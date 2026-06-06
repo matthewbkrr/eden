@@ -152,18 +152,7 @@ jobs:
           # Only required for GitHub *organizations* (free for personal repos):
           # GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
-  # Flags vulnerable / disallowed dependencies introduced by a PR.
-  # NOTE: on a private repo this requires the Dependency Graph (GitHub Advanced
-  # Security). Without it this job errors — enable GHAS or remove this job.
-  dependency-review:
-    name: dependency-review
-    runs-on: ubuntu-24.04
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
-        with:
-          comment-summary-in-pr: on-failure
+  # NOTE: dependency-review-action was removed — it needs the Dependency Graph
+  # (GitHub Advanced Security), unavailable on this private free repo. Dependency
+  # vulnerabilities are covered by `mix deps.audit` (the deps-audit job above)
+  # and by Dependabot alerts/security PRs enabled in repo settings.
