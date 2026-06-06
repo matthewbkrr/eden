@@ -89,6 +89,18 @@ defmodule Eden.Chat do
     end
   end
 
+  @doc "Like get_conversation/2 but with the virtual unread_count / last_message_body filled in."
+  def get_conversation_summary(%Scope{user: user} = scope, id) do
+    with {:ok, conversation} <- get_conversation(scope, id) do
+      {:ok,
+       %{
+         conversation
+         | last_message_body: last_message_bodies([id])[id],
+           unread_count: Map.get(unread_counts(user, [id]), id, 0)
+       }}
+    end
+  end
+
   @doc """
   Starts (or, for a 1:1, reuses) a conversation between the scoped user and the
   given other user ids. Pass `group: true` (or 2+ others) for a group; `title:`
@@ -159,11 +171,14 @@ defmodule Eden.Chat do
     end
   end
 
-  @doc "Marks the conversation read up to now for the scoped user."
+  @doc "Marks the conversation read up to now for the scoped user, broadcasting a read receipt."
   def mark_read(%Scope{user: user}, conversation_id) do
-    from(m in Membership, where: m.conversation_id == ^conversation_id and m.user_id == ^user.id)
-    |> Repo.update_all(set: [last_read_at: now()])
+    read_at = now()
 
+    from(m in Membership, where: m.conversation_id == ^conversation_id and m.user_id == ^user.id)
+    |> Repo.update_all(set: [last_read_at: read_at])
+
+    broadcast(conversation_id, {:read, user.id, read_at})
     :ok
   end
 
@@ -199,7 +214,11 @@ defmodule Eden.Chat do
       )
 
     for user_id <- member_ids do
-      Phoenix.PubSub.broadcast(@pubsub, user_topic(user_id), :conversations_changed)
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user_id),
+        {:conversation_activity, conversation_id}
+      )
     end
   end
 

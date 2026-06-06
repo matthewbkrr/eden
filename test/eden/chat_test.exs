@@ -109,6 +109,24 @@ defmodule Eden.ChatTest do
       {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "ping"})
       assert_receive {:new_message, ^message}
     end
+
+    test "notifies each member of activity on their per-user topic", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      Chat.subscribe_user(scope(bob))
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hey"})
+      assert_receive {:conversation_activity, conversation_id}
+      assert conversation_id == conv.id
+    end
+
+    test "mark_read broadcasts a read receipt", %{bob: bob, conv: conv} do
+      Chat.subscribe(conv.id)
+      :ok = Chat.mark_read(scope(bob), conv.id)
+      assert_receive {:read, reader_id, %DateTime{}}
+      assert reader_id == bob.id
+    end
   end
 
   describe "list_messages/3" do

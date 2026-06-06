@@ -31,6 +31,7 @@ defmodule EdenWeb.ChatLive do
         people: [],
         has_more: false,
         oldest_id: nil,
+        other_read_at: nil,
         online_ids: EdenWeb.Presence.online_ids(),
         composer: empty_composer()
       )
@@ -76,8 +77,6 @@ defmodule EdenWeb.ChatLive do
         {:noreply, assign(socket, composer: empty_composer())}
 
       true ->
-        # On success the PubSub broadcast streams the message back (single insert
-        # path); just clear the box. On error keep the text and explain.
         case Chat.create_message(scope, conversation.id, %{"body" => body}) do
           {:ok, _message} ->
             {:noreply, assign(socket, composer: empty_composer())}
@@ -114,6 +113,10 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, show_new: !socket.assigns.show_new, people: people)}
   end
 
+  def handle_event("close_new", _params, socket) do
+    {:noreply, assign(socket, show_new: false)}
+  end
+
   def handle_event("start", %{"member_ids" => ids} = params, socket) do
     scope = socket.assigns.current_scope
     opts = if length(List.wrap(ids)) > 1, do: [group: true, title: params["title"]], else: []
@@ -140,8 +143,8 @@ defmodule EdenWeb.ChatLive do
 
   @impl true
   def handle_info({:new_message, message}, socket) do
-    # We're viewing this conversation, so an incoming message counts as read.
-    # Skip our own messages (no unread to clear, no write needed).
+    # Incoming message in the open conversation counts as read; skip our own
+    # (nothing to clear, no write needed).
     if message.sender_id != socket.assigns.current_scope.user.id do
       Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
     end
@@ -149,74 +152,37 @@ defmodule EdenWeb.ChatLive do
     {:noreply, stream_insert(socket, :messages, message)}
   end
 
-  def handle_info(:conversations_changed, socket) do
-    scope = socket.assigns.current_scope
-    {:noreply, stream(socket, :conversations, Chat.list_conversations(scope), reset: true)}
+  # The other participant read up to read_at — refresh delivery ticks.
+  def handle_info({:read, reader_id, read_at}, socket) do
+    %{current_scope: scope, selected: conversation} = socket.assigns
+
+    if conversation && reader_id != scope.user.id do
+      {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+
+      {:noreply,
+       socket |> assign(other_read_at: read_at) |> stream(:messages, messages, reset: true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A conversation the user belongs to changed: move it to the top of the list
+  # with refreshed unread/preview, without reloading the whole sidebar.
+  def handle_info({:conversation_activity, conversation_id}, socket) do
+    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
+      {:ok, conversation} ->
+        {:noreply, stream_insert(socket, :conversations, conversation, at: 0)}
+
+      {:error, _} ->
+        {:noreply, socket}
+    end
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
     {:noreply, assign(socket, online_ids: EdenWeb.Presence.online_ids())}
   end
 
-  ## Helpers
-
-  defp select_conversation(socket, conversation) do
-    scope = socket.assigns.current_scope
-    socket = unsubscribe(socket)
-    Chat.subscribe(conversation.id)
-    Chat.mark_read(scope, conversation.id)
-
-    {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
-
-    socket
-    |> assign(
-      selected: conversation,
-      subscribed_id: conversation.id,
-      has_more: length(messages) == @page,
-      oldest_id: messages |> List.first() |> then(&(&1 && &1.id))
-    )
-    |> stream(:messages, messages, reset: true)
-  end
-
-  defp unsubscribe(socket) do
-    if id = socket.assigns[:subscribed_id], do: Chat.unsubscribe(id)
-    assign(socket, subscribed_id: nil)
-  end
-
-  defp title(%{is_group: true, title: title}, _user) when is_binary(title) and title != "",
-    do: title
-
-  defp title(%{is_group: true} = conversation, user),
-    do: conversation |> others(user) |> Enum.map_join(", ", & &1.display_name)
-
-  defp title(conversation, user) do
-    case others(conversation, user) do
-      [first | _] -> first.display_name
-      [] -> gettext("Just you")
-    end
-  end
-
-  defp others(conversation, user) do
-    conversation.memberships
-    |> Enum.reject(&(&1.user_id == user.id))
-    |> Enum.map(& &1.user)
-  end
-
-  defp initials(name), do: name |> String.first() |> String.upcase()
-
-  defp time(at), do: Calendar.strftime(at, "%H:%M")
-
-  # Online state is shown for 1:1s (the other participant); groups don't show a dot.
-  defp online?(%{is_group: true}, _user, _online_ids), do: false
-
-  defp online?(conversation, user, online_ids) do
-    case others(conversation, user) do
-      [other | _] -> MapSet.member?(online_ids, other.id)
-      [] -> false
-    end
-  end
-
-  defp empty_composer, do: to_form(%{}, as: "message")
+  ## Render
 
   @impl true
   def render(assigns) do
@@ -258,37 +224,14 @@ defmodule EdenWeb.ChatLive do
         </header>
 
         <div class="flex-1 overflow-y-auto p-2 space-y-0.5" id="conversations" phx-update="stream">
-          <.link
+          <.conversation_item
             :for={{dom_id, conversation} <- @streams.conversations}
             id={dom_id}
-            patch={~p"/app/c/#{conversation.id}"}
-            class={["ed-convo", @selected && @selected.id == conversation.id && "ed-convo--active"]}
-          >
-            <span class="ed-avatar">
-              {initials(title(conversation, @current_scope.user))}
-              <span
-                :if={online?(conversation, @current_scope.user, @online_ids)}
-                class="ed-avatar__dot"
-              >
-              </span>
-            </span>
-            <span class="ed-convo__body">
-              <span class="ed-convo__top">
-                <span class="ed-convo__name">{title(conversation, @current_scope.user)}</span>
-                <span :if={conversation.last_message_at} class="ed-convo__time">
-                  {time(conversation.last_message_at)}
-                </span>
-              </span>
-              <span class="ed-convo__top">
-                <span class="ed-convo__preview">
-                  {conversation.last_message_body || gettext("No messages yet")}
-                </span>
-                <span :if={conversation.unread_count > 0} class="ed-badge">
-                  {conversation.unread_count}
-                </span>
-              </span>
-            </span>
-          </.link>
+            conversation={conversation}
+            user={@current_scope.user}
+            online_ids={@online_ids}
+            active={@selected && @selected.id == conversation.id}
+          />
         </div>
       </aside>
 
@@ -306,10 +249,7 @@ defmodule EdenWeb.ChatLive do
             </.link>
             <span class="ed-avatar ed-avatar--sm">
               {initials(title(@selected, @current_scope.user))}
-              <span
-                :if={online?(@selected, @current_scope.user, @online_ids)}
-                class="ed-avatar__dot"
-              >
+              <span :if={online?(@selected, @current_scope.user, @online_ids)} class="ed-avatar__dot">
               </span>
             </span>
             <div class="min-w-0">
@@ -334,44 +274,15 @@ defmodule EdenWeb.ChatLive do
               </button>
             </div>
             <div class="flex flex-col gap-2" id="messages" phx-update="stream">
-              <div
+              <.message_bubble
                 :for={{dom_id, message} <- @streams.messages}
                 id={dom_id}
-                class={["flex", message.sender_id == @current_scope.user.id && "justify-end"]}
-              >
-                <div class={[
-                  "ed-bubble",
-                  (message.sender_id == @current_scope.user.id && "ed-bubble--me") ||
-                    "ed-bubble--them"
-                ]}>
-                  <span
-                    :if={
-                      @selected.is_group and message.sender_id != @current_scope.user.id and
-                        message.sender
-                    }
-                    class="block"
-                    style="font-size:0.75rem; font-weight:600; color: var(--ed-primary);"
-                  >
-                    {message.sender.display_name}
-                  </span>
-                  {message.body}
-                  <span class="ed-bubble__meta">{time(message.inserted_at)}</span>
-                </div>
-              </div>
+                message={message}
+                mine={message.sender_id == @current_scope.user.id}
+                group={@selected.is_group}
+                read={read?(message, @other_read_at)}
+              />
             </div>
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
-              export default {
-                mounted() { this.toBottom() },
-                beforeUpdate() {
-                  // Only auto-scroll if the user is already near the bottom, so
-                  // loading older messages (prepended) doesn't yank them down.
-                  this.pinned =
-                    this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
-                },
-                updated() { if (this.pinned) this.toBottom() },
-                toBottom() { this.el.scrollTop = this.el.scrollHeight }
-              }
-            </script>
           </div>
 
           <.form
@@ -413,18 +324,131 @@ defmodule EdenWeb.ChatLive do
         <% end %>
       </main>
 
-      <div
-        :if={@show_new}
-        class="fixed inset-0 z-30 grid place-items-center p-4"
+      <.new_conversation_modal :if={@show_new} people={@people} />
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
+        export default {
+          mounted() { this.toBottom() },
+          beforeUpdate() {
+            this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
+          },
+          updated() { if (this.pinned) this.toBottom() },
+          toBottom() { this.el.scrollTop = this.el.scrollHeight }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTime">
+        export default {
+          mounted() { this.fmt() },
+          updated() { this.fmt() },
+          fmt() {
+            const d = new Date(this.el.getAttribute("datetime"));
+            if (!isNaN(d)) this.el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          }
+        }
+      </script>
+    </div>
+    """
+  end
+
+  ## Components
+
+  attr :id, :string, required: true
+  attr :conversation, :map, required: true
+  attr :user, :map, required: true
+  attr :online_ids, :any, required: true
+  attr :active, :boolean, default: false
+
+  defp conversation_item(assigns) do
+    ~H"""
+    <.link
+      id={@id}
+      patch={~p"/app/c/#{@conversation.id}"}
+      class={["ed-convo", @active && "ed-convo--active"]}
+    >
+      <span class="ed-avatar">
+        {initials(title(@conversation, @user))}
+        <span :if={online?(@conversation, @user, @online_ids)} class="ed-avatar__dot"></span>
+      </span>
+      <span class="ed-convo__body">
+        <span class="ed-convo__top">
+          <span class="ed-convo__name">{title(@conversation, @user)}</span>
+          <.local_time
+            :if={@conversation.last_message_at}
+            at={@conversation.last_message_at}
+            class="ed-convo__time"
+          />
+        </span>
+        <span class="ed-convo__top">
+          <span class="ed-convo__preview">
+            {@conversation.last_message_body || gettext("No messages yet")}
+          </span>
+          <span :if={@conversation.unread_count > 0} class="ed-badge">
+            {@conversation.unread_count}
+          </span>
+        </span>
+      </span>
+    </.link>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :message, :map, required: true
+  attr :mine, :boolean, required: true
+  attr :group, :boolean, required: true
+  attr :read, :boolean, required: true
+
+  defp message_bubble(assigns) do
+    ~H"""
+    <div id={@id} class={["flex", @mine && "justify-end"]}>
+      <div class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}>
+        <span
+          :if={@group and not @mine and @message.sender}
+          class="block"
+          style="font-size:0.75rem; font-weight:600; color: var(--ed-primary);"
+        >
+          {@message.sender.display_name}
+        </span>
+        {@message.body}
+        <span class="ed-bubble__meta">
+          <.local_time at={@message.inserted_at} />
+          <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
+            <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
+            <span :if={@read} class="inline-flex items-center">
+              <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
+              <.icon name="hero-check-micro" class="size-3.5" />
+            </span>
+          </span>
+        </span>
+      </div>
+    </div>
+    """
+  end
+
+  attr :people, :list, required: true
+
+  defp new_conversation_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
         style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_new"
+        aria-label={gettext("Close")}
+        tabindex="-1"
       >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
         <div
-          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4"
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
           style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_new"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("New conversation")}</h2>
-            <button class="ed-btn--icon" phx-click="toggle_new" aria-label={gettext("Close")}>
+            <button class="ed-btn--icon" phx-click="close_new" aria-label={gettext("Close")}>
               <.icon name="hero-x-mark-mini" class="size-5" />
             </button>
           </div>
@@ -446,7 +470,6 @@ defmodule EdenWeb.ChatLive do
                 <label
                   :for={u <- @people}
                   class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] cursor-pointer"
-                  style="--hover: var(--ed-surface-2);"
                 >
                   <input type="checkbox" name="member_ids[]" value={u.id} class="size-4" />
                   <span class="ed-avatar ed-avatar--sm">{initials(u.display_name)}</span>
@@ -468,4 +491,93 @@ defmodule EdenWeb.ChatLive do
     </div>
     """
   end
+
+  # A timestamp that the browser reformats to the viewer's local time (the
+  # server-rendered text is a UTC fallback shown before JS runs).
+  attr :at, :any, required: true
+  attr :class, :string, default: nil
+
+  defp local_time(assigns) do
+    ~H"""
+    <time
+      class={@class}
+      phx-hook=".LocalTime"
+      id={"t-#{System.unique_integer([:positive])}"}
+      datetime={DateTime.to_iso8601(@at)}
+    >
+      {Calendar.strftime(@at, "%H:%M")}
+    </time>
+    """
+  end
+
+  ## Helpers
+
+  defp select_conversation(socket, conversation) do
+    scope = socket.assigns.current_scope
+    socket = unsubscribe(socket)
+    Chat.subscribe(conversation.id)
+    Chat.mark_read(scope, conversation.id)
+
+    {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+
+    socket
+    |> assign(
+      selected: conversation,
+      subscribed_id: conversation.id,
+      other_read_at: other_read_at(conversation, scope.user),
+      has_more: length(messages) == @page,
+      oldest_id: messages |> List.first() |> then(&(&1 && &1.id))
+    )
+    |> stream(:messages, messages, reset: true)
+  end
+
+  defp unsubscribe(socket) do
+    if id = socket.assigns[:subscribed_id], do: Chat.unsubscribe(id)
+    assign(socket, subscribed_id: nil)
+  end
+
+  defp title(%{is_group: true, title: title}, _user) when is_binary(title) and title != "",
+    do: title
+
+  defp title(%{is_group: true} = conversation, user),
+    do: conversation |> others(user) |> Enum.map_join(", ", & &1.display_name)
+
+  defp title(conversation, user) do
+    case others(conversation, user) do
+      [first | _] -> first.display_name
+      [] -> gettext("Just you")
+    end
+  end
+
+  defp others(conversation, user) do
+    conversation.memberships
+    |> Enum.reject(&(&1.user_id == user.id))
+    |> Enum.map(& &1.user)
+  end
+
+  defp initials(name), do: name |> String.first() |> String.upcase()
+
+  # Online state is shown for 1:1s (the other participant); groups don't show a dot.
+  defp online?(%{is_group: true}, _user, _online_ids), do: false
+
+  defp online?(conversation, user, online_ids) do
+    case others(conversation, user) do
+      [other | _] -> MapSet.member?(online_ids, other.id)
+      [] -> false
+    end
+  end
+
+  # Read receipts: the other participant's last_read_at for a 1:1 (nil for groups).
+  defp other_read_at(%{is_group: true}, _user), do: nil
+
+  defp other_read_at(conversation, user) do
+    conversation.memberships
+    |> Enum.find(&(&1.user_id != user.id))
+    |> then(&(&1 && &1.last_read_at))
+  end
+
+  defp read?(_message, nil), do: false
+  defp read?(message, read_at), do: DateTime.compare(message.inserted_at, read_at) != :gt
+
+  defp empty_composer, do: to_form(%{}, as: "message")
 end
