@@ -131,6 +131,10 @@ defmodule Eden.Chat do
   @doc "Subscribe the calling process to a conversation's messages. Authorize first."
   def subscribe(conversation_id), do: Phoenix.PubSub.subscribe(@pubsub, topic(conversation_id))
 
+  @doc "Unsubscribe from a conversation's messages."
+  def unsubscribe(conversation_id),
+    do: Phoenix.PubSub.unsubscribe(@pubsub, topic(conversation_id))
+
   defp broadcast(conversation_id, message),
     do: Phoenix.PubSub.broadcast(@pubsub, topic(conversation_id), message)
 

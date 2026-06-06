@@ -22,10 +22,10 @@ defmodule EdenWeb.AuthLiveTest do
       assert path == ~p"/login"
     end
 
-    test "renders for an authenticated user", %{conn: conn} do
+    test "renders the chat for an authenticated user", %{conn: conn} do
       conn = log_in_user(conn, user_fixture(%{display_name: "Anna"}))
       {:ok, _view, html} = live(conn, ~p"/app")
-      assert html =~ "Welcome, Anna"
+      assert html =~ "No conversation selected"
     end
   end
 

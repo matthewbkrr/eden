@@ -27,6 +27,7 @@ msgstr "Внешний вид"
 msgid "Attempting to reconnect"
 msgstr "Переподключение…"
 
+#: lib/eden_web/live/chat_live.ex:235
 #: lib/eden_web/live/settings_live.ex:21
 #, elixir-autogen, elixir-format
 msgid "Back"
@@ -63,7 +64,7 @@ msgstr "Язык"
 msgid "Light"
 msgstr "Светлая"
 
-#: lib/eden_web/live/app_home_live.ex:18
+#: lib/eden_web/live/chat_live.ex:189
 #: lib/eden_web/live/settings_live.ex:12
 #: lib/eden_web/live/settings_live.ex:24
 #, elixir-autogen, elixir-format
@@ -110,11 +111,6 @@ msgstr "Отображаемое имя"
 #, elixir-autogen, elixir-format
 msgid "Go to start"
 msgstr "На главную"
-
-#: lib/eden_web/live/app_home_live.ex:6
-#, elixir-autogen, elixir-format
-msgid "Home"
-msgstr "Главная"
 
 #: lib/eden_web/live/invite_live.ex:90
 #, elixir-autogen, elixir-format
@@ -163,7 +159,7 @@ msgstr "Войти"
 msgid "Log in to eden"
 msgstr "Вход в eden"
 
-#: lib/eden_web/live/app_home_live.ex:22
+#: lib/eden_web/live/chat_live.ex:196
 #, elixir-autogen, elixir-format
 msgid "Log out"
 msgstr "Выйти"
@@ -220,11 +216,6 @@ msgstr "С возвращением, %{name}!"
 msgid "Welcome to eden, %{name}!"
 msgstr "Добро пожаловать в eden, %{name}!"
 
-#: lib/eden_web/live/app_home_live.ex:29
-#, elixir-autogen, elixir-format
-msgid "Welcome, %{name}"
-msgstr "Добро пожаловать, %{name}"
-
 #: lib/eden_web/controllers/user_session_controller.ex:23
 #, elixir-autogen, elixir-format
 msgid "You have been logged out."
@@ -235,7 +226,90 @@ msgstr "Вы вышли из аккаунта."
 msgid "You were invited. Pick a username and password."
 msgstr "Вас пригласили. Придумайте имя пользователя и пароль."
 
-#: lib/eden_web/live/app_home_live.ex:32
+#: lib/eden_web/live/chat_live.ex:19
 #, elixir-autogen, elixir-format
-msgid "You're signed in. Conversations arrive in Phase 2."
-msgstr "Вы вошли. Переписки появятся в Фазе 2."
+msgid "Chats"
+msgstr "Чаты"
+
+#: lib/eden_web/live/chat_live.ex:334
+#, elixir-autogen, elixir-format
+msgid "Close"
+msgstr "Закрыть"
+
+#: lib/eden_web/live/chat_live.ex:43
+#, elixir-autogen, elixir-format
+msgid "Conversation not found."
+msgstr "Беседа не найдена."
+
+#: lib/eden_web/live/chat_live.ex:107
+#, elixir-autogen, elixir-format
+msgid "Couldn't start the conversation."
+msgstr "Не удалось начать беседу."
+
+#: lib/eden_web/live/chat_live.ex:219
+#, elixir-autogen, elixir-format
+msgid "Direct message"
+msgstr "Личная переписка"
+
+#: lib/eden_web/live/chat_live.ex:219
+#, elixir-autogen, elixir-format
+msgid "Group"
+msgstr "Группа"
+
+#: lib/eden_web/live/chat_live.ex:349
+#, elixir-autogen, elixir-format
+msgid "Group name (optional)"
+msgstr "Название группы (необязательно)"
+
+#: lib/eden_web/live/chat_live.ex:154
+#, elixir-autogen, elixir-format
+msgid "Just you"
+msgstr "Только вы"
+
+#: lib/eden_web/live/chat_live.ex:249
+#, elixir-autogen, elixir-format
+msgid "Load older"
+msgstr "Загрузить ранние"
+
+#: lib/eden_web/live/chat_live.ex:297
+#, elixir-autogen, elixir-format
+msgid "Message"
+msgstr "Сообщение"
+
+#: lib/eden_web/live/chat_live.ex:185
+#: lib/eden_web/live/chat_live.ex:316
+#: lib/eden_web/live/chat_live.ex:333
+#, elixir-autogen, elixir-format
+msgid "New conversation"
+msgstr "Новая беседа"
+
+#: lib/eden_web/live/chat_live.ex:311
+#, elixir-autogen, elixir-format
+msgid "No conversation selected"
+msgstr "Беседа не выбрана"
+
+#: lib/eden_web/live/chat_live.ex:341
+#, elixir-autogen, elixir-format
+msgid "No one else has joined yet."
+msgstr "Пока больше никто не присоединился."
+
+#: lib/eden_web/live/chat_live.ex:313
+#, elixir-autogen, elixir-format
+msgid "Pick a chat or start a new one."
+msgstr "Выберите чат или начните новый."
+
+#: lib/eden_web/live/chat_live.ex:104
+#: lib/eden_web/live/chat_live.ex:112
+#, elixir-autogen, elixir-format
+msgid "Pick at least one person."
+msgstr "Выберите хотя бы одного человека."
+
+#: lib/eden_web/live/chat_live.ex:303
+#, elixir-autogen, elixir-format
+msgid "Send"
+msgstr "Отправить"
+
+#: lib/eden_web/live/chat_live.ex:370
+#, elixir-autogen, elixir-format
+msgid "Start"
+msgstr "Начать"

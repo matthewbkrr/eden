@@ -9,7 +9,7 @@ defmodule Eden.Accounts do
   """
   import Ecto.Query, warn: false
 
-  alias Eden.Accounts.{Invite, User, UserToken}
+  alias Eden.Accounts.{Invite, Scope, User, UserToken}
   alias Eden.Repo
 
   @token_bytes 32
@@ -23,6 +23,12 @@ defmodule Eden.Accounts do
   @doc "Fetches a user by username (case-insensitive via citext), or nil."
   def get_user_by_username(username) when is_binary(username) do
     Repo.get_by(User, username: username)
+  end
+
+  @doc "All other users (everyone except the scoped user), for the new-conversation picker."
+  def list_other_users(%Scope{user: user}) do
+    from(u in User, where: u.id != ^user.id, order_by: [asc: u.display_name])
+    |> Repo.all()
   end
 
   @doc """

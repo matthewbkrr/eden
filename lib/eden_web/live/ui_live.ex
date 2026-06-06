@@ -277,8 +277,8 @@ defmodule EdenWeb.UiLive do
                 </button>
                 <input class="ed-input" placeholder="Message" />
                 <button
-                  class="ed-btn ed-btn--primary ed-btn--icon"
-                  style="color: var(--ed-on-primary);"
+                  class="ed-btn ed-btn--primary shrink-0"
+                  style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
                   aria-label="Send"
                 >
                   <.icon name="hero-paper-airplane-micro" class="size-4" />
