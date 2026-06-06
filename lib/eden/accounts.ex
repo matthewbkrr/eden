@@ -9,7 +9,7 @@ defmodule Eden.Accounts do
   """
   import Ecto.Query, warn: false
 
-  alias Eden.Accounts.{Invite, User}
+  alias Eden.Accounts.{Invite, User, UserToken}
   alias Eden.Repo
 
   @token_bytes 32
@@ -40,23 +40,48 @@ defmodule Eden.Accounts do
     User.registration_changeset(%User{}, attrs, hash_password: false)
   end
 
+  ## Session tokens
+
+  @doc "Issues a new session token for the user and returns the raw token."
+  def generate_user_session_token(%User{} = user) do
+    {token, user_token} = UserToken.build_session_token(user)
+    Repo.insert!(user_token)
+    token
+  end
+
+  @doc "Returns the user for a valid, non-expired session token, or nil."
+  def get_user_by_session_token(token) do
+    {:ok, query} = UserToken.verify_session_token_query(token)
+    Repo.one(query)
+  end
+
+  @doc "Deletes a session token (logout)."
+  def delete_user_session_token(token) do
+    Repo.delete_all(UserToken.by_token_and_context_query(token, "session"))
+    :ok
+  end
+
   ## Invites
 
   @doc """
-  Creates an invite owned by `inviter` and returns `{:ok, invite, raw_token}`.
-  The raw token is shown once (in the invite URL); only its hash is persisted.
+  Creates an invite and returns `{:ok, invite, raw_token}`. The raw token is shown
+  once (in the invite URL); only its hash is persisted.
 
-  Options: `:max_uses` (default 1), `:expires_at` (default 7 days out).
+  `inviter` is a `%User{}` or `nil` (a "system" invite that bootstraps the first
+  account). Options: `:max_uses` (default 1), `:expires_at` (default 7 days out).
   """
-  def create_invite(%User{} = inviter, opts \\ []) do
+  def create_invite(inviter \\ nil, opts \\ [])
+
+  def create_invite(inviter, opts) when is_nil(inviter) or is_struct(inviter, User) do
     raw_token = build_token()
+    inviter_id = if is_struct(inviter, User), do: inviter.id
 
     attrs = %{
       expires_at: Keyword.get(opts, :expires_at, default_expiry()),
       max_uses: Keyword.get(opts, :max_uses, 1)
     }
 
-    %Invite{inviter_id: inviter.id, hashed_token: hash_token(raw_token)}
+    %Invite{inviter_id: inviter_id, hashed_token: hash_token(raw_token)}
     |> Invite.create_changeset(attrs)
     |> Repo.insert()
     |> case do

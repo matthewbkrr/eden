@@ -20,11 +20,15 @@ defmodule Eden.Accounts.Invite do
     timestamps(type: :utc_datetime)
   end
 
-  @doc "Changeset for creating an invite. `hashed_token` and `inviter_id` are set by the context."
+  @doc """
+  Changeset for creating an invite. `hashed_token` and `inviter_id` are set by the
+  context. `inviter_id` is optional: a "system" invite (no inviter) bootstraps the
+  very first account.
+  """
   def create_changeset(invite, attrs) do
     invite
     |> cast(attrs, [:expires_at, :max_uses])
-    |> validate_required([:hashed_token, :inviter_id, :expires_at])
+    |> validate_required([:hashed_token, :expires_at])
     |> validate_number(:max_uses, greater_than: 0)
     |> unique_constraint(:hashed_token)
     |> assoc_constraint(:inviter)

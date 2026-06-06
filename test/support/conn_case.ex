@@ -27,6 +27,7 @@ defmodule EdenWeb.ConnCase do
       # Import conveniences for testing with connections
       import Plug.Conn
       import Phoenix.ConnTest
+      import Eden.AccountsFixtures
       import EdenWeb.ConnCase
     end
   end
@@ -34,5 +35,20 @@ defmodule EdenWeb.ConnCase do
   setup tags do
     Eden.DataCase.setup_sandbox(tags)
     {:ok, conn: Phoenix.ConnTest.build_conn()}
+  end
+
+  @doc "Registers a fresh user and logs them into the connection."
+  def register_and_log_in_user(%{conn: conn}) do
+    user = Eden.AccountsFixtures.user_fixture()
+    %{conn: log_in_user(conn, user), user: user}
+  end
+
+  @doc "Puts a valid session token for `user` into the connection."
+  def log_in_user(conn, user) do
+    token = Eden.Accounts.generate_user_session_token(user)
+
+    conn
+    |> Plug.Test.init_test_session(%{})
+    |> Plug.Conn.put_session("user_token", token)
   end
 end

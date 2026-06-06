@@ -1,11 +1,14 @@
 defmodule EdenWeb.Router do
   use EdenWeb, :router
 
+  import EdenWeb.UserAuth
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
     plug :fetch_live_flash
     plug EdenWeb.Locale
+    plug :fetch_current_scope_for_user
     plug :put_root_layout, html: {EdenWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
@@ -21,7 +24,27 @@ defmodule EdenWeb.Router do
     get "/", PageController, :home
     post "/locale", LocaleController, :update
 
-    live_session :default, on_mount: [EdenWeb.Locale] do
+    # Session lifecycle (native form posts; LiveView can't set cookies).
+    post "/users/log_in", UserSessionController, :create
+    delete "/users/log_out", UserSessionController, :delete
+    post "/invite/:token", InviteController, :create
+
+    # Signed-out pages: bounce already-authenticated users to the app.
+    live_session :redirect_if_authenticated,
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :redirect_if_authenticated}] do
+      live "/login", LoginLive
+      live "/invite/:token", InviteLive
+    end
+
+    # Authenticated pages.
+    live_session :authenticated,
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_authenticated}] do
+      live "/app", AppHomeLive
+    end
+
+    # Device preferences — available signed out (current_scope may be nil).
+    live_session :default,
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}] do
       live "/settings", SettingsLive
     end
   end
