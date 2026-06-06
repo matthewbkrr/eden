@@ -22,15 +22,6 @@ config :eden, EdenWeb.Endpoint,
   pubsub_server: Eden.PubSub,
   live_view: [signing_salt: "vEgj3gMU"]
 
-# Configure the mailer
-#
-# By default it uses the "Local" adapter which stores the emails
-# locally. You can see the emails in your browser, at "/dev/mailbox".
-#
-# For production it's recommended to configure a different adapter
-# at the `config/runtime.exs`.
-config :eden, Eden.Mailer, adapter: Swoosh.Adapters.Local
-
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
@@ -59,6 +50,10 @@ config :logger, :default_formatter,
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
+
+# Internationalization: supported UI locales. Actual locale per request is
+# resolved by EdenWeb.Locale (session choice → Accept-Language → this default).
+config :gettext, :default_locale, "en"
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

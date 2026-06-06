@@ -1,0 +1,96 @@
+## "msgid"s in this file come from POT (.pot) files.
+###
+### Do not add, change, or remove "msgid"s manually here as
+### they're tied to the ones in the corresponding POT file
+### (with the same domain).
+###
+### Use "mix gettext.extract --merge" or "mix gettext.merge"
+### to merge POT files into PO files.
+msgid ""
+msgstr ""
+"Language: en\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: lib/eden_web/components/core_components.ex:375
+#, elixir-autogen, elixir-format
+msgid "Actions"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:29
+#, elixir-autogen, elixir-format
+msgid "Appearance"
+msgstr ""
+
+#: lib/eden_web/components/layouts.ex:99
+#: lib/eden_web/components/layouts.ex:111
+#, elixir-autogen, elixir-format
+msgid "Attempting to reconnect"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:21
+#, elixir-autogen, elixir-format
+msgid "Back"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:52
+#, elixir-autogen, elixir-format
+msgid "Changes the language across eden."
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:31
+#, elixir-autogen, elixir-format
+msgid "Choose how eden looks on this device."
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:43
+#, elixir-autogen, elixir-format
+msgid "Dark"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:57
+#, elixir-autogen, elixir-format
+msgid "Interface language"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:50
+#: lib/eden_web/live/settings_live.ex:58
+#, elixir-autogen, elixir-format
+msgid "Language"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:40
+#, elixir-autogen, elixir-format
+msgid "Light"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:12
+#: lib/eden_web/live/settings_live.ex:24
+#, elixir-autogen, elixir-format
+msgid "Settings"
+msgstr ""
+
+#: lib/eden_web/components/layouts.ex:106
+#, elixir-autogen, elixir-format
+msgid "Something went wrong!"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:37
+#, elixir-autogen, elixir-format
+msgid "System"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:34
+#: lib/eden_web/live/settings_live.ex:35
+#, elixir-autogen, elixir-format
+msgid "Theme"
+msgstr ""
+
+#: lib/eden_web/components/layouts.ex:94
+#, elixir-autogen, elixir-format
+msgid "We can't find the internet"
+msgstr ""
+
+#: lib/eden_web/components/core_components.ex:81
+#, elixir-autogen, elixir-format
+msgid "close"
+msgstr ""

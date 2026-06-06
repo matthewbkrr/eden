@@ -12,7 +12,9 @@ must also be followed.
 - **Phoenix** 1.8 · **Phoenix LiveView** 1.1 · **Bandit** HTTP server.
 - **Ecto** + **PostgreSQL 16**.
 - Realtime via **Phoenix Channels / LiveView** + **Phoenix.PubSub**.
-- **Req** for HTTP (never httpoison/tesla/httpc), **Swoosh** for mail.
+- **Req** for HTTP (never httpoison/tesla/httpc). **No mailer / no email** —
+  auth is invite-link based by design (delivery from an overseas VPS to RU
+  inboxes is unreliable); never add Swoosh or any email dependency.
 - **Tailwind v4** + **esbuild** for assets.
 - Quality tooling: **credo**, **sobelow**, **dialyxir**, **mix_audit**.
 

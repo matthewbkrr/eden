@@ -102,4 +102,359 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* ==========================================================================
+   eden design system — semantic tokens (--ed-*) in OKLCH.
+   Strategy: Restrained (tinted neutrals + one cobalt accent, hue ~261).
+   Three themes: light (:root default), dark ([data-theme=dark]), and system
+   (prefers-color-scheme when no explicit data-theme). See DESIGN.md.
+   ========================================================================== */
+
+:root {
+  /* Light theme (default base) */
+  --ed-bg: oklch(0.995 0.001 261);
+  --ed-surface: oklch(0.975 0.003 261);
+  --ed-surface-2: oklch(0.955 0.004 261);
+  --ed-border: oklch(0.90 0.006 261);
+  --ed-ink: oklch(0.24 0.012 261);
+  --ed-muted: oklch(0.50 0.012 261);
+  --ed-primary: oklch(0.55 0.16 261);
+  --ed-primary-strong: oklch(0.50 0.17 261);
+  --ed-on-primary: oklch(0.99 0.01 261);
+  --ed-online: oklch(0.62 0.15 150);
+  --ed-danger: oklch(0.55 0.20 25);
+  --ed-warning: oklch(0.70 0.14 75);
+
+  /* Shape & motion (theme-independent) */
+  --ed-radius-sm: 0.375rem;
+  --ed-radius: 0.625rem;
+  --ed-radius-lg: 1rem;
+  --ed-radius-full: 9999px;
+  --ed-ring: color-mix(in oklab, var(--ed-primary) 55%, transparent);
+  --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.06), 0 4px 16px oklch(0 0 0 / 0.06);
+  --ed-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ed-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ed-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* Dark theme — explicit */
+[data-theme="dark"] {
+  --ed-bg: oklch(0.18 0.012 261);
+  --ed-surface: oklch(0.225 0.014 261);
+  --ed-surface-2: oklch(0.27 0.016 261);
+  --ed-border: oklch(0.32 0.014 261);
+  --ed-ink: oklch(0.96 0.005 261);
+  --ed-muted: oklch(0.68 0.012 261);
+  --ed-primary: oklch(0.62 0.16 261);
+  --ed-primary-strong: oklch(0.68 0.16 261);
+  --ed-on-primary: oklch(0.99 0.01 261);
+  --ed-online: oklch(0.72 0.15 150);
+  --ed-danger: oklch(0.65 0.19 25);
+  --ed-warning: oklch(0.78 0.14 75);
+  --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.36);
+}
+
+/* Dark theme — system ("system" mode removes data-theme; follow the OS) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ed-bg: oklch(0.18 0.012 261);
+    --ed-surface: oklch(0.225 0.014 261);
+    --ed-surface-2: oklch(0.27 0.016 261);
+    --ed-border: oklch(0.32 0.014 261);
+    --ed-ink: oklch(0.96 0.005 261);
+    --ed-muted: oklch(0.68 0.012 261);
+    --ed-primary: oklch(0.62 0.16 261);
+    --ed-primary-strong: oklch(0.68 0.16 261);
+    --ed-on-primary: oklch(0.99 0.01 261);
+    --ed-online: oklch(0.72 0.15 150);
+    --ed-danger: oklch(0.65 0.19 25);
+    --ed-warning: oklch(0.78 0.14 75);
+    --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.36);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Components (raw CSS referencing tokens; no @apply per AGENTS.md).
+   -------------------------------------------------------------------------- */
+@layer components {
+  .ed-root {
+    background: var(--ed-bg);
+    color: var(--ed-ink);
+    font-family: var(--ed-font);
+  }
+
+  /* Buttons ------------------------------------------------------------- */
+  .ed-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.25rem;
+    padding: 0 0.875rem;
+    border-radius: var(--ed-radius);
+    border: 1px solid transparent;
+    font: 550 0.875rem/1 var(--ed-font);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.16s var(--ed-ease), border-color 0.16s var(--ed-ease),
+      color 0.16s var(--ed-ease), opacity 0.16s var(--ed-ease);
+  }
+  .ed-btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
+  .ed-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .ed-btn--primary { background: var(--ed-primary); color: var(--ed-on-primary); }
+  .ed-btn--primary:hover:not(:disabled) { background: var(--ed-primary-strong); }
+
+  .ed-btn--secondary {
+    background: var(--ed-surface-2);
+    color: var(--ed-ink);
+    border-color: var(--ed-border);
+  }
+  .ed-btn--secondary:hover:not(:disabled) { background: var(--ed-surface); }
+
+  .ed-btn--ghost { background: transparent; color: var(--ed-muted); }
+  .ed-btn--ghost:hover:not(:disabled) { background: var(--ed-surface-2); color: var(--ed-ink); }
+
+  .ed-btn--danger { background: var(--ed-danger); color: var(--ed-on-primary); }
+  .ed-btn--danger:hover:not(:disabled) { filter: brightness(1.08); }
+
+  .ed-btn--icon {
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border-radius: var(--ed-radius-full);
+    background: transparent;
+    color: var(--ed-muted);
+  }
+  .ed-btn--icon:hover:not(:disabled) { background: var(--ed-surface-2); color: var(--ed-ink); }
+
+  /* Inputs -------------------------------------------------------------- */
+  .ed-input {
+    width: 100%;
+    height: 2.25rem;
+    padding: 0 0.75rem;
+    background: var(--ed-surface);
+    border: 1px solid var(--ed-border);
+    border-radius: var(--ed-radius);
+    color: var(--ed-ink);
+    font: 400 0.9375rem/1.4 var(--ed-font);
+    transition: border-color 0.16s var(--ed-ease), box-shadow 0.16s var(--ed-ease);
+  }
+  .ed-input::placeholder { color: var(--ed-muted); }
+  .ed-input:focus {
+    outline: none;
+    border-color: var(--ed-primary);
+    box-shadow: 0 0 0 3px var(--ed-ring);
+  }
+  textarea.ed-input { height: auto; min-height: 2.5rem; padding: 0.5rem 0.75rem; resize: none; }
+
+  /* Avatars ------------------------------------------------------------- */
+  .ed-avatar {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface-2);
+    color: var(--ed-ink);
+    font: 600 0.875rem/1 var(--ed-font);
+    overflow: visible;
+    flex: none;
+  }
+  .ed-avatar img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+  .ed-avatar--sm { width: 2rem; height: 2rem; font-size: 0.75rem; }
+  .ed-avatar--lg { width: 3.5rem; height: 3.5rem; font-size: 1.125rem; }
+  .ed-avatar__dot {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-online);
+    box-shadow: 0 0 0 2.5px var(--ed-bg);
+  }
+
+  /* Badges / pills / tags ---------------------------------------------- */
+  .ed-badge {
+    display: inline-grid;
+    place-items: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.375rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-primary);
+    color: var(--ed-on-primary);
+    font: 600 0.6875rem/1 var(--ed-font);
+  }
+  .ed-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    height: 1.5rem;
+    padding: 0 0.625rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
+    font: 550 0.75rem/1 var(--ed-font);
+  }
+  .ed-pill__dot { width: 0.5rem; height: 0.5rem; border-radius: var(--ed-radius-full); background: var(--ed-online); }
+  .ed-tag {
+    display: inline-flex;
+    align-items: center;
+    height: 1.5rem;
+    padding: 0 0.5rem;
+    border-radius: var(--ed-radius-sm);
+    border: 1px solid var(--ed-border);
+    color: var(--ed-muted);
+    font: 550 0.75rem/1 var(--ed-font);
+  }
+
+  /* Message bubbles ----------------------------------------------------- */
+  .ed-bubble {
+    max-width: 30rem;
+    width: fit-content;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--ed-radius-lg);
+    font: 400 0.9375rem/1.45 var(--ed-font);
+  }
+  .ed-bubble--them {
+    background: var(--ed-surface);
+    color: var(--ed-ink);
+    border-bottom-left-radius: var(--ed-radius-sm);
+  }
+  .ed-bubble--me {
+    background: var(--ed-primary);
+    color: var(--ed-on-primary);
+    border-bottom-right-radius: var(--ed-radius-sm);
+    margin-left: auto;
+  }
+  .ed-bubble__meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-left: 0.5rem;
+    font: 500 0.6875rem/1 var(--ed-mono);
+    opacity: 0.7;
+    vertical-align: baseline;
+  }
+  .ed-bubble--system {
+    margin: 0 auto;
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
+    border-radius: var(--ed-radius-full);
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+  }
+
+  /* Conversation list item --------------------------------------------- */
+  .ed-convo {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.625rem 0.75rem;
+    border-radius: var(--ed-radius);
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    border: none;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-convo:hover { background: var(--ed-surface); }
+  .ed-convo--active { background: var(--ed-surface-2); }
+  .ed-convo__body { min-width: 0; flex: 1; }
+  .ed-convo__top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+  .ed-convo__name { color: var(--ed-ink); font: 600 0.9375rem/1.2 var(--ed-font); }
+  .ed-convo__time { color: var(--ed-muted); font: 500 0.6875rem/1 var(--ed-mono); flex: none; }
+  .ed-convo__preview {
+    color: var(--ed-muted);
+    font: 400 0.875rem/1.3 var(--ed-font);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Typing indicator ---------------------------------------------------- */
+  .ed-typing { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.625rem 0.75rem; }
+  .ed-typing span {
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-muted);
+    animation: ed-typing 1.2s infinite var(--ed-ease);
+  }
+  .ed-typing span:nth-child(2) { animation-delay: 0.15s; }
+  .ed-typing span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes ed-typing {
+    0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+  }
+
+  /* Toasts -------------------------------------------------------------- */
+  .ed-toast {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.625rem 0.875rem;
+    border-radius: var(--ed-radius);
+    background: var(--ed-surface);
+    border: 1px solid var(--ed-border);
+    color: var(--ed-ink);
+    box-shadow: var(--ed-shadow);
+    font: 500 0.875rem/1.3 var(--ed-font);
+  }
+  .ed-toast__bar { width: 0.25rem; align-self: stretch; border-radius: var(--ed-radius-full); background: var(--ed-muted); }
+  .ed-toast--info .ed-toast__bar { background: var(--ed-primary); }
+  .ed-toast--success .ed-toast__bar { background: var(--ed-online); }
+  .ed-toast--error .ed-toast__bar { background: var(--ed-danger); }
+
+  /* Style-guide swatch -------------------------------------------------- */
+  .ed-swatch { height: 3.5rem; border-radius: var(--ed-radius); border: 1px solid var(--ed-border); }
+
+  /* Segmented control (settings: theme / language) --------------------- */
+  .ed-seg {
+    display: inline-flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    background: var(--ed-surface-2);
+    border-radius: var(--ed-radius-full);
+  }
+  .ed-seg__btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    height: 2rem;
+    padding: 0 0.875rem;
+    border: none;
+    background: transparent;
+    color: var(--ed-muted);
+    border-radius: var(--ed-radius-full);
+    font: 550 0.8125rem/1 var(--ed-font);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+  }
+  .ed-seg__btn:hover { color: var(--ed-ink); }
+  .ed-seg__btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
+  /* Active (server-rendered, e.g. current language) */
+  .ed-seg__btn.is-active { background: var(--ed-bg); color: var(--ed-ink); box-shadow: var(--ed-shadow); }
+  /* Active (client theme, driven by the data-theme attribute) */
+  [data-theme="light"] .ed-seg__btn[data-active="light"],
+  [data-theme="dark"] .ed-seg__btn[data-active="dark"] {
+    background: var(--ed-bg);
+    color: var(--ed-ink);
+    box-shadow: var(--ed-shadow);
+  }
+  :root:not([data-theme]) .ed-seg__btn[data-active="system"] {
+    background: var(--ed-bg);
+    color: var(--ed-ink);
+    box-shadow: var(--ed-shadow);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ed-typing span { animation: none; }
+  .ed-btn, .ed-input, .ed-convo { transition: none; }
+}
+
 /* This file is for your main application CSS */
