@@ -74,10 +74,36 @@ Reviewers tag every finding with a priority.
 
 P0/P1 must be addressed before merge; P2/P3 are advisory.
 
-## Working with Elixir/Phoenix code
+## Skills (must use)
 
-- **Consult the relevant Elixir/Phoenix skills** before writing or changing code,
-  and follow their conventions.
+Skills are vendored in `.claude/skills/` (so they travel with the repo) or come
+from installed plugins. Use them as follows — this is **not optional**.
+
+### Elixir/Phoenix code — always consult the thinking skills first
+
+For **any** work that writes or changes Elixir code (`.ex`/`.exs`), invoke the
+relevant thinking skill **before** exploring or editing — the skills tell you
+what patterns and anti-patterns to look for. The `using-elixir-skills` router
+maps the task to the right one:
+
+- `elixir-thinking` — language idioms, structuring modules, pattern matching, `with`.
+- `phoenix-thinking` — LiveView/Plug/PubSub, controllers, the mount lifecycle.
+- `ecto-thinking` — schemas, changesets, contexts, queries, migrations, preloads.
+- `otp-thinking` — GenServer/Supervisor/Task/Registry, concurrency, fault tolerance.
+
+(`oban-thinking` is referenced by the router but not vendored — Oban isn't a
+dependency yet; see `.claude/skills/ATTRIBUTION.md`.)
+
+### UI / frontend work — use the design skills
+
+For any UI (LiveView templates, components, HEEx/Tailwind, pages, styling):
+
+- **`frontend-design`** — building new components, pages, or app UI.
+- **`impeccable`** — designing, auditing, polishing, or iterating on existing UI
+  (typography, color, spacing, motion, accessibility, UX copy).
+
+### Other rules
+
 - Follow the usage rules in [`AGENTS.md`](AGENTS.md). Note: the stock
   `mix precommit` advice there is superseded by **`mix check`** as this project's gate.
 - Respect context boundaries and the storage-adapter abstraction described above.
