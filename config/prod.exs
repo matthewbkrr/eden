@@ -22,5 +22,9 @@ config :eden, EdenWeb.Endpoint,
 # Do not print debug messages in production
 config :logger, level: :info
 
+# Structured JSON logs in production (ready for aggregation/search). Dev and
+# test keep the human-readable formatter from config/config.exs.
+config :logger, :default_formatter, {LoggerJSON.Formatters.Basic, metadata: [:request_id]}
+
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.

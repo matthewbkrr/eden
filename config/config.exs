@@ -11,6 +11,13 @@ config :eden,
   ecto_repos: [Eden.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Oban — background jobs persisted in Postgres. Queues stay minimal for now;
+# add more as features need them (e.g. media processing in Phase 3).
+config :eden, Oban,
+  repo: Eden.Repo,
+  queues: [default: 10],
+  plugins: [{Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}]
+
 # Configure the endpoint
 config :eden, EdenWeb.Endpoint,
   url: [host: "localhost"],

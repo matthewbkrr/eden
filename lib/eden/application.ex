@@ -7,13 +7,15 @@ defmodule Eden.Application do
 
   @impl true
   def start(_type, _args) do
+    # Log Oban job lifecycle events through the structured Logger.
+    Oban.Telemetry.attach_default_logger()
+
     children = [
       EdenWeb.Telemetry,
       Eden.Repo,
       {DNSCluster, query: Application.get_env(:eden, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Eden.PubSub},
-      # Start a worker by calling: Eden.Worker.start_link(arg)
-      # {Eden.Worker, arg},
+      {Oban, Application.fetch_env!(:eden, Oban)},
       # Start to serve requests, typically the last entry
       EdenWeb.Endpoint
     ]
