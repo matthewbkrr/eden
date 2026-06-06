@@ -1,0 +1,34 @@
+# Local development Postgres for eden.
+#
+#   docker compose up -d        # start in the background
+#   docker compose down         # stop (keeps data)
+#   docker compose down -v      # stop and delete the data volume
+#
+# Credentials/host/db match config/dev.exs (postgres/postgres @ localhost,
+# database eden_dev). After it's healthy, run `mix ecto.setup`.
+#
+# NOTE: this binds host port 5432. A native Postgres (e.g. Homebrew
+# `postgresql@16`) may already use it — stop that service first, or change the
+# left-hand side of the port mapping below (and the `port` in config/dev.exs).
+
+services:
+  db:
+    image: postgres:16
+    container_name: eden-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eden_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - eden_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eden_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  eden_pgdata:
