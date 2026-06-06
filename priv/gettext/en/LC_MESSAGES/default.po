@@ -27,7 +27,7 @@ msgstr ""
 msgid "Attempting to reconnect"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:235
+#: lib/eden_web/live/chat_live.ex:277
 #: lib/eden_web/live/settings_live.ex:21
 #, elixir-autogen, elixir-format
 msgid "Back"
@@ -64,7 +64,7 @@ msgstr ""
 msgid "Light"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:189
+#: lib/eden_web/live/chat_live.ex:219
 #: lib/eden_web/live/settings_live.ex:12
 #: lib/eden_web/live/settings_live.ex:24
 #, elixir-autogen, elixir-format
@@ -159,7 +159,7 @@ msgstr ""
 msgid "Log in to eden"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:196
+#: lib/eden_web/live/chat_live.ex:226
 #, elixir-autogen, elixir-format
 msgid "Log out"
 msgstr ""
@@ -226,90 +226,95 @@ msgstr ""
 msgid "You were invited. Pick a username and password."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:19
+#: lib/eden_web/live/chat_live.ex:27
 #, elixir-autogen, elixir-format
 msgid "Chats"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:334
+#: lib/eden_web/live/chat_live.ex:392
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Close"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:43
+#: lib/eden_web/live/chat_live.ex:52
 #, elixir-autogen, elixir-format
 msgid "Conversation not found."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:107
+#: lib/eden_web/live/chat_live.ex:116
 #, elixir-autogen, elixir-format
 msgid "Couldn't start the conversation."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:219
-#, elixir-autogen, elixir-format
-msgid "Direct message"
-msgstr ""
-
-#: lib/eden_web/live/chat_live.ex:219
-#, elixir-autogen, elixir-format
-msgid "Group"
-msgstr ""
-
-#: lib/eden_web/live/chat_live.ex:349
+#: lib/eden_web/live/chat_live.ex:407
 #, elixir-autogen, elixir-format
 msgid "Group name (optional)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:154
+#: lib/eden_web/live/chat_live.ex:174
 #, elixir-autogen, elixir-format
 msgid "Just you"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:249
+#: lib/eden_web/live/chat_live.ex:306
 #, elixir-autogen, elixir-format
 msgid "Load older"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:297
+#: lib/eden_web/live/chat_live.ex:354
 #, elixir-autogen, elixir-format
 msgid "Message"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:185
-#: lib/eden_web/live/chat_live.ex:316
-#: lib/eden_web/live/chat_live.ex:333
+#: lib/eden_web/live/chat_live.ex:215
+#: lib/eden_web/live/chat_live.ex:374
+#: lib/eden_web/live/chat_live.ex:391
 #, elixir-autogen, elixir-format
 msgid "New conversation"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:311
+#: lib/eden_web/live/chat_live.ex:369
 #, elixir-autogen, elixir-format
 msgid "No conversation selected"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:341
+#: lib/eden_web/live/chat_live.ex:399
 #, elixir-autogen, elixir-format
 msgid "No one else has joined yet."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:313
+#: lib/eden_web/live/chat_live.ex:371
 #, elixir-autogen, elixir-format
 msgid "Pick a chat or start a new one."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:104
-#: lib/eden_web/live/chat_live.ex:112
+#: lib/eden_web/live/chat_live.ex:113
+#: lib/eden_web/live/chat_live.ex:121
 #, elixir-autogen, elixir-format
 msgid "Pick at least one person."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:303
+#: lib/eden_web/live/chat_live.ex:361
 #, elixir-autogen, elixir-format
 msgid "Send"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:370
+#: lib/eden_web/live/chat_live.ex:428
 #, elixir-autogen, elixir-format
 msgid "Start"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:257
+#, elixir-autogen, elixir-format
+msgid "No messages yet"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:298
+#, elixir-autogen, elixir-format
+msgid "offline"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:297
+#, elixir-autogen, elixir-format
+msgid "online"
 msgstr ""

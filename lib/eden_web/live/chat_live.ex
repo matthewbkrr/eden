@@ -13,6 +13,14 @@ defmodule EdenWeb.ChatLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    scope = socket.assigns.current_scope
+
+    if connected?(socket) do
+      EdenWeb.Presence.track_user(self(), scope.user.id)
+      Phoenix.PubSub.subscribe(Eden.PubSub, EdenWeb.Presence.topic())
+      Chat.subscribe_user(scope)
+    end
+
     socket =
       socket
       |> assign(
@@ -23,9 +31,10 @@ defmodule EdenWeb.ChatLive do
         people: [],
         has_more: false,
         oldest_id: nil,
+        online_ids: EdenWeb.Presence.online_ids(),
         composer: to_form(%{}, as: "message")
       )
-      |> stream(:conversations, Chat.list_conversations(socket.assigns.current_scope))
+      |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
 
     {:ok, socket}
@@ -114,7 +123,18 @@ defmodule EdenWeb.ChatLive do
 
   @impl true
   def handle_info({:new_message, message}, socket) do
+    # We're viewing this conversation, so the message counts as read.
+    Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
     {:noreply, stream_insert(socket, :messages, message)}
+  end
+
+  def handle_info(:conversations_changed, socket) do
+    scope = socket.assigns.current_scope
+    {:noreply, stream(socket, :conversations, Chat.list_conversations(scope), reset: true)}
+  end
+
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
+    {:noreply, assign(socket, online_ids: EdenWeb.Presence.online_ids())}
   end
 
   ## Helpers
@@ -165,6 +185,16 @@ defmodule EdenWeb.ChatLive do
 
   defp time(at), do: Calendar.strftime(at, "%H:%M")
 
+  # Online state is shown for 1:1s (the other participant); groups don't show a dot.
+  defp online?(%{is_group: true}, _user, _online_ids), do: false
+
+  defp online?(conversation, user, online_ids) do
+    case others(conversation, user) do
+      [other | _] -> MapSet.member?(online_ids, other.id)
+      [] -> false
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -207,7 +237,14 @@ defmodule EdenWeb.ChatLive do
             patch={~p"/app/c/#{conversation.id}"}
             class={["ed-convo", @selected && @selected.id == conversation.id && "ed-convo--active"]}
           >
-            <span class="ed-avatar">{initials(title(conversation, @current_scope.user))}</span>
+            <span class="ed-avatar">
+              {initials(title(conversation, @current_scope.user))}
+              <span
+                :if={online?(conversation, @current_scope.user, @online_ids)}
+                class="ed-avatar__dot"
+              >
+              </span>
+            </span>
             <span class="ed-convo__body">
               <span class="ed-convo__top">
                 <span class="ed-convo__name">{title(conversation, @current_scope.user)}</span>
@@ -215,8 +252,13 @@ defmodule EdenWeb.ChatLive do
                   {time(conversation.last_message_at)}
                 </span>
               </span>
-              <span class="ed-convo__preview">
-                {if conversation.is_group, do: gettext("Group"), else: gettext("Direct message")}
+              <span class="ed-convo__top">
+                <span class="ed-convo__preview">
+                  {conversation.last_message_body || gettext("No messages yet")}
+                </span>
+                <span :if={conversation.unread_count > 0} class="ed-badge">
+                  {conversation.unread_count}
+                </span>
               </span>
             </span>
           </.link>
@@ -237,9 +279,24 @@ defmodule EdenWeb.ChatLive do
             </.link>
             <span class="ed-avatar ed-avatar--sm">
               {initials(title(@selected, @current_scope.user))}
+              <span
+                :if={online?(@selected, @current_scope.user, @online_ids)}
+                class="ed-avatar__dot"
+              >
+              </span>
             </span>
-            <div class="font-semibold" style="font-size:0.9375rem;">
-              {title(@selected, @current_scope.user)}
+            <div class="min-w-0">
+              <div class="font-semibold truncate" style="font-size:0.9375rem;">
+                {title(@selected, @current_scope.user)}
+              </div>
+              <div
+                :if={not @selected.is_group}
+                style={"font-size:0.6875rem; color: var(#{if online?(@selected, @current_scope.user, @online_ids), do: "--ed-online", else: "--ed-muted"});"}
+              >
+                {if online?(@selected, @current_scope.user, @online_ids),
+                  do: gettext("online"),
+                  else: gettext("offline")}
+              </div>
             </div>
           </header>
 

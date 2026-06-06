@@ -15,6 +15,7 @@ defmodule Eden.Application do
       Eden.Repo,
       {DNSCluster, query: Application.get_env(:eden, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Eden.PubSub},
+      EdenWeb.Presence,
       {Oban, Application.fetch_env!(:eden, Oban)},
       # Start to serve requests, typically the last entry
       EdenWeb.Endpoint

@@ -148,6 +148,26 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "list_conversations/1 enrichment" do
+    test "fills last_message_body and per-user unread_count", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "first"})
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "second"})
+
+      [for_bob] = Chat.list_conversations(scope(bob))
+      assert for_bob.last_message_body == "second"
+      assert for_bob.unread_count == 2
+
+      # the sender's own messages are never unread for the sender
+      [for_alice] = Chat.list_conversations(scope(alice))
+      assert for_alice.unread_count == 0
+
+      Chat.mark_read(scope(bob), conv.id)
+      [after_read] = Chat.list_conversations(scope(bob))
+      assert after_read.unread_count == 0
+    end
+  end
+
   describe "mark_read/2" do
     test "sets last_read_at for the member", %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

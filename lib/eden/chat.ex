@@ -18,13 +18,60 @@ defmodule Eden.Chat do
 
   ## Conversations
 
-  @doc "Conversations the scoped user belongs to, most-recent first, members preloaded."
+  @doc """
+  Conversations the scoped user belongs to, most-recent first, with members
+  preloaded and the virtual `unread_count` / `last_message_body` filled in.
+  """
   def list_conversations(%Scope{user: user}) do
-    Conversation
-    |> join(:inner, [c], m in Membership, on: m.conversation_id == c.id and m.user_id == ^user.id)
-    |> order_by([c], desc_nulls_last: c.last_message_at, desc: c.id)
-    |> preload(memberships: :user)
+    conversations =
+      Conversation
+      |> join(:inner, [c], m in Membership,
+        on: m.conversation_id == c.id and m.user_id == ^user.id
+      )
+      |> order_by([c], desc_nulls_last: c.last_message_at, desc: c.id)
+      |> preload(memberships: :user)
+      |> Repo.all()
+
+    ids = Enum.map(conversations, & &1.id)
+    previews = last_message_bodies(ids)
+    unread = unread_counts(user, ids)
+
+    Enum.map(conversations, fn conversation ->
+      %{
+        conversation
+        | last_message_body: previews[conversation.id],
+          unread_count: Map.get(unread, conversation.id, 0)
+      }
+    end)
+  end
+
+  defp last_message_bodies([]), do: %{}
+
+  defp last_message_bodies(ids) do
+    from(m in Message,
+      where: m.conversation_id in ^ids,
+      distinct: m.conversation_id,
+      order_by: [asc: m.conversation_id, desc: m.id],
+      select: {m.conversation_id, m.body}
+    )
     |> Repo.all()
+    |> Map.new()
+  end
+
+  defp unread_counts(_user, []), do: %{}
+
+  defp unread_counts(user, ids) do
+    from(m in Message,
+      join: mem in Membership,
+      on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      where:
+        m.conversation_id in ^ids and m.sender_id != ^user.id and
+          (is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at),
+      group_by: m.conversation_id,
+      select: {m.conversation_id, count(m.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
   end
 
   @doc "Fetches a conversation the scoped user belongs to (members preloaded), or `{:error, :not_found}`."
@@ -101,6 +148,7 @@ defmodule Eden.Chat do
           touch_conversation(conversation_id, message.inserted_at)
           message = Repo.preload(message, :sender)
           broadcast(conversation_id, {:new_message, message})
+          notify_members(conversation_id)
           {:ok, message}
 
         {:error, changeset} ->
@@ -135,10 +183,28 @@ defmodule Eden.Chat do
   def unsubscribe(conversation_id),
     do: Phoenix.PubSub.unsubscribe(@pubsub, topic(conversation_id))
 
+  @doc "Subscribe to the scoped user's chat activity (any of their conversations changed)."
+  def subscribe_user(%Scope{user: user}),
+    do: Phoenix.PubSub.subscribe(@pubsub, user_topic(user.id))
+
   defp broadcast(conversation_id, message),
     do: Phoenix.PubSub.broadcast(@pubsub, topic(conversation_id), message)
 
+  # Tell every member's chat process that this conversation changed (reorder /
+  # unread / preview in the sidebar), without leaking message contents.
+  defp notify_members(conversation_id) do
+    member_ids =
+      Repo.all(
+        from m in Membership, where: m.conversation_id == ^conversation_id, select: m.user_id
+      )
+
+    for user_id <- member_ids do
+      Phoenix.PubSub.broadcast(@pubsub, user_topic(user_id), :conversations_changed)
+    end
+  end
+
   defp topic(conversation_id), do: "conversation:#{conversation_id}"
+  defp user_topic(user_id), do: "user:#{user_id}:chat"
 
   ## Internals
 
