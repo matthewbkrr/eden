@@ -16,7 +16,7 @@ msgstr ""
 msgid "Actions"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:29
+#: lib/eden_web/live/settings_live.ex:32
 #, elixir-autogen, elixir-format
 msgid "Appearance"
 msgstr ""
@@ -32,37 +32,38 @@ msgstr ""
 msgid "Back"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:52
+#: lib/eden_web/live/settings_live.ex:73
 #, elixir-autogen, elixir-format
 msgid "Changes the language across eden."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:31
+#: lib/eden_web/live/settings_live.ex:34
 #, elixir-autogen, elixir-format
 msgid "Choose how eden looks on this device."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:43
+#: lib/eden_web/live/settings_live.ex:61
 #, elixir-autogen, elixir-format
 msgid "Dark"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:57
+#: lib/eden_web/live/settings_live.ex:78
 #, elixir-autogen, elixir-format
 msgid "Interface language"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:50
-#: lib/eden_web/live/settings_live.ex:58
+#: lib/eden_web/live/settings_live.ex:71
+#: lib/eden_web/live/settings_live.ex:79
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:40
+#: lib/eden_web/live/settings_live.ex:53
 #, elixir-autogen, elixir-format
 msgid "Light"
 msgstr ""
 
+#: lib/eden_web/live/app_home_live.ex:18
 #: lib/eden_web/live/settings_live.ex:12
 #: lib/eden_web/live/settings_live.ex:24
 #, elixir-autogen, elixir-format
@@ -74,13 +75,13 @@ msgstr ""
 msgid "Something went wrong!"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:37
+#: lib/eden_web/live/settings_live.ex:45
 #, elixir-autogen, elixir-format
 msgid "System"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:34
-#: lib/eden_web/live/settings_live.ex:35
+#: lib/eden_web/live/settings_live.ex:37
+#: lib/eden_web/live/settings_live.ex:38
 #, elixir-autogen, elixir-format
 msgid "Theme"
 msgstr ""
@@ -93,4 +94,148 @@ msgstr ""
 #: lib/eden_web/components/core_components.ex:81
 #, elixir-autogen, elixir-format
 msgid "close"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:79
+#, elixir-autogen, elixir-format
+msgid "Create account"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:70
+#, elixir-autogen, elixir-format
+msgid "Display name"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:45
+#, elixir-autogen, elixir-format
+msgid "Go to start"
+msgstr ""
+
+#: lib/eden_web/live/app_home_live.ex:6
+#, elixir-autogen, elixir-format
+msgid "Home"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:90
+#, elixir-autogen, elixir-format
+msgid "Invalid invite"
+msgstr ""
+
+#: lib/eden_web/controllers/user_session_controller.ex:11
+#, elixir-autogen, elixir-format
+msgid "Invalid username or password."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:23
+#, elixir-autogen, elixir-format
+msgid "Invite"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:88
+#, elixir-autogen, elixir-format
+msgid "Invite already used"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:87
+#, elixir-autogen, elixir-format
+msgid "Invite expired"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:89
+#, elixir-autogen, elixir-format
+msgid "Invite revoked"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:16
+#: lib/eden_web/live/invite_live.ex:55
+#, elixir-autogen, elixir-format
+msgid "Join eden"
+msgstr ""
+
+#: lib/eden_web/live/login_live.ex:6
+#: lib/eden_web/live/login_live.ex:35
+#, elixir-autogen, elixir-format
+msgid "Log in"
+msgstr ""
+
+#: lib/eden_web/live/login_live.ex:13
+#, elixir-autogen, elixir-format
+msgid "Log in to eden"
+msgstr ""
+
+#: lib/eden_web/live/app_home_live.ex:22
+#, elixir-autogen, elixir-format
+msgid "Log out"
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:73
+#: lib/eden_web/live/login_live.ex:30
+#, elixir-autogen, elixir-format
+msgid "Password"
+msgstr ""
+
+#: lib/eden_web/controllers/invite_controller.ex:18
+#, elixir-autogen, elixir-format
+msgid "That username may be taken. Please try another."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:96
+#, elixir-autogen, elixir-format
+msgid "This invite link has been used up. Ask for a new one."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:93
+#, elixir-autogen, elixir-format
+msgid "This invite link has expired. Ask for a new one."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:99
+#, elixir-autogen, elixir-format
+msgid "This invite link is invalid."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:98
+#, elixir-autogen, elixir-format
+msgid "This invite link is no longer active."
+msgstr ""
+
+#: lib/eden_web/live/login_live.ex:15
+#, elixir-autogen, elixir-format
+msgid "Use your username and password."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:65
+#: lib/eden_web/live/login_live.ex:23
+#, elixir-autogen, elixir-format
+msgid "Username"
+msgstr ""
+
+#: lib/eden_web/controllers/user_session_controller.ex:16
+#, elixir-autogen, elixir-format
+msgid "Welcome back, %{name}!"
+msgstr ""
+
+#: lib/eden_web/controllers/invite_controller.ex:11
+#, elixir-autogen, elixir-format
+msgid "Welcome to eden, %{name}!"
+msgstr ""
+
+#: lib/eden_web/live/app_home_live.ex:29
+#, elixir-autogen, elixir-format
+msgid "Welcome, %{name}"
+msgstr ""
+
+#: lib/eden_web/controllers/user_session_controller.ex:23
+#, elixir-autogen, elixir-format
+msgid "You have been logged out."
+msgstr ""
+
+#: lib/eden_web/live/invite_live.ex:57
+#, elixir-autogen, elixir-format
+msgid "You were invited. Pick a username and password."
+msgstr ""
+
+#: lib/eden_web/live/app_home_live.ex:32
+#, elixir-autogen, elixir-format
+msgid "You're signed in. Conversations arrive in Phase 2."
 msgstr ""

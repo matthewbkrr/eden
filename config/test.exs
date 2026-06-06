@@ -16,6 +16,9 @@ config :eden, Eden.Repo,
 # Oban in tests: no queues or plugins; jobs are asserted with Oban.Testing.
 config :eden, Oban, testing: :manual
 
+# Use the lowest bcrypt cost in tests so the suite stays fast.
+config :bcrypt_elixir, :log_rounds, 1
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :eden, EdenWeb.Endpoint,

@@ -80,6 +80,7 @@ defmodule Eden.MixProject do
       {:bandit, "~> 1.5"},
       {:oban, "~> 2.19"},
       {:logger_json, "~> 7.0"},
+      {:bcrypt_elixir, "~> 3.0"},
 
       # Dev/test tooling (Phase 0 engineering harness)
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
