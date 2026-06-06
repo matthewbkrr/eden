@@ -34,7 +34,8 @@ defmodule EdenWeb.Router do
     # Authenticated pages.
     live_session :authenticated,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_authenticated}] do
-      live "/app", AppHomeLive
+      live "/app", ChatLive
+      live "/app/c/:id", ChatLive
     end
 
     # Device preferences — available signed out (current_scope may be nil).

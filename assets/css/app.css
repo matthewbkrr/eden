@@ -217,15 +217,24 @@
   .ed-btn--danger { background: var(--ed-danger); color: var(--ed-on-primary); }
   .ed-btn--danger:hover:not(:disabled) { filter: brightness(1.08); }
 
+  /* Standalone icon button (used on <button> and <a>/<.link>), so it must carry
+     its own layout + centering rather than relying on the .ed-btn base. */
   .ed-btn--icon {
+    display: inline-grid;
+    place-items: center;
     width: 2.25rem;
     height: 2.25rem;
     padding: 0;
+    border: none;
     border-radius: var(--ed-radius-full);
     background: transparent;
     color: var(--ed-muted);
+    cursor: pointer;
+    flex: none;
+    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
   }
   .ed-btn--icon:hover:not(:disabled) { background: var(--ed-surface-2); color: var(--ed-ink); }
+  .ed-btn--icon:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
 
   /* Inputs -------------------------------------------------------------- */
   .ed-input {
