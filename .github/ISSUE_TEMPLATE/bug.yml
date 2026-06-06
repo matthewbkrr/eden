@@ -1,0 +1,88 @@
+name: 🐞 Bug report
+description: Report a defect in eden
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please include enough detail for us to reproduce the issue.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Fill in versions and where this happened.
+      value: |
+        - eden commit / branch:
+        - Environment: dev | prod
+        - Elixir / OTP:
+        - Phoenix:
+        - OS:
+        - Browser (if UI):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / stacktrace
+      description: Paste relevant logs or the stacktrace. Rendered as a code block — no backticks needed.
+      render: shell
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "P3 — minor / cosmetic"
+        - "P2 — degraded, has a workaround"
+        - "P1 — major, no workaround"
+        - "P0 — outage / data loss / security"
+    validations:
+      required: true
+  - type: dropdown
+    id: security
+    attributes:
+      label: Is this security-sensitive?
+      description: e.g. leaks data or bypasses auth/permissions. If yes, prefer reporting privately rather than in a public issue.
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for duplicates
+          required: true

@@ -1,0 +1,77 @@
+name: ✨ Feature request
+description: Propose a new capability or enhancement for eden
+title: "[Feature]: "
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a feature. Fill in the sections below so we can scope it well before any code is written.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / problem
+      description: What problem does this solve? Who is affected, and why now?
+      placeholder: As a user, I want … so that …
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Outline the approach. Mention affected contexts (Accounts / Chat / Storage) if known.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, testable conditions that define "done".
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: In scope
+      description: What this feature explicitly includes.
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of scope
+      description: What this feature explicitly does NOT include (guards against scope creep).
+    validations:
+      required: true
+  - type: dropdown
+    id: security-impact
+    attributes:
+      label: Security impact
+      description: Does this touch auth, user data, file uploads, permissions, or untrusted input?
+      options:
+        - "None — no security-relevant surface"
+        - "Low — minor, no sensitive data"
+        - "Medium — touches user data or permissions"
+        - "High — auth, file storage, or untrusted input"
+        - "Needs security review"
+    validations:
+      required: true
+  - type: textarea
+    id: security-notes
+    attributes:
+      label: Security notes
+      description: If impact is Medium+ or needs review, describe the surface — data handled, threats, mitigations.
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for duplicates
+          required: true
+        - label: This fits the contexts in CLAUDE.md (Accounts / Chat / Storage)
+          required: false
