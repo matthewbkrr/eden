@@ -1,0 +1,34 @@
+# Sobelow configuration (security-focused static analysis for Phoenix).
+# Read by `mix sobelow --config`. Evaluated as Elixir, so comments are allowed.
+[
+  # Run all modules; narrow with `ignore:` only for confirmed false positives.
+  verbose: false,
+  private: false,
+
+  # Do NOT honor inline `# sobelow_skip` comments — suppressions must be explicit
+  # and reviewed here, not scattered through the code.
+  skip: false,
+
+  # Auto-detect the router.
+  router: nil,
+
+  # Gate: any finding of :low severity or higher makes sobelow exit non-zero,
+  # so `mix check` / CI fail on new security findings.
+  exit: "low",
+
+  # Show findings of :low confidence and above.
+  threshold: :low,
+
+  format: "txt",
+  out: nil,
+
+  # Finding ids to ignore. Each MUST be justified here.
+  #
+  # Config.CSP — no Content-Security-Policy yet. Deferred to frontend work:
+  # a proper nonce-based CSP will be added with the LiveView UI, then this
+  # entry removed. Tracked as a Phase-1 security follow-up (see CLAUDE.md).
+  ignore: ["Config.CSP"],
+
+  # Files to exclude from scanning. Keep empty.
+  ignore_files: []
+]

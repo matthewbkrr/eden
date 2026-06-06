@@ -11,7 +11,20 @@ defmodule Eden.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      dialyzer: dialyzer()
+    ]
+  end
+
+  # Dialyzer config. PLTs live under priv/plts (gitignored) so CI can cache them
+  # as a single directory. Warnings listed in .dialyzer_ignore.exs are suppressed.
+  defp dialyzer do
+    [
+      plt_core_path: "priv/plts",
+      plt_local_path: "priv/plts",
+      plt_add_apps: [:ex_unit, :mix],
+      ignore_warnings: ".dialyzer_ignore.exs",
+      list_unused_filters: true
     ]
   end
 

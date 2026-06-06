@@ -35,3 +35,6 @@ eden-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Dialyzer PLT files (build artifacts; cached separately in CI).
+/priv/plts/
+
