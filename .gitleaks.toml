@@ -19,6 +19,9 @@ paths = [
   '''config/dev\.exs''',
   '''config/test\.exs''',
 ]
+# Match the whole source line, not just the captured secret — the secret_key_base
+# label is on the line, not inside the high-entropy value gitleaks captures.
+regexTarget = "line"
 regexes = [
   '''secret_key_base: "[^"]+"''',
 ]
