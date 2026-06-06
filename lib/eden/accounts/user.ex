@@ -26,7 +26,7 @@ defmodule Eden.Accounts.User do
   def registration_changeset(user, attrs, opts \\ []) do
     user
     |> cast(attrs, [:username, :display_name, :password])
-    |> validate_username()
+    |> validate_username(opts)
     |> validate_display_name()
     |> validate_password(opts)
   end
@@ -38,15 +38,25 @@ defmodule Eden.Accounts.User do
     |> validate_display_name()
   end
 
-  defp validate_username(changeset) do
-    changeset
-    |> validate_required([:username])
-    |> validate_length(:username, min: 3, max: 30)
-    |> validate_format(:username, ~r/^[a-z0-9_]+$/i,
-      message: "only letters, numbers, and underscores"
-    )
-    |> unsafe_validate_unique(:username, Eden.Repo)
-    |> unique_constraint(:username)
+  defp validate_username(changeset, opts) do
+    changeset =
+      changeset
+      |> validate_required([:username])
+      |> validate_length(:username, min: 3, max: 30)
+      |> validate_format(:username, ~r/^[a-z0-9_]+$/i,
+        message: "only letters, numbers, and underscores"
+      )
+      |> unique_constraint(:username)
+
+    # The early DB probe is for nicer messages on insert; skip it during live
+    # form validation (`validate_unique: false`) to avoid a query per keystroke
+    # and username enumeration on the public invite form. The unique_constraint
+    # above still enforces uniqueness atomically at insert time.
+    if Keyword.get(opts, :validate_unique, true) do
+      unsafe_validate_unique(changeset, :username, Eden.Repo)
+    else
+      changeset
+    end
   end
 
   defp validate_display_name(changeset) do

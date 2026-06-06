@@ -502,4 +502,55 @@ defmodule EdenWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  @doc """
+  Brand-styled flash (info/error) for auth pages that render outside the app
+  layout. Renders nothing when there is no flash.
+  """
+  attr :flash, :map, required: true
+
+  def ed_flash(assigns) do
+    ~H"""
+    <div class="space-y-2 mb-4 empty:hidden">
+      <div :if={msg = Phoenix.Flash.get(@flash, :error)} class="ed-toast ed-toast--error">
+        <span class="ed-toast__bar"></span>{msg}
+      </div>
+      <div :if={msg = Phoenix.Flash.get(@flash, :info)} class="ed-toast ed-toast--info">
+        <span class="ed-toast__bar"></span>{msg}
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Brand-styled labeled text input (eden design system) with field errors. Shared
+  by auth forms so login and invite render identically. Password inputs never
+  echo their value back to the client.
+  """
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :type, :string, default: "text"
+  attr :rest, :global, include: ~w(autocomplete autofocus required)
+
+  def ed_field(assigns) do
+    ~H"""
+    <label class="block space-y-1.5">
+      <span style="font-size:0.8125rem; color: var(--ed-muted);">{@label}</span>
+      <input
+        class="ed-input"
+        type={@type}
+        name={@field.name}
+        id={@field.id}
+        value={@type != "password" && Phoenix.HTML.Form.normalize_value(@type, @field.value)}
+        {@rest}
+      />
+      <span
+        :for={msg <- Enum.map(@field.errors, &translate_error/1)}
+        style="color: var(--ed-danger); font-size:0.75rem;"
+      >
+        {msg}
+      </span>
+    </label>
+    """
+  end
 end

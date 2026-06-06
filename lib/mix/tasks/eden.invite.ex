@@ -56,9 +56,11 @@ defmodule Mix.Tasks.Eden.Invite do
 
   defp days_to_expiry(nil), do: nil
 
-  defp days_to_expiry(days) do
+  defp days_to_expiry(days) when days > 0 do
     DateTime.utc_now() |> DateTime.add(days, :day) |> DateTime.truncate(:second)
   end
+
+  defp days_to_expiry(days), do: Mix.raise("--days must be a positive integer, got: #{days}")
 
   defp base_url do
     EdenWeb.Endpoint.url()

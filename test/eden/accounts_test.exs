@@ -28,6 +28,11 @@ defmodule Eden.AccountsTest do
 
   defp past, do: DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.truncate(:second)
 
+  defp ctx_token(inviter) do
+    {:ok, _invite, token} = Accounts.create_invite(inviter)
+    token
+  end
+
   describe "register_user_with_invite/2" do
     setup do
       inviter = user_fixture()
@@ -45,7 +50,23 @@ defmodule Eden.AccountsTest do
     end
 
     test "rejects an unknown token" do
-      assert {:error, :invalid_invite} = Accounts.register_user_with_invite("nope", valid_attrs())
+      assert {:error, :invalid} = Accounts.register_user_with_invite("nope", valid_attrs())
+    end
+
+    test "rejects a username that differs only in case (citext)", %{inviter: inviter} do
+      assert {:ok, _} =
+               Accounts.register_user_with_invite(
+                 ctx_token(inviter),
+                 valid_attrs(%{username: "Alice"})
+               )
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Accounts.register_user_with_invite(
+                 ctx_token(inviter),
+                 valid_attrs(%{username: "alice"})
+               )
+
+      assert "has already been taken" in errors_on(changeset).username
     end
 
     test "rejects reuse of a single-use invite", ctx do

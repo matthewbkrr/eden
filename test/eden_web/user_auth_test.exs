@@ -39,6 +39,30 @@ defmodule EdenWeb.UserAuthTest do
     end
   end
 
+  describe "already-authenticated users are bounced from signed-out POST routes" do
+    test "POST /users/log_in redirects to /app", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+
+      conn =
+        post(conn, ~p"/users/log_in", %{"user" => %{"username" => "x", "password" => "y"}})
+
+      assert redirected_to(conn) == ~p"/app"
+    end
+
+    test "POST /invite/:token redirects to /app and does not consume the invite", %{conn: conn} do
+      token = invite_token_fixture()
+      conn = log_in_user(conn, user_fixture())
+
+      conn =
+        post(conn, ~p"/invite/#{token}", %{
+          "user" => %{"username" => "n3", "display_name" => "N", "password" => "password123"}
+        })
+
+      assert redirected_to(conn) == ~p"/app"
+      assert {:ok, _} = Eden.Accounts.fetch_valid_invite(token)
+    end
+  end
+
   describe "DELETE /users/log_out" do
     test "logs out and revokes the session token server-side", %{conn: conn} do
       conn = log_in_user(conn, user_fixture())

@@ -15,45 +15,25 @@ defmodule EdenWeb.LoginLive do
           {gettext("Use your username and password.")}
         </p>
 
-        <.auth_flash flash={@flash} />
+        <.ed_flash flash={@flash} />
 
         <.form for={@form} action={~p"/users/log_in"} class="space-y-4">
-          <label class="block space-y-1.5">
-            <span style="font-size:0.8125rem; color: var(--ed-muted);">{gettext("Username")}</span>
-            <input
-              class="ed-input"
-              type="text"
-              name="user[username]"
-              autocomplete="username"
-              required
-              autofocus
-            />
-          </label>
-          <label class="block space-y-1.5">
-            <span style="font-size:0.8125rem; color: var(--ed-muted);">{gettext("Password")}</span>
-            <input
-              class="ed-input"
-              type="password"
-              name="user[password]"
-              autocomplete="current-password"
-              required
-            />
-          </label>
+          <.ed_field
+            field={@form[:username]}
+            label={gettext("Username")}
+            autocomplete="username"
+            required
+            autofocus
+          />
+          <.ed_field
+            field={@form[:password]}
+            label={gettext("Password")}
+            type="password"
+            autocomplete="current-password"
+            required
+          />
           <button class="ed-btn ed-btn--primary w-full" type="submit">{gettext("Log in")}</button>
         </.form>
-      </div>
-    </div>
-    """
-  end
-
-  defp auth_flash(assigns) do
-    ~H"""
-    <div class="space-y-2 mb-4 empty:hidden">
-      <div :if={msg = Phoenix.Flash.get(@flash, :error)} class="ed-toast ed-toast--error">
-        <span class="ed-toast__bar"></span>{msg}
-      </div>
-      <div :if={msg = Phoenix.Flash.get(@flash, :info)} class="ed-toast ed-toast--info">
-        <span class="ed-toast__bar"></span>{msg}
       </div>
     </div>
     """

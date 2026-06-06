@@ -35,9 +35,12 @@ defmodule Eden.Accounts do
     if User.valid_password?(user, password), do: user
   end
 
-  @doc "Changeset for the registration form (does not hash unless told to)."
+  @doc """
+  Changeset for the live registration form: does not hash the password and skips
+  the unique-username DB probe (uniqueness is still enforced at insert).
+  """
   def change_user_registration(attrs \\ %{}) do
-    User.registration_changeset(%User{}, attrs, hash_password: false)
+    User.registration_changeset(%User{}, attrs, hash_password: false, validate_unique: false)
   end
 
   ## Session tokens
@@ -113,8 +116,9 @@ defmodule Eden.Accounts do
 
   @doc """
   Accepts an invite and creates a user, atomically. Returns `{:ok, user}` or
-  `{:error, reason}` where reason is an invite problem atom (`:invalid_invite`,
-  `:expired`, `:revoked`, `:exhausted`) or a registration `%Ecto.Changeset{}`.
+  `{:error, reason}` where reason is an invite problem atom (`:invalid`,
+  `:expired`, `:revoked`, `:exhausted` — same vocabulary as `fetch_valid_invite/1`)
+  or a registration `%Ecto.Changeset{}`.
 
   The invite row is locked `FOR UPDATE` for the transaction so two people racing
   on the last use of an invite cannot both succeed.
@@ -139,7 +143,7 @@ defmodule Eden.Accounts do
   defp accept_locked_invite(hashed, attrs) do
     case lock_invite(hashed) do
       nil ->
-        {:error, :invalid_invite}
+        {:error, :invalid}
 
       invite ->
         with {:ok, _invite} <- validate_invite(invite),

@@ -12,19 +12,16 @@ defmodule EdenWeb.InviteController do
         |> UserAuth.log_in_user(user)
 
       {:error, %Ecto.Changeset{}} ->
+        # Most commonly a username already taken. Send them back to the form
+        # (which renders the flash) to choose another.
         conn
-        |> put_flash(:error, gettext("Please fix the errors below and try again."))
+        |> put_flash(:error, gettext("That username may be taken. Please try another."))
         |> redirect(to: ~p"/invite/#{token}")
 
-      {:error, reason} ->
-        conn
-        |> put_flash(:error, invite_error(reason))
-        |> redirect(to: ~p"/")
+      {:error, _reason} ->
+        # Invite became invalid (expired/revoked/exhausted/unknown) between load
+        # and submit; the invite page re-renders the specific reason.
+        redirect(conn, to: ~p"/invite/#{token}")
     end
   end
-
-  defp invite_error(:expired), do: gettext("This invite link has expired.")
-  defp invite_error(:revoked), do: gettext("This invite link is no longer active.")
-  defp invite_error(:exhausted), do: gettext("This invite link has already been used up.")
-  defp invite_error(_), do: gettext("This invite link is invalid.")
 end

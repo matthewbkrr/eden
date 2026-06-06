@@ -18,23 +18,18 @@ defmodule EdenWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Guards the controller routes for signed-out flows (the LiveView pages use the
+  # matching :redirect_if_authenticated on_mount hook).
+  pipeline :redirect_if_authenticated do
+    plug :redirect_if_user_is_authenticated
+  end
+
   scope "/", EdenWeb do
     pipe_through :browser
 
     get "/", PageController, :home
     post "/locale", LocaleController, :update
-
-    # Session lifecycle (native form posts; LiveView can't set cookies).
-    post "/users/log_in", UserSessionController, :create
     delete "/users/log_out", UserSessionController, :delete
-    post "/invite/:token", InviteController, :create
-
-    # Signed-out pages: bounce already-authenticated users to the app.
-    live_session :redirect_if_authenticated,
-      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :redirect_if_authenticated}] do
-      live "/login", LoginLive
-      live "/invite/:token", InviteLive
-    end
 
     # Authenticated pages.
     live_session :authenticated,
@@ -46,6 +41,21 @@ defmodule EdenWeb.Router do
     live_session :default,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}] do
       live "/settings", SettingsLive
+    end
+  end
+
+  # Signed-out flows: already-authenticated users are bounced to the app, both
+  # at the LiveView (on_mount) and the native POST controller routes (plug).
+  scope "/", EdenWeb do
+    pipe_through [:browser, :redirect_if_authenticated]
+
+    post "/users/log_in", UserSessionController, :create
+    post "/invite/:token", InviteController, :create
+
+    live_session :redirect_if_authenticated,
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :redirect_if_authenticated}] do
+      live "/login", LoginLive
+      live "/invite/:token", InviteLive
     end
   end
 

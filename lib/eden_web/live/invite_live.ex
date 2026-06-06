@@ -57,24 +57,23 @@ defmodule EdenWeb.InviteLive do
           {gettext("You were invited. Pick a username and password.")}
         </p>
 
-        <.form
-          for={@form}
-          action={~p"/invite/#{@token}"}
-          phx-change="validate"
-          class="space-y-4"
-        >
-          <.field
+        <.ed_flash flash={@flash} />
+
+        <.form for={@form} action={~p"/invite/#{@token}"} phx-change="validate" class="space-y-4">
+          <.ed_field
             field={@form[:username]}
             label={gettext("Username")}
             autocomplete="username"
+            required
             autofocus
           />
-          <.field field={@form[:display_name]} label={gettext("Display name")} />
-          <.field
+          <.ed_field field={@form[:display_name]} label={gettext("Display name")} required />
+          <.ed_field
             field={@form[:password]}
             label={gettext("Password")}
             type="password"
             autocomplete="new-password"
+            required
           />
           <button class="ed-btn ed-btn--primary w-full" type="submit">
             {gettext("Create account")}
@@ -82,33 +81,6 @@ defmodule EdenWeb.InviteLive do
         </.form>
       </div>
     </div>
-    """
-  end
-
-  attr :field, Phoenix.HTML.FormField, required: true
-  attr :label, :string, required: true
-  attr :type, :string, default: "text"
-  attr :rest, :global, include: ~w(autocomplete autofocus)
-
-  defp field(assigns) do
-    ~H"""
-    <label class="block space-y-1.5">
-      <span style="font-size:0.8125rem; color: var(--ed-muted);">{@label}</span>
-      <input
-        class="ed-input"
-        type={@type}
-        name={@field.name}
-        id={@field.id}
-        value={Phoenix.HTML.Form.normalize_value(@type, @field.value)}
-        {@rest}
-      />
-      <span
-        :for={msg <- Enum.map(@field.errors, &translate_error/1)}
-        style="color: var(--ed-danger); font-size:0.75rem;"
-      >
-        {msg}
-      </span>
-    </label>
     """
   end
 
