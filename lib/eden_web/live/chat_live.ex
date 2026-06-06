@@ -56,7 +56,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_params(_params, _uri, socket) do
-    {:noreply, socket |> unsubscribe() |> assign(selected: nil)}
+    {:noreply, socket |> unsubscribe() |> assign(selected: nil) |> refresh_sidebar()}
   end
 
   @impl true
@@ -529,6 +529,16 @@ defmodule EdenWeb.ChatLive do
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id))
     )
     |> stream(:messages, messages, reset: true)
+    # Re-stream the sidebar so the active highlight follows the selection (stream
+    # items don't re-render on assign changes) and the opened conversation's
+    # unread badge clears.
+    |> refresh_sidebar()
+  end
+
+  defp refresh_sidebar(socket) do
+    stream(socket, :conversations, Chat.list_conversations(socket.assigns.current_scope),
+      reset: true
+    )
   end
 
   defp unsubscribe(socket) do

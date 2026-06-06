@@ -52,6 +52,22 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "hello there"
     end
 
+    test "the active highlight follows the selected conversation", ctx do
+      carol = user_fixture(%{username: "carol_hl", display_name: "Carol"})
+      {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert has_element?(view, ~s(a[href="/app/c/#{ctx.conversation.id}"].ed-convo--active))
+      refute has_element?(view, ~s(a[href="/app/c/#{conv2.id}"].ed-convo--active))
+
+      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+
+      assert has_element?(view, ~s(a[href="/app/c/#{conv2.id}"].ed-convo--active))
+      refute has_element?(view, ~s(a[href="/app/c/#{ctx.conversation.id}"].ed-convo--active))
+    end
+
     test "receives another member's message in realtime", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
