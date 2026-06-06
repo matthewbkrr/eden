@@ -18,7 +18,7 @@ defmodule EdenWeb.SettingsLive do
     <div class="ed-root min-h-screen">
       <div class="mx-auto max-w-xl px-5 sm:px-6 py-10">
         <header class="flex items-center gap-3 mb-8">
-          <.link navigate={~p"/"} class="ed-btn--icon" aria-label={gettext("Back")}>
+          <.link navigate={~p"/app"} class="ed-btn--icon" aria-label={gettext("Back")}>
             <.icon name="hero-arrow-left-mini" class="size-5" />
           </.link>
           <h1 style="font-size:1.375rem; font-weight:650;">{gettext("Settings")}</h1>

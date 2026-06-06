@@ -32,7 +32,7 @@ defmodule EdenWeb.ChatLive do
         has_more: false,
         oldest_id: nil,
         online_ids: EdenWeb.Presence.online_ids(),
-        composer: to_form(%{}, as: "message")
+        composer: empty_composer()
       )
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
@@ -59,17 +59,34 @@ defmodule EdenWeb.ChatLive do
   end
 
   @impl true
+  def handle_event("composer_changed", %{"message" => %{"body" => body}}, socket) do
+    # Track the value server-side so resetting to "" after send produces a real
+    # diff that clears the input.
+    {:noreply, assign(socket, composer: to_form(%{"body" => body}, as: "message"))}
+  end
+
   def handle_event("send", %{"message" => %{"body" => body}}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
 
-    if conversation do
-      # On success the PubSub broadcast streams the message back to us (and every
-      # other member), so there's a single insert path. Errors (blank/too long)
-      # just clear nothing.
-      Chat.create_message(scope, conversation.id, %{"body" => body})
-    end
+    cond do
+      is_nil(conversation) ->
+        {:noreply, socket}
 
-    {:noreply, assign(socket, composer: to_form(%{}, as: "message"))}
+      String.trim(body) == "" ->
+        {:noreply, assign(socket, composer: empty_composer())}
+
+      true ->
+        # On success the PubSub broadcast streams the message back (single insert
+        # path); just clear the box. On error keep the text and explain.
+        case Chat.create_message(scope, conversation.id, %{"body" => body}) do
+          {:ok, _message} ->
+            {:noreply, assign(socket, composer: empty_composer())}
+
+          {:error, _changeset} ->
+            {:noreply,
+             put_flash(socket, :error, gettext("Message is too long (up to 4000 characters)."))}
+        end
+    end
   end
 
   def handle_event("load_more", _params, socket) do
@@ -123,8 +140,12 @@ defmodule EdenWeb.ChatLive do
 
   @impl true
   def handle_info({:new_message, message}, socket) do
-    # We're viewing this conversation, so the message counts as read.
-    Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
+    # We're viewing this conversation, so an incoming message counts as read.
+    # Skip our own messages (no unread to clear, no write needed).
+    if message.sender_id != socket.assigns.current_scope.user.id do
+      Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
+    end
+
     {:noreply, stream_insert(socket, :messages, message)}
   end
 
@@ -195,10 +216,16 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  defp empty_composer, do: to_form(%{}, as: "message")
+
   @impl true
   def render(assigns) do
     ~H"""
     <div class="ed-root h-screen flex overflow-hidden">
+      <div class="fixed top-4 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4">
+        <.ed_flash flash={@flash} />
+      </div>
+
       <aside
         class={["w-full md:w-80 shrink-0 border-r flex flex-col", @selected && "hidden md:flex"]}
         style="border-color: var(--ed-border);"
@@ -334,8 +361,15 @@ defmodule EdenWeb.ChatLive do
             </div>
             <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
               export default {
-                mounted() { this.el.scrollTop = this.el.scrollHeight },
-                updated() { this.el.scrollTop = this.el.scrollHeight }
+                mounted() { this.toBottom() },
+                beforeUpdate() {
+                  // Only auto-scroll if the user is already near the bottom, so
+                  // loading older messages (prepended) doesn't yank them down.
+                  this.pinned =
+                    this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
+                },
+                updated() { if (this.pinned) this.toBottom() },
+                toBottom() { this.el.scrollTop = this.el.scrollHeight }
               }
             </script>
           </div>
@@ -343,6 +377,7 @@ defmodule EdenWeb.ChatLive do
           <.form
             for={@composer}
             phx-submit="send"
+            phx-change="composer_changed"
             class="flex items-center gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
