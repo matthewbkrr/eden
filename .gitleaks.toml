@@ -1,0 +1,24 @@
+# gitleaks configuration for eden.
+#
+# Extends gitleaks' default ruleset and allowlists ONLY the Phoenix-generated
+# dev/test `secret_key_base`. Those values are committed by `mix phx.new` by
+# design and are NOT production secrets — production reads SECRET_KEY_BASE from
+# the environment in config/runtime.exs. The allowlist is scoped to the exact
+# files AND the secret_key_base assignment, so any other secret in them is still
+# caught.
+
+title = "eden gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Phoenix dev/test secret_key_base (non-sensitive scaffold value)"
+condition = "AND"
+paths = [
+  '''config/dev\.exs''',
+  '''config/test\.exs''',
+]
+regexes = [
+  '''secret_key_base: "[^"]+"''',
+]
