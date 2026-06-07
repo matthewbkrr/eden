@@ -83,6 +83,9 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # Ignore malformed send payloads (e.g. a crafted event) instead of crashing.
+  def handle_event("send", _params, socket), do: {:noreply, socket}
+
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :photo, ref)}
   end
@@ -753,7 +756,11 @@ defmodule EdenWeb.ChatLive do
   defp send_text(socket, scope, conversation, body, client_id \\ nil) do
     case Chat.create_message(scope, conversation.id, %{"body" => body, "client_id" => client_id}) do
       {:ok, _message} ->
-        ack(assign(socket, composer: empty_composer()), client_id)
+        # The form path clears the input via the composer assign; the hook path
+        # (client_id present) already cleared it client-side, so leave the assign
+        # alone to avoid clobbering text typed during a slow round-trip.
+        socket = if client_id, do: socket, else: assign(socket, composer: empty_composer())
+        ack(socket, client_id)
 
       {:error, _changeset} ->
         socket

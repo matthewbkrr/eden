@@ -188,6 +188,16 @@ defmodule Eden.ChatTest do
       refute_receive {:new_message, _}, 50
     end
 
+    test "rejects an over-long client_id with a changeset error (no crash)", %{
+      alice: alice,
+      conv: conv
+    } do
+      big = String.duplicate("x", 5000)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Chat.create_message(scope(alice), conv.id, %{"body" => "hi", "client_id" => big})
+    end
+
     test "messages without a client_id are never deduped", %{alice: alice, conv: conv} do
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "a"})
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "b"})

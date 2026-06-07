@@ -104,6 +104,14 @@ defmodule EdenWeb.ChatLiveTest do
       assert Eden.Repo.aggregate(Eden.Chat.Message, :count) == 1
     end
 
+    test "ignores a malformed send payload without crashing", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "send", %{"oops" => true})
+      assert render(view) =~ "composer"
+    end
+
     test "renders a photo message as a linked image", ctx do
       {:ok, message} =
         Chat.create_photo_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{

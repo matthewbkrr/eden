@@ -9,6 +9,11 @@ defmodule Eden.Chat.Message do
   import Ecto.Changeset
 
   @max_body 4000
+  # Idempotency keys are UUIDs (36 chars); cap well above that and reject anything
+  # larger so a malformed/hostile value can't bloat the row or overflow the
+  # unique index (Postgres btree entries are size-limited, and an oversize value
+  # would otherwise raise instead of failing gracefully).
+  @max_client_id 64
 
   schema "messages" do
     field :body, :string
@@ -29,6 +34,7 @@ defmodule Eden.Chat.Message do
     |> update_change(:body, &sanitize/1)
     |> validate_required([:body])
     |> validate_length(:body, max: @max_body, count: :codepoints)
+    |> validate_length(:client_id, max: @max_client_id)
     |> dedup_constraint()
   end
 
@@ -42,6 +48,7 @@ defmodule Eden.Chat.Message do
     |> update_change(:body, &sanitize/1)
     |> ensure_body()
     |> validate_length(:body, max: @max_body, count: :codepoints)
+    |> validate_length(:client_id, max: @max_client_id)
     |> dedup_constraint()
   end
 

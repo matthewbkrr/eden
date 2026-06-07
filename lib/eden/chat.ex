@@ -404,12 +404,12 @@ defmodule Eden.Chat do
   # a safe resend after a reconnect: return the already-stored message instead of
   # erroring, and don't re-broadcast (the original send already did).
   defp resolve_duplicate(changeset, sender_id) do
-    client_id = Ecto.Changeset.get_field(changeset, :client_id)
-
-    if client_id && duplicate_client_id?(changeset) do
-      {:ok, fetch_by_client_id(sender_id, client_id)}
+    with true <- duplicate_client_id?(changeset),
+         client_id when is_binary(client_id) <- Ecto.Changeset.get_field(changeset, :client_id),
+         %Message{} = message <- fetch_by_client_id(sender_id, client_id) do
+      {:ok, message}
     else
-      {:error, changeset}
+      _ -> {:error, changeset}
     end
   end
 
