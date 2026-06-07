@@ -14,7 +14,8 @@ config :eden, EdenWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
     exclude: [
-      # paths: ["/health"],
+      # Health probes hit plain HTTP (no X-Forwarded-Proto); don't redirect them.
+      paths: ["/healthz"],
       hosts: ["localhost", "127.0.0.1"]
     ]
   ]
@@ -23,8 +24,11 @@ config :eden, EdenWeb.Endpoint,
 config :logger, level: :info
 
 # Structured JSON logs in production (ready for aggregation/search). Dev and
-# test keep the human-readable formatter from config/config.exs.
-config :logger, :default_formatter, {LoggerJSON.Formatters.Basic, metadata: [:request_id]}
+# test keep the human-readable formatter from config/config.exs. This configures
+# the default handler's formatter (a {module, opts} tuple) — note `:default_formatter`
+# expects formatter *options*, not a module, so the module goes via `:default_handler`.
+config :logger, :default_handler,
+  formatter: {LoggerJSON.Formatters.Basic, metadata: [:request_id]}
 
 # Runtime production configuration, including reading
 # of environment variables, is done on config/runtime.exs.
