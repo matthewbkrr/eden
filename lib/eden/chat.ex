@@ -22,9 +22,10 @@ defmodule Eden.Chat do
   # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
   @thumbnail_max 800
   @thumbnail_quality 80
-  # Reject decompression bombs before decoding: cap the source's *header*
-  # pixel dimensions (~100 MP), checked from the lazy image without decoding.
-  @max_source_pixels 100_000_000
+  # Reject decompression bombs before decoding: cap the source's *header* pixel
+  # count, read from the lazy image without decoding. Generous enough for modern
+  # high-MP phone cameras (~16000×12000), tight enough to stop absurd PNG bombs.
+  @max_source_pixels 192_000_000
 
   @doc "Maximum accepted attachment size in bytes (single source of truth for UI + server)."
   def max_attachment_bytes, do: @max_attachment_bytes
@@ -192,7 +193,15 @@ defmodule Eden.Chat do
          {:ok, byte_size} <- check_size(source.path),
          key = Storage.build_key("attachments", ext),
          :ok <- Storage.put(key, source.path) do
-      attrs = %{storage_key: key, content_type: content_type, byte_size: byte_size}
+      {width, height} = image_dimensions(source.path)
+
+      attrs = %{
+        storage_key: key,
+        content_type: content_type,
+        byte_size: byte_size,
+        width: width,
+        height: height
+      }
 
       case insert_photo_message(user, conversation_id, Map.get(source, :body, ""), attrs) do
         {:ok, message} ->
@@ -242,18 +251,17 @@ defmodule Eden.Chat do
 
   @doc """
   Generates and stores a downscaled, metadata-stripped JPEG thumbnail for the
-  attachment, records its key and the original dimensions, then broadcasts the
-  refreshed message so open clients swap the full image for the thumbnail.
-  Invoked by `Eden.Chat.ThumbnailWorker`; returns `:ok` or `{:error, reason}`.
+  attachment, records its key, then broadcasts the refreshed message so open
+  clients swap the full image for the thumbnail. Idempotent — a no-op once a
+  thumbnail exists. Invoked by `Eden.Chat.ThumbnailWorker`; returns `:ok` or
+  `{:error, reason}` (the dimensions are captured earlier, at upload time).
   """
+  def generate_thumbnail(%Attachment{thumbnail_key: key}) when is_binary(key), do: :ok
+
   def generate_thumbnail(%Attachment{} = attachment) do
     with {:ok, bytes} <- Storage.read(attachment.storage_key),
-         {:ok, jpeg, width, height} <- make_thumbnail(bytes),
-         thumb_key = Storage.build_key("thumbnails", "jpg"),
-         :ok <- Storage.put_binary(thumb_key, jpeg),
-         {:ok, _attachment} <- update_thumbnail(attachment, thumb_key, width, height) do
-      broadcast_thumbnail(attachment.message_id)
-      :ok
+         {:ok, jpeg} <- make_thumbnail(bytes) do
+      store_thumbnail(attachment, jpeg)
     end
   end
 
@@ -408,9 +416,7 @@ defmodule Eden.Chat do
   # don't need alpha; PNG transparency and GIF animation are not preserved.)
   defp make_thumbnail(bytes) do
     with {:ok, image} <- Image.from_binary(bytes),
-         width = Image.width(image),
-         height = Image.height(image),
-         :ok <- guard_dimensions(width, height),
+         :ok <- guard_dimensions(Image.width(image), Image.height(image)),
          {:ok, thumb} <-
            Vix.Vips.Operation.thumbnail_buffer(bytes, @thumbnail_max, size: :VIPS_SIZE_DOWN),
          {:ok, jpeg} <-
@@ -419,23 +425,51 @@ defmodule Eden.Chat do
              quality: @thumbnail_quality,
              strip_metadata: true
            ) do
-      {:ok, jpeg, width, height}
+      {:ok, jpeg}
     else
       # A bad/oversized image is a permanent failure (tagged so the worker cancels
       # rather than retries); transient errors live in generate_thumbnail instead.
       {:error, reason} -> {:error, {:unprocessable, reason}}
     end
   rescue
-    e -> {:error, {:unprocessable, Exception.message(e)}}
+    e ->
+      Logger.error("thumbnail generation crashed: #{Exception.message(e)}")
+      {:error, {:unprocessable, Exception.message(e)}}
   end
 
   defp guard_dimensions(width, height) when width * height <= @max_source_pixels, do: :ok
   defp guard_dimensions(_width, _height), do: {:error, :too_large}
 
-  defp update_thumbnail(attachment, thumb_key, width, height) do
+  defp store_thumbnail(attachment, jpeg) do
+    thumb_key = Storage.build_key("thumbnails", "jpg")
+
+    with :ok <- Storage.put_binary(thumb_key, jpeg),
+         {:ok, _attachment} <- update_thumbnail(attachment, thumb_key) do
+      broadcast_thumbnail(attachment.message_id)
+      :ok
+    else
+      error ->
+        # Don't leak the thumbnail blob if the DB update failed mid-way.
+        Storage.delete(thumb_key)
+        error
+    end
+  end
+
+  defp update_thumbnail(attachment, thumb_key) do
     attachment
-    |> Attachment.changeset(%{thumbnail_key: thumb_key, width: width, height: height})
+    |> Attachment.changeset(%{thumbnail_key: thumb_key})
     |> Repo.update()
+  end
+
+  # Best-effort original dimensions from the header (lazy — no full decode). Never
+  # raises out: an unreadable file yields {nil, nil} so it can't fail an upload.
+  defp image_dimensions(path) do
+    case Image.open(path) do
+      {:ok, image} -> {Image.width(image), Image.height(image)}
+      {:error, _} -> {nil, nil}
+    end
+  rescue
+    _ -> {nil, nil}
   end
 
   # Re-broadcast the message (attachment now carries a thumbnail_key) so open

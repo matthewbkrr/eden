@@ -74,6 +74,19 @@ defmodule EdenWeb.FileControllerTest do
       conn = get(conn, ~p"/files/#{attachment.id}")
       assert redirected_to(conn) == ~p"/login"
     end
+
+    test "a 404 for a blob missing on disk is not cached immutably", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment
+    } do
+      # Delete the stored blob out-of-band, then request it.
+      :ok = Eden.Storage.delete(attachment.storage_key)
+
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}")
+      assert response(conn, 404)
+      assert get_resp_header(conn, "cache-control") == []
+    end
   end
 
   describe "GET /files/:id/thumb" do

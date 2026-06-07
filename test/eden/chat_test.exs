@@ -219,12 +219,17 @@ defmodule Eden.ChatTest do
       %{conv: conv}
     end
 
-    test "downsizes to the long edge, records original dimensions, and broadcasts",
+    test "captures dimensions at upload, downsizes the thumbnail, and broadcasts",
          %{alice: alice, conv: conv} do
       Chat.subscribe(conv.id)
 
       {:ok, message} =
         Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(1200, 800)})
+
+      # Original dimensions are known immediately (before any thumbnail), so the
+      # first render can reserve layout space.
+      assert message.attachment.width == 1200
+      assert message.attachment.height == 800
 
       assert :ok = Chat.generate_thumbnail(message.attachment)
 

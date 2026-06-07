@@ -58,7 +58,14 @@ defmodule EdenWeb.FileController do
     end
   end
 
-  defp not_found(conn), do: conn |> put_status(:not_found) |> text("Not found")
+  # Drop any cache header set on the success path so a 404 (e.g. a blob missing
+  # out-of-band) is never cached as immutable for a year.
+  defp not_found(conn) do
+    conn
+    |> delete_resp_header("cache-control")
+    |> put_status(:not_found)
+    |> text("Not found")
+  end
 
   defp variant_source(attachment, :original),
     do: {:ok, attachment.storage_key, attachment.content_type}
