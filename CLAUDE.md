@@ -110,6 +110,23 @@ For any UI (LiveView templates, components, HEEx/Tailwind, pages, styling):
   `mix precommit` advice there is superseded by **`mix check`** as this project's gate.
 - Respect context boundaries and the storage-adapter abstraction described above.
 
+## Deployment (Phase 5)
+
+Production runs as an **OTP release** in a thin Docker image (multi-stage
+`Dockerfile`, Erlang/OTP 28 on Debian bookworm — matches CI).
+
+- `bin/server` — start the supervised app (sets `PHX_SERVER=true`).
+- `bin/migrate` — run migrations via `Eden.Release.migrate/0` (no Mix in prod).
+- `GET /healthz` — liveness probe, answered in the endpoint before the router
+  (cheap, no DB), excluded from `force_ssl`.
+- Required runtime env (see `config/runtime.exs`): `DATABASE_URL`,
+  `SECRET_KEY_BASE`, `PHX_HOST`; `EDEN_UPLOADS_ROOT` for the uploads volume;
+  `PORT` optional.
+- CI's **release-smoke** job builds the prod release and runs migrations through
+  it, so prod-only compile/runtime-config regressions are caught before deploy.
+- Still server-dependent (do at deploy time): domain + TLS (reverse-proxy),
+  Postgres backups, log shipping, prod metrics/alerts.
+
 ## Security follow-ups (tracked)
 
 - **Content-Security-Policy** — there is no CSP yet; `Config.CSP` is temporarily
