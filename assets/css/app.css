@@ -451,26 +451,37 @@
   .ed-swatch { height: 3.5rem; border-radius: var(--ed-radius); border: 1px solid var(--ed-border); }
 
   /* Segmented control (settings: theme / language) --------------------- */
+  /* Mobile-first: full-width with equal segments so 3 options never overflow a
+     narrow screen. On >=sm it collapses back to a compact inline pill. */
   .ed-seg {
-    display: inline-flex;
+    display: flex;
+    width: 100%;
     gap: 0.25rem;
     padding: 0.25rem;
     background: var(--ed-surface-2);
     border-radius: var(--ed-radius-full);
   }
   .ed-seg__btn {
+    flex: 1;
+    min-width: 0;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.4rem;
     height: 2rem;
-    padding: 0 0.875rem;
+    padding: 0 0.5rem;
     border: none;
     background: transparent;
     color: var(--ed-muted);
     border-radius: var(--ed-radius-full);
-    font: 550 0.8125rem/1 var(--ed-font);
+    font: 550 0.75rem/1 var(--ed-font);
+    white-space: nowrap;
     cursor: pointer;
     transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+  }
+  @media (min-width: 640px) {
+    .ed-seg { display: inline-flex; width: auto; }
+    .ed-seg__btn { flex: 0 0 auto; padding: 0 0.875rem; font-size: 0.8125rem; }
   }
   .ed-seg__btn:hover { color: var(--ed-ink); }
   .ed-seg__btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }

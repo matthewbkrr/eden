@@ -33,7 +33,7 @@ defmodule EdenWeb.SettingsLive do
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
               {gettext("Choose how eden looks on this device.")}
             </p>
-            <div class="flex items-center justify-between gap-4">
+            <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
               <span style="font-size:0.875rem;">{gettext("Theme")}</span>
               <div class="ed-seg" role="group" aria-label={gettext("Theme")}>
                 <button
@@ -42,7 +42,8 @@ defmodule EdenWeb.SettingsLive do
                   phx-click={JS.dispatch("phx:set-theme")}
                   data-phx-theme="system"
                 >
-                  <.icon name="hero-computer-desktop-micro" class="size-4" /> {gettext("System")}
+                  <.icon name="hero-computer-desktop-micro" class="size-4 hidden sm:block" />
+                  {gettext("System")}
                 </button>
                 <button
                   class="ed-seg__btn"
@@ -50,7 +51,7 @@ defmodule EdenWeb.SettingsLive do
                   phx-click={JS.dispatch("phx:set-theme")}
                   data-phx-theme="light"
                 >
-                  <.icon name="hero-sun-micro" class="size-4" /> {gettext("Light")}
+                  <.icon name="hero-sun-micro" class="size-4 hidden sm:block" /> {gettext("Light")}
                 </button>
                 <button
                   class="ed-seg__btn"
@@ -58,7 +59,7 @@ defmodule EdenWeb.SettingsLive do
                   phx-click={JS.dispatch("phx:set-theme")}
                   data-phx-theme="dark"
                 >
-                  <.icon name="hero-moon-micro" class="size-4" /> {gettext("Dark")}
+                  <.icon name="hero-moon-micro" class="size-4 hidden sm:block" /> {gettext("Dark")}
                 </button>
               </div>
             </div>
@@ -72,7 +73,11 @@ defmodule EdenWeb.SettingsLive do
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
               {gettext("Changes the language across eden.")}
             </p>
-            <form action={~p"/locale"} method="post" class="flex items-center justify-between gap-4">
+            <form
+              action={~p"/locale"}
+              method="post"
+              class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+            >
               <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
               <input type="hidden" name="return_to" value={~p"/settings"} />
               <span style="font-size:0.875rem;">{gettext("Interface language")}</span>
