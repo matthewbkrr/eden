@@ -22,7 +22,7 @@ defmodule Eden.MixProject do
     [
       plt_core_path: "priv/plts",
       plt_local_path: "priv/plts",
-      plt_add_apps: [:ex_unit, :mix],
+      plt_add_apps: [:ex_unit, :mix, :image, :vix],
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true
     ]
@@ -79,6 +79,7 @@ defmodule Eden.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:oban, "~> 2.19"},
+      {:image, "~> 0.54"},
       {:logger_json, "~> 7.0"},
       {:bcrypt_elixir, "~> 3.0"},
 

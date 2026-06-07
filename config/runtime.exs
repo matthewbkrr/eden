@@ -56,6 +56,13 @@ if config_env() == :prod do
 
   config :eden, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # Uploads live on a persistent volume in prod — the dev default is a relative
+  # path that an ephemeral release filesystem can't keep. Point EDEN_UPLOADS_ROOT
+  # at a mounted volume. Swap to an S3-compatible adapter here when object storage
+  # lands (see "Security follow-ups" in CLAUDE.md).
+  config :eden, Eden.Storage.Local,
+    root: System.get_env("EDEN_UPLOADS_ROOT") || "/var/lib/eden/uploads"
+
   config :eden, EdenWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [

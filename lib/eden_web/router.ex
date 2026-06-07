@@ -24,12 +24,24 @@ defmodule EdenWeb.Router do
     plug :redirect_if_user_is_authenticated
   end
 
+  # Protected controller routes (not LiveView).
+  pipeline :require_authenticated do
+    plug :require_authenticated_user
+  end
+
   scope "/", EdenWeb do
     pipe_through :browser
 
     get "/", PageController, :home
     post "/locale", LocaleController, :update
     delete "/users/log_out", UserSessionController, :delete
+
+    # Serve uploaded attachments; the controller authorizes by conversation membership.
+    scope "/" do
+      pipe_through :require_authenticated
+      get "/files/:id", FileController, :show
+      get "/files/:id/thumb", FileController, :thumb
+    end
 
     # Authenticated pages.
     live_session :authenticated,

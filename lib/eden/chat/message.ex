@@ -15,16 +15,36 @@ defmodule Eden.Chat.Message do
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :sender, Eden.Accounts.User
+    has_one :attachment, Eden.Chat.Attachment
 
     timestamps(type: :utc_datetime)
   end
 
+  @doc "Changeset for a text message: a non-blank body is required."
   def changeset(message, attrs) do
     message
     |> cast(attrs, [:body])
     |> update_change(:body, &sanitize/1)
     |> validate_required([:body])
     |> validate_length(:body, max: @max_body, count: :codepoints)
+  end
+
+  @doc """
+  Changeset for a photo message: the body (caption) is optional and defaults to
+  an empty string — the attachment is the content.
+  """
+  def photo_changeset(message, attrs) do
+    message
+    |> cast(attrs, [:body])
+    |> update_change(:body, &sanitize/1)
+    |> ensure_body()
+    |> validate_length(:body, max: @max_body, count: :codepoints)
+  end
+
+  defp ensure_body(changeset) do
+    if get_field(changeset, :body) in [nil, ""],
+      do: put_change(changeset, :body, ""),
+      else: changeset
   end
 
   # Postgres rejects NUL bytes even though they're valid UTF-8; strip them and

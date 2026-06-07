@@ -52,6 +52,18 @@ defmodule EdenWeb.UserAuth do
     assign(conn, :current_scope, Scope.for_user(user))
   end
 
+  @doc "Plug: requires an authenticated user (for protected controller routes), else redirects to /login."
+  def require_authenticated_user(conn, _opts) do
+    if conn.assigns.current_scope do
+      conn
+    else
+      conn
+      |> put_flash(:error, "You must log in to access this page.")
+      |> redirect(to: ~p"/login")
+      |> halt()
+    end
+  end
+
   @doc "Plug: bounces already-authenticated users away from auth pages."
   def redirect_if_user_is_authenticated(conn, _opts) do
     if conn.assigns.current_scope do

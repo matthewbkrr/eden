@@ -1,13 +1,30 @@
 defmodule Eden.ChatTest do
   use Eden.DataCase, async: true
+  use Oban.Testing, repo: Eden.Repo
 
   import Eden.AccountsFixtures
 
   alias Eden.Accounts.Scope
   alias Eden.Chat
-  alias Eden.Chat.{Conversation, Membership}
+  alias Eden.Chat.{Attachment, Conversation, Membership, ThumbnailWorker}
 
   defp scope(user), do: Scope.for_user(user)
+
+  @png_signature <<137, 80, 78, 71, 13, 10, 26, 10>>
+
+  defp image_path(bytes) do
+    path = Path.join(System.tmp_dir!(), "img-#{System.unique_integer([:positive])}")
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  # A real, decodable PNG (the magic-byte stubs above can't be thumbnailed).
+  defp real_png(width \\ 1200, height \\ 800) do
+    {:ok, img} = Image.new(width, height, color: [120, 80, 200])
+    {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+    image_path(bytes)
+  end
 
   setup do
     alice = user_fixture(%{username: "alice", display_name: "Alice"})
@@ -126,6 +143,151 @@ defmodule Eden.ChatTest do
       :ok = Chat.mark_read(scope(bob), conv.id)
       assert_receive {:read, reader_id, %DateTime{}}
       assert reader_id == bob.id
+    end
+  end
+
+  describe "create_photo_message/3" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "stores the image and creates a message with an attachment", %{alice: alice, conv: conv} do
+      path = image_path(@png_signature <> "fake-png-body")
+
+      assert {:ok, message} =
+               Chat.create_photo_message(scope(alice), conv.id, %{path: path, body: "look"})
+
+      assert message.body == "look"
+      assert message.attachment.content_type == "image/png"
+      assert message.attachment.byte_size > 0
+      assert Eden.Storage.exists?(message.attachment.storage_key)
+    end
+
+    test "allows a photo with no caption", %{alice: alice, conv: conv} do
+      path = image_path(@png_signature <> "x")
+      assert {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      assert message.body == ""
+      assert message.attachment
+    end
+
+    test "rejects a non-image by magic bytes regardless of claimed type", %{
+      alice: alice,
+      conv: conv
+    } do
+      path = image_path("just plain text, not an image")
+
+      assert {:error, :unsupported_type} =
+               Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+    end
+
+    test "rejects an oversize file", %{alice: alice, conv: conv} do
+      path = image_path(@png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1))
+
+      assert {:error, :too_large} =
+               Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+    end
+
+    test "non-members cannot post a photo", %{conv: conv} do
+      dave = user_fixture(%{username: "davephoto"})
+      path = image_path(@png_signature <> "x")
+      assert {:error, :not_found} = Chat.create_photo_message(scope(dave), conv.id, %{path: path})
+    end
+
+    test "broadcasts the photo message with the attachment preloaded", %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+      path = image_path(@png_signature <> "x")
+      {:ok, _} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      assert_receive {:new_message, message}
+      assert message.attachment.content_type == "image/png"
+    end
+
+    test "enqueues a thumbnail job on the media queue", %{alice: alice, conv: conv} do
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+
+      assert_enqueued(
+        worker: ThumbnailWorker,
+        queue: :media,
+        args: %{attachment_id: message.attachment.id}
+      )
+    end
+  end
+
+  describe "generate_thumbnail/1" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "captures dimensions at upload, downsizes the thumbnail, and broadcasts",
+         %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+
+      {:ok, message} =
+        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(1200, 800)})
+
+      # Original dimensions are known immediately (before any thumbnail), so the
+      # first render can reserve layout space.
+      assert message.attachment.width == 1200
+      assert message.attachment.height == 800
+
+      assert :ok = Chat.generate_thumbnail(message.attachment)
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      assert is_binary(attachment.thumbnail_key)
+      assert attachment.width == 1200
+      assert attachment.height == 800
+      assert Eden.Storage.exists?(attachment.thumbnail_key)
+
+      {:ok, thumb_bytes} = Eden.Storage.read(attachment.thumbnail_key)
+      {:ok, thumb} = Image.from_binary(thumb_bytes)
+      assert max(Image.width(thumb), Image.height(thumb)) == 800
+
+      assert_receive {:thumbnail_ready, broadcast}
+      assert broadcast.attachment.thumbnail_key == attachment.thumbnail_key
+    end
+
+    test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
+      {:ok, message} =
+        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(300, 200)})
+
+      assert :ok = Chat.generate_thumbnail(message.attachment)
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      {:ok, thumb_bytes} = Eden.Storage.read(attachment.thumbnail_key)
+      {:ok, thumb} = Image.from_binary(thumb_bytes)
+      assert Image.width(thumb) == 300
+      assert Image.height(thumb) == 200
+    end
+
+    test "the worker generates the thumbnail and is idempotent", %{alice: alice, conv: conv} do
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+      args = %{attachment_id: message.attachment.id}
+
+      assert :ok = perform_job(ThumbnailWorker, args)
+      first_key = Repo.get(Attachment, message.attachment.id).thumbnail_key
+      assert is_binary(first_key)
+
+      assert :ok = perform_job(ThumbnailWorker, args)
+      assert Repo.get(Attachment, message.attachment.id).thumbnail_key == first_key
+    end
+
+    test "the worker is a no-op for a missing attachment" do
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: 999_999})
+    end
+
+    test "a corrupt image fails gracefully and the worker cancels (no retries)",
+         %{alice: alice, conv: conv} do
+      # Valid PNG magic bytes (passes upload detection) but not a decodable image.
+      path = image_path(@png_signature <> "not actually a png body")
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+
+      assert {:error, {:unprocessable, _}} = Chat.generate_thumbnail(message.attachment)
+
+      assert {:cancel, {:unprocessable, _}} =
+               perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+
+      refute Repo.get(Attachment, message.attachment.id).thumbnail_key
     end
   end
 

@@ -38,3 +38,6 @@ npm-debug.log
 # Dialyzer PLT files (build artifacts; cached separately in CI).
 /priv/plts/
 
+# Local-disk uploads (dev storage adapter).
+/priv/uploads/
+

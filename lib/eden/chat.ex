@@ -8,13 +8,27 @@ defmodule Eden.Chat do
   topics; subscribe only after `get_conversation/2` has authorized access.
   """
   import Ecto.Query, warn: false
+  require Logger
 
   alias Eden.Accounts.Scope
-  alias Eden.Chat.{Conversation, Membership, Message}
+  alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
   alias Eden.Repo
+  alias Eden.Storage
 
   @pubsub Eden.PubSub
   @default_page 50
+  @max_attachment_bytes 8 * 1024 * 1024
+
+  # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
+  @thumbnail_max 800
+  @thumbnail_quality 80
+  # Reject decompression bombs before decoding: cap the source's *header* pixel
+  # count, read from the lazy image without decoding. Generous enough for modern
+  # high-MP phone cameras (~16000×12000), tight enough to stop absurd PNG bombs.
+  @max_source_pixels 192_000_000
+
+  @doc "Maximum accepted attachment size in bytes (single source of truth for UI + server)."
+  def max_attachment_bytes, do: @max_attachment_bytes
 
   ## Conversations
 
@@ -135,7 +149,7 @@ defmodule Eden.Chat do
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload(:sender)
+        |> preload([:sender, :attachment])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -156,18 +170,52 @@ defmodule Eden.Chat do
       |> Message.changeset(attrs)
       |> Repo.insert()
       |> case do
-        {:ok, message} ->
-          touch_conversation(conversation_id, message.inserted_at)
-          message = Repo.preload(message, :sender)
-          broadcast(conversation_id, {:new_message, message})
-          notify_members(conversation_id)
-          {:ok, message}
-
-        {:error, changeset} ->
-          {:error, changeset}
+        {:ok, message} -> {:ok, deliver(conversation_id, message)}
+        {:error, changeset} -> {:error, changeset}
       end
     else
       {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Posts a photo message: validates the file is a supported image by its magic
+  bytes (never trusting the client content-type), stores it via the storage
+  adapter, and inserts the message + attachment atomically. `source` is a map
+  with `:path` (a local temp file) and an optional `:body` caption.
+
+  Returns `{:ok, message}` (attachment preloaded) or `{:error, reason}` where
+  reason is `:not_found | :unsupported_type | :too_large` or a changeset.
+  """
+  def create_photo_message(%Scope{user: user} = scope, conversation_id, source) do
+    with true <- member?(scope, conversation_id),
+         {:ok, content_type, ext} <- detect_image(source.path),
+         {:ok, byte_size} <- check_size(source.path),
+         key = Storage.build_key("attachments", ext),
+         :ok <- Storage.put(key, source.path) do
+      {width, height} = image_dimensions(source.path)
+
+      attrs = %{
+        storage_key: key,
+        content_type: content_type,
+        byte_size: byte_size,
+        width: width,
+        height: height
+      }
+
+      case insert_photo_message(user, conversation_id, Map.get(source, :body, ""), attrs) do
+        {:ok, message} ->
+          message = deliver(conversation_id, message)
+          enqueue_thumbnail(message.attachment)
+          {:ok, message}
+
+        {:error, changeset} ->
+          Storage.delete(key)
+          {:error, changeset}
+      end
+    else
+      false -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -180,6 +228,41 @@ defmodule Eden.Chat do
 
     broadcast(conversation_id, {:read, user.id, read_at})
     :ok
+  end
+
+  @doc """
+  Fetches an attachment by id, but only if the scoped user belongs to the
+  attachment's conversation. Authorizes file serving by membership.
+  """
+  def fetch_attachment(%Scope{user: user}, id) do
+    query =
+      from a in Attachment,
+        join: m in Message,
+        on: m.id == a.message_id,
+        join: mem in Membership,
+        on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+        where: a.id == ^id
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      attachment -> {:ok, attachment}
+    end
+  end
+
+  @doc """
+  Generates and stores a downscaled, metadata-stripped JPEG thumbnail for the
+  attachment, records its key, then broadcasts the refreshed message so open
+  clients swap the full image for the thumbnail. Idempotent — a no-op once a
+  thumbnail exists. Invoked by `Eden.Chat.ThumbnailWorker`; returns `:ok` or
+  `{:error, reason}` (the dimensions are captured earlier, at upload time).
+  """
+  def generate_thumbnail(%Attachment{thumbnail_key: key}) when is_binary(key), do: :ok
+
+  def generate_thumbnail(%Attachment{} = attachment) do
+    with {:ok, bytes} <- Storage.read(attachment.storage_key),
+         {:ok, jpeg} <- make_thumbnail(bytes) do
+      store_thumbnail(attachment, jpeg)
+    end
   end
 
   @doc "Whether the scoped user belongs to the conversation."
@@ -288,4 +371,141 @@ defmodule Eden.Chat do
   defp normalize_id(id) when is_binary(id), do: String.to_integer(id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
+
+  # Touch the conversation, preload, and fan out the new message.
+  defp deliver(conversation_id, message) do
+    touch_conversation(conversation_id, message.inserted_at)
+    message = Repo.preload(message, [:sender, :attachment])
+    broadcast(conversation_id, {:new_message, message})
+    notify_members(conversation_id)
+    message
+  end
+
+  defp insert_photo_message(user, conversation_id, body, attachment_attrs) do
+    Repo.transact(fn ->
+      with {:ok, message} <-
+             %Message{conversation_id: conversation_id, sender_id: user.id}
+             |> Message.photo_changeset(%{"body" => body})
+             |> Repo.insert(),
+           {:ok, _attachment} <-
+             %Attachment{message_id: message.id}
+             |> Attachment.changeset(attachment_attrs)
+             |> Repo.insert() do
+        {:ok, message}
+      end
+    end)
+  end
+
+  defp enqueue_thumbnail(%Attachment{id: id}) do
+    case %{attachment_id: id} |> ThumbnailWorker.new() |> Oban.insert() do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("thumbnail enqueue failed for attachment #{id}: #{inspect(reason)}")
+        :ok
+    end
+  end
+
+  # Shrink to fit @thumbnail_max (never upscaling) and re-encode as JPEG with
+  # metadata stripped (drops EXIF, incl. GPS). The resize runs on the raw buffer
+  # via `thumbnail_buffer/3`, which shrinks *on load* — it never materialises the
+  # full-resolution bitmap, so a small upload that decodes to huge dimensions
+  # can't blow up memory. The header is read lazily first to record the original
+  # dimensions and to reject decompression bombs. (JPEG is intentional: photos
+  # don't need alpha; PNG transparency and GIF animation are not preserved.)
+  defp make_thumbnail(bytes) do
+    with {:ok, image} <- Image.from_binary(bytes),
+         :ok <- guard_dimensions(Image.width(image), Image.height(image)),
+         {:ok, thumb} <-
+           Vix.Vips.Operation.thumbnail_buffer(bytes, @thumbnail_max, size: :VIPS_SIZE_DOWN),
+         {:ok, jpeg} <-
+           Image.write(thumb, :memory,
+             suffix: ".jpg",
+             quality: @thumbnail_quality,
+             strip_metadata: true
+           ) do
+      {:ok, jpeg}
+    else
+      # A bad/oversized image is a permanent failure (tagged so the worker cancels
+      # rather than retries); transient errors live in generate_thumbnail instead.
+      {:error, reason} -> {:error, {:unprocessable, reason}}
+    end
+  rescue
+    e ->
+      Logger.error("thumbnail generation crashed: #{Exception.message(e)}")
+      {:error, {:unprocessable, Exception.message(e)}}
+  end
+
+  defp guard_dimensions(width, height) when width * height <= @max_source_pixels, do: :ok
+  defp guard_dimensions(_width, _height), do: {:error, :too_large}
+
+  defp store_thumbnail(attachment, jpeg) do
+    thumb_key = Storage.build_key("thumbnails", "jpg")
+
+    with :ok <- Storage.put_binary(thumb_key, jpeg),
+         {:ok, _attachment} <- update_thumbnail(attachment, thumb_key) do
+      broadcast_thumbnail(attachment.message_id)
+      :ok
+    else
+      error ->
+        # Don't leak the thumbnail blob if the DB update failed mid-way.
+        Storage.delete(thumb_key)
+        error
+    end
+  end
+
+  defp update_thumbnail(attachment, thumb_key) do
+    attachment
+    |> Attachment.changeset(%{thumbnail_key: thumb_key})
+    |> Repo.update()
+  end
+
+  # Best-effort original dimensions from the header (lazy — no full decode). Never
+  # raises out: an unreadable file yields {nil, nil} so it can't fail an upload.
+  defp image_dimensions(path) do
+    case Image.open(path) do
+      {:ok, image} -> {Image.width(image), Image.height(image)}
+      {:error, _} -> {nil, nil}
+    end
+  rescue
+    _ -> {nil, nil}
+  end
+
+  # Re-broadcast the message (attachment now carries a thumbnail_key) so open
+  # conversations swap the full image for the lighter thumbnail in place. The
+  # message may be gone if it was deleted while the thumbnail was generating.
+  defp broadcast_thumbnail(message_id) do
+    case Repo.get(Message, message_id) do
+      nil ->
+        :ok
+
+      message ->
+        message = Repo.preload(message, [:sender, :attachment])
+        broadcast(message.conversation_id, {:thumbnail_ready, message})
+    end
+  end
+
+  # Identify an image by its magic bytes — never trust the client content-type.
+  # `path` is a server-assigned upload temp file, not a user-supplied path.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp detect_image(path) do
+    case File.open(path, [:read, :binary], &IO.binread(&1, 16)) do
+      {:ok, <<0x89, "PNG\r\n", 0x1A, "\n", _::binary>>} -> {:ok, "image/png", "png"}
+      {:ok, <<0xFF, 0xD8, 0xFF, _::binary>>} -> {:ok, "image/jpeg", "jpg"}
+      {:ok, <<"GIF87a", _::binary>>} -> {:ok, "image/gif", "gif"}
+      {:ok, <<"GIF89a", _::binary>>} -> {:ok, "image/gif", "gif"}
+      {:ok, <<"RIFF", _::binary-size(4), "WEBP", _::binary>>} -> {:ok, "image/webp", "webp"}
+      {:ok, _other} -> {:error, :unsupported_type}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp check_size(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} when size <= @max_attachment_bytes -> {:ok, size}
+      {:ok, _stat} -> {:error, :too_large}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 end

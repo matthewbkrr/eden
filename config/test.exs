@@ -19,6 +19,9 @@ config :eden, Oban, testing: :manual
 # Use the lowest bcrypt cost in tests so the suite stays fast.
 config :bcrypt_elixir, :log_rounds, 1
 
+# Store uploads under a temp dir during tests.
+config :eden, Eden.Storage.Local, root: Path.join(System.tmp_dir!(), "eden_test_uploads")
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :eden, EdenWeb.Endpoint,

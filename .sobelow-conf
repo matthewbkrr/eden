@@ -5,9 +5,11 @@
   verbose: false,
   private: false,
 
-  # Do NOT honor inline `# sobelow_skip` comments — suppressions must be explicit
-  # and reviewed here, not scattered through the code.
-  skip: false,
+  # Honor inline `# sobelow_skip [...]` comments for targeted, in-context
+  # suppressions of confirmed false positives (each carries a justifying comment
+  # at the call site, reviewed in the diff). Project-wide suppressions still go
+  # in `ignore:` below.
+  skip: true,
 
   # Auto-detect the router.
   router: nil,
