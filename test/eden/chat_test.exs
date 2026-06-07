@@ -205,6 +205,24 @@ defmodule Eden.ChatTest do
       assert Repo.aggregate(Message, :count) == 2
     end
 
+    test "a burst of sends with interleaved resends yields a clean, ordered history", %{
+      alice: alice,
+      conv: conv
+    } do
+      # Each message is sent and then "resent" (as the outbound queue would after a
+      # reconnect). History must stay complete, ordered, and free of duplicates.
+      for n <- 1..3 do
+        cid = "burst-#{n}"
+        attrs = %{"body" => "m#{n}", "client_id" => cid}
+        {:ok, _} = Chat.create_message(scope(alice), conv.id, attrs)
+        {:ok, _} = Chat.create_message(scope(alice), conv.id, attrs)
+      end
+
+      {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
+      assert Enum.map(messages, & &1.body) == ["m1", "m2", "m3"]
+      assert Repo.aggregate(Message, :count) == 3
+    end
+
     test "a photo resend with the same client_id dedups and drops the duplicate blob", %{
       alice: alice,
       conv: conv
