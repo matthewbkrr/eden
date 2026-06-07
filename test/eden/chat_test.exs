@@ -6,7 +6,7 @@ defmodule Eden.ChatTest do
 
   alias Eden.Accounts.Scope
   alias Eden.Chat
-  alias Eden.Chat.{Attachment, Conversation, Membership, ThumbnailWorker}
+  alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
 
   defp scope(user), do: Scope.for_user(user)
 
@@ -143,6 +143,83 @@ defmodule Eden.ChatTest do
       :ok = Chat.mark_read(scope(bob), conv.id)
       assert_receive {:read, reader_id, %DateTime{}}
       assert reader_id == bob.id
+    end
+  end
+
+  describe "idempotent sends (client_id)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "a resend with the same client_id returns the original, no duplicate row", %{
+      alice: alice,
+      conv: conv
+    } do
+      cid = "11111111-1111-1111-1111-111111111111"
+
+      assert {:ok, first} =
+               Chat.create_message(scope(alice), conv.id, %{"body" => "hi", "client_id" => cid})
+
+      assert {:ok, second} =
+               Chat.create_message(scope(alice), conv.id, %{
+                 "body" => "resent",
+                 "client_id" => cid
+               })
+
+      assert first.id == second.id
+      # The original wins; the resend's (possibly mutated) body is ignored.
+      assert second.body == "hi"
+      assert Repo.aggregate(Message, :count) == 1
+    end
+
+    test "the duplicate resend does not re-broadcast", %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+      cid = "22222222-2222-2222-2222-222222222222"
+
+      {:ok, _} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "once", "client_id" => cid})
+
+      assert_receive {:new_message, _}
+
+      {:ok, _} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "once", "client_id" => cid})
+
+      refute_receive {:new_message, _}, 50
+    end
+
+    test "messages without a client_id are never deduped", %{alice: alice, conv: conv} do
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "a"})
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "b"})
+      assert Repo.aggregate(Message, :count) == 2
+    end
+
+    test "the same client_id from different senders is not a collision", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      cid = "33333333-3333-3333-3333-333333333333"
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "a", "client_id" => cid})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "b", "client_id" => cid})
+      assert Repo.aggregate(Message, :count) == 2
+    end
+
+    test "a photo resend with the same client_id dedups and drops the duplicate blob", %{
+      alice: alice,
+      conv: conv
+    } do
+      cid = "44444444-4444-4444-4444-444444444444"
+
+      {:ok, first} =
+        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(), client_id: cid})
+
+      {:ok, second} =
+        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(), client_id: cid})
+
+      assert first.id == second.id
+      assert Repo.aggregate(Message, :count) == 1
+      assert Repo.aggregate(Attachment, :count) == 1
     end
   end
 

@@ -171,7 +171,7 @@ defmodule Eden.Chat do
       |> Repo.insert()
       |> case do
         {:ok, message} -> {:ok, deliver(conversation_id, message)}
-        {:error, changeset} -> {:error, changeset}
+        {:error, changeset} -> resolve_duplicate(changeset, user.id)
       end
     else
       {:error, :not_found}
@@ -203,15 +203,19 @@ defmodule Eden.Chat do
         height: height
       }
 
-      case insert_photo_message(user, conversation_id, Map.get(source, :body, ""), attrs) do
+      message_attrs = %{"body" => Map.get(source, :body, ""), "client_id" => source[:client_id]}
+
+      case insert_photo_message(user, conversation_id, message_attrs, attrs) do
         {:ok, message} ->
           message = deliver(conversation_id, message)
           enqueue_thumbnail(message.attachment)
           {:ok, message}
 
         {:error, changeset} ->
+          # The blob we just stored is unneeded whether this is a hard error or a
+          # duplicate resend (the original already has its own attachment).
           Storage.delete(key)
-          {:error, changeset}
+          resolve_duplicate(changeset, user.id)
       end
     else
       false -> {:error, :not_found}
@@ -381,11 +385,11 @@ defmodule Eden.Chat do
     message
   end
 
-  defp insert_photo_message(user, conversation_id, body, attachment_attrs) do
+  defp insert_photo_message(user, conversation_id, message_attrs, attachment_attrs) do
     Repo.transact(fn ->
       with {:ok, message} <-
              %Message{conversation_id: conversation_id, sender_id: user.id}
-             |> Message.photo_changeset(%{"body" => body})
+             |> Message.photo_changeset(message_attrs)
              |> Repo.insert(),
            {:ok, _attachment} <-
              %Attachment{message_id: message.id}
@@ -394,6 +398,34 @@ defmodule Eden.Chat do
         {:ok, message}
       end
     end)
+  end
+
+  # A failed insert whose only problem is the (sender, client_id) unique index is
+  # a safe resend after a reconnect: return the already-stored message instead of
+  # erroring, and don't re-broadcast (the original send already did).
+  defp resolve_duplicate(changeset, sender_id) do
+    client_id = Ecto.Changeset.get_field(changeset, :client_id)
+
+    if client_id && duplicate_client_id?(changeset) do
+      {:ok, fetch_by_client_id(sender_id, client_id)}
+    else
+      {:error, changeset}
+    end
+  end
+
+  defp duplicate_client_id?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {:client_id, {_msg, opts}} -> opts[:constraint] == :unique
+      _ -> false
+    end)
+  end
+
+  defp fetch_by_client_id(sender_id, client_id) do
+    Repo.one(
+      from m in Message,
+        where: m.sender_id == ^sender_id and m.client_id == ^client_id,
+        preload: [:sender, :attachment]
+    )
   end
 
   defp enqueue_thumbnail(%Attachment{id: id}) do
