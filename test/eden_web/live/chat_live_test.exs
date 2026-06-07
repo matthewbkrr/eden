@@ -89,6 +89,21 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "ping from bob"
     end
 
+    test "a hook send creates the message and a same-client_id resend doesn't duplicate", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      cid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+      params = %{"message" => %{"body" => "queued hi", "client_id" => cid}}
+
+      render_hook(view, "send", params)
+      assert render(view) =~ "queued hi"
+
+      # A resend after a reconnect carries the same client_id — no duplicate row.
+      render_hook(view, "send", params)
+      assert Eden.Repo.aggregate(Eden.Chat.Message, :count) == 1
+    end
+
     test "renders a photo message as a linked image", ctx do
       {:ok, message} =
         Chat.create_photo_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
