@@ -10,11 +10,13 @@ defmodule Eden.Chat do
   import Ecto.Query, warn: false
 
   alias Eden.Accounts.Scope
-  alias Eden.Chat.{Conversation, Membership, Message}
+  alias Eden.Chat.{Attachment, Conversation, Membership, Message}
   alias Eden.Repo
+  alias Eden.Storage
 
   @pubsub Eden.PubSub
   @default_page 50
+  @max_attachment_bytes 8 * 1024 * 1024
 
   ## Conversations
 
@@ -135,7 +137,7 @@ defmodule Eden.Chat do
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload(:sender)
+        |> preload([:sender, :attachment])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -156,18 +158,42 @@ defmodule Eden.Chat do
       |> Message.changeset(attrs)
       |> Repo.insert()
       |> case do
-        {:ok, message} ->
-          touch_conversation(conversation_id, message.inserted_at)
-          message = Repo.preload(message, :sender)
-          broadcast(conversation_id, {:new_message, message})
-          notify_members(conversation_id)
-          {:ok, message}
-
-        {:error, changeset} ->
-          {:error, changeset}
+        {:ok, message} -> {:ok, deliver(conversation_id, message)}
+        {:error, changeset} -> {:error, changeset}
       end
     else
       {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Posts a photo message: validates the file is a supported image by its magic
+  bytes (never trusting the client content-type), stores it via the storage
+  adapter, and inserts the message + attachment atomically. `source` is a map
+  with `:path` (a local temp file) and an optional `:body` caption.
+
+  Returns `{:ok, message}` (attachment preloaded) or `{:error, reason}` where
+  reason is `:not_found | :unsupported_type | :too_large` or a changeset.
+  """
+  def create_photo_message(%Scope{user: user} = scope, conversation_id, source) do
+    with true <- member?(scope, conversation_id),
+         {:ok, content_type, ext} <- detect_image(source.path),
+         {:ok, byte_size} <- check_size(source.path),
+         key = Storage.build_key("attachments", ext),
+         :ok <- Storage.put(key, source.path) do
+      attrs = %{storage_key: key, content_type: content_type, byte_size: byte_size}
+
+      case insert_photo_message(user, conversation_id, Map.get(source, :body, ""), attrs) do
+        {:ok, message} ->
+          {:ok, deliver(conversation_id, message)}
+
+        {:error, changeset} ->
+          Storage.delete(key)
+          {:error, changeset}
+      end
+    else
+      false -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -288,4 +314,51 @@ defmodule Eden.Chat do
   defp normalize_id(id) when is_binary(id), do: String.to_integer(id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
+
+  # Touch the conversation, preload, and fan out the new message.
+  defp deliver(conversation_id, message) do
+    touch_conversation(conversation_id, message.inserted_at)
+    message = Repo.preload(message, [:sender, :attachment])
+    broadcast(conversation_id, {:new_message, message})
+    notify_members(conversation_id)
+    message
+  end
+
+  defp insert_photo_message(user, conversation_id, body, attachment_attrs) do
+    Repo.transact(fn ->
+      with {:ok, message} <-
+             %Message{conversation_id: conversation_id, sender_id: user.id}
+             |> Message.photo_changeset(%{"body" => body})
+             |> Repo.insert(),
+           {:ok, _attachment} <-
+             %Attachment{message_id: message.id}
+             |> Attachment.changeset(attachment_attrs)
+             |> Repo.insert() do
+        {:ok, message}
+      end
+    end)
+  end
+
+  # Identify an image by its magic bytes — never trust the client content-type.
+  # `path` is a server-assigned upload temp file, not a user-supplied path.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp detect_image(path) do
+    case File.open(path, [:read, :binary], &IO.binread(&1, 16)) do
+      {:ok, <<0x89, "PNG\r\n", 0x1A, "\n", _::binary>>} -> {:ok, "image/png", "png"}
+      {:ok, <<0xFF, 0xD8, 0xFF, _::binary>>} -> {:ok, "image/jpeg", "jpg"}
+      {:ok, <<"GIF87a", _::binary>>} -> {:ok, "image/gif", "gif"}
+      {:ok, <<"GIF89a", _::binary>>} -> {:ok, "image/gif", "gif"}
+      {:ok, <<"RIFF", _::binary-size(4), "WEBP", _::binary>>} -> {:ok, "image/webp", "webp"}
+      {:ok, _other} -> {:error, :unsupported_type}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp check_size(path) do
+    case File.stat(path) do
+      {:ok, %{size: size}} when size <= @max_attachment_bytes -> {:ok, size}
+      {:ok, _stat} -> {:error, :too_large}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 end

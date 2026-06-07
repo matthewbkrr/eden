@@ -15,8 +15,13 @@ config :eden,
 # add more as features need them (e.g. media processing in Phase 3).
 config :eden, Oban,
   repo: Eden.Repo,
-  queues: [default: 10],
+  queues: [default: 10, media: 5],
   plugins: [{Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}]
+
+# Blob storage. Local disk on dev; swap the adapter (S3-compatible) in prod via
+# config without touching callers. See Eden.Storage.
+config :eden, Eden.Storage, adapter: Eden.Storage.Local
+config :eden, Eden.Storage.Local, root: "priv/uploads"
 
 # Configure the endpoint
 config :eden, EdenWeb.Endpoint,

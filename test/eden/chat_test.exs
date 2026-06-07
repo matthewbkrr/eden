@@ -9,6 +9,15 @@ defmodule Eden.ChatTest do
 
   defp scope(user), do: Scope.for_user(user)
 
+  @png_signature <<137, 80, 78, 71, 13, 10, 26, 10>>
+
+  defp image_path(bytes) do
+    path = Path.join(System.tmp_dir!(), "img-#{System.unique_integer([:positive])}")
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   setup do
     alice = user_fixture(%{username: "alice", display_name: "Alice"})
     bob = user_fixture(%{username: "bob", display_name: "Bob"})
@@ -126,6 +135,63 @@ defmodule Eden.ChatTest do
       :ok = Chat.mark_read(scope(bob), conv.id)
       assert_receive {:read, reader_id, %DateTime{}}
       assert reader_id == bob.id
+    end
+  end
+
+  describe "create_photo_message/3" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "stores the image and creates a message with an attachment", %{alice: alice, conv: conv} do
+      path = image_path(@png_signature <> "fake-png-body")
+
+      assert {:ok, message} =
+               Chat.create_photo_message(scope(alice), conv.id, %{path: path, body: "look"})
+
+      assert message.body == "look"
+      assert message.attachment.content_type == "image/png"
+      assert message.attachment.byte_size > 0
+      assert Eden.Storage.exists?(message.attachment.storage_key)
+    end
+
+    test "allows a photo with no caption", %{alice: alice, conv: conv} do
+      path = image_path(@png_signature <> "x")
+      assert {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      assert message.body == ""
+      assert message.attachment
+    end
+
+    test "rejects a non-image by magic bytes regardless of claimed type", %{
+      alice: alice,
+      conv: conv
+    } do
+      path = image_path("just plain text, not an image")
+
+      assert {:error, :unsupported_type} =
+               Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+    end
+
+    test "rejects an oversize file", %{alice: alice, conv: conv} do
+      path = image_path(@png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1))
+
+      assert {:error, :too_large} =
+               Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+    end
+
+    test "non-members cannot post a photo", %{conv: conv} do
+      dave = user_fixture(%{username: "davephoto"})
+      path = image_path(@png_signature <> "x")
+      assert {:error, :not_found} = Chat.create_photo_message(scope(dave), conv.id, %{path: path})
+    end
+
+    test "broadcasts the photo message with the attachment preloaded", %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+      path = image_path(@png_signature <> "x")
+      {:ok, _} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      assert_receive {:new_message, message}
+      assert message.attachment.content_type == "image/png"
     end
   end
 
