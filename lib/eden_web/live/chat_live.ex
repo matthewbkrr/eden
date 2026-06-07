@@ -419,7 +419,13 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
           },
           disconnected() { this.connected = false },
-          reconnected() { this.connected = true; this.flush() },
+          reconnected() {
+            this.connected = true
+            // Re-arm anything that was in-flight when the link dropped; the
+            // server dedups by client_id, so re-sending can't duplicate.
+            for (const item of this.queue) item.sent = false
+            this.flush()
+          },
           updated() {
             // Switched conversation: drop the old thread's optimistic UI + queue.
             if (this.el.dataset.conversationId !== this.convId) {
@@ -440,17 +446,20 @@ defmodule EdenWeb.ChatLive do
             const clientId = crypto.randomUUID()
             this.input.value = ""
             this.addOptimistic(clientId, body)
-            this.queue.push({ clientId, body })
+            this.queue.push({ clientId, body, sent: false })
             this.flush()
           },
           flush() {
             if (!this.connected) return
-            const items = this.queue
-            this.queue = []
-            for (const { clientId, body } of items) {
-              this.pushEvent("send", { message: { body, client_id: clientId } }, (reply) => {
-                if (reply && reply.nack) this.markFailed(clientId)
-                else this.remove(clientId)
+            // Items stay queued until acked; only then are they removed. An
+            // in-flight item (sent) isn't re-sent until a reconnect re-arms it.
+            for (const item of this.queue) {
+              if (item.sent) continue
+              item.sent = true
+              this.pushEvent("send", { message: { body: item.body, client_id: item.clientId } }, (reply) => {
+                this.queue = this.queue.filter((q) => q.clientId !== item.clientId)
+                if (reply && reply.nack) this.markFailed(item.clientId)
+                else this.remove(item.clientId)
               })
             }
           },
