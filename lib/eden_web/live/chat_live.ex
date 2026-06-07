@@ -202,7 +202,9 @@ defmodule EdenWeb.ChatLive do
   def render(assigns) do
     ~H"""
     <div class="ed-root h-screen flex overflow-hidden">
-      <div class="fixed top-4 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4">
+      <%!-- Below the header so it never covers the header buttons; the wrapper
+            ignores pointer events so only the toast itself is interactive. --%>
+      <div class="fixed top-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4 pointer-events-none">
         <.ed_flash flash={@flash} />
       </div>
 
@@ -491,6 +493,43 @@ defmodule EdenWeb.ChatLive do
           },
         }
       </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".Lightbox">
+        // In-app image viewer: click a photo to open it full-screen in a single
+        // shared overlay (close on backdrop click or Esc). Cmd/Ctrl/Shift/middle
+        // click fall through to the normal "open original in a new tab".
+        export default {
+          mounted() {
+            this.el.addEventListener("click", (e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
+              e.preventDefault()
+              this.openLightbox(this.el.dataset.full)
+            })
+          },
+          openLightbox(src) {
+            let box = document.getElementById("ed-lightbox")
+            if (!box) {
+              box = document.createElement("div")
+              box.id = "ed-lightbox"
+              box.className = "ed-lightbox"
+              const img = document.createElement("img")
+              img.alt = ""
+              box.appendChild(img)
+              const close = () => {
+                box.classList.remove("ed-lightbox--open")
+                document.body.style.overflow = ""
+                document.removeEventListener("keydown", box.__onKey)
+              }
+              box.__onKey = (e) => { if (e.key === "Escape") close() }
+              box.addEventListener("click", close)
+              document.body.appendChild(box)
+            }
+            box.querySelector("img").src = src
+            box.classList.add("ed-lightbox--open")
+            document.body.style.overflow = "hidden"
+            document.addEventListener("keydown", box.__onKey)
+          },
+        }
+      </script>
     </div>
     """
   end
@@ -524,9 +563,7 @@ defmodule EdenWeb.ChatLive do
           />
         </span>
         <span class="ed-convo__top">
-          <span class="ed-convo__preview">
-            {@conversation.last_message_body || gettext("No messages yet")}
-          </span>
+          <span class="ed-convo__preview">{convo_preview(@conversation)}</span>
           <span :if={@conversation.unread_count > 0} class="ed-badge">
             {@conversation.unread_count}
           </span>
@@ -535,6 +572,16 @@ defmodule EdenWeb.ChatLive do
     </.link>
     """
   end
+
+  # Sidebar preview line. Photos show "📷 <caption|Photo>" so the row is never
+  # blank (keeps item height + the time position consistent).
+  defp convo_preview(%{last_message_photo?: true} = conversation) do
+    caption = conversation.last_message_body
+    "📷 " <> if(is_binary(caption) and caption != "", do: caption, else: gettext("Photo"))
+  end
+
+  defp convo_preview(%{last_message_body: body}) when is_binary(body) and body != "", do: body
+  defp convo_preview(_conversation), do: gettext("No messages yet")
 
   attr :id, :string, required: true
   attr :message, :map, required: true
@@ -555,17 +602,20 @@ defmodule EdenWeb.ChatLive do
         </span>
         <a
           :if={@message.attachment}
+          id={"att-#{@message.attachment.id}"}
+          phx-hook=".Lightbox"
+          data-full={~p"/files/#{@message.attachment.id}"}
           href={~p"/files/#{@message.attachment.id}"}
           target="_blank"
           rel="noopener"
-          class="block mb-1"
+          class="block mb-1 cursor-zoom-in"
         >
           <img
             src={thumb_src(@message.attachment)}
             width={@message.attachment.width}
             height={@message.attachment.height}
-            class="rounded-[0.6rem] block max-w-full h-auto"
-            style="max-height:20rem;"
+            class="rounded-[0.6rem] block"
+            style="max-width:min(20rem,100%); max-height:20rem; width:auto; height:auto;"
             loading="lazy"
             alt={gettext("Photo")}
           />

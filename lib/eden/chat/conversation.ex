@@ -16,6 +16,8 @@ defmodule Eden.Chat.Conversation do
     # Computed for the conversation list (set by Chat.list_conversations/1).
     field :unread_count, :integer, virtual: true, default: 0
     field :last_message_body, :string, virtual: true
+    # Whether the last message carries a photo (for the sidebar preview).
+    field :last_message_photo?, :boolean, virtual: true, default: false
 
     has_many :memberships, Eden.Chat.Membership
     has_many :messages, Eden.Chat.Message
