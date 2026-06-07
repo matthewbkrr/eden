@@ -13,11 +13,9 @@ defmodule Eden.Storage.Local do
   # sobelow_skip ["Traversal.FileModule"]
   def put(key, source_path) do
     dest = path(key)
-    File.mkdir_p!(Path.dirname(dest))
 
-    case File.cp(source_path, dest) do
-      :ok -> :ok
-      {:error, reason} -> {:error, reason}
+    with :ok <- File.mkdir_p(Path.dirname(dest)) do
+      File.cp(source_path, dest)
     end
   end
 
@@ -25,9 +23,14 @@ defmodule Eden.Storage.Local do
   # sobelow_skip ["Traversal.FileModule"]
   def put_binary(key, binary) do
     dest = path(key)
-    File.mkdir_p!(Path.dirname(dest))
-    File.write(dest, binary)
+
+    with :ok <- File.mkdir_p(Path.dirname(dest)) do
+      File.write(dest, binary)
+    end
   end
+
+  @impl true
+  def local_path(key), do: {:ok, path(key)}
 
   @impl true
   # sobelow_skip ["Traversal.FileModule"]

@@ -39,7 +39,7 @@ defmodule EdenWeb.FileControllerTest do
       conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}")
 
       assert response(conn, 200) == png
-      assert get_resp_header(conn, "content-type") == ["image/png; charset=utf-8"]
+      assert get_resp_header(conn, "content-type") == ["image/png"]
       assert get_resp_header(conn, "content-disposition") == ["inline"]
       assert ["private, max-age=31536000, immutable"] = get_resp_header(conn, "cache-control")
     end
@@ -98,7 +98,7 @@ defmodule EdenWeb.FileControllerTest do
 
       conn = conn |> log_in_user(bob) |> get(~p"/files/#{message.attachment.id}/thumb")
       assert response(conn, 200)
-      assert get_resp_header(conn, "content-type") == ["image/jpeg; charset=utf-8"]
+      assert get_resp_header(conn, "content-type") == ["image/jpeg"]
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
     end
   end

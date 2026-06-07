@@ -16,24 +16,49 @@ defmodule EdenWeb.FileController do
   # The content-type is server-determined by magic-byte detection (see
   # `Chat.create_photo_message/3`) and constrained to a fixed image/* allowlist —
   # never the client-supplied type — and we send `x-content-type-options: nosniff`
-  # so the browser cannot reinterpret a polyglot upload as HTML. Both sobelow XSS
-  # warnings are false positives under these guarantees.
-  # sobelow_skip ["XSS.SendResp", "XSS.ContentType"]
+  # so the browser cannot reinterpret a polyglot upload as HTML. The sobelow
+  # warning is a false positive under those guarantees. `nil` charset keeps the
+  # response type clean (`image/png`, not `image/png; charset=utf-8`).
+  # sobelow_skip ["XSS.ContentType"]
   defp serve(conn, id, variant) do
     with {int_id, ""} <- Integer.parse(id),
          {:ok, attachment} <- Chat.fetch_attachment(conn.assigns.current_scope, int_id),
-         {:ok, key, content_type} <- variant_source(attachment, variant),
-         {:ok, bytes} <- Storage.read(key) do
+         {:ok, key, content_type} <- variant_source(attachment, variant) do
       conn
-      |> put_resp_content_type(content_type)
+      |> put_resp_content_type(content_type, nil)
       |> put_resp_header("x-content-type-options", "nosniff")
       |> put_resp_header("content-disposition", "inline")
       |> put_resp_header("cache-control", "private, max-age=31536000, immutable")
-      |> send_resp(200, bytes)
+      |> send_object(key)
     else
-      _ -> conn |> put_status(:not_found) |> text("Not found")
+      _ -> not_found(conn)
     end
   end
+
+  # Stream from disk (sendfile, no full-file copy into memory) when the adapter is
+  # disk-backed; fall back to reading bytes for a remote adapter. The path comes
+  # from `Storage.local_path/1` over an app-generated, sanitized key.
+  # sobelow_skip ["Traversal.SendFile"]
+  defp send_object(conn, key) do
+    if Storage.exists?(key) do
+      case Storage.local_path(key) do
+        {:ok, path} -> send_file(conn, 200, path)
+        :error -> read_and_send(conn, key)
+      end
+    else
+      not_found(conn)
+    end
+  end
+
+  # sobelow_skip ["XSS.SendResp"]
+  defp read_and_send(conn, key) do
+    case Storage.read(key) do
+      {:ok, bytes} -> send_resp(conn, 200, bytes)
+      {:error, _} -> not_found(conn)
+    end
+  end
+
+  defp not_found(conn), do: conn |> put_status(:not_found) |> text("Not found")
 
   defp variant_source(attachment, :original),
     do: {:ok, attachment.storage_key, attachment.content_type}

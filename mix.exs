@@ -22,7 +22,7 @@ defmodule Eden.MixProject do
     [
       plt_core_path: "priv/plts",
       plt_local_path: "priv/plts",
-      plt_add_apps: [:ex_unit, :mix],
+      plt_add_apps: [:ex_unit, :mix, :image, :vix],
       ignore_warnings: ".dialyzer_ignore.exs",
       list_unused_filters: true
     ]

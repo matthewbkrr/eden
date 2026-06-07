@@ -115,3 +115,12 @@ For any UI (LiveView templates, components, HEEx/Tailwind, pages, styling):
 - **Content-Security-Policy** — there is no CSP yet; `Config.CSP` is temporarily
   ignored in `.sobelow-conf`. When the LiveView UI lands, add a nonce-based CSP to
   the `:browser` pipeline and **remove that ignore entry**.
+- **S3-compatible storage adapter** — only `Eden.Storage.Local` exists. Prod uses
+  it against `EDEN_UPLOADS_ROOT` (a persistent volume, set in `config/runtime.exs`).
+  Build an S3 adapter to satisfy Phase 3's "storage swaps by one config line"; it
+  needs `local_path/1` to return `:error` so file serving falls back to streaming
+  bytes.
+- **Attachment blob cleanup on delete** — `attachments.message_id` is
+  `on_delete: :delete_all`, so deleting a message drops the row but **not** the
+  stored blobs (`storage_key` + `thumbnail_key`). When message deletion lands,
+  delete both objects via `Eden.Storage.delete/1` first, or storage leaks.

@@ -27,7 +27,7 @@ msgstr ""
 msgid "Attempting to reconnect"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:245
+#: lib/eden_web/live/chat_live.ex:257
 #: lib/eden_web/live/settings_live.ex:21
 #, elixir-autogen, elixir-format
 msgid "Back"
@@ -64,7 +64,7 @@ msgstr ""
 msgid "Light"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:210
+#: lib/eden_web/live/chat_live.ex:222
 #: lib/eden_web/live/settings_live.ex:12
 #: lib/eden_web/live/settings_live.ex:24
 #, elixir-autogen, elixir-format
@@ -159,7 +159,7 @@ msgstr ""
 msgid "Log in to eden"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:217
+#: lib/eden_web/live/chat_live.ex:229
 #, elixir-autogen, elixir-format
 msgid "Log out"
 msgstr ""
@@ -231,8 +231,8 @@ msgstr ""
 msgid "Chats"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:483
 #: lib/eden_web/live/chat_live.ex:498
+#: lib/eden_web/live/chat_live.ex:513
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr ""
@@ -247,44 +247,44 @@ msgstr ""
 msgid "Couldn't start the conversation."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:513
+#: lib/eden_web/live/chat_live.ex:528
 #, elixir-autogen, elixir-format
 msgid "Group name (optional)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:605
+#: lib/eden_web/live/chat_live.ex:620
 #, elixir-autogen, elixir-format
 msgid "Just you"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:271
+#: lib/eden_web/live/chat_live.ex:283
 #, elixir-autogen, elixir-format
 msgid "Load older"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:332
+#: lib/eden_web/live/chat_live.ex:344
 #, elixir-autogen, elixir-format
 msgid "Message"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:206
-#: lib/eden_web/live/chat_live.ex:353
-#: lib/eden_web/live/chat_live.ex:497
+#: lib/eden_web/live/chat_live.ex:218
+#: lib/eden_web/live/chat_live.ex:365
+#: lib/eden_web/live/chat_live.ex:512
 #, elixir-autogen, elixir-format
 msgid "New conversation"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:348
+#: lib/eden_web/live/chat_live.ex:360
 #, elixir-autogen, elixir-format
 msgid "No conversation selected"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:505
+#: lib/eden_web/live/chat_live.ex:520
 #, elixir-autogen, elixir-format
 msgid "No one else has joined yet."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:350
+#: lib/eden_web/live/chat_live.ex:362
 #, elixir-autogen, elixir-format
 msgid "Pick a chat or start a new one."
 msgstr ""
@@ -295,77 +295,82 @@ msgstr ""
 msgid "Pick at least one person."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:339
+#: lib/eden_web/live/chat_live.ex:351
 #, elixir-autogen, elixir-format
 msgid "Send"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:533
+#: lib/eden_web/live/chat_live.ex:548
 #, elixir-autogen, elixir-format
 msgid "Start"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:416
+#: lib/eden_web/live/chat_live.ex:428
 #, elixir-autogen, elixir-format
 msgid "No messages yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:263
+#: lib/eden_web/live/chat_live.ex:275
 #, elixir-autogen, elixir-format
 msgid "offline"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:262
+#: lib/eden_web/live/chat_live.ex:274
 #, elixir-autogen, elixir-format
 msgid "online"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:648
+#: lib/eden_web/live/chat_live.ex:663
 #, elixir-autogen, elixir-format
 msgid "Message is too long (up to 4000 characters)."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:323
+#: lib/eden_web/live/chat_live.ex:335
 #, elixir-autogen, elixir-format
 msgid "Attach photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:668
+#: lib/eden_web/live/chat_live.ex:692
 #, elixir-autogen, elixir-format
 msgid "Couldn't send the photo."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:672
+#: lib/eden_web/live/chat_live.ex:696
 #, elixir-autogen, elixir-format
 msgid "Images only"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:674
+#: lib/eden_web/live/chat_live.ex:698
 #, elixir-autogen, elixir-format
 msgid "Invalid file"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:673
+#: lib/eden_web/live/chat_live.ex:697
 #, elixir-autogen, elixir-format
 msgid "One photo at a time"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:666
+#: lib/eden_web/live/chat_live.ex:690
 #, elixir-autogen, elixir-format
 msgid "Only image files are allowed."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:316
+#: lib/eden_web/live/chat_live.ex:328
 #, elixir-autogen, elixir-format
 msgid "Remove"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:667
+#: lib/eden_web/live/chat_live.ex:691
 #, elixir-autogen, elixir-format
 msgid "That image is too large (up to 8 MB)."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:671
+#: lib/eden_web/live/chat_live.ex:695
 #, elixir-autogen, elixir-format
 msgid "Up to 8 MB"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:470
+#, elixir-autogen, elixir-format
+msgid "Photo"
 msgstr ""

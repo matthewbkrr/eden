@@ -270,6 +270,20 @@ defmodule Eden.ChatTest do
     test "the worker is a no-op for a missing attachment" do
       assert :ok = perform_job(ThumbnailWorker, %{attachment_id: 999_999})
     end
+
+    test "a corrupt image fails gracefully and the worker cancels (no retries)",
+         %{alice: alice, conv: conv} do
+      # Valid PNG magic bytes (passes upload detection) but not a decodable image.
+      path = image_path(@png_signature <> "not actually a png body")
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+
+      assert {:error, {:unprocessable, _}} = Chat.generate_thumbnail(message.attachment)
+
+      assert {:cancel, {:unprocessable, _}} =
+               perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+
+      refute Repo.get(Attachment, message.attachment.id).thumbnail_key
+    end
   end
 
   describe "list_messages/3" do

@@ -8,6 +8,7 @@ defmodule Eden.Chat do
   topics; subscribe only after `get_conversation/2` has authorized access.
   """
   import Ecto.Query, warn: false
+  require Logger
 
   alias Eden.Accounts.Scope
   alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
@@ -18,9 +19,15 @@ defmodule Eden.Chat do
   @default_page 50
   @max_attachment_bytes 8 * 1024 * 1024
 
-  # Thumbnails: longest edge in pixels (never upscaled), JPEG quality.
-  @thumbnail_max "800"
+  # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
+  @thumbnail_max 800
   @thumbnail_quality 80
+  # Reject decompression bombs before decoding: cap the source's *header*
+  # pixel dimensions (~100 MP), checked from the lazy image without decoding.
+  @max_source_pixels 100_000_000
+
+  @doc "Maximum accepted attachment size in bytes (single source of truth for UI + server)."
+  def max_attachment_bytes, do: @max_attachment_bytes
 
   ## Conversations
 
@@ -382,25 +389,48 @@ defmodule Eden.Chat do
   end
 
   defp enqueue_thumbnail(%Attachment{id: id}) do
-    %{attachment_id: id} |> ThumbnailWorker.new() |> Oban.insert()
+    case %{attachment_id: id} |> ThumbnailWorker.new() |> Oban.insert() do
+      {:ok, _job} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error("thumbnail enqueue failed for attachment #{id}: #{inspect(reason)}")
+        :ok
+    end
   end
 
-  # Decode → shrink to fit @thumbnail_max (never upscaling) → re-encode as JPEG
-  # with metadata stripped (drops EXIF, incl. GPS). Returns the bytes and the
-  # *original* dimensions for layout. libvips never trusts the byte stream as
-  # code, so decoding untrusted uploads here is safe.
+  # Shrink to fit @thumbnail_max (never upscaling) and re-encode as JPEG with
+  # metadata stripped (drops EXIF, incl. GPS). The resize runs on the raw buffer
+  # via `thumbnail_buffer/3`, which shrinks *on load* — it never materialises the
+  # full-resolution bitmap, so a small upload that decodes to huge dimensions
+  # can't blow up memory. The header is read lazily first to record the original
+  # dimensions and to reject decompression bombs. (JPEG is intentional: photos
+  # don't need alpha; PNG transparency and GIF animation are not preserved.)
   defp make_thumbnail(bytes) do
     with {:ok, image} <- Image.from_binary(bytes),
-         {:ok, thumb} <- Image.thumbnail(image, @thumbnail_max, resize: :down),
+         width = Image.width(image),
+         height = Image.height(image),
+         :ok <- guard_dimensions(width, height),
+         {:ok, thumb} <-
+           Vix.Vips.Operation.thumbnail_buffer(bytes, @thumbnail_max, size: :VIPS_SIZE_DOWN),
          {:ok, jpeg} <-
            Image.write(thumb, :memory,
              suffix: ".jpg",
              quality: @thumbnail_quality,
              strip_metadata: true
            ) do
-      {:ok, jpeg, Image.width(image), Image.height(image)}
+      {:ok, jpeg, width, height}
+    else
+      # A bad/oversized image is a permanent failure (tagged so the worker cancels
+      # rather than retries); transient errors live in generate_thumbnail instead.
+      {:error, reason} -> {:error, {:unprocessable, reason}}
     end
+  rescue
+    e -> {:error, {:unprocessable, Exception.message(e)}}
   end
+
+  defp guard_dimensions(width, height) when width * height <= @max_source_pixels, do: :ok
+  defp guard_dimensions(_width, _height), do: {:error, :too_large}
 
   defp update_thumbnail(attachment, thumb_key, width, height) do
     attachment
@@ -409,10 +439,17 @@ defmodule Eden.Chat do
   end
 
   # Re-broadcast the message (attachment now carries a thumbnail_key) so open
-  # conversations swap the full image for the lighter thumbnail in place.
+  # conversations swap the full image for the lighter thumbnail in place. The
+  # message may be gone if it was deleted while the thumbnail was generating.
   defp broadcast_thumbnail(message_id) do
-    message = Message |> Repo.get(message_id) |> Repo.preload([:sender, :attachment])
-    broadcast(message.conversation_id, {:thumbnail_ready, message})
+    case Repo.get(Message, message_id) do
+      nil ->
+        :ok
+
+      message ->
+        message = Repo.preload(message, [:sender, :attachment])
+        broadcast(message.conversation_id, {:thumbnail_ready, message})
+    end
   end
 
   # Identify an image by its magic bytes — never trust the client content-type.

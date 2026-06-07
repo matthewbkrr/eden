@@ -40,7 +40,7 @@ defmodule EdenWeb.ChatLive do
       |> allow_upload(:photo,
         accept: ~w(.png .jpg .jpeg .gif .webp),
         max_entries: 1,
-        max_file_size: 8_000_000
+        max_file_size: Chat.max_attachment_bytes()
       )
 
     {:ok, socket}
@@ -457,14 +457,17 @@ defmodule EdenWeb.ChatLive do
           :if={@message.attachment}
           href={~p"/files/#{@message.attachment.id}"}
           target="_blank"
+          rel="noopener"
           class="block mb-1"
         >
           <img
             src={thumb_src(@message.attachment)}
-            class="rounded-[0.6rem] block max-w-full"
+            width={@message.attachment.width}
+            height={@message.attachment.height}
+            class="rounded-[0.6rem] block max-w-full h-auto"
             style="max-height:20rem;"
             loading="lazy"
-            alt=""
+            alt={gettext("Photo")}
           />
         </a>
         <span :if={@message.body != ""}>{@message.body}</span>
@@ -669,9 +672,18 @@ defmodule EdenWeb.ChatLive do
       end)
 
     case results do
-      [{:ok, _message}] -> {:noreply, assign(socket, composer: empty_composer())}
-      [{:error, reason}] -> {:noreply, put_flash(socket, :error, photo_error(reason))}
-      [] -> {:noreply, socket}
+      [{:ok, _message}] ->
+        {:noreply, assign(socket, composer: empty_composer())}
+
+      [{:error, reason}] ->
+        {:noreply, put_flash(socket, :error, photo_error(reason))}
+
+      # No entry was consumed (the file is still uploading or failed client-side
+      # validation). Don't drop a caption the user already typed.
+      [] ->
+        if String.trim(body) == "",
+          do: {:noreply, socket},
+          else: send_text(socket, scope, conversation, body)
     end
   end
 

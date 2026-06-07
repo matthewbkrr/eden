@@ -13,11 +13,26 @@ defmodule Eden.Storage do
   @callback delete(key) :: :ok | {:error, term}
   @callback exists?(key) :: boolean
 
+  @doc """
+  Optional: a local filesystem path for `key`, when the adapter is disk-backed.
+  Lets callers stream via `Plug.Conn.send_file/3` instead of reading the whole
+  object into memory. Remote adapters (e.g. S3) return `:error`.
+  """
+  @callback local_path(key) :: {:ok, Path.t()} | :error
+  @optional_callbacks local_path: 1
+
   @doc "Store the file at `source_path` under `key`."
   def put(key, source_path), do: adapter().put(key, source_path)
 
   @doc "Store in-memory `binary` bytes under `key` (e.g. a generated thumbnail)."
   def put_binary(key, binary), do: adapter().put_binary(key, binary)
+
+  @doc "A local filesystem path for `key`, or `:error` if the adapter isn't disk-backed."
+  def local_path(key) do
+    adapter = adapter()
+
+    if function_exported?(adapter, :local_path, 1), do: adapter.local_path(key), else: :error
+  end
 
   @doc "Read the object's bytes."
   def read(key), do: adapter().read(key)

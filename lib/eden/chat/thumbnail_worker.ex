@@ -16,7 +16,13 @@ defmodule Eden.Chat.ThumbnailWorker do
     case Repo.get(Attachment, id) do
       nil -> :ok
       %Attachment{thumbnail_key: key} when is_binary(key) -> :ok
-      attachment -> Chat.generate_thumbnail(attachment)
+      attachment -> handle(Chat.generate_thumbnail(attachment))
     end
   end
+
+  # A broken or oversized image will never succeed, so cancel instead of burning
+  # retries; storage/DB hiccups are transient, so let those retry.
+  defp handle(:ok), do: :ok
+  defp handle({:error, {:unprocessable, _} = reason}), do: {:cancel, reason}
+  defp handle({:error, reason}), do: {:error, reason}
 end
