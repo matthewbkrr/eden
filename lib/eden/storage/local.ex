@@ -23,6 +23,14 @@ defmodule Eden.Storage.Local do
 
   @impl true
   # sobelow_skip ["Traversal.FileModule"]
+  def put_binary(key, binary) do
+    dest = path(key)
+    File.mkdir_p!(Path.dirname(dest))
+    File.write(dest, binary)
+  end
+
+  @impl true
+  # sobelow_skip ["Traversal.FileModule"]
   def read(key), do: File.read(path(key))
 
   @impl true

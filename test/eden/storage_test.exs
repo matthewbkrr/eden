@@ -24,6 +24,13 @@ defmodule Eden.StorageTest do
     assert :ok = Storage.delete(key)
   end
 
+  test "put_binary / read round-trip" do
+    key = Storage.build_key("thumbnails", "jpg")
+    assert :ok = Storage.put_binary(key, <<1, 2, 3, 0, 255>>)
+    assert {:ok, <<1, 2, 3, 0, 255>>} = Storage.read(key)
+    Storage.delete(key)
+  end
+
   test "build_key/2 is prefixed, has the extension, and is unique" do
     k1 = Storage.build_key("attachments", "png")
     k2 = Storage.build_key("attachments", "png")

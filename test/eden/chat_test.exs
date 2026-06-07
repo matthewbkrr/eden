@@ -1,11 +1,12 @@
 defmodule Eden.ChatTest do
   use Eden.DataCase, async: true
+  use Oban.Testing, repo: Eden.Repo
 
   import Eden.AccountsFixtures
 
   alias Eden.Accounts.Scope
   alias Eden.Chat
-  alias Eden.Chat.{Conversation, Membership}
+  alias Eden.Chat.{Attachment, Conversation, Membership, ThumbnailWorker}
 
   defp scope(user), do: Scope.for_user(user)
 
@@ -16,6 +17,13 @@ defmodule Eden.ChatTest do
     File.write!(path, bytes)
     on_exit(fn -> File.rm(path) end)
     path
+  end
+
+  # A real, decodable PNG (the magic-byte stubs above can't be thumbnailed).
+  defp real_png(width \\ 1200, height \\ 800) do
+    {:ok, img} = Image.new(width, height, color: [120, 80, 200])
+    {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+    image_path(bytes)
   end
 
   setup do
@@ -192,6 +200,75 @@ defmodule Eden.ChatTest do
       {:ok, _} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
       assert_receive {:new_message, message}
       assert message.attachment.content_type == "image/png"
+    end
+
+    test "enqueues a thumbnail job on the media queue", %{alice: alice, conv: conv} do
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+
+      assert_enqueued(
+        worker: ThumbnailWorker,
+        queue: :media,
+        args: %{attachment_id: message.attachment.id}
+      )
+    end
+  end
+
+  describe "generate_thumbnail/1" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "downsizes to the long edge, records original dimensions, and broadcasts",
+         %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+
+      {:ok, message} =
+        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(1200, 800)})
+
+      assert :ok = Chat.generate_thumbnail(message.attachment)
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      assert is_binary(attachment.thumbnail_key)
+      assert attachment.width == 1200
+      assert attachment.height == 800
+      assert Eden.Storage.exists?(attachment.thumbnail_key)
+
+      {:ok, thumb_bytes} = Eden.Storage.read(attachment.thumbnail_key)
+      {:ok, thumb} = Image.from_binary(thumb_bytes)
+      assert max(Image.width(thumb), Image.height(thumb)) == 800
+
+      assert_receive {:thumbnail_ready, broadcast}
+      assert broadcast.attachment.thumbnail_key == attachment.thumbnail_key
+    end
+
+    test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
+      {:ok, message} =
+        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(300, 200)})
+
+      assert :ok = Chat.generate_thumbnail(message.attachment)
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      {:ok, thumb_bytes} = Eden.Storage.read(attachment.thumbnail_key)
+      {:ok, thumb} = Image.from_binary(thumb_bytes)
+      assert Image.width(thumb) == 300
+      assert Image.height(thumb) == 200
+    end
+
+    test "the worker generates the thumbnail and is idempotent", %{alice: alice, conv: conv} do
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+      args = %{attachment_id: message.attachment.id}
+
+      assert :ok = perform_job(ThumbnailWorker, args)
+      first_key = Repo.get(Attachment, message.attachment.id).thumbnail_key
+      assert is_binary(first_key)
+
+      assert :ok = perform_job(ThumbnailWorker, args)
+      assert Repo.get(Attachment, message.attachment.id).thumbnail_key == first_key
+    end
+
+    test "the worker is a no-op for a missing attachment" do
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: 999_999})
     end
   end
 

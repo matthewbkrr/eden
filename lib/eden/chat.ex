@@ -10,13 +10,17 @@ defmodule Eden.Chat do
   import Ecto.Query, warn: false
 
   alias Eden.Accounts.Scope
-  alias Eden.Chat.{Attachment, Conversation, Membership, Message}
+  alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
   alias Eden.Repo
   alias Eden.Storage
 
   @pubsub Eden.PubSub
   @default_page 50
   @max_attachment_bytes 8 * 1024 * 1024
+
+  # Thumbnails: longest edge in pixels (never upscaled), JPEG quality.
+  @thumbnail_max "800"
+  @thumbnail_quality 80
 
   ## Conversations
 
@@ -185,7 +189,9 @@ defmodule Eden.Chat do
 
       case insert_photo_message(user, conversation_id, Map.get(source, :body, ""), attrs) do
         {:ok, message} ->
-          {:ok, deliver(conversation_id, message)}
+          message = deliver(conversation_id, message)
+          enqueue_thumbnail(message.attachment)
+          {:ok, message}
 
         {:error, changeset} ->
           Storage.delete(key)
@@ -224,6 +230,23 @@ defmodule Eden.Chat do
     case Repo.one(query) do
       nil -> {:error, :not_found}
       attachment -> {:ok, attachment}
+    end
+  end
+
+  @doc """
+  Generates and stores a downscaled, metadata-stripped JPEG thumbnail for the
+  attachment, records its key and the original dimensions, then broadcasts the
+  refreshed message so open clients swap the full image for the thumbnail.
+  Invoked by `Eden.Chat.ThumbnailWorker`; returns `:ok` or `{:error, reason}`.
+  """
+  def generate_thumbnail(%Attachment{} = attachment) do
+    with {:ok, bytes} <- Storage.read(attachment.storage_key),
+         {:ok, jpeg, width, height} <- make_thumbnail(bytes),
+         thumb_key = Storage.build_key("thumbnails", "jpg"),
+         :ok <- Storage.put_binary(thumb_key, jpeg),
+         {:ok, _attachment} <- update_thumbnail(attachment, thumb_key, width, height) do
+      broadcast_thumbnail(attachment.message_id)
+      :ok
     end
   end
 
@@ -356,6 +379,40 @@ defmodule Eden.Chat do
         {:ok, message}
       end
     end)
+  end
+
+  defp enqueue_thumbnail(%Attachment{id: id}) do
+    %{attachment_id: id} |> ThumbnailWorker.new() |> Oban.insert()
+  end
+
+  # Decode → shrink to fit @thumbnail_max (never upscaling) → re-encode as JPEG
+  # with metadata stripped (drops EXIF, incl. GPS). Returns the bytes and the
+  # *original* dimensions for layout. libvips never trusts the byte stream as
+  # code, so decoding untrusted uploads here is safe.
+  defp make_thumbnail(bytes) do
+    with {:ok, image} <- Image.from_binary(bytes),
+         {:ok, thumb} <- Image.thumbnail(image, @thumbnail_max, resize: :down),
+         {:ok, jpeg} <-
+           Image.write(thumb, :memory,
+             suffix: ".jpg",
+             quality: @thumbnail_quality,
+             strip_metadata: true
+           ) do
+      {:ok, jpeg, Image.width(image), Image.height(image)}
+    end
+  end
+
+  defp update_thumbnail(attachment, thumb_key, width, height) do
+    attachment
+    |> Attachment.changeset(%{thumbnail_key: thumb_key, width: width, height: height})
+    |> Repo.update()
+  end
+
+  # Re-broadcast the message (attachment now carries a thumbnail_key) so open
+  # conversations swap the full image for the lighter thumbnail in place.
+  defp broadcast_thumbnail(message_id) do
+    message = Message |> Repo.get(message_id) |> Repo.preload([:sender, :attachment])
+    broadcast(message.conversation_id, {:thumbnail_ready, message})
   end
 
   # Identify an image by its magic bytes — never trust the client content-type.

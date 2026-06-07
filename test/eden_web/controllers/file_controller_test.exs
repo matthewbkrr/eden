@@ -75,4 +75,31 @@ defmodule EdenWeb.FileControllerTest do
       assert redirected_to(conn) == ~p"/login"
     end
   end
+
+  describe "GET /files/:id/thumb" do
+    test "returns 404 before the thumbnail has been generated", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment
+    } do
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}/thumb")
+      assert response(conn, 404)
+    end
+
+    test "serves the generated thumbnail as a member", %{conn: conn, alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      {:ok, img} = Image.new(1000, 700, color: [10, 200, 90])
+      {:ok, png} = Image.write(img, :memory, suffix: ".png")
+      path = image_path(png)
+
+      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      :ok = Chat.generate_thumbnail(message.attachment)
+
+      conn = conn |> log_in_user(bob) |> get(~p"/files/#{message.attachment.id}/thumb")
+      assert response(conn, 200)
+      assert get_resp_header(conn, "content-type") == ["image/jpeg; charset=utf-8"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    end
+  end
 end

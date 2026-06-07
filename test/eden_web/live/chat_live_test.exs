@@ -13,6 +13,15 @@ defmodule EdenWeb.ChatLiveTest do
     %{alice: alice, bob: bob, conversation: conversation}
   end
 
+  defp real_png_path do
+    {:ok, img} = Image.new(900, 600, color: [200, 60, 60])
+    {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+    path = Path.join(System.tmp_dir!(), "lvimg-#{System.unique_integer([:positive])}")
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   test "shows the empty state when nothing is selected", %{conn: conn} do
     conn = log_in_user(conn, user_fixture())
     {:ok, _view, html} = live(conn, ~p"/app")
@@ -78,6 +87,36 @@ defmodule EdenWeb.ChatLiveTest do
         })
 
       assert render(view) =~ "ping from bob"
+    end
+
+    test "renders a photo message as a linked image", ctx do
+      {:ok, message} =
+        Chat.create_photo_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          path: real_png_path()
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ ~s(src="/files/#{message.attachment.id}")
+      assert html =~ ~s(href="/files/#{message.attachment.id}")
+    end
+
+    test "swaps the full image for the thumbnail once it is ready", ctx do
+      {:ok, message} =
+        Chat.create_photo_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+          path: real_png_path()
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      refute render(view) =~ "/files/#{message.attachment.id}/thumb"
+
+      # Generating the thumbnail broadcasts on the conversation topic the view
+      # is subscribed to, so the image source updates in place.
+      :ok = Chat.generate_thumbnail(message.attachment)
+      assert render(view) =~ "/files/#{message.attachment.id}/thumb"
     end
   end
 end

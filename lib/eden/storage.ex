@@ -8,12 +8,16 @@ defmodule Eden.Storage do
   @type key :: String.t()
 
   @callback put(key, source_path :: Path.t()) :: :ok | {:error, term}
+  @callback put_binary(key, binary) :: :ok | {:error, term}
   @callback read(key) :: {:ok, binary} | {:error, term}
   @callback delete(key) :: :ok | {:error, term}
   @callback exists?(key) :: boolean
 
   @doc "Store the file at `source_path` under `key`."
   def put(key, source_path), do: adapter().put(key, source_path)
+
+  @doc "Store in-memory `binary` bytes under `key` (e.g. a generated thumbnail)."
+  def put_binary(key, binary), do: adapter().put_binary(key, binary)
 
   @doc "Read the object's bytes."
   def read(key), do: adapter().read(key)

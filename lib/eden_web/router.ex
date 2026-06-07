@@ -40,6 +40,7 @@ defmodule EdenWeb.Router do
     scope "/" do
       pipe_through :require_authenticated
       get "/files/:id", FileController, :show
+      get "/files/:id/thumb", FileController, :thumb
     end
 
     # Authenticated pages.

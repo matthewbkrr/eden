@@ -150,6 +150,18 @@ defmodule EdenWeb.ChatLive do
     {:noreply, stream_insert(socket, :messages, message)}
   end
 
+  # A thumbnail finished generating: swap the full image for it, in place. Guard
+  # against a late broadcast arriving after the user switched conversations.
+  def handle_info({:thumbnail_ready, message}, socket) do
+    selected = socket.assigns.selected
+
+    if selected && selected.id == message.conversation_id do
+      {:noreply, stream_insert(socket, :messages, message)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # The other participant read up to read_at — refresh delivery ticks.
   def handle_info({:read, reader_id, read_at}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
@@ -448,7 +460,7 @@ defmodule EdenWeb.ChatLive do
           class="block mb-1"
         >
           <img
-            src={~p"/files/#{@message.attachment.id}"}
+            src={thumb_src(@message.attachment)}
             class="rounded-[0.6rem] block max-w-full"
             style="max-height:20rem;"
             loading="lazy"
@@ -672,4 +684,9 @@ defmodule EdenWeb.ChatLive do
   defp upload_error_text(:not_accepted), do: gettext("Images only")
   defp upload_error_text(:too_many_files), do: gettext("One photo at a time")
   defp upload_error_text(_other), do: gettext("Invalid file")
+
+  # Prefer the lighter thumbnail once it exists; fall back to the original while
+  # the worker is still generating it.
+  defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
+  defp thumb_src(%{id: id}), do: ~p"/files/#{id}"
 end
