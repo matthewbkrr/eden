@@ -138,6 +138,64 @@ jobs:
       # The `test` alias creates and migrates the test DB before running.
       - run: mix test
 
+  # Build the actual production Docker image and run it: this is the only job
+  # exercising prod compile-time config + runtime.exs + the slim runtime image,
+  # so it catches prod-only boot/config regressions and missing runtime libs
+  # (e.g. libvips) that the test-env suite can't see.
+  docker:
+    name: docker-build
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the production image
+        run: docker build -t eden:ci .
+
+      - name: Migrate, boot, and smoke-test the image
+        run: |
+          set -euo pipefail
+          PGPASSWORD=postgres createdb -h localhost -U postgres eden_prod
+          SECRET="$(openssl rand -base64 48)"
+          ENVS="--network host \
+            -e SECRET_KEY_BASE=$SECRET \
+            -e DATABASE_URL=ecto://postgres:postgres@localhost:5432/eden_prod \
+            -e PHX_HOST=localhost -e PORT=4000"
+
+          # Migrate first (real deploy order: schema before the server + Oban start).
+          docker run --rm $ENVS eden:ci /app/bin/migrate
+
+          docker run -d --name eden $ENVS eden:ci
+
+          code=000
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4000/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          [ "$code" = "200" ] || { docker logs eden; echo "healthz never returned 200"; exit 1; }
+
+          # libvips (photo thumbnails) must work on the slim runtime image.
+          docker exec eden /app/bin/eden eval \
+            '{:ok, i} = Image.new(32, 32, color: [1, 2, 3]); {:ok, _} = Image.write(i, :memory, suffix: ".jpg"); IO.puts("vips ok")'
+
+      - name: Container logs
+        if: always()
+        run: docker logs eden || true
+
   # Secret scanning over the full history.
   gitleaks:
     name: gitleaks

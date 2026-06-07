@@ -43,6 +43,11 @@ defmodule EdenWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # Liveness probe for the container / reverse-proxy. Answered here — before
+  # parsing, session, and the router — so it stays cheap and still responds even
+  # if routing or the database is degraded.
+  plug :health_check
+
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
@@ -52,4 +57,14 @@ defmodule EdenWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug EdenWeb.Router
+
+  def health_check(%Plug.Conn{request_path: path} = conn, _opts)
+      when path in ["/healthz", "/healthz/"] do
+    conn
+    |> Plug.Conn.put_resp_content_type("text/plain")
+    |> Plug.Conn.send_resp(200, "ok")
+    |> Plug.Conn.halt()
+  end
+
+  def health_check(conn, _opts), do: conn
 end
