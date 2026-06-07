@@ -512,10 +512,20 @@ defmodule EdenWeb.CoreComponents do
   def ed_flash(assigns) do
     ~H"""
     <div class="space-y-2 mb-4 empty:hidden">
-      <div :if={msg = Phoenix.Flash.get(@flash, :error)} class="ed-toast ed-toast--error">
+      <div
+        :if={msg = Phoenix.Flash.get(@flash, :error)}
+        class="ed-toast ed-toast--error pointer-events-auto cursor-pointer"
+        role="alert"
+        phx-click={JS.push("lv:clear-flash", value: %{key: "error"}) |> JS.hide()}
+      >
         <span class="ed-toast__bar"></span>{msg}
       </div>
-      <div :if={msg = Phoenix.Flash.get(@flash, :info)} class="ed-toast ed-toast--info">
+      <div
+        :if={msg = Phoenix.Flash.get(@flash, :info)}
+        class="ed-toast ed-toast--info pointer-events-auto cursor-pointer"
+        role="status"
+        phx-click={JS.push("lv:clear-flash", value: %{key: "info"}) |> JS.hide()}
+      >
         <span class="ed-toast__bar"></span>{msg}
       </div>
     </div>

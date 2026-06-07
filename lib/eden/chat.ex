@@ -47,26 +47,30 @@ defmodule Eden.Chat do
       |> Repo.all()
 
     ids = Enum.map(conversations, & &1.id)
-    previews = last_message_bodies(ids)
+    previews = last_message_previews(ids)
     unread = unread_counts(user, ids)
 
     Enum.map(conversations, fn conversation ->
+      preview = previews[conversation.id]
+
       %{
         conversation
-        | last_message_body: previews[conversation.id],
+        | last_message_body: preview && preview.body,
+          last_message_photo?: (preview && preview.photo?) || false,
           unread_count: Map.get(unread, conversation.id, 0)
       }
     end)
   end
 
-  defp last_message_bodies([]), do: %{}
+  defp last_message_previews([]), do: %{}
 
-  defp last_message_bodies(ids) do
+  defp last_message_previews(ids) do
     from(m in Message,
+      left_join: a in assoc(m, :attachment),
       where: m.conversation_id in ^ids,
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
-      select: {m.conversation_id, m.body}
+      select: {m.conversation_id, %{body: m.body, photo?: not is_nil(a.id)}}
     )
     |> Repo.all()
     |> Map.new()
@@ -106,10 +110,13 @@ defmodule Eden.Chat do
   @doc "Like get_conversation/2 but with the virtual unread_count / last_message_body filled in."
   def get_conversation_summary(%Scope{user: user} = scope, id) do
     with {:ok, conversation} <- get_conversation(scope, id) do
+      preview = last_message_previews([id])[id]
+
       {:ok,
        %{
          conversation
-         | last_message_body: last_message_bodies([id])[id],
+         | last_message_body: preview && preview.body,
+           last_message_photo?: (preview && preview.photo?) || false,
            unread_count: Map.get(unread_counts(user, [id]), id, 0)
        }}
     end
