@@ -71,16 +71,20 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, composer: to_form(%{"body" => body}, as: "message"))}
   end
 
-  def handle_event("send", %{"message" => %{"body" => body}}, socket) do
+  def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
+    client_id = msg["client_id"]
 
     cond do
       is_nil(conversation) -> {:noreply, socket}
       socket.assigns.uploads.photo.entries != [] -> send_photo(socket, scope, conversation, body)
       String.trim(body) == "" -> {:noreply, assign(socket, composer: empty_composer())}
-      true -> send_text(socket, scope, conversation, body)
+      true -> send_text(socket, scope, conversation, body, client_id)
     end
   end
+
+  # Ignore malformed send payloads (e.g. a crafted event) instead of crashing.
+  def handle_event("send", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :photo, ref)}
@@ -293,16 +297,25 @@ defmodule EdenWeb.ChatLive do
                 read={read?(message, @other_read_at)}
               />
             </div>
+            <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
+            <div class="flex flex-col gap-2 mt-2" id="pending-messages" phx-update="ignore"></div>
           </div>
 
           <.form
             for={@composer}
+            id="composer"
+            phx-hook=".SendQueue"
+            data-conversation-id={@selected.id}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
-            <div :for={entry <- @uploads.photo.entries} class="flex items-center gap-3">
+            <div
+              :for={entry <- @uploads.photo.entries}
+              data-upload-preview
+              class="flex items-center gap-3"
+            >
               <.live_img_preview
                 entry={entry}
                 class="rounded-[var(--ed-radius)] object-cover"
@@ -389,6 +402,93 @@ defmodule EdenWeb.ChatLive do
             const d = new Date(this.el.getAttribute("datetime"));
             if (!isNaN(d)) this.el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SendQueue">
+        // Optimistic text sends + an in-memory outbound queue. A send is rendered
+        // immediately, queued, and (re)sent over the socket; while the socket is
+        // down it waits and flushes on reconnect, so a flaky cross-border link
+        // doesn't lose or duplicate messages (the server dedups by client_id).
+        // Photo sends fall through to the normal LiveView path (they need a live
+        // upload). In-memory only: a full page reload clears the queue.
+        export default {
+          mounted() {
+            this.connected = true
+            this.convId = this.el.dataset.conversationId
+            this.queue = []
+            this.input = this.el.querySelector('input[name="message[body]"]')
+            this.pending = document.getElementById("pending-messages")
+            this.scroller = document.getElementById("message-scroll")
+            this.el.addEventListener("submit", (e) => this.onSubmit(e))
+          },
+          disconnected() { this.connected = false },
+          reconnected() {
+            this.connected = true
+            // Re-arm anything that was in-flight when the link dropped; the
+            // server dedups by client_id, so re-sending can't duplicate.
+            for (const item of this.queue) item.sent = false
+            this.flush()
+          },
+          updated() {
+            // Switched conversation: drop the old thread's optimistic UI + queue.
+            if (this.el.dataset.conversationId !== this.convId) {
+              this.convId = this.el.dataset.conversationId
+              this.queue = []
+              if (this.pending) this.pending.replaceChildren()
+            }
+          },
+          onSubmit(e) {
+            // Photos go through the normal phx-submit (they carry an upload).
+            if (this.el.querySelector("[data-upload-preview]")) return
+            // Take over text sends: stop the event reaching LiveView's delegated
+            // phx-submit so the message isn't also sent without a client_id.
+            e.preventDefault()
+            e.stopPropagation()
+            const body = (this.input.value || "").trim()
+            if (!body) return
+            const clientId = crypto.randomUUID()
+            this.input.value = ""
+            this.addOptimistic(clientId, body)
+            this.queue.push({ clientId, body, sent: false })
+            this.flush()
+          },
+          flush() {
+            if (!this.connected) return
+            // Items stay queued until acked; only then are they removed. An
+            // in-flight item (sent) isn't re-sent until a reconnect re-arms it.
+            for (const item of this.queue) {
+              if (item.sent) continue
+              item.sent = true
+              this.pushEvent("send", { message: { body: item.body, client_id: item.clientId } }, (reply) => {
+                this.queue = this.queue.filter((q) => q.clientId !== item.clientId)
+                if (reply && reply.nack) this.markFailed(item.clientId)
+                else this.remove(item.clientId)
+              })
+            }
+          },
+          addOptimistic(clientId, body) {
+            const row = document.createElement("div")
+            row.className = "flex justify-end"
+            row.dataset.clientId = clientId
+            const bubble = document.createElement("div")
+            bubble.className = "ed-bubble ed-bubble--me"
+            bubble.style.opacity = "0.55"
+            bubble.textContent = body
+            row.appendChild(bubble)
+            this.pending.appendChild(row)
+            if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight
+          },
+          remove(clientId) {
+            const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+            if (node) node.remove()
+          },
+          markFailed(clientId) {
+            const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+            if (!node) return
+            const bubble = node.querySelector(".ed-bubble")
+            bubble.style.opacity = "1"
+            bubble.style.border = "1px solid var(--ed-danger)"
+          },
         }
       </script>
     </div>
@@ -653,16 +753,28 @@ defmodule EdenWeb.ChatLive do
 
   defp empty_composer, do: to_form(%{}, as: "message")
 
-  defp send_text(socket, scope, conversation, body) do
-    case Chat.create_message(scope, conversation.id, %{"body" => body}) do
+  defp send_text(socket, scope, conversation, body, client_id \\ nil) do
+    case Chat.create_message(scope, conversation.id, %{"body" => body, "client_id" => client_id}) do
       {:ok, _message} ->
-        {:noreply, assign(socket, composer: empty_composer())}
+        # The form path clears the input via the composer assign; the hook path
+        # (client_id present) already cleared it client-side, so leave the assign
+        # alone to avoid clobbering text typed during a slow round-trip.
+        socket = if client_id, do: socket, else: assign(socket, composer: empty_composer())
+        ack(socket, client_id)
 
       {:error, _changeset} ->
-        {:noreply,
-         put_flash(socket, :error, gettext("Message is too long (up to 4000 characters)."))}
+        socket
+        |> put_flash(:error, gettext("Message is too long (up to 4000 characters)."))
+        |> nack(client_id)
     end
   end
+
+  # When a send comes from the client SendQueue hook (client_id present), reply so
+  # it can clear or flag its optimistic bubble; a plain form submit gets :noreply.
+  defp ack(socket, nil), do: {:noreply, socket}
+  defp ack(socket, client_id), do: {:reply, %{"ack" => client_id}, socket}
+  defp nack(socket, nil), do: {:noreply, socket}
+  defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
   defp send_photo(socket, scope, conversation, body) do
     # Store + persist inside the consume callback, while the temp file exists.

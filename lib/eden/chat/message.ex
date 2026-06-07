@@ -9,9 +9,16 @@ defmodule Eden.Chat.Message do
   import Ecto.Changeset
 
   @max_body 4000
+  # Idempotency keys are UUIDs (36 chars); cap well above that and reject anything
+  # larger so a malformed/hostile value can't bloat the row or overflow the
+  # unique index (Postgres btree entries are size-limited, and an oversize value
+  # would otherwise raise instead of failing gracefully).
+  @max_client_id 64
 
   schema "messages" do
     field :body, :string
+    # Client-generated idempotency key (UUID). See the migration / Chat dedup.
+    field :client_id, :string
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :sender, Eden.Accounts.User
@@ -23,10 +30,12 @@ defmodule Eden.Chat.Message do
   @doc "Changeset for a text message: a non-blank body is required."
   def changeset(message, attrs) do
     message
-    |> cast(attrs, [:body])
+    |> cast(attrs, [:body, :client_id])
     |> update_change(:body, &sanitize/1)
     |> validate_required([:body])
     |> validate_length(:body, max: @max_body, count: :codepoints)
+    |> validate_length(:client_id, max: @max_client_id)
+    |> dedup_constraint()
   end
 
   @doc """
@@ -35,10 +44,18 @@ defmodule Eden.Chat.Message do
   """
   def photo_changeset(message, attrs) do
     message
-    |> cast(attrs, [:body])
+    |> cast(attrs, [:body, :client_id])
     |> update_change(:body, &sanitize/1)
     |> ensure_body()
     |> validate_length(:body, max: @max_body, count: :codepoints)
+    |> validate_length(:client_id, max: @max_client_id)
+    |> dedup_constraint()
+  end
+
+  # Surfaces the (sender_id, client_id) unique index as a changeset error the
+  # context can recognise as a duplicate resend.
+  defp dedup_constraint(changeset) do
+    unique_constraint(changeset, :client_id, name: :messages_sender_id_client_id_index)
   end
 
   defp ensure_body(changeset) do

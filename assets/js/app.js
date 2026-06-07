@@ -26,8 +26,19 @@ import {hooks as colocatedHooks} from "phoenix-colocated/eden"
 import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
+
+// Capped backoff: retry fast at first, then settle at 5s. Keeps recovery quick
+// on a flaky RU↔overseas link without hammering the server during a long outage.
+const backoff = (tries) => [250, 500, 1000, 2000, 5000][tries - 1] || 5000
+
 const liveSocket = new LiveSocket("/live", Socket, {
+  // Fall back to long-polling if the WebSocket can't establish quickly (the WS
+  // upgrade is the fragile part across the border / restrictive networks).
   longPollFallbackMs: 2500,
+  // Detect a dead socket sooner so reconnection starts faster.
+  heartbeatIntervalMs: 15000,
+  reconnectAfterMs: backoff,
+  rejoinAfterMs: backoff,
   params: {_csrf_token: csrfToken},
   hooks: {...colocatedHooks},
 })
