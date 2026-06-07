@@ -208,6 +208,25 @@ defmodule Eden.Chat do
     :ok
   end
 
+  @doc """
+  Fetches an attachment by id, but only if the scoped user belongs to the
+  attachment's conversation. Authorizes file serving by membership.
+  """
+  def fetch_attachment(%Scope{user: user}, id) do
+    query =
+      from a in Attachment,
+        join: m in Message,
+        on: m.id == a.message_id,
+        join: mem in Membership,
+        on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+        where: a.id == ^id
+
+    case Repo.one(query) do
+      nil -> {:error, :not_found}
+      attachment -> {:ok, attachment}
+    end
+  end
+
   @doc "Whether the scoped user belongs to the conversation."
   def member?(%Scope{user: user}, conversation_id) do
     Repo.exists?(

@@ -37,6 +37,11 @@ defmodule EdenWeb.ChatLive do
       )
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
+      |> allow_upload(:photo,
+        accept: ~w(.png .jpg .jpeg .gif .webp),
+        max_entries: 1,
+        max_file_size: 8_000_000
+      )
 
     {:ok, socket}
   end
@@ -70,22 +75,15 @@ defmodule EdenWeb.ChatLive do
     %{current_scope: scope, selected: conversation} = socket.assigns
 
     cond do
-      is_nil(conversation) ->
-        {:noreply, socket}
-
-      String.trim(body) == "" ->
-        {:noreply, assign(socket, composer: empty_composer())}
-
-      true ->
-        case Chat.create_message(scope, conversation.id, %{"body" => body}) do
-          {:ok, _message} ->
-            {:noreply, assign(socket, composer: empty_composer())}
-
-          {:error, _changeset} ->
-            {:noreply,
-             put_flash(socket, :error, gettext("Message is too long (up to 4000 characters)."))}
-        end
+      is_nil(conversation) -> {:noreply, socket}
+      socket.assigns.uploads.photo.entries != [] -> send_photo(socket, scope, conversation, body)
+      String.trim(body) == "" -> {:noreply, assign(socket, composer: empty_composer())}
+      true -> send_text(socket, scope, conversation, body)
     end
+  end
+
+  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :photo, ref)}
   end
 
   def handle_event("load_more", _params, socket) do
@@ -289,25 +287,60 @@ defmodule EdenWeb.ChatLive do
             for={@composer}
             phx-submit="send"
             phx-change="composer_changed"
-            class="flex items-center gap-2 p-3 border-t shrink-0"
+            class="flex flex-col gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
-            <input
-              type="text"
-              name="message[body]"
-              value={@composer[:body].value}
-              class="ed-input"
-              placeholder={gettext("Message")}
-              autocomplete="off"
-            />
-            <button
-              class="ed-btn ed-btn--primary shrink-0"
-              style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
-              type="submit"
-              aria-label={gettext("Send")}
-            >
-              <.icon name="hero-paper-airplane-micro" class="size-4" />
-            </button>
+            <div :for={entry <- @uploads.photo.entries} class="flex items-center gap-3">
+              <.live_img_preview
+                entry={entry}
+                class="rounded-[var(--ed-radius)] object-cover"
+                style="width:3rem; height:3rem;"
+              />
+              <span
+                class="flex-1 min-w-0 truncate"
+                style="font-size:0.8125rem; color: var(--ed-muted);"
+              >
+                {entry.client_name}
+              </span>
+              <span
+                :for={err <- upload_errors(@uploads.photo, entry)}
+                style="font-size:0.75rem; color: var(--ed-danger);"
+              >
+                {upload_error_text(err)}
+              </span>
+              <button
+                type="button"
+                class="ed-btn--icon"
+                phx-click="cancel_upload"
+                phx-value-ref={entry.ref}
+                aria-label={gettext("Remove")}
+              >
+                <.icon name="hero-x-mark-mini" class="size-5" />
+              </button>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Attach photo")}>
+                <.icon name="hero-photo-micro" class="size-5" />
+                <.live_file_input upload={@uploads.photo} class="hidden" />
+              </label>
+              <input
+                type="text"
+                name="message[body]"
+                value={@composer[:body].value}
+                class="ed-input"
+                placeholder={gettext("Message")}
+                autocomplete="off"
+              />
+              <button
+                class="ed-btn ed-btn--primary shrink-0"
+                style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+                type="submit"
+                aria-label={gettext("Send")}
+              >
+                <.icon name="hero-paper-airplane-micro" class="size-4" />
+              </button>
+            </div>
           </.form>
         <% else %>
           <div class="flex-1 grid place-items-center text-center p-8">
@@ -408,7 +441,21 @@ defmodule EdenWeb.ChatLive do
         >
           {@message.sender.display_name}
         </span>
-        {@message.body}
+        <a
+          :if={@message.attachment}
+          href={~p"/files/#{@message.attachment.id}"}
+          target="_blank"
+          class="block mb-1"
+        >
+          <img
+            src={~p"/files/#{@message.attachment.id}"}
+            class="rounded-[0.6rem] block max-w-full"
+            style="max-height:20rem;"
+            loading="lazy"
+            alt=""
+          />
+        </a>
+        <span :if={@message.body != ""}>{@message.body}</span>
         <span class="ed-bubble__meta">
           <.local_time at={@message.inserted_at} />
           <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
@@ -590,4 +637,39 @@ defmodule EdenWeb.ChatLive do
   defp read?(message, read_at), do: DateTime.compare(message.inserted_at, read_at) != :gt
 
   defp empty_composer, do: to_form(%{}, as: "message")
+
+  defp send_text(socket, scope, conversation, body) do
+    case Chat.create_message(scope, conversation.id, %{"body" => body}) do
+      {:ok, _message} ->
+        {:noreply, assign(socket, composer: empty_composer())}
+
+      {:error, _changeset} ->
+        {:noreply,
+         put_flash(socket, :error, gettext("Message is too long (up to 4000 characters)."))}
+    end
+  end
+
+  defp send_photo(socket, scope, conversation, body) do
+    # Store + persist inside the consume callback, while the temp file exists.
+    results =
+      consume_uploaded_entries(socket, :photo, fn %{path: path}, _entry ->
+        {:ok, Chat.create_photo_message(scope, conversation.id, %{path: path, body: body})}
+      end)
+
+    case results do
+      [{:ok, _message}] -> {:noreply, assign(socket, composer: empty_composer())}
+      [{:error, reason}] -> {:noreply, put_flash(socket, :error, photo_error(reason))}
+      [] -> {:noreply, socket}
+    end
+  end
+
+  defp photo_error(:unsupported_type), do: gettext("Only image files are allowed.")
+  defp photo_error(:too_large), do: gettext("That image is too large (up to 8 MB).")
+  defp photo_error(_other), do: gettext("Couldn't send the photo.")
+
+  # Client-side upload validation errors surfaced by `allow_upload/3`.
+  defp upload_error_text(:too_large), do: gettext("Up to 8 MB")
+  defp upload_error_text(:not_accepted), do: gettext("Images only")
+  defp upload_error_text(:too_many_files), do: gettext("One photo at a time")
+  defp upload_error_text(_other), do: gettext("Invalid file")
 end
