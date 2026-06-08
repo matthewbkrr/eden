@@ -263,11 +263,12 @@ defmodule EdenWeb.ChatLive do
             <.link navigate={~p"/app"} class="ed-btn--icon md:hidden" aria-label={gettext("Back")}>
               <.icon name="hero-arrow-left-mini" class="size-5" />
             </.link>
-            <span class="ed-avatar ed-avatar--sm">
-              {initials(title(@selected, @current_scope.user))}
-              <span :if={online?(@selected, @current_scope.user, @online_ids)} class="ed-avatar__dot">
-              </span>
-            </span>
+            <.avatar
+              name={title(@selected, @current_scope.user)}
+              src={avatar_src(peer(@selected, @current_scope.user))}
+              online={online?(@selected, @current_scope.user, @online_ids)}
+              size={:sm}
+            />
             <div class="min-w-0">
               <div class="font-semibold truncate" style="font-size:0.9375rem;">
                 {title(@selected, @current_scope.user)}
@@ -536,6 +537,22 @@ defmodule EdenWeb.ChatLive do
 
   ## Components
 
+  attr :name, :string, required: true
+  attr :src, :string, default: nil
+  attr :online, :boolean, default: false
+  attr :size, :atom, default: nil, values: [nil, :sm, :lg]
+
+  # Circular avatar: shows the user's image when present, initials otherwise.
+  defp avatar(assigns) do
+    ~H"""
+    <span class={["ed-avatar", @size == :sm && "ed-avatar--sm", @size == :lg && "ed-avatar--lg"]}>
+      <img :if={@src} src={@src} alt="" />
+      <span :if={!@src}>{initials(@name)}</span>
+      <span :if={@online} class="ed-avatar__dot"></span>
+    </span>
+    """
+  end
+
   attr :id, :string, required: true
   attr :conversation, :map, required: true
   attr :user, :map, required: true
@@ -549,10 +566,11 @@ defmodule EdenWeb.ChatLive do
       patch={~p"/app/c/#{@conversation.id}"}
       class={["ed-convo", @active && "ed-convo--active"]}
     >
-      <span class="ed-avatar">
-        {initials(title(@conversation, @user))}
-        <span :if={online?(@conversation, @user, @online_ids)} class="ed-avatar__dot"></span>
-      </span>
+      <.avatar
+        name={title(@conversation, @user)}
+        src={avatar_src(peer(@conversation, @user))}
+        online={online?(@conversation, @user, @online_ids)}
+      />
       <span class="ed-convo__body">
         <span class="ed-convo__top">
           <span class="ed-convo__name">{title(@conversation, @user)}</span>
@@ -684,7 +702,7 @@ defmodule EdenWeb.ChatLive do
                   class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] cursor-pointer"
                 >
                   <input type="checkbox" name="member_ids[]" value={u.id} class="size-4" />
-                  <span class="ed-avatar ed-avatar--sm">{initials(u.display_name)}</span>
+                  <.avatar name={u.display_name} src={avatar_src(u)} size={:sm} />
                   <span class="flex-1 min-w-0">
                     <span class="block" style="font-weight:550; font-size:0.875rem;">
                       {u.display_name}
@@ -776,6 +794,16 @@ defmodule EdenWeb.ChatLive do
     |> Enum.reject(&(&1.user_id == user.id))
     |> Enum.map(& &1.user)
   end
+
+  # The single other participant of a 1:1 (nil for groups), used for the avatar.
+  defp peer(%{is_group: true}, _user), do: nil
+  defp peer(conversation, user), do: conversation |> others(user) |> List.first()
+
+  # Avatar image URL for a user, cache-busted by the avatar key (nil → initials).
+  defp avatar_src(%{avatar_key: key, id: id}) when is_binary(key),
+    do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"
+
+  defp avatar_src(_user), do: nil
 
   defp initials(name), do: name |> String.first() |> String.upcase()
 
