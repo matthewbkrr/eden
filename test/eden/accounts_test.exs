@@ -33,6 +33,15 @@ defmodule Eden.AccountsTest do
     token
   end
 
+  defp real_png(w \\ 600, h \\ 600) do
+    {:ok, img} = Image.new(w, h, color: [120, 80, 200])
+    {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+    path = Path.join(System.tmp_dir!(), "av-#{System.unique_integer([:positive])}.png")
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   describe "register_user_with_invite/2" do
     setup do
       inviter = user_fixture()
@@ -175,6 +184,71 @@ defmodule Eden.AccountsTest do
 
     test "is nil for an unknown username" do
       refute Accounts.get_user_by_username_and_password("ghost", "supersecret")
+    end
+  end
+
+  describe "update_profile/2" do
+    test "updates display name and bio (trimmed, NUL-stripped)" do
+      user = user_fixture()
+
+      assert {:ok, u} =
+               Accounts.update_profile(user, %{
+                 "display_name" => "Neo",
+                 "bio" => " hi" <> <<0>> <> "there "
+               })
+
+      assert u.display_name == "Neo"
+      assert u.bio == "hithere"
+    end
+
+    test "rejects a blank display name and an over-long bio" do
+      user = user_fixture()
+      assert {:error, %Ecto.Changeset{}} = Accounts.update_profile(user, %{"display_name" => ""})
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.update_profile(user, %{"bio" => String.duplicate("x", 501)})
+    end
+
+    test "an empty bio clears it to nil" do
+      {:ok, user} = Accounts.update_profile(user_fixture(), %{"bio" => "something"})
+      assert {:ok, cleared} = Accounts.update_profile(user, %{"bio" => "   "})
+      assert cleared.bio == nil
+    end
+  end
+
+  describe "avatars" do
+    test "set_avatar processes the image into a square JPEG and stores it" do
+      assert {:ok, u} = Accounts.set_avatar(user_fixture(), real_png(1400, 500))
+      assert is_binary(u.avatar_key)
+      assert Eden.Storage.exists?(u.avatar_key)
+
+      {:ok, bytes} = Eden.Storage.read(u.avatar_key)
+      {:ok, img} = Image.from_binary(bytes)
+      assert Image.width(img) == 512 and Image.height(img) == 512
+    end
+
+    test "replacing an avatar deletes the previous blob" do
+      {:ok, u1} = Accounts.set_avatar(user_fixture(), real_png())
+      old = u1.avatar_key
+      assert {:ok, u2} = Accounts.set_avatar(u1, real_png())
+      refute u2.avatar_key == old
+      refute Eden.Storage.exists?(old)
+      assert Eden.Storage.exists?(u2.avatar_key)
+    end
+
+    test "remove_avatar clears the key and deletes the blob" do
+      {:ok, u} = Accounts.set_avatar(user_fixture(), real_png())
+      key = u.avatar_key
+      assert {:ok, cleared} = Accounts.remove_avatar(u)
+      assert cleared.avatar_key == nil
+      refute Eden.Storage.exists?(key)
+    end
+
+    test "rejects a non-image upload" do
+      path = Path.join(System.tmp_dir!(), "notimg-#{System.unique_integer([:positive])}")
+      File.write!(path, "definitely not an image")
+      on_exit(fn -> File.rm(path) end)
+      assert {:error, _} = Accounts.set_avatar(user_fixture(), path)
     end
   end
 end
