@@ -34,7 +34,10 @@ defmodule EdenWeb.SettingsLiveTest do
 
     test "shows the signed-in user's current name and bio", %{conn: conn} do
       user = user_fixture(%{display_name: "Ada"})
-      {:ok, user} = Accounts.update_profile(user, %{display_name: "Ada", bio: "Counts on machines."})
+
+      {:ok, user} =
+        Accounts.update_profile(user, %{display_name: "Ada", bio: "Counts on machines."})
+
       conn = log_in_user(conn, user)
       {:ok, _view, html} = live(conn, ~p"/settings")
 

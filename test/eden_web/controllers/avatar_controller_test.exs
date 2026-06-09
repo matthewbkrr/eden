@@ -22,7 +22,11 @@ defmodule EdenWeb.AvatarControllerTest do
       %{viewer: viewer, target: target}
     end
 
-    test "serves an authenticated user the avatar JPEG", %{conn: conn, viewer: viewer, target: target} do
+    test "serves an authenticated user the avatar JPEG", %{
+      conn: conn,
+      viewer: viewer,
+      target: target
+    } do
       conn = conn |> log_in_user(viewer) |> get(~p"/users/#{target.id}/avatar")
       assert response(conn, 200)
       assert get_resp_header(conn, "content-type") == ["image/jpeg"]

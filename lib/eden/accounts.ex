@@ -109,10 +109,8 @@ defmodule Eden.Accounts do
              height: @avatar_size,
              crop: :VIPS_INTERESTING_CENTRE,
              size: :VIPS_SIZE_BOTH
-           ),
-         {:ok, jpeg} <-
-           Image.write(square, :memory, suffix: ".jpg", quality: 82, strip_metadata: true) do
-      {:ok, jpeg}
+           ) do
+      Image.write(square, :memory, suffix: ".jpg", quality: 82, strip_metadata: true)
     end
   rescue
     _ -> {:error, :unprocessable}
@@ -121,8 +119,9 @@ defmodule Eden.Accounts do
   defp check_avatar_size(bytes) when byte_size(bytes) <= @max_avatar_bytes, do: :ok
   defp check_avatar_size(_bytes), do: {:error, :too_large}
 
-  defp check_avatar_pixels(w, h) when is_integer(w) and is_integer(h) and w * h <= @max_avatar_pixels,
-    do: :ok
+  defp check_avatar_pixels(w, h)
+       when is_integer(w) and is_integer(h) and w * h <= @max_avatar_pixels,
+       do: :ok
 
   defp check_avatar_pixels(_w, _h), do: {:error, :unprocessable}
 
