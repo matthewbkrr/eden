@@ -19,7 +19,9 @@ defmodule Eden.Chat.Conversation do
     # Whether the last message carries a photo (for the sidebar preview).
     field :last_message_photo?, :boolean, virtual: true, default: false
 
-    has_many :memberships, Eden.Chat.Membership
+    # Stable order so an unnamed group's title (built from member names) and the
+    # member list don't reshuffle each time the list is re-preloaded.
+    has_many :memberships, Eden.Chat.Membership, preload_order: [asc: :id]
     has_many :messages, Eden.Chat.Message
 
     timestamps(type: :utc_datetime)

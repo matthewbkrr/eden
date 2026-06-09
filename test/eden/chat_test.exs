@@ -83,6 +83,21 @@ defmodule Eden.ChatTest do
       assert {:ok, _} = Chat.get_conversation(scope(bob), conv.id)
       assert {:error, :not_found} = Chat.get_conversation(scope(dave), conv.id)
     end
+
+    test "preloaded memberships keep a stable order across reloads", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
+
+      order = fn ->
+        {:ok, c} = Chat.get_conversation(scope(alice), conv.id)
+        Enum.map(c.memberships, & &1.id)
+      end
+
+      ids = order.()
+      assert ids == Enum.sort(ids)
+      # Re-preloading yields the same order (no reshuffling group titles/members).
+      assert ids == order.()
+    end
   end
 
   describe "get_shared_user/2" do
