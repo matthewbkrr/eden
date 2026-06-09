@@ -614,18 +614,26 @@ defmodule Eden.ChatTest do
       assert after_read.unread_count == 0
     end
 
-    test "flags last_message_photo? when the last message is a photo", %{alice: alice, bob: bob} do
+    test "sets last_message_kind when the last message is an attachment", %{
+      alice: alice,
+      bob: bob
+    } do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
       {:ok, _} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
 
       [listed] = Chat.list_conversations(scope(alice))
-      assert listed.last_message_photo? == true
+      assert listed.last_message_kind == "image"
       assert listed.last_message_body == ""
 
       # get_conversation_summary mirrors the same enrichment
       {:ok, summary} = Chat.get_conversation_summary(scope(alice), conv.id)
-      assert summary.last_message_photo? == true
+      assert summary.last_message_kind == "image"
+
+      # A plain text message leaves it nil.
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "back to text"})
+      [text_last] = Chat.list_conversations(scope(alice))
+      assert is_nil(text_last.last_message_kind)
     end
   end
 

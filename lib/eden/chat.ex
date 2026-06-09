@@ -67,7 +67,7 @@ defmodule Eden.Chat do
       %{
         conversation
         | last_message_body: preview && preview.body,
-          last_message_photo?: (preview && preview.photo?) || false,
+          last_message_kind: preview && preview.kind,
           unread_count: Map.get(unread, conversation.id, 0)
       }
     end)
@@ -81,7 +81,7 @@ defmodule Eden.Chat do
       where: m.conversation_id in ^ids,
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
-      select: {m.conversation_id, %{body: m.body, photo?: not is_nil(a.id)}}
+      select: {m.conversation_id, %{body: m.body, kind: a.kind}}
     )
     |> Repo.all()
     |> Map.new()
@@ -127,7 +127,7 @@ defmodule Eden.Chat do
        %{
          conversation
          | last_message_body: preview && preview.body,
-           last_message_photo?: (preview && preview.photo?) || false,
+           last_message_kind: preview && preview.kind,
            unread_count: Map.get(unread_counts(user, [id]), id, 0)
        }}
     end

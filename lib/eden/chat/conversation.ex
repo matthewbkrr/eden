@@ -16,8 +16,9 @@ defmodule Eden.Chat.Conversation do
     # Computed for the conversation list (set by Chat.list_conversations/1).
     field :unread_count, :integer, virtual: true, default: 0
     field :last_message_body, :string, virtual: true
-    # Whether the last message carries a photo (for the sidebar preview).
-    field :last_message_photo?, :boolean, virtual: true, default: false
+    # The last message's attachment kind (image|video|file) or nil, for the
+    # sidebar preview line.
+    field :last_message_kind, :string, virtual: true
 
     # Stable order so an unnamed group's title (built from member names) and the
     # member list don't reshuffle each time the list is re-preloaded.

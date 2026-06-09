@@ -40,8 +40,11 @@ defmodule EdenWeb.ChatLive do
       )
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
-      |> allow_upload(:photo,
-        accept: ~w(.png .jpg .jpeg .gif .webp),
+      # Accept anything: the server classifies by magic bytes and enforces the
+      # per-kind size cap; the client cap is the largest (video). Images/video get
+      # special rendering, everything else becomes a downloadable file.
+      |> allow_upload(:attachment,
+        accept: :any,
         max_entries: 1,
         max_file_size: Chat.max_attachment_bytes()
       )
@@ -79,10 +82,17 @@ defmodule EdenWeb.ChatLive do
     client_id = msg["client_id"]
 
     cond do
-      is_nil(conversation) -> {:noreply, socket}
-      socket.assigns.uploads.photo.entries != [] -> send_photo(socket, scope, conversation, body)
-      String.trim(body) == "" -> {:noreply, assign(socket, composer: empty_composer())}
-      true -> send_text(socket, scope, conversation, body, client_id)
+      is_nil(conversation) ->
+        {:noreply, socket}
+
+      socket.assigns.uploads.attachment.entries != [] ->
+        send_attachment(socket, scope, conversation, body)
+
+      String.trim(body) == "" ->
+        {:noreply, assign(socket, composer: empty_composer())}
+
+      true ->
+        send_text(socket, scope, conversation, body, client_id)
     end
   end
 
@@ -90,7 +100,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("send", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :photo, ref)}
+    {:noreply, cancel_upload(socket, :attachment, ref)}
   end
 
   def handle_event("load_more", _params, socket) do
@@ -403,23 +413,31 @@ defmodule EdenWeb.ChatLive do
             style="border-color: var(--ed-border);"
           >
             <div
-              :for={entry <- @uploads.photo.entries}
+              :for={entry <- @uploads.attachment.entries}
               data-upload-preview
               class="flex items-center gap-3"
             >
               <.live_img_preview
+                :if={image_entry?(entry)}
                 entry={entry}
-                class="rounded-[var(--ed-radius)] object-cover"
+                class="rounded-[var(--ed-radius)] object-cover shrink-0"
                 style="width:3rem; height:3rem;"
               />
               <span
-                class="flex-1 min-w-0 truncate"
-                style="font-size:0.8125rem; color: var(--ed-muted);"
+                :if={!image_entry?(entry)}
+                class="ed-file-chip shrink-0"
+                aria-hidden="true"
               >
-                {entry.client_name}
+                <.icon name={entry_icon(entry)} class="size-5" />
+              </span>
+              <span class="flex-1 min-w-0">
+                <span class="block truncate" style="font-size:0.8125rem;">{entry.client_name}</span>
+                <span class="block" style="font-size:0.75rem; color: var(--ed-muted);">
+                  {human_size(entry.client_size)}
+                </span>
               </span>
               <span
-                :for={err <- upload_errors(@uploads.photo, entry)}
+                :for={err <- upload_errors(@uploads.attachment, entry)}
                 style="font-size:0.75rem; color: var(--ed-danger);"
               >
                 {upload_error_text(err)}
@@ -436,9 +454,10 @@ defmodule EdenWeb.ChatLive do
             </div>
 
             <div class="flex items-center gap-2">
-              <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Attach photo")}>
-                <.icon name="hero-photo-micro" class="size-5" />
-                <.live_file_input upload={@uploads.photo} class="hidden" />
+              <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Attach a file")}>
+                <.icon name="hero-paper-clip-micro" class="size-5" />
+                <%!-- sr-only (not hidden) keeps the input focusable so the control is keyboard-reachable. --%>
+                <.live_file_input upload={@uploads.attachment} class="sr-only" />
               </label>
               <input
                 type="text"
@@ -690,15 +709,21 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
-  # Sidebar preview line. Photos show "📷 <caption|Photo>" so the row is never
-  # blank (keeps item height + the time position consistent).
-  defp convo_preview(%{last_message_photo?: true} = conversation) do
+  # Sidebar preview line. An attachment shows "<emoji> <caption|kind>" so the row
+  # is never blank (keeps item height + the time position consistent).
+  defp convo_preview(%{last_message_kind: kind} = conversation)
+       when kind in ~w(image video file) do
+    {emoji, label} = attachment_label(kind)
     caption = conversation.last_message_body
-    "📷 " <> if(is_binary(caption) and caption != "", do: caption, else: gettext("Photo"))
+    emoji <> " " <> if(is_binary(caption) and caption != "", do: caption, else: label)
   end
 
   defp convo_preview(%{last_message_body: body}) when is_binary(body) and body != "", do: body
   defp convo_preview(_conversation), do: gettext("No messages yet")
+
+  defp attachment_label("image"), do: {"📷", gettext("Photo")}
+  defp attachment_label("video"), do: {"🎬", gettext("Video")}
+  defp attachment_label("file"), do: {"📎", gettext("File")}
 
   attr :id, :string, required: true
   attr :message, :map, required: true
@@ -717,26 +742,7 @@ defmodule EdenWeb.ChatLive do
         >
           {@message.sender.display_name}
         </span>
-        <a
-          :if={@message.attachment}
-          id={"att-#{@message.attachment.id}"}
-          phx-hook=".Lightbox"
-          data-full={~p"/files/#{@message.attachment.id}"}
-          href={~p"/files/#{@message.attachment.id}"}
-          target="_blank"
-          rel="noopener"
-          class="block mb-1 cursor-zoom-in"
-        >
-          <img
-            src={thumb_src(@message.attachment)}
-            width={@message.attachment.width}
-            height={@message.attachment.height}
-            class="rounded-[0.6rem] block"
-            style="max-width:min(20rem,100%); max-height:20rem; width:auto; height:auto;"
-            loading="lazy"
-            alt={gettext("Photo")}
-          />
-        </a>
+        <.attachment_view :if={@message.attachment} attachment={@message.attachment} />
         <span :if={@message.body != ""}>{@message.body}</span>
         <span class="ed-bubble__meta">
           <.local_time at={@message.inserted_at} />
@@ -750,6 +756,67 @@ defmodule EdenWeb.ChatLive do
         </span>
       </div>
     </div>
+    """
+  end
+
+  attr :attachment, :map, required: true
+
+  # Renders an attachment by kind: a lightbox-able image, an in-app video player,
+  # or a download card for a generic file.
+  defp attachment_view(%{attachment: %{kind: "image"}} = assigns) do
+    ~H"""
+    <a
+      id={"att-#{@attachment.id}"}
+      phx-hook=".Lightbox"
+      data-full={~p"/files/#{@attachment.id}"}
+      href={~p"/files/#{@attachment.id}"}
+      target="_blank"
+      rel="noopener"
+      class="block mb-1 cursor-zoom-in"
+    >
+      <img
+        src={thumb_src(@attachment)}
+        width={@attachment.width}
+        height={@attachment.height}
+        class="rounded-[0.6rem] block"
+        style="max-width:min(20rem,100%); max-height:20rem; width:auto; height:auto;"
+        loading="lazy"
+        alt={gettext("Photo")}
+      />
+    </a>
+    """
+  end
+
+  defp attachment_view(%{attachment: %{kind: "video"}} = assigns) do
+    ~H"""
+    <video
+      controls
+      preload="metadata"
+      poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
+      aria-label={@attachment.filename || gettext("Video")}
+      class="ed-video mb-1"
+    >
+      <source src={~p"/files/#{@attachment.id}"} type={@attachment.content_type} />
+    </video>
+    """
+  end
+
+  defp attachment_view(assigns) do
+    ~H"""
+    <a
+      href={~p"/files/#{@attachment.id}"}
+      download
+      class="ed-file mb-1"
+      aria-label={gettext("Download %{name}", name: @attachment.filename || gettext("file"))}
+    >
+      <span class="ed-file__icon" aria-hidden="true">
+        <.icon name="hero-document-arrow-down-micro" class="size-5" />
+      </span>
+      <span class="ed-file__meta">
+        <span class="ed-file__name">{@attachment.filename || gettext("File")}</span>
+        <span class="ed-file__size">{human_size(@attachment.byte_size)}</span>
+      </span>
+    </a>
     """
   end
 
@@ -1121,10 +1188,10 @@ defmodule EdenWeb.ChatLive do
   defp nack(socket, nil), do: {:noreply, socket}
   defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
-  defp send_photo(socket, scope, conversation, body) do
+  defp send_attachment(socket, scope, conversation, body) do
     # Store + persist inside the consume callback, while the temp file exists.
     results =
-      consume_uploaded_entries(socket, :photo, fn %{path: path}, entry ->
+      consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
         {:ok,
          Chat.create_attachment_message(scope, conversation.id, %{
            path: path,
@@ -1138,7 +1205,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply, assign(socket, composer: empty_composer())}
 
       [{:error, reason}] ->
-        {:noreply, put_flash(socket, :error, photo_error(reason))}
+        {:noreply, put_flash(socket, :error, attachment_error(reason))}
 
       # No entry was consumed (the file is still uploading or failed client-side
       # validation). Don't drop a caption the user already typed.
@@ -1149,18 +1216,35 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  defp photo_error(:unsupported_type), do: gettext("Only image files are allowed.")
-  defp photo_error(:too_large), do: gettext("That image is too large (up to 8 MB).")
-  defp photo_error(_other), do: gettext("Couldn't send the photo.")
+  defp attachment_error(:too_large), do: gettext("That file is too large.")
+  defp attachment_error(_other), do: gettext("Couldn't send that file.")
 
   # Client-side upload validation errors surfaced by `allow_upload/3`.
-  defp upload_error_text(:too_large), do: gettext("Up to 8 MB")
-  defp upload_error_text(:not_accepted), do: gettext("Images only")
-  defp upload_error_text(:too_many_files), do: gettext("One photo at a time")
+  defp upload_error_text(:too_large), do: gettext("File too large")
+  defp upload_error_text(:too_many_files), do: gettext("One file at a time")
   defp upload_error_text(_other), do: gettext("Invalid file")
 
   # Prefer the lighter thumbnail once it exists; fall back to the original while
   # the worker is still generating it.
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
   defp thumb_src(%{id: id}), do: ~p"/files/#{id}"
+
+  # Composer upload entry helpers (client-side; for preview only, not trusted).
+  defp image_entry?(%{client_type: "image/" <> _}), do: true
+  defp image_entry?(_entry), do: false
+
+  defp entry_icon(%{client_type: "video/" <> _}), do: "hero-film-micro"
+  defp entry_icon(%{client_type: "audio/" <> _}), do: "hero-musical-note-micro"
+  defp entry_icon(_entry), do: "hero-document-micro"
+
+  # Human-readable byte size (e.g. "3.4 MB"), used for files in the composer + bubble.
+  def human_size(bytes) when is_integer(bytes) and bytes >= 0 do
+    cond do
+      bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
+      bytes >= 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
+      true -> "#{bytes} B"
+    end
+  end
+
+  def human_size(_bytes), do: ""
 end
