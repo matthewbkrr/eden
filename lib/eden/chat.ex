@@ -32,6 +32,10 @@ defmodule Eden.Chat do
   # high-MP phone cameras (~16000×12000), tight enough to stop absurd PNG bombs.
   @max_source_pixels 192_000_000
 
+  # Hard ceiling on a single ffmpeg/ffprobe run, so a crafted or corrupt video
+  # can't pin a media worker (and starve the :media queue) indefinitely.
+  @media_cmd_timeout_ms 20_000
+
   @doc "Largest accepted upload size in bytes — the client-side ceiling (the server enforces the per-kind cap)."
   def max_attachment_bytes, do: @max_video_bytes
 
@@ -651,7 +655,8 @@ defmodule Eden.Chat do
     max = max_attachment_bytes(kind)
 
     case File.stat(path) do
-      {:ok, %{size: size}} when size <= max -> {:ok, size}
+      {:ok, %{size: size}} when size > 0 and size <= max -> {:ok, size}
+      {:ok, %{size: 0}} -> {:error, :empty}
       {:ok, _stat} -> {:error, :too_large}
       {:error, reason} -> {:error, reason}
     end
@@ -671,12 +676,21 @@ defmodule Eden.Chat do
   # worker cancels rather than retrying forever); storage/DB hiccups stay transient.
   defp generate_video_preview(%Attachment{} = attachment) do
     with_local_source(attachment.storage_key, fn input ->
-      with {:ok, meta} <- ffprobe_meta(input),
-           {:ok, frame} <- ffmpeg_poster_frame(input),
-           {:ok, poster} <- make_thumbnail(frame) do
-        store_video_preview(attachment, poster, meta)
+      with {:ok, meta} <- ffprobe_meta(input) do
+        # The poster is best-effort: a valid video we just can't grab a frame from
+        # (e.g. audio-only in an mp4 container) still records its duration/size.
+        store_video_preview(attachment, poster_frame(input), meta)
       end
     end)
+  end
+
+  defp poster_frame(input) do
+    with {:ok, frame} <- ffmpeg_poster_frame(input),
+         {:ok, jpeg} <- make_thumbnail(frame) do
+      jpeg
+    else
+      _ -> nil
+    end
   end
 
   # Give ffmpeg/ffprobe a real file path: use the stored blob's local path when the
@@ -788,34 +802,44 @@ defmodule Eden.Chat do
     end
   end
 
-  # `bin` is a fixed literal ("ffmpeg"/"ffprobe") resolved to an absolute path, and
-  # args is an argv list (System.cmd runs the binary directly, never via a shell),
-  # so there is no command-injection surface — the sobelow warning is a false positive.
-  # sobelow_skip ["CI.System"]
   defp run_media_cmd(bin, args) do
     case System.find_executable(bin) do
-      nil ->
-        {:error, {:unprocessable, :ffmpeg_unavailable}}
-
-      path ->
-        case System.cmd(path, args, stderr_to_stdout: true) do
-          {out, 0} ->
-            {:ok, out}
-
-          {out, code} ->
-            {:error, {:unprocessable, "#{bin} exit #{code}: #{String.slice(out, 0, 200)}"}}
-        end
+      nil -> {:error, {:unprocessable, :ffmpeg_unavailable}}
+      path -> run_with_timeout(bin, path, args)
     end
   end
 
-  defp store_video_preview(attachment, poster_jpeg, meta) do
+  # Run the (synchronous, non-cancellable) System.cmd inside a Task so we can
+  # bound it: on timeout we abandon the task, freeing the worker. brutal_kill
+  # closes the port, which terminates the child process on our deployments.
+  # `bin` is a fixed literal resolved via find_executable and args is an argv
+  # list (no shell), so there is no injection surface — the sobelow warning is
+  # a false positive.
+  # sobelow_skip ["CI.System"]
+  defp run_with_timeout(bin, path, args) do
+    task = Task.async(fn -> System.cmd(path, args, stderr_to_stdout: true) end)
+
+    case Task.yield(task, @media_cmd_timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, {out, 0}} ->
+        {:ok, out}
+
+      {:ok, {out, code}} ->
+        {:error, {:unprocessable, "#{bin} exit #{code}: #{String.slice(out, 0, 200)}"}}
+
+      nil ->
+        {:error, {:unprocessable, :media_timeout}}
+
+      {:exit, reason} ->
+        {:error, {:unprocessable, {:media_crash, reason}}}
+    end
+  end
+
+  defp store_video_preview(attachment, poster_jpeg, meta) when is_binary(poster_jpeg) do
     poster_key = Storage.build_key("thumbnails", "jpg")
 
     with :ok <- Storage.put_binary(poster_key, poster_jpeg),
          {:ok, _attachment} <-
-           attachment
-           |> Attachment.changeset(Map.put(meta, :thumbnail_key, poster_key))
-           |> Repo.update() do
+           update_attachment(attachment, Map.put(meta, :thumbnail_key, poster_key)) do
       broadcast_thumbnail(attachment.message_id)
       :ok
     else
@@ -823,5 +847,21 @@ defmodule Eden.Chat do
         Storage.delete(poster_key)
         error
     end
+  end
+
+  # No poster, but ffprobe gave us metadata — persist it so the UI still knows the
+  # duration/dimensions (and that this is a real video).
+  defp store_video_preview(attachment, nil, meta) when map_size(meta) > 0 do
+    with {:ok, _attachment} <- update_attachment(attachment, meta) do
+      broadcast_thumbnail(attachment.message_id)
+      :ok
+    end
+  end
+
+  defp store_video_preview(_attachment, nil, _meta),
+    do: {:error, {:unprocessable, :no_video_data}}
+
+  defp update_attachment(attachment, attrs) do
+    attachment |> Attachment.changeset(attrs) |> Repo.update()
   end
 end

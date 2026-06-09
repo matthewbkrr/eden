@@ -62,8 +62,16 @@ defmodule EdenWeb.FileController do
   # (never user input), so the send_file traversal warnings are false positives.
   # sobelow_skip ["Traversal.SendFile"]
   defp send_local(conn, path) do
-    %{size: total} = File.stat!(path)
+    # Re-stat rather than trust the earlier exists? check: the blob can vanish
+    # between the two, and a missing file is a 404, not a 500.
+    case File.stat(path) do
+      {:ok, %{size: total}} -> send_local(conn, path, total)
+      {:error, _reason} -> not_found(conn)
+    end
+  end
 
+  # sobelow_skip ["Traversal.SendFile"]
+  defp send_local(conn, path, total) do
     case parse_range(get_req_header(conn, "range"), total) do
       {:ok, first, last} ->
         conn

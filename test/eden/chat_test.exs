@@ -41,6 +41,20 @@ defmodule Eden.ChatTest do
     path
   end
 
+  # A real 1-second audio-only mp4 (ftyp → classified video, but no video stream).
+  defp audio_mp4 do
+    path = Path.join(System.tmp_dir!(), "aud-#{System.unique_integer([:positive])}.mp4")
+
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ~w(-nostdin -v error -y -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -c:a aac) ++ [path]
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   setup do
     alice = user_fixture(%{username: "alice", display_name: "Alice"})
     bob = user_fixture(%{username: "bob", display_name: "Bob"})
@@ -385,6 +399,16 @@ defmodule Eden.ChatTest do
       assert message.attachment.content_type == "application/pdf"
     end
 
+    test "rejects an empty (0-byte) upload", %{alice: alice, conv: conv} do
+      path = image_path("")
+
+      assert {:error, :empty} =
+               Chat.create_attachment_message(scope(alice), conv.id, %{
+                 path: path,
+                 filename: "x.txt"
+               })
+    end
+
     test "rejects an image over the image cap", %{alice: alice, conv: conv} do
       path = image_path(@png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1))
 
@@ -555,6 +579,24 @@ defmodule Eden.ChatTest do
       assert max(Image.width(poster), Image.height(poster)) <= 800
 
       assert_receive {:thumbnail_ready, _broadcast}
+    end
+
+    @tag :ffmpeg
+    test "records duration even when no poster frame can be extracted (audio-only mp4)",
+         %{alice: alice, conv: conv} do
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: audio_mp4(),
+          filename: "voice.mp4"
+        })
+
+      assert message.attachment.kind == "video"
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      # No video stream → no poster, but the duration is still saved.
+      assert is_nil(attachment.thumbnail_key)
+      assert attachment.duration in 800..1300
     end
   end
 

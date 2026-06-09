@@ -795,6 +795,7 @@ defmodule EdenWeb.ChatLive do
       poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
       aria-label={@attachment.filename || gettext("Video")}
       class="ed-video mb-1"
+      style={video_ratio(@attachment)}
     >
       <source src={~p"/files/#{@attachment.id}"} type={@attachment.content_type} />
     </video>
@@ -1217,6 +1218,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp attachment_error(:too_large), do: gettext("That file is too large.")
+  defp attachment_error(:empty), do: gettext("That file is empty.")
   defp attachment_error(_other), do: gettext("Couldn't send that file.")
 
   # Client-side upload validation errors surfaced by `allow_upload/3`.
@@ -1238,7 +1240,7 @@ defmodule EdenWeb.ChatLive do
   defp entry_icon(_entry), do: "hero-document-micro"
 
   # Human-readable byte size (e.g. "3.4 MB"), used for files in the composer + bubble.
-  def human_size(bytes) when is_integer(bytes) and bytes >= 0 do
+  defp human_size(bytes) when is_integer(bytes) and bytes >= 0 do
     cond do
       bytes >= 1_048_576 -> "#{Float.round(bytes / 1_048_576, 1)} MB"
       bytes >= 1024 -> "#{Float.round(bytes / 1024, 1)} KB"
@@ -1246,5 +1248,13 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  def human_size(_bytes), do: ""
+  defp human_size(_bytes), do: ""
+
+  # Reserve the player's box before metadata loads, when dimensions are known
+  # (the worker fills them in for video); avoids a layout jump.
+  defp video_ratio(%{width: w, height: h})
+       when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+       do: "aspect-ratio: #{w} / #{h}"
+
+  defp video_ratio(_attachment), do: nil
 end

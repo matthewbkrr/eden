@@ -232,12 +232,12 @@ msgstr ""
 msgid "Chats"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:832
-#: lib/eden_web/live/chat_live.ex:847
-#: lib/eden_web/live/chat_live.ex:903
-#: lib/eden_web/live/chat_live.ex:918
-#: lib/eden_web/live/chat_live.ex:974
-#: lib/eden_web/live/chat_live.ex:989
+#: lib/eden_web/live/chat_live.ex:833
+#: lib/eden_web/live/chat_live.ex:848
+#: lib/eden_web/live/chat_live.ex:904
+#: lib/eden_web/live/chat_live.ex:919
+#: lib/eden_web/live/chat_live.ex:975
+#: lib/eden_web/live/chat_live.ex:990
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr ""
@@ -253,12 +253,12 @@ msgstr ""
 msgid "Couldn't start the conversation."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:862
+#: lib/eden_web/live/chat_live.ex:863
 #, elixir-autogen, elixir-format
 msgid "Group name (optional)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1116
+#: lib/eden_web/live/chat_live.ex:1117
 #, elixir-autogen, elixir-format
 msgid "Just you"
 msgstr ""
@@ -275,7 +275,7 @@ msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:308
 #: lib/eden_web/live/chat_live.ex:488
-#: lib/eden_web/live/chat_live.ex:846
+#: lib/eden_web/live/chat_live.ex:847
 #, elixir-autogen, elixir-format
 msgid "New conversation"
 msgstr ""
@@ -285,7 +285,7 @@ msgstr ""
 msgid "No conversation selected"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:854
+#: lib/eden_web/live/chat_live.ex:855
 #, elixir-autogen, elixir-format
 msgid "No one else has joined yet."
 msgstr ""
@@ -306,7 +306,7 @@ msgstr ""
 msgid "Send"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:882
+#: lib/eden_web/live/chat_live.ex:883
 #, elixir-autogen, elixir-format
 msgid "Start"
 msgstr ""
@@ -317,18 +317,18 @@ msgid "No messages yet"
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:373
-#: lib/eden_web/live/chat_live.ex:936
+#: lib/eden_web/live/chat_live.ex:937
 #, elixir-autogen, elixir-format
 msgid "offline"
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:372
-#: lib/eden_web/live/chat_live.ex:936
+#: lib/eden_web/live/chat_live.ex:937
 #, elixir-autogen, elixir-format
 msgid "online"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1179
+#: lib/eden_web/live/chat_live.ex:1180
 #, elixir-autogen, elixir-format
 msgid "Message is too long (up to 4000 characters)."
 msgstr ""
@@ -338,7 +338,7 @@ msgstr ""
 msgid "Images only"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1225
+#: lib/eden_web/live/chat_live.ex:1227
 #: lib/eden_web/live/settings_live.ex:309
 #, elixir-autogen, elixir-format
 msgid "Invalid file"
@@ -386,7 +386,7 @@ msgstr ""
 msgid "One photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:915
+#: lib/eden_web/live/chat_live.ex:916
 #: lib/eden_web/live/settings_live.ex:61
 #, elixir-autogen, elixir-format
 msgid "Profile"
@@ -424,12 +424,12 @@ msgid_plural "%{count} members"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:1010
+#: lib/eden_web/live/chat_live.ex:1011
 #, elixir-autogen, elixir-format
 msgid "(you)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:988
+#: lib/eden_web/live/chat_live.ex:989
 #, elixir-autogen, elixir-format
 msgid "Members"
 msgstr ""
@@ -439,7 +439,7 @@ msgstr ""
 msgid "Profile unavailable."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:953
+#: lib/eden_web/live/chat_live.ex:954
 #, elixir-autogen, elixir-format
 msgid "Send message"
 msgstr ""
@@ -454,28 +454,28 @@ msgstr ""
 msgid "Attach a file"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1220
+#: lib/eden_web/live/chat_live.ex:1222
 #, elixir-autogen, elixir-format
 msgid "Couldn't send that file."
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:726
-#: lib/eden_web/live/chat_live.ex:816
+#: lib/eden_web/live/chat_live.ex:817
 #, elixir-autogen, elixir-format
 msgid "File"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1223
+#: lib/eden_web/live/chat_live.ex:1225
 #, elixir-autogen, elixir-format
 msgid "File too large"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1224
+#: lib/eden_web/live/chat_live.ex:1226
 #, elixir-autogen, elixir-format
 msgid "One file at a time"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1219
+#: lib/eden_web/live/chat_live.ex:1220
 #, elixir-autogen, elixir-format
 msgid "That file is too large."
 msgstr ""
@@ -486,12 +486,17 @@ msgstr ""
 msgid "Video"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:810
+#: lib/eden_web/live/chat_live.ex:811
 #, elixir-autogen, elixir-format
 msgid "Download %{name}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:810
+#: lib/eden_web/live/chat_live.ex:811
 #, elixir-autogen, elixir-format
 msgid "file"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:1221
+#, elixir-autogen, elixir-format
+msgid "That file is empty."
 msgstr ""
