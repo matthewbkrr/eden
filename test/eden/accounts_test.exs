@@ -214,6 +214,16 @@ defmodule Eden.AccountsTest do
       assert {:ok, cleared} = Accounts.update_profile(user, %{"bio" => "   "})
       assert cleared.bio == nil
     end
+
+    test "broadcasts the change to subscribers" do
+      user = user_fixture()
+      :ok = Accounts.subscribe_user_updates()
+
+      {:ok, updated} = Accounts.update_profile(user, %{"display_name" => "Renamed"})
+
+      assert_receive {:user_updated, %User{id: id, display_name: "Renamed"}}
+      assert id == updated.id
+    end
   end
 
   describe "avatars" do

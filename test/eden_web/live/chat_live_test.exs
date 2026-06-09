@@ -212,5 +212,16 @@ defmodule EdenWeb.ChatLiveTest do
       # Alice and Bob already share a 1:1, so it is reused.
       assert_patch(view, ~p"/app/c/#{ctx.conversation.id}")
     end
+
+    test "a member's name change updates the open conversation without reload", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert render(view) =~ "Bob"
+
+      # Bob renames himself elsewhere; the broadcast refreshes Alice's open view.
+      {:ok, _bob} = Eden.Accounts.update_profile(ctx.bob, %{display_name: "Bobby Tables"})
+
+      assert render(view) =~ "Bobby Tables"
+    end
   end
 end

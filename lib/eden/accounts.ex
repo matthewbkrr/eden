@@ -13,6 +13,9 @@ defmodule Eden.Accounts do
   alias Eden.Repo
   alias Eden.Storage
 
+  @pubsub Eden.PubSub
+  @user_updates_topic "user_updates"
+
   @token_bytes 32
   @default_ttl_days 7
 
@@ -60,12 +63,21 @@ defmodule Eden.Accounts do
 
   ## Profile
 
+  @doc """
+  Subscribes the calling process to profile changes (display name / bio / avatar)
+  of any user. Identity is shown wherever a person appears, so connected views
+  (e.g. the chat) subscribe and refresh on `{:user_updated, %User{}}`.
+  """
+  def subscribe_user_updates, do: Phoenix.PubSub.subscribe(@pubsub, @user_updates_topic)
+
   @doc "Changeset for the profile form (display name + bio)."
   def change_profile(%User{} = user, attrs \\ %{}), do: User.profile_changeset(user, attrs)
 
   @doc "Updates the user's display name and bio."
   def update_profile(%User{} = user, attrs) do
-    user |> User.profile_changeset(attrs) |> Repo.update()
+    with {:ok, updated} <- user |> User.profile_changeset(attrs) |> Repo.update() do
+      {:ok, broadcast_user_update(updated)}
+    end
   end
 
   @doc """
@@ -80,7 +92,7 @@ defmodule Eden.Accounts do
          {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
       # Best-effort cleanup of the replaced blob (don't fail the update on it).
       if user.avatar_key, do: Storage.delete(user.avatar_key)
-      {:ok, updated}
+      {:ok, broadcast_user_update(updated)}
     end
   end
 
@@ -90,8 +102,13 @@ defmodule Eden.Accounts do
   def remove_avatar(%User{avatar_key: key} = user) do
     with {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
       Storage.delete(key)
-      {:ok, updated}
+      {:ok, broadcast_user_update(updated)}
     end
+  end
+
+  defp broadcast_user_update(%User{} = user) do
+    Phoenix.PubSub.broadcast(@pubsub, @user_updates_topic, {:user_updated, user})
+    user
   end
 
   # Decode → center-crop to a @avatar_size square → re-encode JPEG with metadata

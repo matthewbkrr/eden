@@ -19,6 +19,7 @@ defmodule EdenWeb.ChatLive do
       EdenWeb.Presence.track_user(self(), scope.user.id)
       Phoenix.PubSub.subscribe(Eden.PubSub, EdenWeb.Presence.topic())
       Chat.subscribe_user(scope)
+      Accounts.subscribe_user_updates()
     end
 
     socket =
@@ -244,6 +245,29 @@ defmodule EdenWeb.ChatLive do
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
     {:noreply, assign(socket, online_ids: EdenWeb.Presence.online_ids())}
+  end
+
+  # A user changed their profile (name/avatar). Identity is rendered wherever a
+  # person appears, so refresh our own scope, the sidebar, an open profile card,
+  # and the selected conversation's members — without a reload.
+  def handle_info({:user_updated, user}, socket) do
+    scope = socket.assigns.current_scope
+
+    socket =
+      if user.id == scope.user.id do
+        assign(socket, current_scope: %{scope | user: user})
+      else
+        socket
+      end
+
+    socket =
+      if socket.assigns.profile && socket.assigns.profile.id == user.id do
+        assign(socket, profile: user)
+      else
+        socket
+      end
+
+    {:noreply, socket |> refresh_sidebar() |> refresh_selected_for(user)}
   end
 
   ## Render
@@ -977,6 +1001,35 @@ defmodule EdenWeb.ChatLive do
     stream(socket, :conversations, Chat.list_conversations(socket.assigns.current_scope),
       reset: true
     )
+  end
+
+  # When the updated user is a member of the open conversation, re-preload its
+  # members (header/title/member-list) and, for a group, re-stream messages so
+  # bubble sender labels pick up the new name.
+  defp refresh_selected_for(%{assigns: %{selected: %{} = conv}} = socket, user) do
+    if Enum.any?(conv.memberships, &(&1.user_id == user.id)) do
+      reload_selected(socket, conv)
+    else
+      socket
+    end
+  end
+
+  defp refresh_selected_for(socket, _user), do: socket
+
+  defp reload_selected(socket, conv) do
+    scope = socket.assigns.current_scope
+
+    case Chat.get_conversation(scope, conv.id) do
+      {:ok, %{is_group: true} = fresh} ->
+        {:ok, messages} = Chat.list_messages(scope, conv.id, limit: @page)
+        socket |> assign(selected: fresh) |> stream(:messages, messages, reset: true)
+
+      {:ok, fresh} ->
+        assign(socket, selected: fresh)
+
+      {:error, _} ->
+        socket
+    end
   end
 
   defp unsubscribe(socket) do
