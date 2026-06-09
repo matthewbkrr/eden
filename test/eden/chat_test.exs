@@ -26,6 +26,21 @@ defmodule Eden.ChatTest do
     image_path(bytes)
   end
 
+  # A real 1-second 320x240 mp4 (only used by :ffmpeg-tagged tests).
+  defp real_mp4 do
+    path = Path.join(System.tmp_dir!(), "vid-#{System.unique_integer([:positive])}.mp4")
+
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ~w(-nostdin -v error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=10 -pix_fmt yuv420p) ++
+          [path]
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   setup do
     alice = user_fixture(%{username: "alice", display_name: "Alice"})
     bob = user_fixture(%{username: "bob", display_name: "Bob"})
@@ -411,6 +426,24 @@ defmodule Eden.ChatTest do
         args: %{attachment_id: message.attachment.id}
       )
     end
+
+    test "enqueues a media job for a video too", %{alice: alice, conv: conv} do
+      path = image_path(<<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16))
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+
+      assert message.attachment.kind == "video"
+      assert_enqueued(worker: ThumbnailWorker, args: %{attachment_id: message.attachment.id})
+    end
+
+    test "does not enqueue a media job for a plain file", %{alice: alice, conv: conv} do
+      path = image_path("just some text")
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: path, filename: "a.txt"})
+
+      assert message.attachment.kind == "file"
+      refute_enqueued(worker: ThumbnailWorker, args: %{attachment_id: message.attachment.id})
+    end
   end
 
   describe "generate_thumbnail/1" do
@@ -488,6 +521,40 @@ defmodule Eden.ChatTest do
                perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
 
       refute Repo.get(Attachment, message.attachment.id).thumbnail_key
+    end
+
+    @tag :ffmpeg
+    test "generates a poster frame and reads a video's duration + dimensions",
+         %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: real_mp4(),
+          filename: "clip.mp4"
+        })
+
+      assert message.attachment.kind == "video"
+      # Video dimensions/duration are unknown until the worker probes the file.
+      assert is_nil(message.attachment.thumbnail_key)
+      assert is_nil(message.attachment.duration)
+
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      assert is_binary(attachment.thumbnail_key)
+      assert Eden.Storage.exists?(attachment.thumbnail_key)
+      assert attachment.width == 320
+      assert attachment.height == 240
+      # The test clip is 1 second.
+      assert attachment.duration in 800..1300
+
+      # The stored poster is a real, downscaled JPEG.
+      {:ok, poster_bytes} = Eden.Storage.read(attachment.thumbnail_key)
+      {:ok, poster} = Image.from_binary(poster_bytes)
+      assert max(Image.width(poster), Image.height(poster)) <= 800
+
+      assert_receive {:thumbnail_ready, _broadcast}
     end
   end
 

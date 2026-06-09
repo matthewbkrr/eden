@@ -286,13 +286,17 @@ defmodule Eden.Chat do
   end
 
   @doc """
-  Generates and stores a downscaled, metadata-stripped JPEG thumbnail for the
-  attachment, records its key, then broadcasts the refreshed message so open
-  clients swap the full image for the thumbnail. Idempotent — a no-op once a
-  thumbnail exists. Invoked by `Eden.Chat.ThumbnailWorker`; returns `:ok` or
-  `{:error, reason}` (the dimensions are captured earlier, at upload time).
+  Produces the attachment's preview off the request path, records it, then
+  broadcasts the refreshed message so open clients pick it up. For an image this
+  is a downscaled, metadata-stripped JPEG thumbnail; for a video, a poster frame
+  (via ffmpeg) plus its duration and dimensions (via ffprobe). Idempotent — a
+  no-op once a preview (`thumbnail_key`) exists. Invoked by
+  `Eden.Chat.ThumbnailWorker`; returns `:ok` or `{:error, reason}`.
   """
   def generate_thumbnail(%Attachment{thumbnail_key: key}) when is_binary(key), do: :ok
+
+  def generate_thumbnail(%Attachment{kind: "video"} = attachment),
+    do: generate_video_preview(attachment)
 
   def generate_thumbnail(%Attachment{} = attachment) do
     with {:ok, bytes} <- Storage.read(attachment.storage_key),
@@ -653,8 +657,171 @@ defmodule Eden.Chat do
     end
   end
 
-  # Which kinds get async media processing (thumbnail / poster). Video joins in
-  # the next step, when the media worker learns to read it.
+  # Which kinds get async media processing (thumbnail for images, poster +
+  # duration for video). Files/audio carry no generated preview.
   defp needs_media_processing?("image"), do: true
+  defp needs_media_processing?("video"), do: true
   defp needs_media_processing?(_kind), do: false
+
+  ## Video media (ffmpeg/ffprobe, shelled out by the media worker)
+
+  # Extract a poster frame (ffmpeg) + read duration/dimensions (ffprobe), downscale
+  # the frame with libvips (reusing the image path), and store it like a thumbnail.
+  # A missing ffmpeg or an unreadable file is a permanent failure (tagged so the
+  # worker cancels rather than retrying forever); storage/DB hiccups stay transient.
+  defp generate_video_preview(%Attachment{} = attachment) do
+    with_local_source(attachment.storage_key, fn input ->
+      with {:ok, meta} <- ffprobe_meta(input),
+           {:ok, frame} <- ffmpeg_poster_frame(input),
+           {:ok, poster} <- make_thumbnail(frame) do
+        store_video_preview(attachment, poster, meta)
+      end
+    end)
+  end
+
+  # Give ffmpeg/ffprobe a real file path: use the stored blob's local path when the
+  # adapter is disk-backed, otherwise download it to a temp file (cleaned up after).
+  # The temp path is app-generated (System.tmp_dir! + a unique integer), not user
+  # input, so the traversal warnings on write/rm are false positives.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp with_local_source(storage_key, fun) do
+    case Storage.local_path(storage_key) do
+      {:ok, path} ->
+        fun.(path)
+
+      :error ->
+        with {:ok, bytes} <- Storage.read(storage_key) do
+          tmp = Path.join(System.tmp_dir!(), "media-src-#{System.unique_integer([:positive])}")
+          File.write!(tmp, bytes)
+
+          try do
+            fun.(tmp)
+          after
+            File.rm(tmp)
+          end
+        end
+    end
+  end
+
+  defp ffprobe_meta(input) do
+    args = [
+      "-v",
+      "error",
+      "-select_streams",
+      "v:0",
+      "-show_entries",
+      "stream=width,height:format=duration",
+      "-of",
+      "json",
+      input
+    ]
+
+    with {:ok, out} <- run_media_cmd("ffprobe", args) do
+      parse_probe(out)
+    end
+  end
+
+  defp parse_probe(json) do
+    case Jason.decode(json) do
+      {:ok, data} ->
+        stream = data |> Map.get("streams", []) |> List.first() || %{}
+        format = Map.get(data, "format", %{})
+
+        {:ok,
+         drop_nil(%{
+           width: stream["width"],
+           height: stream["height"],
+           duration: parse_duration(format["duration"])
+         })}
+
+      {:error, _} ->
+        {:error, {:unprocessable, :ffprobe_output}}
+    end
+  end
+
+  defp parse_duration(secs) when is_binary(secs) do
+    case Float.parse(secs) do
+      {value, _} when value > 0 -> round(value * 1000)
+      _ -> nil
+    end
+  end
+
+  defp parse_duration(_), do: nil
+
+  defp drop_nil(map), do: for({k, v} <- map, not is_nil(v), into: %{}, do: {k, v})
+
+  # sobelow_skip ["Traversal.FileModule"]
+  defp ffmpeg_poster_frame(input) do
+    out = Path.join(System.tmp_dir!(), "poster-#{System.unique_integer([:positive])}.jpg")
+
+    args = [
+      "-nostdin",
+      "-v",
+      "error",
+      "-y",
+      "-i",
+      input,
+      "-map",
+      "0:v:0",
+      "-vf",
+      "thumbnail",
+      "-frames:v",
+      "1",
+      "-f",
+      "image2",
+      out
+    ]
+
+    result =
+      with {:ok, _} <- run_media_cmd("ffmpeg", args), do: read_frame(out)
+
+    # Best-effort cleanup of the extracted frame; the poster is stored separately.
+    File.rm(out)
+    result
+  end
+
+  # sobelow_skip ["Traversal.FileModule"]
+  defp read_frame(path) do
+    case File.read(path) do
+      {:ok, bytes} -> {:ok, bytes}
+      {:error, reason} -> {:error, {:unprocessable, reason}}
+    end
+  end
+
+  # `bin` is a fixed literal ("ffmpeg"/"ffprobe") resolved to an absolute path, and
+  # args is an argv list (System.cmd runs the binary directly, never via a shell),
+  # so there is no command-injection surface — the sobelow warning is a false positive.
+  # sobelow_skip ["CI.System"]
+  defp run_media_cmd(bin, args) do
+    case System.find_executable(bin) do
+      nil ->
+        {:error, {:unprocessable, :ffmpeg_unavailable}}
+
+      path ->
+        case System.cmd(path, args, stderr_to_stdout: true) do
+          {out, 0} ->
+            {:ok, out}
+
+          {out, code} ->
+            {:error, {:unprocessable, "#{bin} exit #{code}: #{String.slice(out, 0, 200)}"}}
+        end
+    end
+  end
+
+  defp store_video_preview(attachment, poster_jpeg, meta) do
+    poster_key = Storage.build_key("thumbnails", "jpg")
+
+    with :ok <- Storage.put_binary(poster_key, poster_jpeg),
+         {:ok, _attachment} <-
+           attachment
+           |> Attachment.changeset(Map.put(meta, :thumbnail_key, poster_key))
+           |> Repo.update() do
+      broadcast_thumbnail(attachment.message_id)
+      :ok
+    else
+      error ->
+        Storage.delete(poster_key)
+        error
+    end
+  end
 end
