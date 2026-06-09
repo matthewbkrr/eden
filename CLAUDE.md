@@ -25,7 +25,10 @@ under `lib/eden_web/`. The web layer calls contexts; contexts never call the web
 layer. Each schema lives in its owning context. (These contexts are the target
 design — built incrementally as features land.)
 
-- **Accounts** — users, authentication, profiles.
+- **Accounts** — users, authentication, profiles. A profile is editable
+  `display_name` + `bio` (`profile_changeset`) plus an avatar: the upload is
+  processed (center-cropped square JPEG, metadata stripped) and persisted through
+  **Storage** as `avatar_key`; `username` stays immutable (it is the login).
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.
@@ -33,10 +36,15 @@ design — built incrementally as features land.)
     last_read, etc.). A conversation has many memberships.
   - `Message` — belongs to a conversation and a sender; carries text and/or a
     photo attachment (referenced by storage key, see Storage).
+  - **Profile visibility is authorized here, not in the web layer:**
+    `get_shared_user/2` returns another user only when the scoped user shares a
+    conversation with them (otherwise `:not_found`). The chat header reads
+    profiles from already-authorized, preloaded memberships.
 - **Storage** — file/photo persistence behind an **adapter behaviour**
   (`Eden.Storage.Adapter`). Local disk in dev, object storage (S3-compatible) in
-  prod, swappable without touching callers. Chat stores only the file **key +
-  metadata**, never a concrete storage implementation.
+  prod, swappable without touching callers. Callers store only the file **key +
+  metadata**, never a concrete storage implementation — chat attachments
+  (`Message`) and account avatars (`avatar_key`) both go through it.
 
 ## Commands
 
