@@ -1124,8 +1124,13 @@ defmodule EdenWeb.ChatLive do
   defp send_photo(socket, scope, conversation, body) do
     # Store + persist inside the consume callback, while the temp file exists.
     results =
-      consume_uploaded_entries(socket, :photo, fn %{path: path}, _entry ->
-        {:ok, Chat.create_photo_message(scope, conversation.id, %{path: path, body: body})}
+      consume_uploaded_entries(socket, :photo, fn %{path: path}, entry ->
+        {:ok,
+         Chat.create_attachment_message(scope, conversation.id, %{
+           path: path,
+           body: body,
+           filename: entry.client_name
+         })}
       end)
 
     case results do

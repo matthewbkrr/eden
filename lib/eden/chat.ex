@@ -17,7 +17,12 @@ defmodule Eden.Chat do
 
   @pubsub Eden.PubSub
   @default_page 50
-  @max_attachment_bytes 8 * 1024 * 1024
+  # Per-kind upload caps (bytes). The client-side cap is the largest of these;
+  # the server enforces the precise per-kind limit on every upload.
+  @max_image_bytes 8 * 1024 * 1024
+  @max_video_bytes 50 * 1024 * 1024
+  @max_file_bytes 25 * 1024 * 1024
+  @max_audio_bytes 25 * 1024 * 1024
 
   # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
   @thumbnail_max 800
@@ -27,8 +32,14 @@ defmodule Eden.Chat do
   # high-MP phone cameras (~16000×12000), tight enough to stop absurd PNG bombs.
   @max_source_pixels 192_000_000
 
-  @doc "Maximum accepted attachment size in bytes (single source of truth for UI + server)."
-  def max_attachment_bytes, do: @max_attachment_bytes
+  @doc "Largest accepted upload size in bytes — the client-side ceiling (the server enforces the per-kind cap)."
+  def max_attachment_bytes, do: @max_video_bytes
+
+  @doc "Accepted upload size in bytes for a given attachment kind."
+  def max_attachment_bytes("image"), do: @max_image_bytes
+  def max_attachment_bytes("video"), do: @max_video_bytes
+  def max_attachment_bytes("audio"), do: @max_audio_bytes
+  def max_attachment_bytes("file"), do: @max_file_bytes
 
   ## Conversations
 
@@ -186,50 +197,63 @@ defmodule Eden.Chat do
   end
 
   @doc """
-  Posts a photo message: validates the file is a supported image by its magic
-  bytes (never trusting the client content-type), stores it via the storage
-  adapter, and inserts the message + attachment atomically. `source` is a map
-  with `:path` (a local temp file) and an optional `:body` caption.
+  Posts a message with an attachment. The file's `kind` (image | video | file)
+  is decided by its magic bytes — never the client content-type — and arbitrary
+  files are accepted as `file` with a safe inferred type and sanitized name. The
+  blob is stored via the storage adapter and the message + attachment inserted
+  atomically. `source` is a map with `:path` (a local temp file) and optional
+  `:filename`, `:body` caption and `:client_id`.
 
   Returns `{:ok, message}` (attachment preloaded) or `{:error, reason}` where
-  reason is `:not_found | :unsupported_type | :too_large` or a changeset.
+  reason is `:not_found | :too_large` or a changeset.
   """
-  def create_photo_message(%Scope{user: user} = scope, conversation_id, source) do
+  def create_attachment_message(%Scope{user: user} = scope, conversation_id, source) do
     with true <- member?(scope, conversation_id),
-         {:ok, content_type, ext} <- detect_image(source.path),
-         {:ok, byte_size} <- check_size(source.path),
+         {:ok, kind, content_type, ext} <- classify(source.path, source[:filename]),
+         {:ok, byte_size} <- check_size(source.path, kind),
          key = Storage.build_key("attachments", ext),
          :ok <- Storage.put(key, source.path) do
-      {width, height} = image_dimensions(source.path)
+      {width, height} = media_dimensions(kind, source.path)
 
       attrs = %{
-        kind: "image",
+        kind: kind,
         storage_key: key,
         content_type: content_type,
         byte_size: byte_size,
+        filename: source[:filename],
         width: width,
         height: height
       }
 
-      message_attrs = %{"body" => Map.get(source, :body, ""), "client_id" => source[:client_id]}
-
-      case insert_photo_message(user, conversation_id, message_attrs, attrs) do
-        {:ok, message} ->
-          message = deliver(conversation_id, message)
-          enqueue_thumbnail(message.attachment)
-          {:ok, message}
-
-        {:error, changeset} ->
-          # The blob we just stored is unneeded whether this is a hard error or a
-          # duplicate resend (the original already has its own attachment).
-          Storage.delete(key)
-          resolve_duplicate(changeset, user.id)
-      end
+      persist_attachment(user, conversation_id, source, attrs)
     else
       false -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp persist_attachment(user, conversation_id, source, %{kind: kind, storage_key: key} = attrs) do
+    message_attrs = %{"body" => Map.get(source, :body, ""), "client_id" => source[:client_id]}
+
+    case insert_attachment_message(user, conversation_id, message_attrs, attrs) do
+      {:ok, message} ->
+        message = deliver(conversation_id, message)
+        if needs_media_processing?(kind), do: enqueue_thumbnail(message.attachment)
+        {:ok, message}
+
+      {:error, changeset} ->
+        # The blob we just stored is unneeded whether this is a hard error or a
+        # duplicate resend (the original already has its own attachment).
+        Storage.delete(key)
+        resolve_duplicate(changeset, user.id)
+    end
+  end
+
+  # Original pixel dimensions for an image (from the header, lazily). Video
+  # dimensions are read by the media worker (libvips can't decode video), so
+  # they start nil here.
+  defp media_dimensions("image", path), do: image_dimensions(path)
+  defp media_dimensions(_kind, _path), do: {nil, nil}
 
   @doc "Marks the conversation read up to now for the scoped user, broadcasting a read receipt."
   def mark_read(%Scope{user: user}, conversation_id) do
@@ -432,7 +456,7 @@ defmodule Eden.Chat do
     message
   end
 
-  defp insert_photo_message(user, conversation_id, message_attrs, attachment_attrs) do
+  defp insert_attachment_message(user, conversation_id, message_attrs, attachment_attrs) do
     Repo.transact(fn ->
       with {:ok, message} <-
              %Message{conversation_id: conversation_id, sender_id: user.id}
@@ -565,26 +589,72 @@ defmodule Eden.Chat do
     end
   end
 
-  # Identify an image by its magic bytes — never trust the client content-type.
+  # Classify an upload by its magic bytes — never the client content-type. Known
+  # image/video signatures set those kinds; everything else is accepted as a
+  # generic `file` with a safe inferred type and an extension from its (already
+  # sanitized) name. Returns `{:ok, kind, content_type, ext}` or `{:error, _}`.
   # `path` is a server-assigned upload temp file, not a user-supplied path.
   # sobelow_skip ["Traversal.FileModule"]
-  defp detect_image(path) do
+  defp classify(path, filename) do
     case File.open(path, [:read, :binary], &IO.binread(&1, 16)) do
-      {:ok, <<0x89, "PNG\r\n", 0x1A, "\n", _::binary>>} -> {:ok, "image/png", "png"}
-      {:ok, <<0xFF, 0xD8, 0xFF, _::binary>>} -> {:ok, "image/jpeg", "jpg"}
-      {:ok, <<"GIF87a", _::binary>>} -> {:ok, "image/gif", "gif"}
-      {:ok, <<"GIF89a", _::binary>>} -> {:ok, "image/gif", "gif"}
-      {:ok, <<"RIFF", _::binary-size(4), "WEBP", _::binary>>} -> {:ok, "image/webp", "webp"}
-      {:ok, _other} -> {:error, :unsupported_type}
-      {:error, reason} -> {:error, reason}
+      {:ok, header} when is_binary(header) ->
+        {kind, content_type, ext} = sniff(header, filename)
+        {:ok, kind, content_type, ext}
+
+      {:ok, _eof} ->
+        {:ok, "file", "application/octet-stream", file_ext(filename) || "bin"}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp check_size(path) do
+  defp sniff(<<0x89, "PNG\r\n", 0x1A, "\n", _::binary>>, _f), do: {"image", "image/png", "png"}
+  defp sniff(<<0xFF, 0xD8, 0xFF, _::binary>>, _f), do: {"image", "image/jpeg", "jpg"}
+  defp sniff(<<"GIF87a", _::binary>>, _f), do: {"image", "image/gif", "gif"}
+  defp sniff(<<"GIF89a", _::binary>>, _f), do: {"image", "image/gif", "gif"}
+
+  defp sniff(<<"RIFF", _::binary-size(4), "WEBP", _::binary>>, _f),
+    do: {"image", "image/webp", "webp"}
+
+  # ISO base media (mp4 / m4v / mov): the "ftyp" box sits at offset 4.
+  defp sniff(<<_::binary-size(4), "ftyp", _::binary>>, _f), do: {"video", "video/mp4", "mp4"}
+  # Matroska / WebM: the EBML header.
+  defp sniff(<<0x1A, 0x45, 0xDF, 0xA3, _::binary>>, _f), do: {"video", "video/webm", "webm"}
+  # Known document types — still served as generic downloads, type just informs the client.
+  defp sniff(<<"%PDF-", _::binary>>, _f), do: {"file", "application/pdf", "pdf"}
+
+  defp sniff(<<"PK", 0x03, 0x04, _::binary>>, f),
+    do: {"file", "application/zip", file_ext(f) || "zip"}
+
+  # Anything else is a generic file: octet-stream + nosniff + attachment disposition.
+  defp sniff(_other, f), do: {"file", "application/octet-stream", file_ext(f) || "bin"}
+
+  # Lowercased, key-safe extension (no dot) from a filename, or nil.
+  defp file_ext(nil), do: nil
+
+  defp file_ext(name) when is_binary(name) do
+    case name |> Path.extname() |> String.trim_leading(".") |> String.downcase() do
+      "" -> nil
+      ext -> ext |> String.replace(~r/[^a-z0-9]/, "") |> nil_if_empty()
+    end
+  end
+
+  defp nil_if_empty(""), do: nil
+  defp nil_if_empty(s), do: s
+
+  defp check_size(path, kind) do
+    max = max_attachment_bytes(kind)
+
     case File.stat(path) do
-      {:ok, %{size: size}} when size <= @max_attachment_bytes -> {:ok, size}
+      {:ok, %{size: size}} when size <= max -> {:ok, size}
       {:ok, _stat} -> {:error, :too_large}
       {:error, reason} -> {:error, reason}
     end
   end
+
+  # Which kinds get async media processing (thumbnail / poster). Video joins in
+  # the next step, when the media worker learns to read it.
+  defp needs_media_processing?("image"), do: true
+  defp needs_media_processing?(_kind), do: false
 end

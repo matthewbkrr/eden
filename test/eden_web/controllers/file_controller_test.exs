@@ -24,7 +24,7 @@ defmodule EdenWeb.FileControllerTest do
 
     body = @png_signature <> "fake-png-body"
     path = image_path(body)
-    {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+    {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
 
     %{alice: alice, bob: bob, attachment: message.attachment, png: body}
   end
@@ -106,7 +106,7 @@ defmodule EdenWeb.FileControllerTest do
       {:ok, png} = Image.write(img, :memory, suffix: ".png")
       path = image_path(png)
 
-      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
       :ok = Chat.generate_thumbnail(message.attachment)
 
       conn = conn |> log_in_user(bob) |> get(~p"/files/#{message.attachment.id}/thumb")

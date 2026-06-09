@@ -114,7 +114,7 @@ defmodule EdenWeb.ChatLiveTest do
 
     test "renders a photo message as a linked image", ctx do
       {:ok, message} =
-        Chat.create_photo_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+        Chat.create_attachment_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
           path: real_png_path()
         })
 
@@ -127,7 +127,7 @@ defmodule EdenWeb.ChatLiveTest do
 
     test "swaps the full image for the thumbnail once it is ready", ctx do
       {:ok, message} =
-        Chat.create_photo_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+        Chat.create_attachment_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
           path: real_png_path()
         })
 

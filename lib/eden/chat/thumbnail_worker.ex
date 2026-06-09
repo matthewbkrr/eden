@@ -1,7 +1,7 @@
 defmodule Eden.Chat.ThumbnailWorker do
   @moduledoc """
   Generates a downscaled, metadata-stripped thumbnail for an attachment, off the
-  request path. Enqueued by `Eden.Chat.create_photo_message/3` after the original
+  request path. Enqueued by `Eden.Chat.create_attachment_message/3` after the original
   is stored; runs on the `:media` queue. Idempotent — a missing attachment or one
   that already has a thumbnail is a no-op, so retries are safe.
   """
