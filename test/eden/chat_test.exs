@@ -83,6 +83,53 @@ defmodule Eden.ChatTest do
       assert {:ok, _} = Chat.get_conversation(scope(bob), conv.id)
       assert {:error, :not_found} = Chat.get_conversation(scope(dave), conv.id)
     end
+
+    test "preloaded memberships keep a stable order across reloads", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
+
+      order = fn ->
+        {:ok, c} = Chat.get_conversation(scope(alice), conv.id)
+        Enum.map(c.memberships, & &1.id)
+      end
+
+      ids = order.()
+      assert ids == Enum.sort(ids)
+      # Re-preloading yields the same order (no reshuffling group titles/members).
+      assert ids == order.()
+    end
+  end
+
+  describe "get_shared_user/2" do
+    test "returns a user sharing a conversation, with profile fields", %{alice: alice, bob: bob} do
+      {:ok, _conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      assert {:ok, fetched} = Chat.get_shared_user(scope(alice), bob.id)
+      assert fetched.id == bob.id
+      assert fetched.display_name == "Bob"
+      # bio/avatar_key are loaded (the profile fields the modal renders)
+      assert Map.has_key?(fetched, :bio)
+      assert Map.has_key?(fetched, :avatar_key)
+    end
+
+    test "is symmetric and accepts a string id", %{alice: alice, bob: bob} do
+      {:ok, _conv} = Chat.create_conversation(scope(alice), [bob.id])
+      assert {:ok, %{id: id}} = Chat.get_shared_user(scope(bob), to_string(alice.id))
+      assert id == alice.id
+    end
+
+    test "denies a user you share no conversation with", %{alice: alice, bob: bob} do
+      {:ok, _conv} = Chat.create_conversation(scope(alice), [bob.id])
+      dave = user_fixture(%{username: "dave"})
+
+      assert {:error, :not_found} = Chat.get_shared_user(scope(alice), dave.id)
+      assert {:error, :not_found} = Chat.get_shared_user(scope(dave), bob.id)
+    end
+
+    test "returns not_found for unknown or non-numeric ids", %{alice: alice} do
+      assert {:error, :not_found} = Chat.get_shared_user(scope(alice), 999_999)
+      assert {:error, :not_found} = Chat.get_shared_user(scope(alice), "abc")
+    end
   end
 
   describe "create_message/3" do

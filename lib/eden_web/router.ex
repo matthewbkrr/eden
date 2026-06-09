@@ -41,6 +41,7 @@ defmodule EdenWeb.Router do
       pipe_through :require_authenticated
       get "/files/:id", FileController, :show
       get "/files/:id/thumb", FileController, :thumb
+      get "/users/:id/avatar", AvatarController, :show
     end
 
     # Authenticated pages.

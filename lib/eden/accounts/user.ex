@@ -7,9 +7,14 @@ defmodule Eden.Accounts.User do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @max_bio 500
+
   schema "users" do
     field :username, :string
     field :display_name, :string
+    field :bio, :string
+    # Storage key of the processed avatar (set by Accounts.set_avatar/2), or nil.
+    field :avatar_key, :string
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
 
@@ -31,11 +36,25 @@ defmodule Eden.Accounts.User do
     |> validate_password(opts)
   end
 
-  @doc "Changeset for editing the profile (no credentials)."
+  @doc "Changeset for editing the profile (display name + bio; no credentials)."
   def profile_changeset(user, attrs) do
     user
-    |> cast(attrs, [:display_name])
+    # empty_values: [] so an empty bio submission is treated as "clear it" (→ nil)
+    # rather than being dropped; display_name "" then fails validate_required below.
+    |> cast(attrs, [:display_name, :bio], empty_values: [])
     |> validate_display_name()
+    |> update_change(:bio, &normalize_bio/1)
+    |> validate_length(:bio, max: @max_bio, count: :codepoints)
+  end
+
+  # Strip NUL bytes (Postgres rejects them) and trim; a blank bio becomes nil.
+  defp normalize_bio(nil), do: nil
+
+  defp normalize_bio(bio) do
+    case bio |> String.replace("\0", "") |> String.trim() do
+      "" -> nil
+      trimmed -> trimmed
+    end
   end
 
   defp validate_username(changeset, opts) do

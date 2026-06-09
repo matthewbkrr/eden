@@ -11,14 +11,26 @@ defmodule Eden.Accounts do
 
   alias Eden.Accounts.{Invite, Scope, User, UserToken}
   alias Eden.Repo
+  alias Eden.Storage
+
+  @pubsub Eden.PubSub
+  @user_updates_topic "user_updates"
 
   @token_bytes 32
   @default_ttl_days 7
+
+  # Avatars: processed to a square JPEG of this edge; source caps guard memory.
+  @avatar_size 512
+  @max_avatar_bytes 5 * 1024 * 1024
+  @max_avatar_pixels 100_000_000
 
   ## Users
 
   @doc "Fetches a user by id, raising if missing."
   def get_user!(id), do: Repo.get!(User, id)
+
+  @doc "Fetches a user by id, or nil."
+  def get_user(id), do: Repo.get(User, id)
 
   @doc "Fetches a user by username (case-insensitive via citext), or nil."
   def get_user_by_username(username) when is_binary(username) do
@@ -48,6 +60,87 @@ defmodule Eden.Accounts do
   def change_user_registration(attrs \\ %{}) do
     User.registration_changeset(%User{}, attrs, hash_password: false, validate_unique: false)
   end
+
+  ## Profile
+
+  @doc """
+  Subscribes the calling process to profile changes (display name / bio / avatar)
+  of any user. Identity is shown wherever a person appears, so connected views
+  (e.g. the chat) subscribe and refresh on `{:user_updated, %User{}}`.
+  """
+  def subscribe_user_updates, do: Phoenix.PubSub.subscribe(@pubsub, @user_updates_topic)
+
+  @doc "Changeset for the profile form (display name + bio)."
+  def change_profile(%User{} = user, attrs \\ %{}), do: User.profile_changeset(user, attrs)
+
+  @doc "Updates the user's display name and bio."
+  def update_profile(%User{} = user, attrs) do
+    with {:ok, updated} <- user |> User.profile_changeset(attrs) |> Repo.update() do
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  @doc """
+  Processes an uploaded image into a square avatar and stores it, swapping the
+  user's `avatar_key` and deleting the previous blob. `source_path` is a local
+  temp file. Returns `{:ok, user}` or `{:error, :too_large | :unprocessable | reason}`.
+  """
+  def set_avatar(%User{} = user, source_path) do
+    with {:ok, jpeg} <- process_avatar(source_path),
+         key = Storage.build_key("avatars", "jpg"),
+         :ok <- Storage.put_binary(key, jpeg),
+         {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
+      # Best-effort cleanup of the replaced blob (don't fail the update on it).
+      if user.avatar_key, do: Storage.delete(user.avatar_key)
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  @doc "Removes the user's avatar (and its stored blob)."
+  def remove_avatar(%User{avatar_key: nil} = user), do: {:ok, user}
+
+  def remove_avatar(%User{avatar_key: key} = user) do
+    with {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
+      Storage.delete(key)
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  defp broadcast_user_update(%User{} = user) do
+    Phoenix.PubSub.broadcast(@pubsub, @user_updates_topic, {:user_updated, user})
+    user
+  end
+
+  # Decode → center-crop to a @avatar_size square → re-encode JPEG with metadata
+  # stripped. The header is read lazily first to reject decompression bombs; any
+  # libvips failure (non-image, corrupt) becomes {:error, :unprocessable}.
+  # `path` is a server-assigned upload temp file, not user-supplied.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp process_avatar(path) do
+    with {:ok, bytes} <- File.read(path),
+         :ok <- check_avatar_size(bytes),
+         {:ok, image} <- Image.from_binary(bytes),
+         :ok <- check_avatar_pixels(Image.width(image), Image.height(image)),
+         {:ok, square} <-
+           Vix.Vips.Operation.thumbnail_buffer(bytes, @avatar_size,
+             height: @avatar_size,
+             crop: :VIPS_INTERESTING_CENTRE,
+             size: :VIPS_SIZE_BOTH
+           ) do
+      Image.write(square, :memory, suffix: ".jpg", quality: 82, strip_metadata: true)
+    end
+  rescue
+    _ -> {:error, :unprocessable}
+  end
+
+  defp check_avatar_size(bytes) when byte_size(bytes) <= @max_avatar_bytes, do: :ok
+  defp check_avatar_size(_bytes), do: {:error, :too_large}
+
+  defp check_avatar_pixels(w, h)
+       when is_integer(w) and is_integer(h) and w * h <= @max_avatar_pixels,
+       do: :ok
+
+  defp check_avatar_pixels(_w, _h), do: {:error, :unprocessable}
 
   ## Session tokens
 

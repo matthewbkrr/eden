@@ -142,4 +142,86 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "/files/#{message.attachment.id}/thumb"
     end
   end
+
+  describe "viewing a profile" do
+    setup [:setup_conversation]
+
+    test "the 1:1 header opens the other participant's profile", ctx do
+      {:ok, bob} =
+        Eden.Accounts.update_profile(ctx.bob, %{display_name: "Bob", bio: "Likes tea."})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      html =
+        view
+        |> element(~s(button[phx-click="show_profile"][phx-value-id="#{bob.id}"]))
+        |> render_click()
+
+      assert html =~ "@bob"
+      assert html =~ "Likes tea."
+      assert html =~ "Send message"
+    end
+
+    test "clicking your own entry routes to Settings instead", ctx do
+      carol = user_fixture(%{username: "carol", display_name: "Carol"})
+      {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{group.id}")
+
+      render_click(view, "show_profile", %{"id" => to_string(ctx.alice.id)})
+      assert_redirect(view, ~p"/settings")
+    end
+
+    test "a profile you don't share a conversation with is unavailable", ctx do
+      dave = user_fixture(%{username: "dave"})
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      html = render_click(view, "show_profile", %{"id" => to_string(dave.id)})
+      assert html =~ "Profile unavailable."
+    end
+
+    test "a group header opens the member list, then a member's profile", ctx do
+      carol = user_fixture(%{username: "carol", display_name: "Carol"})
+      {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{group.id}")
+
+      members = view |> element(~s(button[phx-click="show_members"])) |> render_click()
+      assert members =~ "Members"
+      assert members =~ "Carol"
+      assert members =~ "(you)"
+
+      profile =
+        view
+        |> element(~s(button[phx-click="show_profile"][phx-value-id="#{carol.id}"]))
+        |> render_click()
+
+      assert profile =~ "@carol"
+      assert profile =~ "Send message"
+    end
+
+    test "Send message from a profile opens a 1:1", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_click(view, "show_profile", %{"id" => to_string(ctx.bob.id)})
+      render_click(view, "message_user", %{"id" => to_string(ctx.bob.id)})
+
+      # Alice and Bob already share a 1:1, so it is reused.
+      assert_patch(view, ~p"/app/c/#{ctx.conversation.id}")
+    end
+
+    test "a member's name change updates the open conversation without reload", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert render(view) =~ "Bob"
+
+      # Bob renames himself elsewhere; the broadcast refreshes Alice's open view.
+      {:ok, _bob} = Eden.Accounts.update_profile(ctx.bob, %{display_name: "Bobby Tables"})
+
+      assert render(view) =~ "Bobby Tables"
+    end
+  end
 end
