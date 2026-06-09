@@ -28,6 +28,8 @@ defmodule EdenWeb.ChatLive do
         selected: nil,
         subscribed_id: nil,
         show_new: false,
+        show_members: false,
+        profile: nil,
         people: [],
         has_more: false,
         oldest_id: nil,
@@ -117,6 +119,54 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("close_new", _params, socket) do
     {:noreply, assign(socket, show_new: false)}
+  end
+
+  # Open a co-member's profile. Your own profile is editable in Settings, so
+  # route there instead. Authorization (shared conversation) lives in the context.
+  def handle_event("show_profile", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+
+    if id == to_string(scope.user.id) do
+      {:noreply, push_navigate(socket, to: ~p"/settings")}
+    else
+      case Chat.get_shared_user(scope, id) do
+        {:ok, user} ->
+          {:noreply, assign(socket, profile: user, show_members: false)}
+
+        {:error, :not_found} ->
+          {:noreply, put_flash(socket, :error, gettext("Profile unavailable."))}
+      end
+    end
+  end
+
+  def handle_event("close_profile", _params, socket) do
+    {:noreply, assign(socket, profile: nil)}
+  end
+
+  def handle_event("show_members", _params, socket) do
+    {:noreply, assign(socket, show_members: true)}
+  end
+
+  def handle_event("close_members", _params, socket) do
+    {:noreply, assign(socket, show_members: false)}
+  end
+
+  # "Send message" from a profile: open (or reuse) a 1:1 with that user. The
+  # profile was reached through a shared conversation, so re-checking the share
+  # both authorizes and validates the id before creating anything.
+  def handle_event("message_user", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+
+    with {:ok, user} <- Chat.get_shared_user(scope, id),
+         {:ok, conversation} <- Chat.create_conversation(scope, [user.id]) do
+      {:noreply,
+       socket
+       |> assign(profile: nil, show_members: false)
+       |> stream(:conversations, Chat.list_conversations(scope), reset: true)
+       |> push_patch(to: ~p"/app/c/#{conversation.id}")}
+    else
+      _ -> {:noreply, put_flash(socket, :error, gettext("Couldn't start the conversation."))}
+    end
   end
 
   def handle_event("start", %{"member_ids" => ids} = params, socket) do
@@ -263,25 +313,39 @@ defmodule EdenWeb.ChatLive do
             <.link navigate={~p"/app"} class="ed-btn--icon md:hidden" aria-label={gettext("Back")}>
               <.icon name="hero-arrow-left-mini" class="size-5" />
             </.link>
-            <.avatar
-              name={title(@selected, @current_scope.user)}
-              src={avatar_src(peer(@selected, @current_scope.user))}
-              online={online?(@selected, @current_scope.user, @online_ids)}
-              size={:sm}
-            />
-            <div class="min-w-0">
-              <div class="font-semibold truncate" style="font-size:0.9375rem;">
-                {title(@selected, @current_scope.user)}
+            <button
+              type="button"
+              class="flex items-center gap-3 min-w-0 flex-1 text-left -ml-1.5 px-1.5 py-1 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface)]"
+              phx-click={if @selected.is_group, do: "show_members", else: "show_profile"}
+              phx-value-id={peer_id(@selected, @current_scope.user)}
+              aria-label={gettext("View profile")}
+            >
+              <.avatar
+                name={title(@selected, @current_scope.user)}
+                src={avatar_src(peer(@selected, @current_scope.user))}
+                online={online?(@selected, @current_scope.user, @online_ids)}
+                size={:sm}
+              />
+              <div class="min-w-0">
+                <div class="font-semibold truncate" style="font-size:0.9375rem;">
+                  {title(@selected, @current_scope.user)}
+                </div>
+                <div
+                  :if={not @selected.is_group}
+                  style={"font-size:0.6875rem; color: var(#{if online?(@selected, @current_scope.user, @online_ids), do: "--ed-online", else: "--ed-muted"});"}
+                >
+                  {if online?(@selected, @current_scope.user, @online_ids),
+                    do: gettext("online"),
+                    else: gettext("offline")}
+                </div>
+                <div
+                  :if={@selected.is_group}
+                  style="font-size:0.6875rem; color: var(--ed-muted);"
+                >
+                  {ngettext("%{count} member", "%{count} members", member_count(@selected))}
+                </div>
               </div>
-              <div
-                :if={not @selected.is_group}
-                style={"font-size:0.6875rem; color: var(#{if online?(@selected, @current_scope.user, @online_ids), do: "--ed-online", else: "--ed-muted"});"}
-              >
-                {if online?(@selected, @current_scope.user, @online_ids),
-                  do: gettext("online"),
-                  else: gettext("offline")}
-              </div>
-            </div>
+            </button>
           </header>
 
           <div class="flex-1 overflow-y-auto p-4" id="message-scroll" phx-hook=".ScrollBottom">
@@ -386,6 +450,17 @@ defmodule EdenWeb.ChatLive do
       </main>
 
       <.new_conversation_modal :if={@show_new} people={@people} />
+      <.members_modal
+        :if={@show_members && @selected}
+        conversation={@selected}
+        user={@current_scope.user}
+        online_ids={@online_ids}
+      />
+      <.profile_modal
+        :if={@profile}
+        user={@profile}
+        online={MapSet.member?(@online_ids, @profile.id)}
+      />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
@@ -722,6 +797,139 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :user, :map, required: true
+  attr :online, :boolean, required: true
+
+  # Read-only profile of another participant, reached from the chat header (1:1)
+  # or the group member list. Editing your own profile happens in Settings.
+  defp profile_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_profile"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-xs rounded-[var(--ed-radius-lg)] border p-6 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_profile"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+          aria-label={gettext("Profile")}
+        >
+          <div class="flex justify-end -mt-2 -mr-2">
+            <button class="ed-btn--icon" phx-click="close_profile" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <div class="flex flex-col items-center text-center">
+            <.avatar
+              name={@user.display_name}
+              src={avatar_src(@user)}
+              online={@online}
+              size={:lg}
+            />
+            <h2 class="mt-3 font-semibold" style="font-size:1.0625rem;">{@user.display_name}</h2>
+            <p style="color: var(--ed-muted); font-size:0.8125rem;">@{@user.username}</p>
+            <p
+              class="mt-0.5"
+              style={"font-size:0.75rem; color: var(#{if @online, do: "--ed-online", else: "--ed-muted"});"}
+            >
+              {if @online, do: gettext("online"), else: gettext("offline")}
+            </p>
+
+            <p
+              :if={@user.bio}
+              class="mt-4 whitespace-pre-line break-words text-left w-full"
+              style="font-size:0.875rem; color: var(--ed-ink);"
+            >
+              {@user.bio}
+            </p>
+          </div>
+
+          <button
+            class="ed-btn ed-btn--primary w-full mt-6"
+            phx-click="message_user"
+            phx-value-id={@user.id}
+          >
+            <.icon name="hero-chat-bubble-oval-left-micro" class="size-4" /> {gettext("Send message")}
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :conversation, :map, required: true
+  attr :user, :map, required: true
+  attr :online_ids, :any, required: true
+
+  # Group member list: tap a member to open their profile (tapping yourself
+  # routes to Settings, handled by show_profile).
+  defp members_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_members"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_members"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Members")}</h2>
+            <button class="ed-btn--icon" phx-click="close_members" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <div class="max-h-72 overflow-y-auto space-y-0.5">
+            <button
+              :for={m <- @conversation.memberships}
+              type="button"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              phx-click="show_profile"
+              phx-value-id={m.user.id}
+            >
+              <.avatar
+                name={m.user.display_name}
+                src={avatar_src(m.user)}
+                online={MapSet.member?(@online_ids, m.user.id)}
+                size={:sm}
+              />
+              <span class="flex-1 min-w-0">
+                <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
+                  {m.user.display_name}{if m.user.id == @user.id, do: " " <> gettext("(you)")}
+                </span>
+                <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
+                  @{m.user.username}
+                </span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   # A timestamp that the browser reformats to the viewer's local time (the
   # server-rendered text is a UTC fallback shown before JS runs).
   attr :at, :any, required: true
@@ -798,6 +1006,12 @@ defmodule EdenWeb.ChatLive do
   # The single other participant of a 1:1 (nil for groups), used for the avatar.
   defp peer(%{is_group: true}, _user), do: nil
   defp peer(conversation, user), do: conversation |> others(user) |> List.first()
+
+  # The peer's id for the header click target (nil for groups, which open the
+  # member list rather than a single profile).
+  defp peer_id(conversation, user), do: conversation |> peer(user) |> then(&(&1 && &1.id))
+
+  defp member_count(conversation), do: length(conversation.memberships)
 
   # Avatar image URL for a user, cache-busted by the avatar key (nil → initials).
   defp avatar_src(%{avatar_key: key, id: id}) when is_binary(key),

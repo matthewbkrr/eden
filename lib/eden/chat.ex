@@ -10,7 +10,7 @@ defmodule Eden.Chat do
   import Ecto.Query, warn: false
   require Logger
 
-  alias Eden.Accounts.Scope
+  alias Eden.Accounts.{Scope, User}
   alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
   alias Eden.Repo
   alias Eden.Storage
@@ -283,6 +283,32 @@ defmodule Eden.Chat do
     )
   end
 
+  @doc """
+  Fetches another user the scoped user shares at least one conversation with.
+  This is the authorization boundary for viewing a profile: you may see a user
+  only when you already share a conversation with them. Returns `{:ok, %User{}}`
+  (profile fields included) or `{:error, :not_found}` for an unknown, unshared,
+  or non-numeric id. Note: a user always shares conversations with themselves.
+  """
+  def get_shared_user(%Scope{user: user}, other_id) do
+    with id when is_integer(id) <- safe_id(other_id),
+         true <- shares_conversation?(user.id, id),
+         %User{} = other <- Repo.get(User, id) do
+      {:ok, other}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp shares_conversation?(user_id, other_id) do
+    Repo.exists?(
+      from m1 in Membership,
+        join: m2 in Membership,
+        on: m2.conversation_id == m1.conversation_id,
+        where: m1.user_id == ^user_id and m2.user_id == ^other_id
+    )
+  end
+
   ## PubSub
 
   @doc "Subscribe the calling process to a conversation's messages. Authorize first."
@@ -380,6 +406,19 @@ defmodule Eden.Chat do
 
   defp normalize_id(id) when is_integer(id), do: id
   defp normalize_id(id) when is_binary(id), do: String.to_integer(id)
+
+  # Like normalize_id/1 but never raises — for ids that arrive straight from a
+  # client event, where a non-numeric value should mean "not found", not a crash.
+  defp safe_id(id) when is_integer(id), do: id
+
+  defp safe_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {int, ""} -> int
+      _ -> :error
+    end
+  end
+
+  defp safe_id(_id), do: :error
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 
