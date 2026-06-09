@@ -203,6 +203,7 @@ defmodule Eden.Chat do
       {width, height} = image_dimensions(source.path)
 
       attrs = %{
+        kind: "image",
         storage_key: key,
         content_type: content_type,
         byte_size: byte_size,
