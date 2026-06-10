@@ -474,14 +474,17 @@ defmodule EdenWeb.ChatLiveTest do
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hi"})
 
       conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, html} = live(conn, ~p"/app")
-      assert html =~ ">Mute<" or html =~ "Mute"
-      refute html =~ "ed-badge--muted"
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      menu = view |> element("#convo-menu-#{ctx.conversation.id}") |> render()
+      assert menu =~ "Mute"
+      refute menu =~ "Unmute"
+      refute render(view) =~ "ed-badge--muted"
 
       render_click(view, "toggle_mute", %{"id" => to_string(ctx.conversation.id)})
-      html = render(view)
-      assert html =~ "Unmute"
-      assert html =~ "ed-badge--muted"
+
+      assert view |> element("#convo-menu-#{ctx.conversation.id}") |> render() =~ "Unmute"
+      assert render(view) =~ "ed-badge--muted"
       assert [%{muted: true}] = Chat.list_conversations(scope)
     end
 

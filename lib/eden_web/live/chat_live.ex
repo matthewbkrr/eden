@@ -237,13 +237,20 @@ defmodule EdenWeb.ChatLive do
   # Sidebar/tab refreshes are driven by the :folders_changed broadcast both
   # toggles emit on the user topic, so every session stays in sync.
   def handle_event("toggle_mute", %{"id" => id}, socket) do
-    Chat.toggle_conversation_mute(socket.assigns.current_scope, id)
-    {:noreply, socket}
+    case Chat.toggle_conversation_mute(socket.assigns.current_scope, id) do
+      {:ok, _} -> {:noreply, socket}
+      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't update that chat."))}
+    end
   end
 
   def handle_event("toggle_folder_mute", %{"id" => id}, socket) do
-    Chat.toggle_folder_mute(socket.assigns.current_scope, id)
-    {:noreply, socket}
+    case Chat.toggle_folder_mute(socket.assigns.current_scope, id) do
+      {:ok, _} ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't update that folder."))}
+    end
   end
 
   def handle_event("forward_prompt", %{"id" => id}, socket) do
@@ -544,6 +551,7 @@ defmodule EdenWeb.ChatLive do
               >
                 <span :if={tab.muted_at} class="ed-folder-tab__muted">
                   <.icon name="hero-bell-slash-micro" class="size-3.5" />
+                  <span class="sr-only">{gettext("Muted")}</span>
                 </span>
                 {tab.name}
                 <span :if={tab.unread_count > 0} class="ed-folder-tab__badge">
@@ -1119,6 +1127,7 @@ defmodule EdenWeb.ChatLive do
               {title(@conversation, @user)}
               <span :if={@conversation.muted} class="ed-convo__muted">
                 <.icon name="hero-bell-slash-micro" class="size-3.5" />
+                <span class="sr-only">{gettext("Muted")}</span>
               </span>
             </span>
             <.local_time

@@ -453,7 +453,13 @@ defmodule Eden.Chat do
          %Membership{} = membership <-
            Repo.get_by(Membership, conversation_id: id, user_id: user.id) do
       muted_at = if membership.muted_at, do: nil, else: now()
-      {:ok, _} = membership |> Ecto.Changeset.change(muted_at: muted_at) |> Repo.update()
+
+      # update_all: a no-op (not a StaleEntryError) if the membership vanished
+      # concurrently — e.g. the conversation was GC'd mid-click.
+      Repo.update_all(from(m in Membership, where: m.id == ^membership.id),
+        set: [muted_at: muted_at]
+      )
+
       broadcast_folders(user.id)
       {:ok, if(muted_at, do: :muted, else: :unmuted)}
     else
@@ -471,7 +477,11 @@ defmodule Eden.Chat do
     case get_folder(scope, folder_id) do
       %Folder{} = folder ->
         muted_at = if folder.muted_at, do: nil, else: now()
-        {:ok, _} = folder |> Ecto.Changeset.change(muted_at: muted_at) |> Repo.update()
+
+        # update_all: a no-op (not a StaleEntryError) if the folder was deleted
+        # concurrently in Settings.
+        Repo.update_all(from(f in Folder, where: f.id == ^folder.id), set: [muted_at: muted_at])
+
         broadcast_folders(user.id)
         {:ok, if(muted_at, do: :muted, else: :unmuted)}
 

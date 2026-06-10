@@ -307,9 +307,13 @@
     color: var(--ed-on-primary);
     font: 600 0.6875rem/1 var(--ed-font);
   }
-  /* Muted chat: unread is still tracked but de-emphasized. */
+  /* Muted chat: unread is still tracked but de-emphasized. The text uses
+     var(--ed-bg) so it flips with the theme: near-white on the light theme's
+     mid gray, dark on the dark theme's light gray — readable in both (the
+     inherited --ed-on-primary white would wash out on dark). */
   .ed-badge--muted {
     background: var(--ed-muted);
+    color: var(--ed-bg);
   }
   .ed-pill {
     display: inline-flex;
