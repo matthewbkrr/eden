@@ -1,9 +1,12 @@
 defmodule Eden.Chat.ThumbnailWorker do
   @moduledoc """
-  Generates a downscaled, metadata-stripped thumbnail for an attachment, off the
-  request path. Enqueued by `Eden.Chat.create_photo_message/3` after the original
-  is stored; runs on the `:media` queue. Idempotent — a missing attachment or one
-  that already has a thumbnail is a no-op, so retries are safe.
+  Generates an attachment's preview off the request path: a downscaled,
+  metadata-stripped thumbnail for an image, or a poster frame + duration for a
+  video (see `Eden.Chat.generate_thumbnail/1`). Enqueued by
+  `Eden.Chat.create_attachment_message/3` after the original is stored; runs on
+  the `:media` queue. Idempotent — a missing attachment or one that already has a
+  preview is a no-op, so retries are safe. A permanently unprocessable input
+  (corrupt media, ffmpeg unavailable) cancels rather than burning retries.
   """
   use Oban.Worker, queue: :media, max_attempts: 3
 

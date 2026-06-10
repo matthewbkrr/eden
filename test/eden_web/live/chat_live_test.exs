@@ -16,7 +16,11 @@ defmodule EdenWeb.ChatLiveTest do
   defp real_png_path do
     {:ok, img} = Image.new(900, 600, color: [200, 60, 60])
     {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
-    path = Path.join(System.tmp_dir!(), "lvimg-#{System.unique_integer([:positive])}")
+    write_tmp(bytes)
+  end
+
+  defp write_tmp(bytes) do
+    path = Path.join(System.tmp_dir!(), "lv-#{System.unique_integer([:positive])}")
     File.write!(path, bytes)
     on_exit(fn -> File.rm(path) end)
     path
@@ -114,7 +118,7 @@ defmodule EdenWeb.ChatLiveTest do
 
     test "renders a photo message as a linked image", ctx do
       {:ok, message} =
-        Chat.create_photo_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+        Chat.create_attachment_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
           path: real_png_path()
         })
 
@@ -125,9 +129,45 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ ~s(href="/files/#{message.attachment.id}")
     end
 
+    test "renders a generic file as a download card with its name", ctx do
+      path = write_tmp("just plain text, not an image")
+
+      {:ok, message} =
+        Chat.create_attachment_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          path: path,
+          filename: "notes.txt"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert message.attachment.kind == "file"
+      assert html =~ "ed-file"
+      assert html =~ "notes.txt"
+      assert html =~ ~s(href="/files/#{message.attachment.id}")
+    end
+
+    test "renders a video as an in-app player", ctx do
+      path = write_tmp(<<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16))
+
+      {:ok, message} =
+        Chat.create_attachment_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          path: path,
+          filename: "clip.mp4"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert message.attachment.kind == "video"
+      assert html =~ "<video"
+      assert html =~ ~s(<source src="/files/#{message.attachment.id}")
+      assert html =~ "video/mp4"
+    end
+
     test "swaps the full image for the thumbnail once it is ready", ctx do
       {:ok, message} =
-        Chat.create_photo_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+        Chat.create_attachment_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
           path: real_png_path()
         })
 

@@ -24,7 +24,7 @@ defmodule EdenWeb.FileControllerTest do
 
     body = @png_signature <> "fake-png-body"
     path = image_path(body)
-    {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+    {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
 
     %{alice: alice, bob: bob, attachment: message.attachment, png: body}
   end
@@ -89,6 +89,83 @@ defmodule EdenWeb.FileControllerTest do
     end
   end
 
+  describe "GET /files/:id range + disposition" do
+    test "advertises byte-range support", %{conn: conn, alice: alice, attachment: attachment} do
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}")
+      assert get_resp_header(conn, "accept-ranges") == ["bytes"]
+    end
+
+    test "serves a byte range as 206 partial content", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment,
+      png: png
+    } do
+      conn =
+        conn
+        |> log_in_user(alice)
+        |> put_req_header("range", "bytes=0-3")
+        |> get(~p"/files/#{attachment.id}")
+
+      assert conn.status == 206
+      assert response(conn, 206) == binary_part(png, 0, 4)
+      assert get_resp_header(conn, "content-range") == ["bytes 0-3/#{byte_size(png)}"]
+    end
+
+    test "serves a suffix range", %{conn: conn, alice: alice, attachment: attachment, png: png} do
+      total = byte_size(png)
+
+      conn =
+        conn
+        |> log_in_user(alice)
+        |> put_req_header("range", "bytes=-5")
+        |> get(~p"/files/#{attachment.id}")
+
+      assert conn.status == 206
+      assert response(conn, 206) == binary_part(png, total - 5, 5)
+    end
+
+    test "returns 416 for an unsatisfiable range", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment,
+      png: png
+    } do
+      conn =
+        conn
+        |> log_in_user(alice)
+        |> put_req_header("range", "bytes=999999-")
+        |> get(~p"/files/#{attachment.id}")
+
+      assert conn.status == 416
+      assert get_resp_header(conn, "content-range") == ["bytes */#{byte_size(png)}"]
+    end
+
+    test "serves a generic file as a download with its sanitized name", %{
+      conn: conn,
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      path = image_path("just plain text, not an image")
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: path,
+          filename: "quarterly report.txt"
+        })
+
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{message.attachment.id}")
+
+      assert response(conn, 200)
+      assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
+      [disposition] = get_resp_header(conn, "content-disposition")
+      assert disposition =~ "attachment"
+      assert disposition =~ ~s(filename="quarterly report.txt")
+      assert disposition =~ "filename*=UTF-8''quarterly%20report.txt"
+    end
+  end
+
   describe "GET /files/:id/thumb" do
     test "returns 404 before the thumbnail has been generated", %{
       conn: conn,
@@ -106,7 +183,7 @@ defmodule EdenWeb.FileControllerTest do
       {:ok, png} = Image.write(img, :memory, suffix: ".png")
       path = image_path(png)
 
-      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
       :ok = Chat.generate_thumbnail(message.attachment)
 
       conn = conn |> log_in_user(bob) |> get(~p"/files/#{message.attachment.id}/thumb")

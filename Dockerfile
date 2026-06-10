@@ -47,9 +47,10 @@ RUN mix release
 FROM ${RUNNER_IMAGE}
 
 # openssl/ncurses/locales: ERTS + TLS. libstdc++6/libgomp1: required by the
-# libvips bundled in vix (used for photo thumbnails).
+# libvips bundled in vix (used for photo thumbnails). ffmpeg: video poster
+# frames + duration/dimensions (ffmpeg/ffprobe), shelled out by the media worker.
 RUN apt-get update -y \
-  && apt-get install -y libstdc++6 libgomp1 openssl libncurses6 locales ca-certificates \
+  && apt-get install -y libstdc++6 libgomp1 openssl libncurses6 locales ca-certificates ffmpeg \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # UTF-8 locale (Elixir expects it).

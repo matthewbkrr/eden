@@ -16,6 +16,11 @@ must also be followed.
   auth is invite-link based by design (delivery from an overseas VPS to RU
   inboxes is unreliable); never add Swoosh or any email dependency.
 - **Tailwind v4** + **esbuild** for assets.
+- Media: **`:image`/vix** (bundled libvips, no system dep) for image thumbnails +
+  avatar processing. **`ffmpeg`/`ffprobe`** (system dependency — in the Docker
+  runtime image and the CI test job) for video poster frames + duration, shelled
+  out via `System.cmd`. Video tests are tagged `:ffmpeg` and skipped where the
+  binary is absent.
 - Quality tooling: **credo**, **sobelow**, **dialyxir**, **mix_audit**.
 
 ## Architecture
@@ -34,8 +39,15 @@ design — built incrementally as features land.)
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.
   - `Membership` — join between a `Conversation` and a user (role, joined_at,
     last_read, etc.). A conversation has many memberships.
-  - `Message` — belongs to a conversation and a sender; carries text and/or a
-    photo attachment (referenced by storage key, see Storage).
+  - `Message` — belongs to a conversation and a sender; carries text and/or one
+    `Attachment` (referenced by storage key, see Storage).
+  - `Attachment` — one per message, classified by **magic bytes** into a `kind`
+    (`image | video | file | audio`), never the client content-type. Images and
+    video render inline (image lightbox; in-app `<video>` with a poster + Range
+    seeking); anything else is a downloadable file with a sanitized original name.
+    The `:media` Oban worker fills the preview asynchronously (image thumbnail, or
+    video poster + duration/dimensions via ffmpeg). Per-kind upload caps and a
+    decompression-bomb guard are enforced server-side.
   - **Profile visibility is authorized here, not in the web layer:**
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads

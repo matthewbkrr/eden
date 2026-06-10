@@ -26,6 +26,35 @@ defmodule Eden.ChatTest do
     image_path(bytes)
   end
 
+  # A real 1-second 320x240 mp4 (only used by :ffmpeg-tagged tests).
+  defp real_mp4 do
+    path = Path.join(System.tmp_dir!(), "vid-#{System.unique_integer([:positive])}.mp4")
+
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ~w(-nostdin -v error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=10 -pix_fmt yuv420p) ++
+          [path]
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
+  # A real 1-second audio-only mp4 (ftyp → classified video, but no video stream).
+  defp audio_mp4 do
+    path = Path.join(System.tmp_dir!(), "aud-#{System.unique_integer([:positive])}.mp4")
+
+    {_, 0} =
+      System.cmd(
+        "ffmpeg",
+        ~w(-nostdin -v error -y -f lavfi -i anullsrc=r=44100:cl=mono -t 1 -c:a aac) ++ [path]
+      )
+
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   setup do
     alice = user_fixture(%{username: "alice", display_name: "Alice"})
     bob = user_fixture(%{username: "bob", display_name: "Bob"})
@@ -287,10 +316,10 @@ defmodule Eden.ChatTest do
       cid = "44444444-4444-4444-4444-444444444444"
 
       {:ok, first} =
-        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(), client_id: cid})
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(), client_id: cid})
 
       {:ok, second} =
-        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(), client_id: cid})
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(), client_id: cid})
 
       assert first.id == second.id
       assert Repo.aggregate(Message, :count) == 1
@@ -298,7 +327,7 @@ defmodule Eden.ChatTest do
     end
   end
 
-  describe "create_photo_message/3" do
+  describe "create_attachment_message/3" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       %{conv: conv}
@@ -308,9 +337,10 @@ defmodule Eden.ChatTest do
       path = image_path(@png_signature <> "fake-png-body")
 
       assert {:ok, message} =
-               Chat.create_photo_message(scope(alice), conv.id, %{path: path, body: "look"})
+               Chat.create_attachment_message(scope(alice), conv.id, %{path: path, body: "look"})
 
       assert message.body == "look"
+      assert message.attachment.kind == "image"
       assert message.attachment.content_type == "image/png"
       assert message.attachment.byte_size > 0
       assert Eden.Storage.exists?(message.attachment.storage_key)
@@ -318,50 +348,125 @@ defmodule Eden.ChatTest do
 
     test "allows a photo with no caption", %{alice: alice, conv: conv} do
       path = image_path(@png_signature <> "x")
-      assert {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
       assert message.body == ""
       assert message.attachment
     end
 
-    test "rejects a non-image by magic bytes regardless of claimed type", %{
+    test "accepts an arbitrary file as kind=file with a safe type and sanitized name", %{
       alice: alice,
       conv: conv
     } do
       path = image_path("just plain text, not an image")
 
-      assert {:error, :unsupported_type} =
-               Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      assert {:ok, message} =
+               Chat.create_attachment_message(scope(alice), conv.id, %{
+                 path: path,
+                 filename: "../notes.txt"
+               })
+
+      assert message.attachment.kind == "file"
+      assert message.attachment.content_type == "application/octet-stream"
+      assert message.attachment.filename == "notes.txt"
     end
 
-    test "rejects an oversize file", %{alice: alice, conv: conv} do
+    test "detects an mp4 video by magic bytes", %{alice: alice, conv: conv} do
+      path = image_path(<<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16))
+
+      assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+      assert message.attachment.kind == "video"
+      assert message.attachment.content_type == "video/mp4"
+    end
+
+    test "detects a webm video by magic bytes", %{alice: alice, conv: conv} do
+      path = image_path(<<0x1A, 0x45, 0xDF, 0xA3>> <> :binary.copy("0", 16))
+
+      assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+      assert message.attachment.kind == "video"
+      assert message.attachment.content_type == "video/webm"
+    end
+
+    test "detects a pdf as a file", %{alice: alice, conv: conv} do
+      path = image_path("%PDF-1.7\n" <> :binary.copy("0", 16))
+
+      assert {:ok, message} =
+               Chat.create_attachment_message(scope(alice), conv.id, %{
+                 path: path,
+                 filename: "report.pdf"
+               })
+
+      assert message.attachment.kind == "file"
+      assert message.attachment.content_type == "application/pdf"
+    end
+
+    test "rejects an empty (0-byte) upload", %{alice: alice, conv: conv} do
+      path = image_path("")
+
+      assert {:error, :empty} =
+               Chat.create_attachment_message(scope(alice), conv.id, %{
+                 path: path,
+                 filename: "x.txt"
+               })
+    end
+
+    test "rejects an image over the image cap", %{alice: alice, conv: conv} do
       path = image_path(@png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1))
 
       assert {:error, :too_large} =
-               Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+               Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+    end
+
+    test "allows a video larger than the image cap (per-kind limits)", %{alice: alice, conv: conv} do
+      # 9 MB exceeds the 8 MB image cap but is well under the 50 MB video cap.
+      body = <<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("v", 9 * 1024 * 1024)
+      path = image_path(body)
+
+      assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+      assert message.attachment.kind == "video"
     end
 
     test "non-members cannot post a photo", %{conv: conv} do
       dave = user_fixture(%{username: "davephoto"})
       path = image_path(@png_signature <> "x")
-      assert {:error, :not_found} = Chat.create_photo_message(scope(dave), conv.id, %{path: path})
+
+      assert {:error, :not_found} =
+               Chat.create_attachment_message(scope(dave), conv.id, %{path: path})
     end
 
     test "broadcasts the photo message with the attachment preloaded", %{alice: alice, conv: conv} do
       Chat.subscribe(conv.id)
       path = image_path(@png_signature <> "x")
-      {:ok, _} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      {:ok, _} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
       assert_receive {:new_message, message}
       assert message.attachment.content_type == "image/png"
     end
 
     test "enqueues a thumbnail job on the media queue", %{alice: alice, conv: conv} do
-      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
 
       assert_enqueued(
         worker: ThumbnailWorker,
         queue: :media,
         args: %{attachment_id: message.attachment.id}
       )
+    end
+
+    test "enqueues a media job for a video too", %{alice: alice, conv: conv} do
+      path = image_path(<<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16))
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+
+      assert message.attachment.kind == "video"
+      assert_enqueued(worker: ThumbnailWorker, args: %{attachment_id: message.attachment.id})
+    end
+
+    test "does not enqueue a media job for a plain file", %{alice: alice, conv: conv} do
+      path = image_path("just some text")
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: path, filename: "a.txt"})
+
+      assert message.attachment.kind == "file"
+      refute_enqueued(worker: ThumbnailWorker, args: %{attachment_id: message.attachment.id})
     end
   end
 
@@ -376,7 +481,7 @@ defmodule Eden.ChatTest do
       Chat.subscribe(conv.id)
 
       {:ok, message} =
-        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(1200, 800)})
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(1200, 800)})
 
       # Original dimensions are known immediately (before any thumbnail), so the
       # first render can reserve layout space.
@@ -401,7 +506,7 @@ defmodule Eden.ChatTest do
 
     test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
       {:ok, message} =
-        Chat.create_photo_message(scope(alice), conv.id, %{path: real_png(300, 200)})
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(300, 200)})
 
       assert :ok = Chat.generate_thumbnail(message.attachment)
 
@@ -413,7 +518,7 @@ defmodule Eden.ChatTest do
     end
 
     test "the worker generates the thumbnail and is idempotent", %{alice: alice, conv: conv} do
-      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
       args = %{attachment_id: message.attachment.id}
 
       assert :ok = perform_job(ThumbnailWorker, args)
@@ -432,7 +537,7 @@ defmodule Eden.ChatTest do
          %{alice: alice, conv: conv} do
       # Valid PNG magic bytes (passes upload detection) but not a decodable image.
       path = image_path(@png_signature <> "not actually a png body")
-      {:ok, message} = Chat.create_photo_message(scope(alice), conv.id, %{path: path})
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
 
       assert {:error, {:unprocessable, _}} = Chat.generate_thumbnail(message.attachment)
 
@@ -440,6 +545,58 @@ defmodule Eden.ChatTest do
                perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
 
       refute Repo.get(Attachment, message.attachment.id).thumbnail_key
+    end
+
+    @tag :ffmpeg
+    test "generates a poster frame and reads a video's duration + dimensions",
+         %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: real_mp4(),
+          filename: "clip.mp4"
+        })
+
+      assert message.attachment.kind == "video"
+      # Video dimensions/duration are unknown until the worker probes the file.
+      assert is_nil(message.attachment.thumbnail_key)
+      assert is_nil(message.attachment.duration)
+
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      assert is_binary(attachment.thumbnail_key)
+      assert Eden.Storage.exists?(attachment.thumbnail_key)
+      assert attachment.width == 320
+      assert attachment.height == 240
+      # The test clip is 1 second.
+      assert attachment.duration in 800..1300
+
+      # The stored poster is a real, downscaled JPEG.
+      {:ok, poster_bytes} = Eden.Storage.read(attachment.thumbnail_key)
+      {:ok, poster} = Image.from_binary(poster_bytes)
+      assert max(Image.width(poster), Image.height(poster)) <= 800
+
+      assert_receive {:thumbnail_ready, _broadcast}
+    end
+
+    @tag :ffmpeg
+    test "records duration even when no poster frame can be extracted (audio-only mp4)",
+         %{alice: alice, conv: conv} do
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: audio_mp4(),
+          filename: "voice.mp4"
+        })
+
+      assert message.attachment.kind == "video"
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+
+      attachment = Repo.get(Attachment, message.attachment.id)
+      # No video stream → no poster, but the duration is still saved.
+      assert is_nil(attachment.thumbnail_key)
+      assert attachment.duration in 800..1300
     end
   end
 
@@ -499,18 +656,26 @@ defmodule Eden.ChatTest do
       assert after_read.unread_count == 0
     end
 
-    test "flags last_message_photo? when the last message is a photo", %{alice: alice, bob: bob} do
+    test "sets last_message_kind when the last message is an attachment", %{
+      alice: alice,
+      bob: bob
+    } do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
-      {:ok, _} = Chat.create_photo_message(scope(alice), conv.id, %{path: real_png()})
+      {:ok, _} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
 
       [listed] = Chat.list_conversations(scope(alice))
-      assert listed.last_message_photo? == true
+      assert listed.last_message_kind == "image"
       assert listed.last_message_body == ""
 
       # get_conversation_summary mirrors the same enrichment
       {:ok, summary} = Chat.get_conversation_summary(scope(alice), conv.id)
-      assert summary.last_message_photo? == true
+      assert summary.last_message_kind == "image"
+
+      # A plain text message leaves it nil.
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "back to text"})
+      [text_last] = Chat.list_conversations(scope(alice))
+      assert is_nil(text_last.last_message_kind)
     end
   end
 

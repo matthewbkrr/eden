@@ -239,6 +239,9 @@
   .ed-btn--icon > * { pointer-events: none; }
   .ed-btn--icon:hover:not(:disabled) { background: var(--ed-surface-2); color: var(--ed-ink); }
   .ed-btn--icon:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
+  /* When the icon button wraps a focusable control (e.g. the attach file input),
+     surface the focus ring on the label so it's keyboard-discoverable. */
+  .ed-btn--icon:has(:focus-visible) { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
   /* Comfortable touch target on phones (≥44px). */
   @media (max-width: 768px) {
     .ed-btn--icon { width: 2.75rem; height: 2.75rem; }
@@ -362,6 +365,69 @@
     border-radius: var(--ed-radius-full);
     padding: 0.25rem 0.75rem;
     font-size: 0.75rem;
+  }
+
+  /* Video + file attachments inside a bubble. They inherit the bubble's text
+     color (white on --me, ink on --them) and tint themselves from it, so a
+     single rule reads correctly on either side. */
+  .ed-video {
+    display: block;
+    max-width: min(20rem, 100%);
+    max-height: 20rem;
+    border-radius: 0.6rem;
+    background: oklch(0 0 0 / 0.25);
+  }
+  .ed-file {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 11rem;
+    max-width: min(20rem, 100%);
+    padding: 0.5rem 0.625rem;
+    border-radius: 0.6rem;
+    color: inherit;
+    text-decoration: none;
+    background: color-mix(in oklch, currentColor 10%, transparent);
+    transition: background var(--ed-dur, 150ms) ease;
+  }
+  .ed-file:hover {
+    background: color-mix(in oklch, currentColor 18%, transparent);
+  }
+  .ed-file__icon {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    background: color-mix(in oklch, currentColor 16%, transparent);
+  }
+  .ed-file__meta {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .ed-file__name {
+    font-size: 0.875rem;
+    font-weight: 550;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ed-file__size {
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+
+  /* Composer preview chip for a non-image attachment (video/file). */
+  .ed-file-chip {
+    display: grid;
+    place-items: center;
+    width: 3rem;
+    height: 3rem;
+    border-radius: var(--ed-radius);
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
   }
 
   /* In-app image lightbox (toggled by the .Lightbox hook) -------------- */
