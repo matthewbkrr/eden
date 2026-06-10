@@ -264,4 +264,90 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "Bobby Tables"
     end
   end
+
+  describe "message actions" do
+    setup [:setup_conversation]
+
+    test "renders the action menu; delete-for-everyone only on own messages", ctx do
+      {:ok, mine} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "mine"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ "Copy text"
+      assert html =~ "Copy link"
+      assert html =~ "Forward"
+      assert html =~ "Delete for me"
+      assert html =~ "Delete for everyone"
+      assert html =~ ~s(/app/c/#{ctx.conversation.id}/m/#{mine.id})
+    end
+
+    test "delete for me hides it from this user", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hush"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert html =~ "hush"
+
+      render_click(view, "delete_for_me", %{"id" => to_string(msg.id)})
+      refute has_element?(view, "#messages-#{msg.id}")
+    end
+
+    test "delete for both shows a tombstone in real time", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "regret"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_click(view, "delete_for_both", %{"id" => to_string(msg.id)})
+      assert has_element?(view, "#messages-#{msg.id}", "Message deleted")
+      refute has_element?(view, "#messages-#{msg.id}", "regret")
+    end
+
+    test "a previously deleted message renders as a tombstone", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "gone"})
+
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), msg.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      refute html =~ "gone"
+      assert html =~ "Message deleted"
+    end
+
+    test "forward copies the message into the chosen conversation", ctx do
+      carol = user_fixture(%{username: "carolfwd"})
+      {:ok, target} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+          "body" => "share me"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_click(view, "forward_prompt", %{"id" => to_string(msg.id)})
+      assert render(view) =~ "Forward to"
+
+      render_click(view, "forward", %{"target" => to_string(target.id)})
+
+      {:ok, [forwarded]} = Chat.list_messages(Scope.for_user(ctx.alice), target.id)
+      assert forwarded.body == "share me"
+      assert forwarded.forwarded_from_id == msg.id
+    end
+
+    test "a permalink opens the conversation", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "anchor"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}/m/#{msg.id}")
+      assert html =~ "anchor"
+    end
+  end
 end

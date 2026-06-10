@@ -323,8 +323,12 @@ defmodule Eden.Chat do
   def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id) do
     with {:ok, source} <- fetch_message(scope, message_id),
          :ok <- ensure_not_deleted(source),
-         :ok <- ensure_member(scope, target_conversation_id) do
-      do_forward(user, target_conversation_id, Repo.preload(source, :attachment))
+         target_id when is_integer(target_id) <- safe_id(target_conversation_id),
+         :ok <- ensure_member(scope, target_id) do
+      do_forward(user, target_id, Repo.preload(source, :attachment))
+    else
+      :error -> {:error, :not_found}
+      error -> error
     end
   end
 
