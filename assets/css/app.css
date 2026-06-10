@@ -670,7 +670,7 @@
     border: 1px solid var(--ed-border);
     background: var(--ed-bg);
   }
-  .ed-folder-row--pinned {
+  .ed-folder-row--virtual {
     background: transparent;
     border-style: dashed;
   }

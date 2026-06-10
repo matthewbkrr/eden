@@ -257,12 +257,19 @@ defmodule Eden.Chat do
   Chats" is virtual and not part of this list.
   """
   def list_folders(%Scope{user: user}) do
-    unread = folder_unread_counts(user)
+    folders =
+      Repo.all(
+        from f in Folder, where: f.user_id == ^user.id, order_by: [asc: f.position, asc: f.id]
+      )
 
-    Repo.all(
-      from f in Folder, where: f.user_id == ^user.id, order_by: [asc: f.position, asc: f.id]
-    )
-    |> Enum.map(&%{&1 | unread_count: Map.get(unread, &1.id, 0)})
+    # Most users have no folders; skip the (heavier) unread query entirely then —
+    # this runs on every :conversation_activity ping.
+    if folders == [] do
+      []
+    else
+      unread = folder_unread_counts(user)
+      Enum.map(folders, &%{&1 | unread_count: Map.get(unread, &1.id, 0)})
+    end
   end
 
   # Per-folder unread totals — same rule as unread_counts/2, grouped by folder
@@ -289,15 +296,28 @@ defmodule Eden.Chat do
     |> Map.new()
   end
 
+  # A generous sanity cap — Telegram allows about this many. Keeps a runaway
+  # client from flooding the tab carousel (and every list_folders query).
+  @max_folders 20
+
+  @doc "Most folders a user can have (`create_folder/2` returns `{:error, :limit}` beyond it)."
+  def max_folders, do: @max_folders
+
   @doc "Creates a folder for the scoped user (appended after existing ones)."
   def create_folder(%Scope{user: user}, attrs) do
-    result =
-      %Folder{user_id: user.id, position: next_folder_position(user)}
-      |> Folder.changeset(attrs)
-      |> Repo.insert()
+    count = Repo.aggregate(from(f in Folder, where: f.user_id == ^user.id), :count)
 
-    with {:ok, _folder} <- result, do: broadcast_folders(user.id)
-    result
+    if count >= @max_folders do
+      {:error, :limit}
+    else
+      result =
+        %Folder{user_id: user.id, position: next_folder_position(user)}
+        |> Folder.changeset(attrs)
+        |> Repo.insert()
+
+      with {:ok, _folder} <- result, do: broadcast_folders(user.id)
+      result
+    end
   end
 
   defp next_folder_position(user) do
@@ -352,16 +372,17 @@ defmodule Eden.Chat do
     all_pos = Enum.find_index(entries, &(&1 == :all))
     ids = Enum.reject(entries, &(&1 == :all))
 
-    Repo.transact(fn ->
-      ids
-      |> Enum.with_index()
-      |> Enum.each(fn {id, pos} ->
-        Repo.update_all(from(f in Folder, where: f.id == ^id), set: [position: pos])
-      end)
+    {:ok, _} =
+      Repo.transact(fn ->
+        ids
+        |> Enum.with_index()
+        |> Enum.each(fn {id, pos} ->
+          Repo.update_all(from(f in Folder, where: f.id == ^id), set: [position: pos])
+        end)
 
-      if all_pos, do: put_all_chats_position(user.id, all_pos)
-      {:ok, :ok}
-    end)
+        if all_pos, do: put_all_chats_position(user.id, all_pos)
+        {:ok, :ok}
+      end)
 
     broadcast_folders(user.id)
     :ok
@@ -388,29 +409,38 @@ defmodule Eden.Chat do
   def toggle_conversation_folder(%Scope{user: user} = scope, conversation_id, folder_id) do
     with cid when is_integer(cid) <- safe_id(conversation_id),
          true <- member?(scope, cid),
-         %Folder{id: fid} <- get_folder(scope, folder_id) do
-      existing =
-        Repo.one(
-          from fm in FolderMembership,
-            where: fm.folder_id == ^fid and fm.conversation_id == ^cid
-        )
-
-      result =
-        if existing do
-          Repo.delete(existing)
-          :removed
-        else
-          %FolderMembership{}
-          |> FolderMembership.changeset(%{folder_id: fid, conversation_id: cid})
-          |> Repo.insert()
-
-          :added
-        end
-
+         %Folder{id: fid} <- get_folder(scope, folder_id),
+         {:ok, result} <- do_toggle_folder(fid, cid) do
       broadcast_folders(user.id)
       {:ok, result}
     else
       _ -> {:error, :not_found}
+    end
+  end
+
+  # Concurrency-safe toggle: delete_all is a no-op when another session already
+  # removed the row (Repo.delete would raise StaleEntryError), and
+  # on_conflict: :nothing absorbs a duplicate insert. An insert that fails for a
+  # real reason (e.g. the folder was deleted mid-flight) surfaces as an error
+  # instead of a false {:ok, :added}.
+  defp do_toggle_folder(folder_id, conversation_id) do
+    existing =
+      Repo.one(
+        from fm in FolderMembership,
+          where: fm.folder_id == ^folder_id and fm.conversation_id == ^conversation_id
+      )
+
+    if existing do
+      Repo.delete_all(from fm in FolderMembership, where: fm.id == ^existing.id)
+      {:ok, :removed}
+    else
+      %FolderMembership{}
+      |> FolderMembership.changeset(%{folder_id: folder_id, conversation_id: conversation_id})
+      |> Repo.insert(on_conflict: :nothing)
+      |> case do
+        {:ok, _} -> {:ok, :added}
+        {:error, _} -> {:error, :conflict}
+      end
     end
   end
 

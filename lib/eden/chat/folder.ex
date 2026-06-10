@@ -25,7 +25,10 @@ defmodule Eden.Chat.Folder do
   def changeset(folder, attrs) do
     folder
     |> cast(attrs, [:name, :position])
-    |> update_change(:name, &String.trim/1)
+    # cast turns whitespace-only params into a nil change (Ecto's default
+    # empty_values), so the trim must tolerate nil — validate_required then
+    # reports the blank instead of String.trim/1 crashing on it.
+    |> update_change(:name, &(&1 && String.trim(&1)))
     |> validate_required([:name])
     |> validate_length(:name, max: @max_name)
   end

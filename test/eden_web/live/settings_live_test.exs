@@ -156,6 +156,26 @@ defmodule EdenWeb.SettingsLiveTest do
 
       assert ["Family"] == Enum.map(Chat.list_folders(scope), & &1.name)
     end
+
+    test "a blank rename shows a blank-name error, not a length error", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      [folder] = Chat.list_folders(scope)
+
+      html =
+        view
+        |> element("#rename-folder-#{folder.id}")
+        |> render_submit(%{"folder_id" => to_string(folder.id), "name" => "   "})
+
+      assert html =~ "blank"
+      refute html =~ "too long"
+      # The saved name is untouched.
+      assert [%{name: "Work"}] = Chat.list_folders(scope)
+    end
   end
 
   defp png_bytes(w \\ 600, h \\ 600) do

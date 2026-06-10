@@ -399,9 +399,13 @@ defmodule EdenWeb.ChatLive do
   end
 
   # The user deleted a conversation (in this or another of their sessions): drop it
-  # from the sidebar, and leave the thread if it was the one open here.
+  # from the sidebar, refresh folder badges (its unread no longer counts), and
+  # leave the thread if it was the one open here.
   def handle_info({:conversation_left, conversation_id}, socket) do
-    socket = stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+    socket =
+      socket
+      |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")
+      |> refresh_folders()
 
     if open?(socket, conversation_id) do
       {:noreply, socket |> unsubscribe() |> assign(selected: nil) |> push_patch(to: ~p"/app")}
@@ -539,16 +543,24 @@ defmodule EdenWeb.ChatLive do
               active={@selected && @selected.id == conversation.id}
             />
           </div>
-          <%!-- Shown via CSS only when the stream rendered no rows (e.g. you
-                deleted your last chat) — no server round-trip. --%>
+          <%!-- Shown via CSS only when the stream rendered no rows — no server
+                round-trip. Inside a folder it means "nothing filed here", not
+                "you have no chats", so the copy and CTA differ. --%>
           <div class="ed-convo-empty">
             <span style="color: var(--ed-muted);">
               <.icon name="hero-chat-bubble-left-right" class="size-7" />
             </span>
-            <p style="font-weight:600;">{gettext("No chats yet")}</p>
-            <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
-              <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
-            </button>
+            <%= if @folder_id do %>
+              <p style="font-weight:600;">{gettext("No chats in this folder")}</p>
+              <p style="color: var(--ed-muted); font-size:0.875rem;">
+                {gettext("Right-click a chat to move it here.")}
+              </p>
+            <% else %>
+              <p style="font-weight:600;">{gettext("No chats yet")}</p>
+              <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
+                <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
+              </button>
+            <% end %>
           </div>
         </div>
       </aside>

@@ -69,11 +69,14 @@ design — built incrementally as features land.)
     personal grouping of the owner's sidebar that never affects other members.
     `Folder` (name, `position`) is created/renamed/reordered/deleted in Settings;
     `FolderMembership` is the folder↔conversation join (a chat can be in many
-    folders). **"All Chats" is virtual** (no row). `list_conversations/2` takes an
-    optional `folder_id` (the folder is joined on `user_id`, so a foreign id yields
-    nothing); `list_folders/1` carries a per-folder unread badge. Folder changes
-    broadcast `:folders_changed` on the user topic. Left/hidden chats (`left_at`)
-    drop out of folder views; a GC'd conversation cascades its folder rows.
+    folders). **"All Chats" is virtual** (no row) — movable among the tabs but not
+    deletable; its spot is stored per user in `chat_folder_prefs.all_chats_position`
+    (`FolderPrefs`, written by `reorder_folders/2` via the `"all"` sentinel).
+    `list_conversations/2` takes an optional `folder_id` (the folder is joined on
+    `user_id`, so a foreign id yields nothing); `list_folders/1` carries a
+    per-folder unread badge. Folder changes broadcast `:folders_changed` on the
+    user topic. Left/hidden chats (`left_at`) drop out of folder views; a GC'd
+    conversation cascades its folder rows.
   - **Profile visibility is authorized here, not in the web layer:**
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads

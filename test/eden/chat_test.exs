@@ -1015,6 +1015,25 @@ defmodule Eden.ChatTest do
       assert {:error, %Ecto.Changeset{}} = Chat.create_folder(scope(alice), %{"name" => too_long})
     end
 
+    test "folder count is capped", %{alice: alice} do
+      for n <- 1..Chat.max_folders() do
+        {:ok, _} = Chat.create_folder(scope(alice), %{"name" => "F#{n}"})
+      end
+
+      assert {:error, :limit} = Chat.create_folder(scope(alice), %{"name" => "One more"})
+    end
+
+    test "toggle survives the row vanishing concurrently", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+
+      # Simulate another session removing the membership between the read and
+      # the delete: delete_all must not raise (Repo.delete would).
+      Repo.delete_all(Eden.Chat.FolderMembership)
+      assert {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+    end
+
     test "reorder reassigns positions and ignores foreign ids", %{alice: alice, bob: bob} do
       {:ok, a} = Chat.create_folder(scope(alice), %{"name" => "A"})
       {:ok, b} = Chat.create_folder(scope(alice), %{"name" => "B"})

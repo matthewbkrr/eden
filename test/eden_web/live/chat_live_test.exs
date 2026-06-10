@@ -442,6 +442,17 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#conversations-#{other.id}")
     end
 
+    test "an empty folder shows the folder empty state, not the global one", ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, folder} = Chat.create_folder(scope, %{"name" => "Empty"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_click(view, "select_folder", %{"id" => to_string(folder.id)})
+      assert html =~ "No chats in this folder"
+    end
+
     test "the All Chats tab renders at its stored position", ctx do
       scope = Scope.for_user(ctx.alice)
       {:ok, work} = Chat.create_folder(scope, %{"name" => "Work"})

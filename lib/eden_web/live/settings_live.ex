@@ -1,9 +1,11 @@
 defmodule EdenWeb.SettingsLive do
   @moduledoc """
-  Device preferences: appearance (theme) and language. These are stored per
-  device (theme in localStorage via the manager in root.html.heex; language in
-  the session via `EdenWeb.LocaleController`) and work before sign-in. When
-  accounts land (Phase 1), account-scoped settings live alongside this screen.
+  Settings. Device preferences — appearance (theme, in localStorage via the
+  manager in root.html.heex) and language (session via
+  `EdenWeb.LocaleController`) — work before sign-in. Signed-in users also get
+  the account-scoped sections: profile (display name, bio, avatar) and chat
+  folders (create/rename/delete + drag-to-reorder, including the virtual
+  "All Chats" position).
   """
   use EdenWeb, :live_view
 
@@ -275,7 +277,7 @@ defmodule EdenWeb.SettingsLive do
                   :if={row == :all}
                   draggable="true"
                   data-id="all"
-                  class="ed-folder-row ed-folder-row--pinned"
+                  class="ed-folder-row ed-folder-row--virtual"
                 >
                   <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
                     <.icon name="hero-bars-3-micro" class="size-4" />
@@ -305,7 +307,7 @@ defmodule EdenWeb.SettingsLive do
                     <input
                       name="name"
                       value={row.name}
-                      maxlength={Eden.Chat.Folder.max_name()}
+                      maxlength={Chat.Folder.max_name()}
                       class="ed-folder-row__name"
                       aria-label={gettext("Folder name")}
                       draggable="false"
@@ -336,7 +338,7 @@ defmodule EdenWeb.SettingsLive do
               <input
                 name="name"
                 value={@new_folder}
-                maxlength={Eden.Chat.Folder.max_name()}
+                maxlength={Chat.Folder.max_name()}
                 placeholder={gettext("New folder name")}
                 class="ed-input flex-1"
               />
@@ -358,6 +360,7 @@ defmodule EdenWeb.SettingsLive do
                     item._dnd = true
                     item.addEventListener("dragstart", (e) => {
                       this.dragging = item
+                      this.startOrder = this.order().join()
                       item.classList.add("ed-dragging")
                       e.dataTransfer.effectAllowed = "move"
                     })
@@ -384,9 +387,13 @@ defmodule EdenWeb.SettingsLive do
                   }) || null
                 },
                 commit() {
-                  const ids = [...this.el.querySelectorAll("li[draggable=true]")].map((i) => i.dataset.id)
                   this.dragging = null
-                  this.pushEvent("reorder_folders", { ids })
+                  const ids = this.order()
+                  // A click on the handle or a cancelled drag isn't a reorder.
+                  if (ids.join() !== this.startOrder) this.pushEvent("reorder_folders", { ids })
+                },
+                order() {
+                  return [...this.el.querySelectorAll("li[draggable=true]")].map((i) => i.dataset.id)
                 }
               }
             </script>
@@ -442,16 +449,22 @@ defmodule EdenWeb.SettingsLive do
     else
       case Chat.create_folder(socket.assigns.current_scope, %{"name" => name}) do
         {:ok, _folder} -> {:noreply, socket |> assign(new_folder: "") |> reload_folders()}
-        {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Folder name is too long."))}
+        {:error, reason} -> {:noreply, put_flash(socket, :error, folder_error(reason))}
       end
     end
   end
 
   def handle_event("rename_folder", %{"folder_id" => id, "name" => name}, socket) do
     case Chat.rename_folder(socket.assigns.current_scope, id, name) do
-      {:ok, _folder} -> {:noreply, reload_folders(socket)}
-      {:error, :not_found} -> {:noreply, socket}
-      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Folder name is too long."))}
+      {:ok, _folder} ->
+        {:noreply, reload_folders(socket)}
+
+      {:error, :not_found} ->
+        {:noreply, socket}
+
+      {:error, reason} ->
+        # Re-render so the row's input falls back to the saved name.
+        {:noreply, socket |> put_flash(:error, folder_error(reason)) |> reload_folders()}
     end
   end
 
@@ -466,6 +479,19 @@ defmodule EdenWeb.SettingsLive do
   end
 
   defp reload_folders(socket), do: assign_folders(socket)
+
+  # Human-readable reason a folder write was rejected, for the flash.
+  defp folder_error(:limit),
+    do: gettext("You can have up to %{count} folders.", count: Chat.max_folders())
+
+  defp folder_error(%Ecto.Changeset{errors: errors}) do
+    case errors[:name] do
+      nil -> gettext("Couldn't save that folder.")
+      error -> gettext("Folder name") <> ": " <> translate_error(error)
+    end
+  end
+
+  defp folder_error(_reason), do: gettext("Couldn't save that folder.")
 
   # Store the pending avatar (if any) inside the consume callback while the temp
   # file exists; return the (possibly updated) user plus any processing error.
