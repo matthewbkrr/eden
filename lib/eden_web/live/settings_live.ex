@@ -298,6 +298,9 @@ defmodule EdenWeb.SettingsLive do
                   <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
                     <.icon name="hero-bars-3-micro" class="size-4" />
                   </span>
+                  <%!-- Renames save on Enter AND on blur (clicking away / leaving
+                        the page), with a flash confirming the change. Focusing
+                        selects the whole name so it's clearly being edited. --%>
                   <form
                     id={"rename-folder-#{row.id}"}
                     phx-submit="rename_folder"
@@ -305,12 +308,16 @@ defmodule EdenWeb.SettingsLive do
                   >
                     <input type="hidden" name="folder_id" value={row.id} />
                     <input
+                      id={"folder-name-#{row.id}"}
                       name="name"
                       value={row.name}
                       maxlength={Chat.Folder.max_name()}
                       class="ed-folder-row__name"
                       aria-label={gettext("Folder name")}
                       draggable="false"
+                      phx-hook=".SelectOnFocus"
+                      phx-blur="rename_folder"
+                      phx-value-folder_id={row.id}
                     />
                   </form>
                   <button
@@ -347,6 +354,13 @@ defmodule EdenWeb.SettingsLive do
               </button>
             </form>
 
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectOnFocus">
+              // Select the whole value on focus, so clicking a folder name makes
+              // it obvious the entire name is being edited (Finder-style).
+              export default {
+                mounted() { this.el.addEventListener("focus", () => this.el.select()) }
+              }
+            </script>
             <script :type={Phoenix.LiveView.ColocatedHook} name=".Sortable">
               // HTML5 drag-and-drop reorder. Items rearrange live as you drag; on
               // drop we push the new id order to the server. Handlers bind once per
@@ -454,17 +468,25 @@ defmodule EdenWeb.SettingsLive do
     end
   end
 
-  def handle_event("rename_folder", %{"folder_id" => id, "name" => name}, socket) do
-    case Chat.rename_folder(socket.assigns.current_scope, id, name) do
-      {:ok, _folder} ->
-        {:noreply, reload_folders(socket)}
+  # Fired by both the row form's Enter (params carry "name") and the input's
+  # blur (params carry "value"), so clicking away also saves.
+  def handle_event("rename_folder", %{"folder_id" => id} = params, socket) do
+    name = params["name"] || params["value"] || ""
 
-      {:error, :not_found} ->
-        {:noreply, socket}
+    if unchanged_name?(socket, id, name) do
+      {:noreply, socket}
+    else
+      case Chat.rename_folder(socket.assigns.current_scope, id, name) do
+        {:ok, _folder} ->
+          {:noreply, socket |> put_flash(:info, gettext("Folder renamed.")) |> reload_folders()}
 
-      {:error, reason} ->
-        # Re-render so the row's input falls back to the saved name.
-        {:noreply, socket |> put_flash(:error, folder_error(reason)) |> reload_folders()}
+        {:error, :not_found} ->
+          {:noreply, socket}
+
+        {:error, reason} ->
+          # Re-render so the row's input falls back to the saved name.
+          {:noreply, socket |> put_flash(:error, folder_error(reason)) |> reload_folders()}
+      end
     end
   end
 
@@ -479,6 +501,17 @@ defmodule EdenWeb.SettingsLive do
   end
 
   defp reload_folders(socket), do: assign_folders(socket)
+
+  # A blur fires on every focus-out; don't rename (or flash) when nothing changed.
+  defp unchanged_name?(socket, id, name) do
+    case Integer.parse(to_string(id)) do
+      {fid, ""} ->
+        Enum.any?(socket.assigns.folders, &(&1.id == fid and &1.name == String.trim(name)))
+
+      _ ->
+        false
+    end
+  end
 
   # Human-readable reason a folder write was rejected, for the flash.
   defp folder_error(:limit),
