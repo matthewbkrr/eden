@@ -234,6 +234,18 @@ defmodule EdenWeb.ChatLive do
      |> stream_conversations(reset: true)}
   end
 
+  # Sidebar/tab refreshes are driven by the :folders_changed broadcast both
+  # toggles emit on the user topic, so every session stays in sync.
+  def handle_event("toggle_mute", %{"id" => id}, socket) do
+    Chat.toggle_conversation_mute(socket.assigns.current_scope, id)
+    {:noreply, socket}
+  end
+
+  def handle_event("toggle_folder_mute", %{"id" => id}, socket) do
+    Chat.toggle_folder_mute(socket.assigns.current_scope, id)
+    {:noreply, socket}
+  end
+
   def handle_event("forward_prompt", %{"id" => id}, socket) do
     targets = Chat.list_conversations(socket.assigns.current_scope)
     {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
@@ -516,19 +528,44 @@ defmodule EdenWeb.ChatLive do
             >
               {gettext("All Chats")}
             </button>
-            <button
+            <span
               :if={tab != :all}
-              type="button"
-              class={["ed-folder-tab", @folder_id == tab.id && "ed-folder-tab--active"]}
-              phx-click="select_folder"
-              phx-value-id={tab.id}
-              aria-pressed={to_string(@folder_id == tab.id)}
+              id={"folder-tab-#{tab.id}"}
+              class="ed-folder-tab-wrap"
+              phx-hook=".ContextMenu"
             >
-              {tab.name}
-              <span :if={tab.unread_count > 0} class="ed-folder-tab__badge">
-                {tab.unread_count}
-              </span>
-            </button>
+              <button
+                type="button"
+                class={["ed-folder-tab", @folder_id == tab.id && "ed-folder-tab--active"]}
+                phx-click="select_folder"
+                phx-value-id={tab.id}
+                aria-pressed={to_string(@folder_id == tab.id)}
+                aria-haspopup="menu"
+              >
+                <span :if={tab.muted_at} class="ed-folder-tab__muted">
+                  <.icon name="hero-bell-slash-micro" class="size-3.5" />
+                </span>
+                {tab.name}
+                <span :if={tab.unread_count > 0} class="ed-folder-tab__badge">
+                  {tab.unread_count}
+                </span>
+              </button>
+              <div class="ed-menu" id={"folder-menu-#{tab.id}"} data-menu role="menu" hidden>
+                <button
+                  type="button"
+                  class="ed-menu__item"
+                  role="menuitem"
+                  phx-click="toggle_folder_mute"
+                  phx-value-id={tab.id}
+                >
+                  <.icon
+                    name={if tab.muted_at, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
+                    class="size-4"
+                  />
+                  {if tab.muted_at, do: gettext("Unmute folder"), else: gettext("Mute folder")}
+                </button>
+              </div>
+            </span>
           <% end %>
         </nav>
 
@@ -1078,7 +1115,12 @@ defmodule EdenWeb.ChatLive do
         />
         <span class="ed-convo__body">
           <span class="ed-convo__top">
-            <span class="ed-convo__name">{title(@conversation, @user)}</span>
+            <span class="ed-convo__name">
+              {title(@conversation, @user)}
+              <span :if={@conversation.muted} class="ed-convo__muted">
+                <.icon name="hero-bell-slash-micro" class="size-3.5" />
+              </span>
+            </span>
             <.local_time
               :if={@conversation.last_message_at}
               at={@conversation.last_message_at}
@@ -1087,15 +1129,29 @@ defmodule EdenWeb.ChatLive do
           </span>
           <span class="ed-convo__top">
             <span class="ed-convo__preview">{convo_preview(@conversation)}</span>
-            <span :if={@conversation.unread_count > 0} class="ed-badge">
+            <span
+              :if={@conversation.unread_count > 0}
+              class={["ed-badge", @conversation.muted && "ed-badge--muted"]}
+            >
               {@conversation.unread_count}
             </span>
           </span>
         </span>
       </.link>
-      <%!-- Future items (Mute #21) slot in above the divider; the destructive
-            Delete stays last, separated by .ed-menu__sep. --%>
       <div class="ed-menu" id={"convo-menu-#{@conversation.id}"} data-menu role="menu" hidden>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="toggle_mute"
+          phx-value-id={@conversation.id}
+        >
+          <.icon
+            name={if @conversation.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
+            class="size-4"
+          />
+          {if @conversation.muted, do: gettext("Unmute"), else: gettext("Mute")}
+        </button>
         <button
           type="button"
           class="ed-menu__item"

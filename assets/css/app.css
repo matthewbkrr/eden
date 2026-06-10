@@ -307,6 +307,10 @@
     color: var(--ed-on-primary);
     font: 600 0.6875rem/1 var(--ed-font);
   }
+  /* Muted chat: unread is still tracked but de-emphasized. */
+  .ed-badge--muted {
+    background: var(--ed-muted);
+  }
   .ed-pill {
     display: inline-flex;
     align-items: center;
@@ -646,6 +650,23 @@
   .ed-folder-tab--active {
     color: var(--ed-ink);
     background: var(--ed-surface-2);
+  }
+  /* Wrapper hosting the tab's context menu (right-click / long-press). */
+  .ed-folder-tab-wrap {
+    display: inline-flex;
+    flex: none;
+    -webkit-touch-callout: none;
+  }
+  @media (hover: none) {
+    .ed-folder-tab-wrap {
+      user-select: none;
+    }
+  }
+  .ed-folder-tab__muted,
+  .ed-convo__muted {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ed-muted);
   }
   .ed-folder-tab__badge {
     display: inline-flex;

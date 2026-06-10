@@ -88,7 +88,7 @@ defmodule Eden.Chat do
       %{
         conversation
         | unread_count: Map.get(unread, conversation.id, 0),
-          muted: MapSet.member?(muted, conversation.id)
+          muted: conversation.id in muted
       }
       |> apply_preview(previews[conversation.id])
     end)
@@ -96,24 +96,19 @@ defmodule Eden.Chat do
 
   # Conversations the user muted — directly (memberships.muted_at) or by muting
   # a folder the chat lives in. Muted-anywhere wins: it stops contributing to
-  # every badge, and the row renders de-emphasized.
-  defp muted_conversation_ids(_user, []), do: MapSet.new()
+  # every badge, and the row renders de-emphasized. Returns a plain id list
+  # (sidebar-sized; also sidesteps dialyzer's opaque-MapSet false positive).
+  defp muted_conversation_ids(_user, []), do: []
 
   defp muted_conversation_ids(user, ids) do
     direct =
       from m in Membership,
-        where:
-          m.user_id == ^user.id and m.conversation_id in ^ids and not is_nil(m.muted_at),
+        where: m.user_id == ^user.id and m.conversation_id in ^ids and not is_nil(m.muted_at),
         select: m.conversation_id
 
-    via_folder =
-      from fm in FolderMembership,
-        join: f in Folder,
-        on: f.id == fm.folder_id,
-        where: f.user_id == ^user.id and not is_nil(f.muted_at) and fm.conversation_id in ^ids,
-        select: fm.conversation_id
+    via_folder = muted_via_folder_query(user) |> where([fm], fm.conversation_id in ^ids)
 
-    MapSet.new(Repo.all(direct) ++ Repo.all(via_folder))
+    Enum.uniq(Repo.all(direct) ++ Repo.all(via_folder))
   end
 
   defp filter_by_folder(query, nil, _user_id), do: query
@@ -194,7 +189,7 @@ defmodule Eden.Chat do
       conversation = %{
         conversation
         | unread_count: Map.get(unread_counts(user, [id]), id, 0),
-          muted: MapSet.member?(muted_conversation_ids(user, [id]), id)
+          muted: id in muted_conversation_ids(user, [id])
       }
 
       {:ok, apply_preview(conversation, last_message_previews(user, [id])[id])}
@@ -310,13 +305,6 @@ defmodule Eden.Chat do
   # living in ANY muted folder — a muted chat stops contributing to every badge
   # (a muted folder's own badge therefore naturally drops to zero).
   defp folder_unread_counts(user) do
-    muted_via_folder =
-      from fm2 in FolderMembership,
-        join: f2 in Folder,
-        on: f2.id == fm2.folder_id,
-        where: f2.user_id == ^user.id and not is_nil(f2.muted_at),
-        select: fm2.conversation_id
-
     from(f in Folder,
       join: fm in FolderMembership,
       on: fm.folder_id == f.id,
@@ -328,15 +316,24 @@ defmodule Eden.Chat do
       on: msg.conversation_id == fm.conversation_id,
       left_join: d in MessageDeletion,
       on: d.message_id == msg.id and d.user_id == ^user.id,
-      where:
-        f.user_id == ^user.id and msg.sender_id != ^user.id and is_nil(msg.deleted_at) and
-          is_nil(d.id) and (is_nil(mem.last_read_at) or msg.inserted_at > mem.last_read_at) and
-          fm.conversation_id not in subquery(muted_via_folder),
+      where: f.user_id == ^user.id,
+      where: fm.conversation_id not in subquery(muted_via_folder_query(user)),
+      where: msg.sender_id != ^user.id and is_nil(msg.deleted_at) and is_nil(d.id),
+      where: is_nil(mem.last_read_at) or msg.inserted_at > mem.last_read_at,
       group_by: f.id,
       select: {f.id, count(msg.id)}
     )
     |> Repo.all()
     |> Map.new()
+  end
+
+  # Conversations sitting in any of the user's muted folders.
+  defp muted_via_folder_query(user) do
+    from fm in FolderMembership,
+      join: f in Folder,
+      on: f.id == fm.folder_id,
+      where: f.user_id == ^user.id and not is_nil(f.muted_at),
+      select: fm.conversation_id
   end
 
   # A generous sanity cap — Telegram allows about this many. Keeps a runaway

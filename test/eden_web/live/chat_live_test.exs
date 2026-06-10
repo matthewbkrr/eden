@@ -467,6 +467,43 @@ defmodule EdenWeb.ChatLiveTest do
       assert elem(work_at, 0) < elem(all_at, 0)
     end
 
+    test "mute toggles from the chat menu and de-emphasizes the badge", ctx do
+      scope = Scope.for_user(ctx.alice)
+
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hi"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app")
+      assert html =~ ">Mute<" or html =~ "Mute"
+      refute html =~ "ed-badge--muted"
+
+      render_click(view, "toggle_mute", %{"id" => to_string(ctx.conversation.id)})
+      html = render(view)
+      assert html =~ "Unmute"
+      assert html =~ "ed-badge--muted"
+      assert [%{muted: true}] = Chat.list_conversations(scope)
+    end
+
+    test "folder mute toggles from the tab menu and suppresses its badge", ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, folder} = Chat.create_folder(scope, %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope, ctx.conversation.id, folder.id)
+
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hi"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app")
+      assert html =~ "Mute folder"
+      assert html =~ "ed-folder-tab__badge"
+
+      render_click(view, "toggle_folder_mute", %{"id" => to_string(folder.id)})
+      html = render(view)
+      assert html =~ "Unmute folder"
+      refute html =~ "ed-folder-tab__badge"
+    end
+
     test "move-to-folder modal toggles membership", ctx do
       scope = Scope.for_user(ctx.alice)
       {:ok, folder} = Chat.create_folder(scope, %{"name" => "Work"})

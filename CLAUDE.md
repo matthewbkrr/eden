@@ -76,7 +76,12 @@ design — built incrementally as features land.)
     `user_id`, so a foreign id yields nothing); `list_folders/1` carries a
     per-folder unread badge. Folder changes broadcast `:folders_changed` on the
     user topic. Left/hidden chats (`left_at`) drop out of folder views; a GC'd
-    conversation cascades its folder rows.
+    conversation cascades its folder rows. **Mute is per-user and badge-only**
+    (no push/sound exists): `memberships.muted_at` mutes a chat,
+    `chat_folders.muted_at` mutes a folder; a chat muted directly or via ANY
+    muted folder stops counting toward every folder badge (its own unread stays
+    tracked but renders de-emphasized), and un-muting a folder never un-mutes
+    directly-muted chats.
   - **Profile visibility is authorized here, not in the web layer:**
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads

@@ -1183,7 +1183,9 @@ defmodule Eden.ChatTest do
 
       # The chat is effectively muted, and contributes to NO folder badge —
       # including the other, unmuted folder it also lives in.
-      muted_ids = Chat.list_conversations(scope(alice)) |> Enum.filter(& &1.muted) |> Enum.map(& &1.id)
+      muted_ids =
+        Chat.list_conversations(scope(alice)) |> Enum.filter(& &1.muted) |> Enum.map(& &1.id)
+
       assert muted_ids == [conv.id]
       assert Enum.all?(Chat.list_folders(scope(alice)), &(&1.unread_count == 0))
     end
