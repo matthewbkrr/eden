@@ -539,8 +539,14 @@
     display: grid;
   }
   .ed-lightbox img {
-    max-width: 100%;
-    max-height: 100%;
+    /* Clamp against the viewport, not the (content-sized) grid track, so a large
+       original can't inflate the track and overflow. dvh/dvw track mobile chrome;
+       the 3rem accounts for the overlay's 1.5rem padding on each side. */
+    max-width: calc(100dvw - 3rem);
+    max-height: calc(100dvh - 3rem);
+    width: auto;
+    height: auto;
+    object-fit: contain;
     border-radius: var(--ed-radius);
     box-shadow: 0 10px 40px oklch(0 0 0 / 0.5);
   }
