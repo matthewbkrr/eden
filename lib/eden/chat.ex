@@ -71,33 +71,50 @@ defmodule Eden.Chat do
       |> Repo.all()
 
     ids = Enum.map(conversations, & &1.id)
-    previews = last_message_previews(ids)
+    previews = last_message_previews(user, ids)
     unread = unread_counts(user, ids)
 
     Enum.map(conversations, fn conversation ->
-      preview = previews[conversation.id]
-
-      %{
-        conversation
-        | last_message_body: preview && preview.body,
-          last_message_kind: preview && preview.kind,
-          unread_count: Map.get(unread, conversation.id, 0)
-      }
+      %{conversation | unread_count: Map.get(unread, conversation.id, 0)}
+      |> apply_preview(previews[conversation.id])
     end)
   end
 
-  defp last_message_previews([]), do: %{}
+  # The conversation's preview is the latest message the user can still see — one
+  # they haven't "deleted for me" — so a hidden last message falls back to the one
+  # before it. A "deleted for both" tombstone is shown as such.
+  defp last_message_previews(_user, []), do: %{}
 
-  defp last_message_previews(ids) do
+  defp last_message_previews(user, ids) do
     from(m in Message,
       left_join: a in assoc(m, :attachment),
-      where: m.conversation_id in ^ids,
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: m.conversation_id in ^ids and is_nil(d.id),
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
-      select: {m.conversation_id, %{body: m.body, kind: a.kind}}
+      select:
+        {m.conversation_id, %{body: m.body, kind: a.kind, deleted: not is_nil(m.deleted_at)}}
     )
     |> Repo.all()
     |> Map.new()
+  end
+
+  defp apply_preview(conversation, nil),
+    do: %{
+      conversation
+      | last_message_body: nil,
+        last_message_kind: nil,
+        last_message_deleted: false
+    }
+
+  defp apply_preview(conversation, preview) do
+    %{
+      conversation
+      | last_message_body: preview.body,
+        last_message_kind: preview.kind,
+        last_message_deleted: preview.deleted
+    }
   end
 
   defp unread_counts(_user, []), do: %{}
@@ -134,15 +151,8 @@ defmodule Eden.Chat do
   @doc "Like get_conversation/2 but with the virtual unread_count / last_message_body filled in."
   def get_conversation_summary(%Scope{user: user} = scope, id) do
     with {:ok, conversation} <- get_conversation(scope, id) do
-      preview = last_message_previews([id])[id]
-
-      {:ok,
-       %{
-         conversation
-         | last_message_body: preview && preview.body,
-           last_message_kind: preview && preview.kind,
-           unread_count: Map.get(unread_counts(user, [id]), id, 0)
-       }}
+      conversation = %{conversation | unread_count: Map.get(unread_counts(user, [id]), id, 0)}
+      {:ok, apply_preview(conversation, last_message_previews(user, [id])[id])}
     end
   end
 

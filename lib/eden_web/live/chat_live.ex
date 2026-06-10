@@ -306,12 +306,17 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # Delete-for-me (on the user's own topic): drop the message from this session.
+  # Delete-for-me (on the user's own topic): drop the message from this session
+  # and refresh the sidebar preview (the hidden message may have been the last one).
   def handle_info({:message_hidden, conversation_id, message_id}, socket) do
-    if open?(socket, conversation_id) do
-      {:noreply, stream_delete_by_dom_id(socket, :messages, "messages-#{message_id}")}
-    else
-      {:noreply, socket}
+    socket =
+      if open?(socket, conversation_id),
+        do: stream_delete_by_dom_id(socket, :messages, "messages-#{message_id}"),
+        else: socket
+
+    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
+      {:ok, summary} -> {:noreply, stream_insert(socket, :conversations, summary)}
+      {:error, _} -> {:noreply, socket}
     end
   end
 
@@ -883,6 +888,8 @@ defmodule EdenWeb.ChatLive do
 
   # Sidebar preview line. An attachment shows "<emoji> <caption|kind>" so the row
   # is never blank (keeps item height + the time position consistent).
+  defp convo_preview(%{last_message_deleted: true}), do: gettext("Message deleted")
+
   defp convo_preview(%{last_message_kind: kind} = conversation)
        when kind in ~w(image video file) do
     {emoji, label} = attachment_label(kind)

@@ -840,6 +840,28 @@ defmodule Eden.ChatTest do
       [text_last] = Chat.list_conversations(scope(alice))
       assert is_nil(text_last.last_message_kind)
     end
+
+    test "the preview skips a message the user deleted for themselves", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _first} = Chat.create_message(scope(alice), conv.id, %{"body" => "first"})
+      {:ok, last} = Chat.create_message(scope(alice), conv.id, %{"body" => "last"})
+
+      :ok = Chat.delete_message_for_me(scope(bob), last.id)
+
+      # Bob's preview falls back to the message before the one he hid.
+      assert [%{last_message_body: "first"}] = Chat.list_conversations(scope(bob))
+      # Alice still sees the latest.
+      assert [%{last_message_body: "last"}] = Chat.list_conversations(scope(alice))
+    end
+
+    test "the preview marks a deleted-for-both last message", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "bye"})
+      :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+
+      assert [%{last_message_deleted: true, last_message_body: ""}] =
+               Chat.list_conversations(scope(bob))
+    end
   end
 
   describe "mark_read/2" do
