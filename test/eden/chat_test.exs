@@ -566,6 +566,32 @@ defmodule Eden.ChatTest do
       dave = user_fixture(%{username: "davedc"})
       assert {:error, :not_found} = Chat.delete_conversation(scope(dave), conv.id)
     end
+
+    test "leaving a group is permanent — new activity does not bring it back", %{
+      alice: alice,
+      bob: bob
+    } do
+      carol = user_fixture(%{username: "carolleave"})
+      {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
+
+      :ok = Chat.delete_conversation(scope(alice), group.id)
+      assert [] == Chat.list_conversations(scope(alice))
+
+      {:ok, _} = Chat.create_message(scope(bob), group.id, %{"body" => "still on?"})
+      assert [] == Chat.list_conversations(scope(alice))
+      assert [%{id: id}] = Chat.list_conversations(scope(bob))
+      assert id == group.id
+    end
+
+    test "a member who left is not pinged about new activity", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carolping"})
+      {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
+      :ok = Chat.delete_conversation(scope(alice), group.id)
+
+      Chat.subscribe_user(scope(alice))
+      {:ok, _} = Chat.create_message(scope(bob), group.id, %{"body" => "yo"})
+      refute_receive {:conversation_activity, _}
+    end
   end
 
   describe "create_attachment_message/3" do

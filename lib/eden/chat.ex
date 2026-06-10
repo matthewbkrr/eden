@@ -614,12 +614,16 @@ defmodule Eden.Chat do
   defp broadcast(conversation_id, message),
     do: Phoenix.PubSub.broadcast(@pubsub, topic(conversation_id), message)
 
-  # Tell every member's chat process that this conversation changed (reorder /
-  # unread / preview in the sidebar), without leaking message contents.
+  # Tell every active member's chat process that this conversation changed
+  # (reorder / unread / preview in the sidebar), without leaking message contents.
+  # Members who left are skipped — a left group member must not be pulled back in
+  # (a 1:1 leaver has already had `left_at` cleared by resurface_direct/1).
   defp notify_members(conversation_id) do
     member_ids =
       Repo.all(
-        from m in Membership, where: m.conversation_id == ^conversation_id, select: m.user_id
+        from m in Membership,
+          where: m.conversation_id == ^conversation_id and is_nil(m.left_at),
+          select: m.user_id
       )
 
     for user_id <- member_ids do
@@ -714,18 +718,24 @@ defmodule Eden.Chat do
   # Touch the conversation, preload, and fan out the new message.
   defp deliver(conversation_id, message) do
     touch_conversation(conversation_id, message.inserted_at)
-    # New activity un-hides the conversation for anyone who had deleted it.
-    Repo.update_all(
-      from(m in Membership,
-        where: m.conversation_id == ^conversation_id and not is_nil(m.left_at)
-      ),
-      set: [left_at: nil]
-    )
-
+    resurface_direct(conversation_id)
     message = Repo.preload(message, [:sender, :attachment])
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
     message
+  end
+
+  # New activity un-hides a deleted 1:1 (messaging someone back re-opens the
+  # thread). Leaving a *group* is permanent, so group memberships keep `left_at`.
+  defp resurface_direct(conversation_id) do
+    Repo.update_all(
+      from(m in Membership,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: m.conversation_id == ^conversation_id and not is_nil(m.left_at) and c.is_group == false
+      ),
+      set: [left_at: nil]
+    )
   end
 
   defp insert_attachment_message(user, conversation_id, message_attrs, attachment_attrs) do
