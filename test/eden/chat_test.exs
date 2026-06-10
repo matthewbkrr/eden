@@ -488,6 +488,17 @@ defmodule Eden.ChatTest do
 
       assert {:error, :not_found} = Chat.forward_message(scope(alice), original.id, other.id)
     end
+
+    test "forwarding a forward keeps the original as the attribution root", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+      {:ok, original} = Chat.create_message(scope(alice), src.id, %{"body" => "root"})
+      {:ok, first} = Chat.forward_message(scope(alice), original.id, tgt.id)
+      assert first.forwarded_from_id == original.id
+
+      {:ok, second} = Chat.forward_message(scope(alice), first.id, src.id)
+      # Attribution points at the original author, not the intermediate forward.
+      assert second.forwarded_from_id == original.id
+    end
   end
 
   describe "create_attachment_message/3" do
@@ -861,6 +872,20 @@ defmodule Eden.ChatTest do
 
       assert [%{last_message_deleted: true, last_message_body: ""}] =
                Chat.list_conversations(scope(bob))
+    end
+
+    test "unread skips tombstones and self-hidden messages", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _one} = Chat.create_message(scope(alice), conv.id, %{"body" => "1"})
+      {:ok, two} = Chat.create_message(scope(alice), conv.id, %{"body" => "2"})
+      {:ok, three} = Chat.create_message(scope(alice), conv.id, %{"body" => "3"})
+
+      assert [%{unread_count: 3}] = Chat.list_conversations(scope(bob))
+
+      :ok = Chat.delete_message_for_both(scope(alice), two.id)
+      :ok = Chat.delete_message_for_me(scope(bob), three.id)
+
+      assert [%{unread_count: 1}] = Chat.list_conversations(scope(bob))
     end
   end
 

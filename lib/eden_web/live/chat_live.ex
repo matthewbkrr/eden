@@ -332,15 +332,16 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # The other participant read up to read_at — refresh delivery ticks.
+  # The other participant read up to read_at — refresh delivery ticks. Re-stream
+  # without reset so existing rows are morphed in place (keeps an open action menu
+  # and any loaded older messages) instead of being torn down and recreated.
   def handle_info({:read, reader_id, read_at}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
 
     if conversation && reader_id != scope.user.id do
       {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
 
-      {:noreply,
-       socket |> assign(other_read_at: read_at) |> stream(:messages, messages, reset: true)}
+      {:noreply, socket |> assign(other_read_at: read_at) |> stream(:messages, messages)}
     else
       {:noreply, socket}
     end
@@ -687,8 +688,25 @@ defmodule EdenWeb.ChatLive do
             this.menu.style.left = `${left}px`
           },
           copy(text, what) {
-            if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => this.pushEvent("copied", { what }))
+            const done = () => this.pushEvent("copied", { what })
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done).catch(() => this.legacyCopy(text, done))
+            } else {
+              this.legacyCopy(text, done)
+            }
             this.close()
+          },
+          // Fallback for non-secure contexts (HTTP, old WebViews) where the async
+          // Clipboard API is unavailable.
+          legacyCopy(text, done) {
+            const ta = document.createElement("textarea")
+            ta.value = text
+            ta.style.position = "fixed"
+            ta.style.opacity = "0"
+            document.body.appendChild(ta)
+            ta.focus()
+            ta.select()
+            try { if (document.execCommand("copy")) done() } finally { ta.remove() }
           }
         }
       </script>
@@ -913,10 +931,11 @@ defmodule EdenWeb.ChatLive do
 
   defp message_bubble(%{message: %{deleted_at: deleted}} = assigns) when not is_nil(deleted) do
     ~H"""
-    <div id={@id} class={["flex", @mine && "justify-end"]}>
+    <div id={@id} class={["ed-msg flex", @mine && "justify-end"]}>
       <div class="ed-bubble ed-bubble--tombstone">
         <.icon name="hero-no-symbol-micro" class="size-3.5" />
         <span>{gettext("Message deleted")}</span>
+        <.message_menu message={@message} conversation_id={@conversation_id} mine={@mine} deleted />
       </div>
     </div>
     """
@@ -962,9 +981,11 @@ defmodule EdenWeb.ChatLive do
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
+  attr :deleted, :boolean, default: false
 
   # Per-message action menu (⋯). Copy actions are handled client-side by the hook;
-  # forward/delete dispatch to the LiveView.
+  # forward/delete dispatch to the LiveView. `phx-update="ignore"` keeps the menu's
+  # open/closed state across re-renders of the bubble (read ticks, thumbnails).
   defp message_menu(assigns) do
     ~H"""
     <div class="ed-msg-actions" id={"actions-#{@message.id}"} phx-hook=".MsgMenu">
@@ -977,9 +998,9 @@ defmodule EdenWeb.ChatLive do
       >
         <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
       </button>
-      <div class="ed-menu" data-menu role="menu" hidden>
+      <div class="ed-menu" id={"menu-#{@message.id}"} phx-update="ignore" data-menu role="menu" hidden>
         <button
-          :if={@message.body != ""}
+          :if={not @deleted and @message.body != ""}
           type="button"
           class="ed-menu__item"
           role="menuitem"
@@ -989,6 +1010,7 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-clipboard-micro" class="size-4" /> {gettext("Copy text")}
         </button>
         <button
+          :if={not @deleted}
           type="button"
           class="ed-menu__item"
           role="menuitem"
@@ -998,6 +1020,7 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
         </button>
         <button
+          :if={not @deleted}
           type="button"
           class="ed-menu__item"
           role="menuitem"
@@ -1016,7 +1039,7 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-eye-slash-micro" class="size-4" /> {gettext("Delete for me")}
         </button>
         <button
-          :if={@mine}
+          :if={@mine and not @deleted}
           type="button"
           class="ed-menu__item ed-menu__item--danger"
           role="menuitem"

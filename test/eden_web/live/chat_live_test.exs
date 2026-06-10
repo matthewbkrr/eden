@@ -349,5 +349,19 @@ defmodule EdenWeb.ChatLiveTest do
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}/m/#{msg.id}")
       assert html =~ "anchor"
     end
+
+    test "a tombstone offers only delete-for-me", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "x"})
+
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), msg.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert has_element?(view, ~s(#messages-#{msg.id} [phx-click="delete_for_me"]))
+      refute has_element?(view, ~s(#messages-#{msg.id} [phx-click="delete_for_both"]))
+      refute has_element?(view, ~s(#messages-#{msg.id} [phx-click="forward_prompt"]))
+    end
   end
 end

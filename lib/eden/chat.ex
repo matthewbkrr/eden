@@ -123,8 +123,12 @@ defmodule Eden.Chat do
     from(m in Message,
       join: mem in Membership,
       on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      # Don't count tombstones or messages this user deleted for themselves.
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
       where:
         m.conversation_id in ^ids and m.sender_id != ^user.id and
+          is_nil(m.deleted_at) and is_nil(d.id) and
           (is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at),
       group_by: m.conversation_id,
       select: {m.conversation_id, count(m.id)}
@@ -291,11 +295,11 @@ defmodule Eden.Chat do
   so they hide it too. `{:error, :not_found}` if not a member / unknown id.
   """
   def delete_message_for_me(%Scope{user: user} = scope, message_id) do
-    with {:ok, message} <- fetch_message(scope, message_id) do
-      %MessageDeletion{}
-      |> Ecto.Changeset.change(message_id: message.id, user_id: user.id)
-      |> Repo.insert(on_conflict: :nothing, conflict_target: [:message_id, :user_id])
-
+    with {:ok, message} <- fetch_message(scope, message_id),
+         {:ok, _deletion} <-
+           %MessageDeletion{}
+           |> Ecto.Changeset.change(message_id: message.id, user_id: user.id)
+           |> Repo.insert(on_conflict: :nothing, conflict_target: [:message_id, :user_id]) do
       Phoenix.PubSub.broadcast(
         @pubsub,
         user_topic(user.id),
@@ -316,10 +320,14 @@ defmodule Eden.Chat do
   def delete_message_for_both(%Scope{user: user} = scope, message_id) do
     with {:ok, message} <- fetch_message(scope, message_id),
          :ok <- ensure_sender(message, user.id),
-         {:ok, {tombstone, orphan_keys}} <- soft_delete(message) do
+         {:ok, {tombstone, candidate_keys}} <- soft_delete(message) do
       # Storage.delete is an irreversible side effect, so it runs only after the
-      # tombstone has committed — never inside the transaction.
-      Enum.each(orphan_keys, &Storage.delete/1)
+      # tombstone commits. Re-check references here (the attachment row is gone):
+      # this closes the window where a concurrent forward grabbed the same blob.
+      candidate_keys
+      |> Enum.reject(&blob_referenced?/1)
+      |> Enum.each(&Storage.delete/1)
+
       broadcast(message.conversation_id, {:message_deleted, tombstone})
       notify_members(message.conversation_id)
       :ok
@@ -419,11 +427,18 @@ defmodule Eden.Chat do
     )
   end
 
+  # Whether any attachment still references the blob (used post-commit, when the
+  # deleting attachment's row is already gone).
+  defp blob_referenced?(key) do
+    Repo.exists?(from a in Attachment, where: a.storage_key == ^key or a.thumbnail_key == ^key)
+  end
+
   defp insert_forward(user, target_conversation_id, source) do
+    # Forwarding a forward keeps the original author as the attribution root.
     %Message{
       conversation_id: target_conversation_id,
       sender_id: user.id,
-      forwarded_from_id: source.id
+      forwarded_from_id: source.forwarded_from_id || source.id
     }
     |> Message.photo_changeset(%{"body" => source.body || ""})
     |> Repo.insert()

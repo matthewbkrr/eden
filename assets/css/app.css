@@ -465,7 +465,8 @@
     height: 1.5rem;
     border-radius: var(--ed-radius-full);
     color: inherit;
-    background: color-mix(in oklch, currentColor 12%, transparent);
+    /* Slightly stronger tint so it stays legible if it sits over text. */
+    background: color-mix(in oklch, currentColor 22%, transparent);
     opacity: 0;
     transition: opacity 120ms ease;
   }
