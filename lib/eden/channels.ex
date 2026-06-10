@@ -41,14 +41,7 @@ defmodule Eden.Channels do
     if created >= @max_channels do
       {:error, :limit}
     else
-      Repo.transact(fn ->
-        with {:ok, channel} <-
-               %Channel{creator_id: user.id} |> Channel.changeset(attrs) |> Repo.insert(),
-             {:ok, _membership} <- insert_membership(channel.id, user.id, "owner") do
-          {:ok, channel}
-        end
-      end)
-      |> case do
+      case insert_channel_with_owner(user, attrs) do
         {:ok, channel} ->
           broadcast_user(user.id, :channels_changed)
           {:ok, %{channel | role: "owner"}}
@@ -57,6 +50,16 @@ defmodule Eden.Channels do
           error
       end
     end
+  end
+
+  defp insert_channel_with_owner(user, attrs) do
+    Repo.transact(fn ->
+      with {:ok, channel} <-
+             %Channel{creator_id: user.id} |> Channel.changeset(attrs) |> Repo.insert(),
+           {:ok, _membership} <- insert_membership(channel.id, user.id, "owner") do
+        {:ok, channel}
+      end
+    end)
   end
 
   @doc "Channels the scoped user belongs to (creation order), each with the virtual `role` filled."
@@ -128,7 +131,7 @@ defmodule Eden.Channels do
 
   ## Roles
 
-  @doc "The scoped user's role in the channel (`\"owner\" | \"admin\" | \"member\"`), or `nil`."
+  @doc "The scoped user's role in the channel (`owner | admin | member`), or `nil`."
   def member_role(%Scope{user: user}, channel_id) do
     case Ids.normalize(channel_id) do
       id when is_integer(id) ->
