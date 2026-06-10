@@ -64,7 +64,7 @@ defmodule Eden.Chat do
     conversations =
       Conversation
       |> join(:inner, [c], m in Membership,
-        on: m.conversation_id == c.id and m.user_id == ^user.id
+        on: m.conversation_id == c.id and m.user_id == ^user.id and is_nil(m.left_at)
       )
       |> order_by([c], desc_nulls_last: c.last_message_at, desc: c.id)
       |> preload(memberships: :user)
@@ -162,6 +162,55 @@ defmodule Eden.Chat do
       not group? and length(other_ids) == 1 -> find_or_create_direct(creator, hd(other_ids))
       true -> insert_conversation(creator, other_ids, %{is_group: true, title: opts[:title]})
     end
+  end
+
+  @doc """
+  "Deletes" a conversation for the scoped user: hides it from their list
+  (`left_at`). It re-surfaces on new activity. When the last member has left, the
+  conversation is garbage-collected — messages and attachment blobs included
+  (blobs shared with a forward elsewhere are spared). Broadcasts to the user's
+  own sessions. `{:error, :not_found}` if not a member / unknown id.
+  """
+  def delete_conversation(%Scope{user: user} = scope, conversation_id) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- member?(scope, id) do
+      Repo.update_all(
+        from(m in Membership, where: m.conversation_id == ^id and m.user_id == ^user.id),
+        set: [left_at: now()]
+      )
+
+      if all_members_left?(id), do: gc_conversation(id)
+      Phoenix.PubSub.broadcast(@pubsub, user_topic(user.id), {:conversation_left, id})
+      :ok
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp all_members_left?(conversation_id) do
+    not Repo.exists?(
+      from m in Membership, where: m.conversation_id == ^conversation_id and is_nil(m.left_at)
+    )
+  end
+
+  # Hard-delete an abandoned conversation. The DB cascades messages, memberships,
+  # attachments and message_deletions; we collect blob keys first and delete the
+  # unreferenced ones after (a forwarded copy elsewhere may share a blob).
+  defp gc_conversation(conversation_id) do
+    keys =
+      Repo.all(
+        from a in Attachment,
+          join: m in Message,
+          on: m.id == a.message_id,
+          where: m.conversation_id == ^conversation_id,
+          select: [a.storage_key, a.thumbnail_key]
+      )
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    Repo.delete_all(from c in Conversation, where: c.id == ^conversation_id)
+    keys |> Enum.reject(&blob_referenced?/1) |> Enum.each(&Storage.delete/1)
   end
 
   ## Messages
@@ -665,6 +714,14 @@ defmodule Eden.Chat do
   # Touch the conversation, preload, and fan out the new message.
   defp deliver(conversation_id, message) do
     touch_conversation(conversation_id, message.inserted_at)
+    # New activity un-hides the conversation for anyone who had deleted it.
+    Repo.update_all(
+      from(m in Membership,
+        where: m.conversation_id == ^conversation_id and not is_nil(m.left_at)
+      ),
+      set: [left_at: nil]
+    )
+
     message = Repo.preload(message, [:sender, :attachment])
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)

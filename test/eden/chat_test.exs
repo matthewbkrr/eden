@@ -499,6 +499,75 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "delete_conversation/2" do
+    test "hides the conversation for the actor only", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+
+      assert :ok = Chat.delete_conversation(scope(alice), conv.id)
+      assert [] == Chat.list_conversations(scope(alice))
+      assert [%{id: id}] = Chat.list_conversations(scope(bob))
+      assert id == conv.id
+    end
+
+    test "re-surfaces on new activity", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      assert [] == Chat.list_conversations(scope(alice))
+
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "you there?"})
+      assert [%{id: id}] = Chat.list_conversations(scope(alice))
+      assert id == conv.id
+    end
+
+    test "broadcasts to the actor's own sessions", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      Chat.subscribe_user(scope(alice))
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      assert_receive {:conversation_left, id}
+      assert id == conv.id
+    end
+
+    test "garbage-collects the conversation when the last member leaves", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
+      key = msg.attachment.storage_key
+      assert Eden.Storage.exists?(key)
+
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      refute is_nil(Repo.get(Conversation, conv.id))
+
+      :ok = Chat.delete_conversation(scope(bob), conv.id)
+      assert is_nil(Repo.get(Conversation, conv.id))
+      assert Repo.aggregate(Message, :count) == 0
+      refute Eden.Storage.exists?(key)
+    end
+
+    test "GC spares a blob a forward elsewhere still references", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carolgc"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, other} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, msg} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
+      key = msg.attachment.storage_key
+      {:ok, _fwd} = Chat.forward_message(scope(alice), msg.id, other.id)
+
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      :ok = Chat.delete_conversation(scope(bob), conv.id)
+
+      assert is_nil(Repo.get(Conversation, conv.id))
+      assert Eden.Storage.exists?(key)
+    end
+
+    test "a non-member gets :not_found", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      dave = user_fixture(%{username: "davedc"})
+      assert {:error, :not_found} = Chat.delete_conversation(scope(dave), conv.id)
+    end
+  end
+
   describe "create_attachment_message/3" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
