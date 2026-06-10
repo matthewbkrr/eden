@@ -10,6 +10,8 @@ defmodule Eden.Chat.Membership do
   schema "memberships" do
     field :role, :string, default: "member"
     field :last_read_at, :utc_datetime
+    # Set when the user "deletes" (hides) the conversation; cleared on new activity.
+    field :left_at, :utc_datetime
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :user, Eden.Accounts.User

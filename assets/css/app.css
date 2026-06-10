@@ -449,15 +449,21 @@
     text-underline-offset: 2px;
   }
 
-  /* Message context menu (right-click / long-press), opened by the .MsgMenu hook. */
-  .ed-bubble {
-    /* Long-press shouldn't trigger the OS text-selection callout on the bubble. */
+  /* Context menu (right-click / long-press), opened by the .ContextMenu hook on
+     message bubbles and sidebar chats. */
+  .ed-bubble,
+  .ed-convo-wrap,
+  .ed-convo {
+    /* Long-press shouldn't trigger the OS text-selection callout on the host.
+       Also set on the inner <a>.ed-convo: iOS shows the link callout on the
+       anchor itself, where inheritance isn't dependable. */
     -webkit-touch-callout: none;
   }
-  /* On touch, long-press opens the menu instead of selecting text; the menu has
-     "Copy text". Desktop keeps normal selection. */
+  /* On touch, long-press opens the menu instead of selecting text; the message
+     menu has "Copy text". Desktop keeps normal selection. */
   @media (hover: none) {
-    .ed-bubble {
+    .ed-bubble,
+    .ed-convo-wrap {
       user-select: none;
     }
   }
@@ -470,6 +476,8 @@
     background: var(--ed-surface);
     border: 1px solid var(--ed-border);
     box-shadow: 0 12px 32px oklch(0 0 0 / 0.32);
+    /* Anchored at the pointer's top-left, so it should grow from that corner. */
+    transform-origin: top left;
     animation: ed-menu-in 120ms ease-out;
   }
   @keyframes ed-menu-in {
@@ -497,11 +505,19 @@
     color: var(--ed-ink);
     text-align: left;
   }
-  .ed-menu__item:hover {
+  .ed-menu__item:hover,
+  .ed-menu__item:focus-visible {
     background: var(--ed-surface-2);
+    outline: none;
   }
   .ed-menu__item--danger {
     color: var(--ed-danger);
+  }
+  /* Divider between menu groups (e.g. actions vs. the destructive Delete). */
+  .ed-menu__sep {
+    height: 1px;
+    margin: 0.25rem 0.125rem;
+    background: var(--ed-border);
   }
 
   /* Permalink target: briefly ring the message scrolled to. */
@@ -577,6 +593,22 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* Sidebar empty state — revealed by CSS only when the stream has no rows. */
+  .ed-convo-empty {
+    display: none;
+  }
+  #conversations:not(:has(.ed-convo-wrap)) + .ed-convo-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--ed-ink);
   }
 
   /* Typing indicator ---------------------------------------------------- */

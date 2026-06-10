@@ -364,4 +364,47 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ "anchor"
     end
   end
+
+  describe "delete chat" do
+    setup [:setup_conversation]
+
+    test "the sidebar offers a delete-chat action", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app")
+      assert html =~ "Delete chat"
+    end
+
+    test "deleting drops the chat from the sidebar and leaves the open thread", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert has_element?(view, "#conversations-#{ctx.conversation.id}")
+
+      render_click(view, "delete_chat", %{"id" => to_string(ctx.conversation.id)})
+
+      refute has_element?(view, "#conversations-#{ctx.conversation.id}")
+      assert_patch(view, ~p"/app")
+      refute has_element?(view, "#composer")
+    end
+
+    test "the chat stays for the other member", ctx do
+      :ok = Chat.delete_conversation(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, _view, html} = live(conn, ~p"/app")
+      assert html =~ "Alice"
+    end
+
+    test "a new message re-surfaces a deleted 1:1", ctx do
+      :ok = Chat.delete_conversation(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      refute has_element?(view, "#conversations-#{ctx.conversation.id}")
+
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "back"})
+
+      assert has_element?(view, "#conversations-#{ctx.conversation.id}")
+    end
+  end
 end

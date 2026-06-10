@@ -37,13 +37,24 @@ design — built incrementally as features land.)
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.
+    **Delete chat** (`delete_conversation/2`) is per-user: it sets the member's
+    `left_at` to hide the thread from their list (`list_conversations/1` filters
+    `left_at`). For a **1:1**, new activity clears `left_at` so the chat
+    re-surfaces (messaging someone back re-opens it); **leaving a group is
+    permanent** (`resurface_direct/1` only un-hides non-group threads, and
+    `notify_members/1` skips members who left). The mark-left + last-member check
+    + GC run in one transaction; when the last member has left the conversation is
+    **garbage-collected** — the DB cascades messages/memberships/attachments and
+    the orphaned blobs are deleted via the shared `delete_unreferenced_blobs/1`
+    (blobs a forward elsewhere still references are spared).
   - `Membership` — join between a `Conversation` and a user (role, joined_at,
-    last_read, etc.). A conversation has many memberships.
+    last_read, `left_at` for per-user chat deletion, etc.). A conversation has
+    many memberships.
   - `Message` — belongs to a conversation and a sender; carries text and/or one
     `Attachment` (referenced by storage key, see Storage). Lifecycle: **delete for
     me** hides it for one user (`message_deletions` join, filtered out of
     `list_messages/3`); **delete for both** (sender only) soft-deletes via
-    `deleted_at` + a "Message deleted" tombstone and cleans up blobs; **forward**
+    `deleted_at`, removing the message for everyone, and cleans up blobs; **forward**
     copies it into another conversation (re-referencing the same blob,
     `forwarded_from_id` for attribution). A `/app/c/:id/m/:message_id` permalink
     deep-links to a message.
