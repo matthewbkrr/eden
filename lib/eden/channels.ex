@@ -77,7 +77,7 @@ defmodule Eden.Channels do
   @doc "Fetches a channel the scoped user belongs to (virtual `role` filled), or `{:error, :not_found}`."
   def get_channel(%Scope{user: user}, channel_id) do
     with id when is_integer(id) <- Ids.normalize(channel_id),
-         {channel, role} when not is_nil(channel) <-
+         {channel, role} <-
            Repo.one(
              from c in Channel,
                join: m in Membership,
@@ -98,19 +98,31 @@ defmodule Eden.Channels do
   """
   def update_channel(%Scope{} = scope, channel_id, attrs) do
     with {:ok, channel} <- get_channel(scope, channel_id),
-         :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      case channel |> Channel.changeset(attrs) |> Repo.update() do
-        {:ok, updated} ->
-          updated = %{updated | role: channel.role}
-          broadcast_channel(updated.id, {:channel_renamed, updated})
-          notify_members(updated.id, :channels_changed)
-          {:ok, updated}
-
-        error ->
-          error
-      end
+         :ok <- ensure_role(channel.role, ~w(owner admin)),
+         {:ok, updated} <- apply_update(channel, attrs) do
+      updated = %{updated | role: channel.role}
+      broadcast_channel(updated.id, {:channel_renamed, updated})
+      notify_members(updated.id, :channels_changed)
+      {:ok, updated}
     end
   end
+
+  # stale_error_field: a channel deleted between the read and the write becomes
+  # {:error, :not_found} instead of an Ecto.StaleEntryError crash (same class as
+  # the folder/mute toggle races fixed in #23/#24 reviews).
+  defp apply_update(channel, attrs) do
+    channel
+    |> Channel.changeset(attrs)
+    |> Repo.update(stale_error_field: :id)
+    |> normalize_stale()
+  end
+
+  defp normalize_stale({:error, %Ecto.Changeset{errors: errors} = changeset}) do
+    # :id is never cast, so an error there can only be the stale marker.
+    if Keyword.has_key?(errors, :id), do: {:error, :not_found}, else: {:error, changeset}
+  end
+
+  defp normalize_stale(result), do: result
 
   @doc """
   Deletes a channel. Owner only. Member rails refresh via `:channels_changed`;
@@ -121,11 +133,18 @@ defmodule Eden.Channels do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner)) do
       member_ids = member_ids(channel.id)
-      {:ok, _} = Repo.delete(channel)
 
-      broadcast_channel(channel.id, {:channel_deleted, channel.id})
-      Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
-      :ok
+      # stale_error_field: an already-deleted channel (e.g. a concurrent owner
+      # session) is :not_found, not a StaleEntryError crash.
+      case Repo.delete(channel, stale_error_field: :id) do
+        {:ok, _} ->
+          broadcast_channel(channel.id, {:channel_deleted, channel.id})
+          Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
+          :ok
+
+        {:error, _stale} ->
+          {:error, :not_found}
+      end
     end
   end
 

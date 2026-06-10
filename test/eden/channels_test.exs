@@ -98,13 +98,25 @@ defmodule Eden.ChannelsTest do
       assert updated.role == "owner"
     end
 
-    test "admin may update; member may not", %{alice: alice, bob: bob, channel: channel} do
+    test "admin may update; member may not", %{bob: bob, channel: channel} do
       assert {:error, :forbidden} =
                Channels.update_channel(scope(bob), channel.id, %{"name" => "Hijack"})
 
       promote(channel.id, bob.id, "admin")
       assert {:ok, _} = Channels.update_channel(scope(bob), channel.id, %{"name" => "Better"})
-      _ = alice
+    end
+
+    test "update validates like create (blank / too-long name)", %{alice: alice, channel: channel} do
+      assert {:error, %Ecto.Changeset{}} =
+               Channels.update_channel(scope(alice), channel.id, %{"name" => "   "})
+
+      too_long = String.duplicate("x", Channel.max_name() + 1)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Channels.update_channel(scope(alice), channel.id, %{"name" => too_long})
+
+      # The saved name is untouched.
+      assert {:ok, %{name: "Team"}} = Channels.get_channel(scope(alice), channel.id)
     end
 
     test "non-member gets :not_found", %{channel: channel} do
