@@ -594,6 +594,22 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Sidebar empty state — revealed by CSS only when the stream has no rows. */
+  .ed-convo-empty {
+    display: none;
+  }
+  #conversations:not(:has(.ed-convo-wrap)) + .ed-convo-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--ed-ink);
+  }
 
   /* Typing indicator ---------------------------------------------------- */
   .ed-typing { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.625rem 0.75rem; }

@@ -456,15 +456,28 @@ defmodule EdenWeb.ChatLive do
           </div>
         </header>
 
-        <div class="flex-1 overflow-y-auto p-2 space-y-0.5" id="conversations" phx-update="stream">
-          <.conversation_item
-            :for={{dom_id, conversation} <- @streams.conversations}
-            id={dom_id}
-            conversation={conversation}
-            user={@current_scope.user}
-            online_ids={@online_ids}
-            active={@selected && @selected.id == conversation.id}
-          />
+        <div class="flex-1 overflow-y-auto p-2 relative">
+          <div id="conversations" phx-update="stream" class="space-y-0.5">
+            <.conversation_item
+              :for={{dom_id, conversation} <- @streams.conversations}
+              id={dom_id}
+              conversation={conversation}
+              user={@current_scope.user}
+              online_ids={@online_ids}
+              active={@selected && @selected.id == conversation.id}
+            />
+          </div>
+          <%!-- Shown via CSS only when the stream rendered no rows (e.g. you
+                deleted your last chat) — no server round-trip. --%>
+          <div class="ed-convo-empty">
+            <span style="color: var(--ed-muted);">
+              <.icon name="hero-chat-bubble-left-right" class="size-7" />
+            </span>
+            <p style="font-weight:600;">{gettext("No chats yet")}</p>
+            <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
+              <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
+            </button>
+          </div>
         </div>
       </aside>
 
