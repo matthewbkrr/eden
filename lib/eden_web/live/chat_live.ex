@@ -237,14 +237,23 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("search", %{"q" => query}, socket) do
-    if String.trim(query) == "" do
-      {:noreply, assign(socket, search: "", search_results: nil)}
-    else
-      {:noreply,
-       assign(socket,
-         search: query,
-         search_results: Chat.search(socket.assigns.current_scope, query)
-       )}
+    trimmed = String.trim(query)
+
+    cond do
+      trimmed == "" ->
+        {:noreply, assign(socket, search: "", search_results: nil)}
+
+      # Too short to search: keep the panel open with a hint (nil results),
+      # not a false "no results".
+      String.length(trimmed) < Chat.search_min_chars() ->
+        {:noreply, assign(socket, search: query, search_results: nil)}
+
+      true ->
+        {:noreply,
+         assign(socket,
+           search: query,
+           search_results: Chat.search(socket.assigns.current_scope, query)
+         )}
     end
   end
 
@@ -662,6 +671,15 @@ defmodule EdenWeb.ChatLive do
           </div>
         </div>
         <div :if={@search != ""} class="flex-1 overflow-y-auto p-2">
+          <p
+            :if={is_nil(@search_results)}
+            class="text-center py-8"
+            style="color: var(--ed-muted); font-size:0.875rem;"
+          >
+            {gettext("Type at least %{count} characters to search.",
+              count: Chat.search_min_chars()
+            )}
+          </p>
           <.search_results
             :if={@search_results}
             results={@search_results}
@@ -1320,6 +1338,10 @@ defmodule EdenWeb.ChatLive do
               <.local_time at={message.inserted_at} class="ed-convo__time" />
             </span>
             <span class="ed-convo__preview">
+              <%!-- In a group the conversation title doesn't say who wrote it. --%>
+              <span :if={message.conversation.is_group and message.sender}>
+                {message.sender.display_name}:
+              </span>
               <.highlighted text={snippet(message.body, @query)} query={@query} />
             </span>
           </span>
@@ -1332,29 +1354,39 @@ defmodule EdenWeb.ChatLive do
   attr :text, :string, required: true
   attr :query, :string, required: true
 
-  # Wraps case-insensitive occurrences of the query in <mark>. Parts are plain
-  # text nodes (HEEx-escaped), so user content can't inject markup.
+  # Wraps case-insensitive occurrences of the query in <mark>.
   defp highlighted(assigns) do
-    query = String.trim(assigns.query)
+    ~H"{highlight_parts(@text, @query)}"
+  end
 
-    parts =
-      if query == "" do
-        [assigns.text]
-      else
-        String.split(assigns.text, ~r/#{Regex.escape(query)}/iu, include_captures: true)
-      end
+  # Pre-rendered safe iodata: every user-derived part goes through html_escape
+  # (no injection path); only the literal <mark> tags are raw. Built in Elixir
+  # rather than template markup so no template whitespace can slip between a
+  # match and the rest of its word ("озе ре") — newlines the formatter adds
+  # inside HEEx render as spaces.
+  defp highlight_parts(text, query) do
+    q = String.trim(query)
 
-    assigns = assign(assigns, :parts, parts)
+    if q == "" do
+      Phoenix.HTML.html_escape(text)
+    else
+      html =
+        text
+        |> String.split(~r/#{Regex.escape(q)}/iu, include_captures: true)
+        |> Enum.map(&mark_part(&1, String.downcase(q)))
 
-    ~H"""
-    <%= for part <- @parts do %>
-      <%= if String.downcase(part) == String.downcase(String.trim(@query)) do %>
-        <mark class="ed-mark">{part}</mark>
-      <% else %>
-        {part}
-      <% end %>
-    <% end %>
-    """
+      {:safe, html}
+    end
+  end
+
+  defp mark_part(part, down_query) do
+    {:safe, escaped} = Phoenix.HTML.html_escape(part)
+
+    if String.downcase(part) == down_query do
+      [~s(<mark class="ed-mark">), escaped, "</mark>"]
+    else
+      escaped
+    end
   end
 
   # A short window of the message body around the first match, so long messages

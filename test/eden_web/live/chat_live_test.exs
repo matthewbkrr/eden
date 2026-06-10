@@ -453,6 +453,45 @@ defmodule EdenWeb.ChatLiveTest do
       html = render_change(view, "search", %{"q" => "zzznothing"})
       assert html =~ "No results for"
     end
+
+    test "a too-short query shows a hint, not a false no-results", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "a"})
+      assert html =~ "Type at least"
+      refute html =~ "No results for"
+    end
+
+    test "a mid-word highlight stays glued to the rest of the word", ctx do
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "Свет на озере был нереальный"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "озе"})
+      # No whitespace may separate the mark from its word ("озе ре" bug).
+      assert html =~ ~s(<mark class="ed-mark">озе</mark>ре)
+    end
+
+    test "group message results show the sender", ctx do
+      carol = user_fixture(%{username: "carolgrp", display_name: "Carol"})
+
+      {:ok, group} =
+        Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id], title: "Trip")
+
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), group.id, %{"body" => "bonfire tonight"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "bonfire"})
+      assert html =~ "Bob"
+    end
   end
 
   describe "folders" do

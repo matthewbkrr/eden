@@ -495,6 +495,9 @@ defmodule Eden.Chat do
   @search_limit 20
   @search_min_chars 2
 
+  @doc "Shortest query `search/2` will run (shorter ones return empty results)."
+  def search_min_chars, do: @search_min_chars
+
   @doc """
   Searches the scoped user's chats: conversations by participant display name /
   username (or group title) and messages by body. Everything is scoped through
@@ -524,6 +527,9 @@ defmodule Eden.Chat do
   defp escape_like(term), do: String.replace(term, ~r/[\\%_]/, fn ch -> "\\" <> ch end)
 
   defp search_conversations(user, pattern) do
+    # No SQL limit: DISTINCT ON orders by c.id, so a limit there would cap by
+    # conversation age, dropping the most recent matches. A user belongs to a
+    # few dozen conversations at most — sort by recency in memory, then cap.
     from(c in Conversation,
       join: my in Membership,
       on: my.conversation_id == c.id and my.user_id == ^user.id and is_nil(my.left_at),
@@ -535,11 +541,11 @@ defmodule Eden.Chat do
         ilike(c.title, ^pattern) or
           (u.id != ^user.id and (ilike(u.display_name, ^pattern) or ilike(u.username, ^pattern))),
       distinct: c.id,
-      limit: @search_limit,
       preload: [memberships: :user]
     )
     |> Repo.all()
     |> Enum.sort_by(&(&1.last_message_at || ~U[1970-01-01 00:00:00Z]), {:desc, DateTime})
+    |> Enum.take(@search_limit)
   end
 
   defp search_messages(user, pattern) do
