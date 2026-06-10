@@ -277,7 +277,11 @@ defmodule EdenWeb.SettingsLive do
                 <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
                   <.icon name="hero-bars-3-micro" class="size-4" />
                 </span>
-                <form id={"rename-folder-#{folder.id}"} phx-submit="rename_folder" class="flex-1 min-w-0">
+                <form
+                  id={"rename-folder-#{folder.id}"}
+                  phx-submit="rename_folder"
+                  class="flex-1 min-w-0"
+                >
                   <input type="hidden" name="folder_id" value={folder.id} />
                   <input
                     name="name"
@@ -294,7 +298,9 @@ defmodule EdenWeb.SettingsLive do
                   style="color: var(--ed-danger);"
                   phx-click="delete_folder"
                   phx-value-id={folder.id}
-                  data-confirm={gettext("Delete this folder? Your chats stay; only the grouping is removed.")}
+                  data-confirm={
+                    gettext("Delete this folder? Your chats stay; only the grouping is removed.")
+                  }
                   aria-label={gettext("Delete folder")}
                 >
                   <.icon name="hero-trash-micro" class="size-4" />
