@@ -992,4 +992,112 @@ defmodule Eden.ChatTest do
       assert membership.last_read_at
     end
   end
+
+  describe "folders" do
+    test "create, list (ordered), rename, and delete", %{alice: alice} do
+      {:ok, work} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, _fam} = Chat.create_folder(scope(alice), %{"name" => "Family"})
+
+      assert ["Work", "Family"] == Enum.map(Chat.list_folders(scope(alice)), & &1.name)
+
+      {:ok, renamed} = Chat.rename_folder(scope(alice), work.id, "Job")
+      assert renamed.name == "Job"
+
+      assert :ok = Chat.delete_folder(scope(alice), work.id)
+      assert ["Family"] == Enum.map(Chat.list_folders(scope(alice)), & &1.name)
+    end
+
+    test "name is trimmed and length-capped", %{alice: alice} do
+      {:ok, f} = Chat.create_folder(scope(alice), %{"name" => "  Trips  "})
+      assert f.name == "Trips"
+
+      too_long = String.duplicate("x", Eden.Chat.Folder.max_name() + 1)
+      assert {:error, %Ecto.Changeset{}} = Chat.create_folder(scope(alice), %{"name" => too_long})
+    end
+
+    test "reorder reassigns positions and ignores foreign ids", %{alice: alice, bob: bob} do
+      {:ok, a} = Chat.create_folder(scope(alice), %{"name" => "A"})
+      {:ok, b} = Chat.create_folder(scope(alice), %{"name" => "B"})
+      {:ok, c} = Chat.create_folder(scope(alice), %{"name" => "C"})
+      {:ok, foreign} = Chat.create_folder(scope(bob), %{"name" => "Bob"})
+
+      :ok = Chat.reorder_folders(scope(alice), [c.id, a.id, b.id, foreign.id])
+      assert ["C", "A", "B"] == Enum.map(Chat.list_folders(scope(alice)), & &1.name)
+      # Bob's folder is untouched.
+      assert ["Bob"] == Enum.map(Chat.list_folders(scope(bob)), & &1.name)
+    end
+
+    test "toggle adds then removes a chat; conversation_folder_ids reflects it", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+
+      assert {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+      assert [folder.id] == Chat.conversation_folder_ids(scope(alice), conv.id)
+
+      assert {:ok, :removed} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+      assert [] == Chat.conversation_folder_ids(scope(alice), conv.id)
+    end
+
+    test "list_conversations filters by folder; All Chats shows everything", %{
+      alice: alice,
+      bob: bob
+    } do
+      carol = user_fixture(%{username: "carolf"})
+      {:ok, c1} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _c2} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), c1.id, folder.id)
+
+      assert [c1.id] == Enum.map(Chat.list_conversations(scope(alice), folder.id), & &1.id)
+      assert 2 == length(Chat.list_conversations(scope(alice), nil))
+    end
+
+    test "per-folder unread badge counts only the folder's chats", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "ping"})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "ping2"})
+
+      assert [%{unread_count: 2}] = Chat.list_folders(scope(alice))
+    end
+
+    test "deleting a folder keeps the conversations", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+
+      :ok = Chat.delete_folder(scope(alice), folder.id)
+      assert [%{id: id}] = Chat.list_conversations(scope(alice))
+      assert id == conv.id
+    end
+
+    test "deleting a conversation drops it from its folders", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+
+      # Both members leave -> GC hard-deletes the conversation, cascading the join.
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      :ok = Chat.delete_conversation(scope(bob), conv.id)
+
+      assert [] == Chat.conversation_folder_ids(scope(alice), conv.id)
+    end
+
+    test "is per-user: foreign folder/conversation ids are rejected", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+
+      # Bob can't file Alice's-only folder, nor toggle a chat he's a member of into it.
+      assert {:error, :not_found} =
+               Chat.toggle_conversation_folder(scope(bob), conv.id, folder.id)
+
+      assert {:error, :not_found} = Chat.rename_folder(scope(bob), folder.id, "Hack")
+      assert {:error, :not_found} = Chat.delete_folder(scope(bob), folder.id)
+    end
+  end
 end
