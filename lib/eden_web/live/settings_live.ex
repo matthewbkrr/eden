@@ -1,23 +1,45 @@
 defmodule EdenWeb.SettingsLive do
   @moduledoc """
-  Device preferences: appearance (theme) and language. These are stored per
-  device (theme in localStorage via the manager in root.html.heex; language in
-  the session via `EdenWeb.LocaleController`) and work before sign-in. When
-  accounts land (Phase 1), account-scoped settings live alongside this screen.
+  Settings. Device preferences — appearance (theme, in localStorage via the
+  manager in root.html.heex) and language (session via
+  `EdenWeb.LocaleController`) — work before sign-in. Signed-in users also get
+  the account-scoped sections: profile (display name, bio, avatar) and chat
+  folders (create/rename/delete + drag-to-reorder, including the virtual
+  "All Chats" position).
   """
   use EdenWeb, :live_view
 
   alias Eden.Accounts
   alias Eden.Accounts.User
+  alias Eden.Chat
 
   @impl true
   def mount(_params, _session, socket) do
     socket =
       socket
-      |> assign(page_title: gettext("Settings"), locale: Gettext.get_locale())
+      |> assign(page_title: gettext("Settings"), locale: Gettext.get_locale(), new_folder: "")
       |> assign_profile()
+      |> assign_folders()
 
     {:ok, socket}
+  end
+
+  # Folders are account-scoped, so they only appear when signed in. `folder_rows`
+  # is the management list: the user's folders with the virtual :all row inserted
+  # at its stored position (movable, not deletable).
+  defp assign_folders(socket) do
+    case socket.assigns[:current_scope] do
+      %{user: %User{}} = scope ->
+        folders = Chat.list_folders(scope)
+
+        assign(socket,
+          folders: folders,
+          folder_rows: List.insert_at(folders, Chat.all_chats_position(scope), :all)
+        )
+
+      _ ->
+        assign(socket, folders: [], folder_rows: [])
+    end
   end
 
   # Profile editing is account-scoped, so it only appears when signed in (this
@@ -236,6 +258,146 @@ defmodule EdenWeb.SettingsLive do
               </div>
             </form>
           </section>
+
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
+            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext(
+                "Group your chats. Drag to reorder — \"All Chats\" can be moved but not deleted."
+              )}
+            </p>
+
+            <ul id="folder-list" phx-hook=".Sortable" class="space-y-1.5">
+              <%= for row <- @folder_rows do %>
+                <li
+                  :if={row == :all}
+                  draggable="true"
+                  data-id="all"
+                  class="ed-folder-row ed-folder-row--virtual"
+                >
+                  <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
+                    <.icon name="hero-bars-3-micro" class="size-4" />
+                  </span>
+                  <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
+                    {gettext("All Chats")}
+                  </span>
+                  <span style="color: var(--ed-muted); font-size:0.75rem;">
+                    {gettext("Default")}
+                  </span>
+                </li>
+                <li
+                  :if={row != :all}
+                  draggable="true"
+                  data-id={row.id}
+                  class="ed-folder-row"
+                >
+                  <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
+                    <.icon name="hero-bars-3-micro" class="size-4" />
+                  </span>
+                  <form
+                    id={"rename-folder-#{row.id}"}
+                    phx-submit="rename_folder"
+                    class="flex-1 min-w-0"
+                  >
+                    <input type="hidden" name="folder_id" value={row.id} />
+                    <input
+                      name="name"
+                      value={row.name}
+                      maxlength={Chat.Folder.max_name()}
+                      class="ed-folder-row__name"
+                      aria-label={gettext("Folder name")}
+                      draggable="false"
+                    />
+                  </form>
+                  <button
+                    type="button"
+                    class="ed-btn--icon"
+                    style="color: var(--ed-danger);"
+                    phx-click="delete_folder"
+                    phx-value-id={row.id}
+                    data-confirm={
+                      gettext("Delete this folder? Your chats stay; only the grouping is removed.")
+                    }
+                    aria-label={gettext("Delete folder")}
+                  >
+                    <.icon name="hero-trash-micro" class="size-4" />
+                  </button>
+                </li>
+              <% end %>
+            </ul>
+
+            <form
+              phx-submit="create_folder"
+              phx-change="new_folder_changed"
+              class="mt-3 flex items-center gap-2"
+            >
+              <input
+                name="name"
+                value={@new_folder}
+                maxlength={Chat.Folder.max_name()}
+                placeholder={gettext("New folder name")}
+                class="ed-input flex-1"
+              />
+              <button type="submit" class="ed-btn ed-btn--primary" disabled={@new_folder == ""}>
+                {gettext("Add")}
+              </button>
+            </form>
+
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".Sortable">
+              // HTML5 drag-and-drop reorder. Items rearrange live as you drag; on
+              // drop we push the new id order to the server. Handlers bind once per
+              // node (guarded), so they survive LiveView re-renders.
+              export default {
+                mounted() { this.bind() },
+                updated() { this.bind() },
+                bind() {
+                  this.el.querySelectorAll("li[draggable=true]").forEach((item) => {
+                    if (item._dnd) return
+                    item._dnd = true
+                    item.addEventListener("dragstart", (e) => {
+                      this.dragging = item
+                      this.startOrder = this.order().join()
+                      item.classList.add("ed-dragging")
+                      e.dataTransfer.effectAllowed = "move"
+                    })
+                    item.addEventListener("dragend", () => {
+                      item.classList.remove("ed-dragging")
+                      this.commit()
+                    })
+                  })
+                  if (this._listBound) return
+                  this._listBound = true
+                  this.el.addEventListener("dragover", (e) => {
+                    e.preventDefault()
+                    if (!this.dragging) return
+                    const after = this.afterElement(e.clientY)
+                    if (after == null) this.el.appendChild(this.dragging)
+                    else this.el.insertBefore(this.dragging, after)
+                  })
+                },
+                afterElement(y) {
+                  const items = [...this.el.querySelectorAll("li[draggable=true]:not(.ed-dragging)")]
+                  return items.find((item) => {
+                    const box = item.getBoundingClientRect()
+                    return y < box.top + box.height / 2
+                  }) || null
+                },
+                commit() {
+                  this.dragging = null
+                  const ids = this.order()
+                  // A click on the handle or a cancelled drag isn't a reorder.
+                  if (ids.join() !== this.startOrder) this.pushEvent("reorder_folders", { ids })
+                },
+                order() {
+                  return [...this.el.querySelectorAll("li[draggable=true]")].map((i) => i.dataset.id)
+                }
+              }
+            </script>
+          </section>
         </div>
       </div>
     </div>
@@ -276,6 +438,60 @@ defmodule EdenWeb.SettingsLive do
   def handle_event("cancel_avatar", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :avatar, ref)}
   end
+
+  def handle_event("new_folder_changed", %{"name" => name}, socket) do
+    {:noreply, assign(socket, new_folder: name)}
+  end
+
+  def handle_event("create_folder", %{"name" => name}, socket) do
+    if String.trim(name) == "" do
+      {:noreply, socket}
+    else
+      case Chat.create_folder(socket.assigns.current_scope, %{"name" => name}) do
+        {:ok, _folder} -> {:noreply, socket |> assign(new_folder: "") |> reload_folders()}
+        {:error, reason} -> {:noreply, put_flash(socket, :error, folder_error(reason))}
+      end
+    end
+  end
+
+  def handle_event("rename_folder", %{"folder_id" => id, "name" => name}, socket) do
+    case Chat.rename_folder(socket.assigns.current_scope, id, name) do
+      {:ok, _folder} ->
+        {:noreply, reload_folders(socket)}
+
+      {:error, :not_found} ->
+        {:noreply, socket}
+
+      {:error, reason} ->
+        # Re-render so the row's input falls back to the saved name.
+        {:noreply, socket |> put_flash(:error, folder_error(reason)) |> reload_folders()}
+    end
+  end
+
+  def handle_event("delete_folder", %{"id" => id}, socket) do
+    Chat.delete_folder(socket.assigns.current_scope, id)
+    {:noreply, reload_folders(socket)}
+  end
+
+  def handle_event("reorder_folders", %{"ids" => ids}, socket) do
+    Chat.reorder_folders(socket.assigns.current_scope, ids)
+    {:noreply, reload_folders(socket)}
+  end
+
+  defp reload_folders(socket), do: assign_folders(socket)
+
+  # Human-readable reason a folder write was rejected, for the flash.
+  defp folder_error(:limit),
+    do: gettext("You can have up to %{count} folders.", count: Chat.max_folders())
+
+  defp folder_error(%Ecto.Changeset{errors: errors}) do
+    case errors[:name] do
+      nil -> gettext("Couldn't save that folder.")
+      error -> gettext("Folder name") <> ": " <> translate_error(error)
+    end
+  end
+
+  defp folder_error(_reason), do: gettext("Couldn't save that folder.")
 
   # Store the pending avatar (if any) inside the consume callback while the temp
   # file exists; return the (possibly updated) user plus any processing error.

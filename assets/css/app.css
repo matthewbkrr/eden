@@ -611,6 +611,110 @@
     color: var(--ed-ink);
   }
 
+  /* Folder tabs (horizontal carousel above the chat list) -------------- */
+  .ed-folders {
+    display: flex;
+    flex: none;
+    gap: 0.25rem;
+    align-items: center;
+    overflow-x: auto;
+    padding: 0.5rem 0.5rem;
+    border-bottom: 1px solid var(--ed-border);
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .ed-folders::-webkit-scrollbar {
+    display: none;
+  }
+  .ed-folder-tab {
+    flex: none;
+    scroll-snap-align: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.3125rem 0.6875rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    color: var(--ed-muted);
+    font: 600 0.8125rem/1 var(--ed-font);
+    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+  }
+  .ed-folder-tab:hover {
+    color: var(--ed-ink);
+    background: var(--ed-surface);
+  }
+  .ed-folder-tab--active {
+    color: var(--ed-ink);
+    background: var(--ed-surface-2);
+  }
+  .ed-folder-tab__badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.125rem;
+    height: 1.125rem;
+    padding: 0 0.3125rem;
+    border-radius: 999px;
+    background: var(--ed-primary);
+    color: #fff;
+    font: 600 0.6875rem/1 var(--ed-mono);
+  }
+
+  /* Folder management rows (Settings) ---------------------------------- */
+  .ed-folder-row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.375rem 0.5rem;
+    border-radius: var(--ed-radius);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-bg);
+  }
+  .ed-folder-row--virtual {
+    background: transparent;
+    border-style: dashed;
+  }
+  .ed-folder-row.ed-dragging {
+    opacity: 0.5;
+  }
+  .ed-folder-row__handle {
+    flex: none;
+    display: inline-flex;
+    color: var(--ed-muted);
+  }
+  .ed-folder-row__handle--grab {
+    cursor: grab;
+  }
+  .ed-folder-row__name {
+    width: 100%;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--ed-ink);
+    font: 550 0.875rem/1.2 var(--ed-font);
+    padding: 0.25rem 0;
+  }
+  .ed-folder-row__name:focus {
+    border-bottom: 1px solid var(--ed-primary);
+  }
+
+  /* Checkbox affordance (folder picker) -------------------------------- */
+  .ed-check {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--ed-radius-sm);
+    border: 1.5px solid var(--ed-border);
+    color: #fff;
+  }
+  .ed-check--on {
+    background: var(--ed-primary);
+    border-color: var(--ed-primary);
+  }
+
   /* Typing indicator ---------------------------------------------------- */
   .ed-typing { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.625rem 0.75rem; }
   .ed-typing span {

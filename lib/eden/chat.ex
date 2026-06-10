@@ -15,6 +15,9 @@ defmodule Eden.Chat do
   alias Eden.Chat.{
     Attachment,
     Conversation,
+    Folder,
+    FolderMembership,
+    FolderPrefs,
     Membership,
     Message,
     MessageDeletion,
@@ -59,13 +62,19 @@ defmodule Eden.Chat do
   @doc """
   Conversations the scoped user belongs to, most-recent first, with members
   preloaded and the virtual `unread_count` / `last_message_body` filled in.
+
+  Pass a `folder_id` to filter to a custom folder (the folder must belong to the
+  user); `nil` is the virtual "All Chats" and shows everything.
   """
-  def list_conversations(%Scope{user: user}) do
+  def list_conversations(scope, folder_id \\ nil)
+
+  def list_conversations(%Scope{user: user}, folder_id) do
     conversations =
       Conversation
       |> join(:inner, [c], m in Membership,
         on: m.conversation_id == c.id and m.user_id == ^user.id and is_nil(m.left_at)
       )
+      |> filter_by_folder(folder_id, user.id)
       |> order_by([c], desc_nulls_last: c.last_message_at, desc: c.id)
       |> preload(memberships: :user)
       |> Repo.all()
@@ -78,6 +87,18 @@ defmodule Eden.Chat do
       %{conversation | unread_count: Map.get(unread, conversation.id, 0)}
       |> apply_preview(previews[conversation.id])
     end)
+  end
+
+  defp filter_by_folder(query, nil, _user_id), do: query
+
+  defp filter_by_folder(query, folder_id, user_id) do
+    # Join the folder explicitly on user_id too, so a folder id that isn't the
+    # caller's filters to nothing rather than leaking another user's grouping.
+    query
+    |> join(:inner, [c], fm in FolderMembership, on: fm.conversation_id == c.id)
+    |> join(:inner, [c, _m, fm], f in Folder,
+      on: f.id == fm.folder_id and f.id == ^folder_id and f.user_id == ^user_id
+    )
   end
 
   # The conversation's preview is the latest message the user can still see — one
@@ -227,6 +248,231 @@ defmodule Eden.Chat do
     Repo.delete_all(from c in Conversation, where: c.id == ^conversation_id)
     keys
   end
+
+  ## Folders
+
+  @doc """
+  The scoped user's custom folders, ordered for the tab carousel, each with its
+  `unread_count` (across the folder's non-left conversations) filled in. "All
+  Chats" is virtual and not part of this list.
+  """
+  def list_folders(%Scope{user: user}) do
+    folders =
+      Repo.all(
+        from f in Folder, where: f.user_id == ^user.id, order_by: [asc: f.position, asc: f.id]
+      )
+
+    # Most users have no folders; skip the (heavier) unread query entirely then —
+    # this runs on every :conversation_activity ping.
+    if folders == [] do
+      []
+    else
+      unread = folder_unread_counts(user)
+      Enum.map(folders, &%{&1 | unread_count: Map.get(unread, &1.id, 0)})
+    end
+  end
+
+  # Per-folder unread totals — same rule as unread_counts/2, grouped by folder
+  # (a chat in several folders counts toward each). Left conversations are skipped.
+  defp folder_unread_counts(user) do
+    from(f in Folder,
+      join: fm in FolderMembership,
+      on: fm.folder_id == f.id,
+      join: mem in Membership,
+      on:
+        mem.conversation_id == fm.conversation_id and mem.user_id == ^user.id and
+          is_nil(mem.left_at),
+      join: msg in Message,
+      on: msg.conversation_id == fm.conversation_id,
+      left_join: d in MessageDeletion,
+      on: d.message_id == msg.id and d.user_id == ^user.id,
+      where:
+        f.user_id == ^user.id and msg.sender_id != ^user.id and is_nil(msg.deleted_at) and
+          is_nil(d.id) and (is_nil(mem.last_read_at) or msg.inserted_at > mem.last_read_at),
+      group_by: f.id,
+      select: {f.id, count(msg.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # A generous sanity cap — Telegram allows about this many. Keeps a runaway
+  # client from flooding the tab carousel (and every list_folders query).
+  @max_folders 20
+
+  @doc "Most folders a user can have (`create_folder/2` returns `{:error, :limit}` beyond it)."
+  def max_folders, do: @max_folders
+
+  @doc "Creates a folder for the scoped user (appended after existing ones)."
+  def create_folder(%Scope{user: user}, attrs) do
+    count = Repo.aggregate(from(f in Folder, where: f.user_id == ^user.id), :count)
+
+    if count >= @max_folders do
+      {:error, :limit}
+    else
+      result =
+        %Folder{user_id: user.id, position: next_folder_position(user)}
+        |> Folder.changeset(attrs)
+        |> Repo.insert()
+
+      with {:ok, _folder} <- result, do: broadcast_folders(user.id)
+      result
+    end
+  end
+
+  defp next_folder_position(user) do
+    Repo.one(
+      from f in Folder, where: f.user_id == ^user.id, select: coalesce(max(f.position), -1)
+    ) +
+      1
+  end
+
+  @doc "Renames one of the scoped user's folders. `{:error, :not_found}` if not theirs."
+  def rename_folder(%Scope{user: user} = scope, folder_id, name) do
+    with %Folder{} = folder <- get_folder(scope, folder_id),
+         {:ok, folder} <- folder |> Folder.changeset(%{"name" => name}) |> Repo.update() do
+      broadcast_folders(user.id)
+      {:ok, folder}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @doc "Deletes one of the scoped user's folders (its memberships cascade; the chats stay)."
+  def delete_folder(%Scope{user: user} = scope, folder_id) do
+    case get_folder(scope, folder_id) do
+      %Folder{} = folder ->
+        Repo.delete(folder)
+        broadcast_folders(user.id)
+        :ok
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Reorders the scoped user's folders to match `ordered_ids` (ids not owned by the
+  user are ignored). Positions are reassigned 0..n by list order, in one tx. The
+  list may contain the `"all"` sentinel — the virtual "All Chats" tab — whose
+  index in the list is persisted as the user's `all_chats_position`.
+  """
+  def reorder_folders(%Scope{user: user}, ordered_ids) do
+    owned = MapSet.new(Repo.all(from f in Folder, where: f.user_id == ^user.id, select: f.id))
+
+    entries =
+      ordered_ids
+      |> Enum.map(fn
+        "all" -> :all
+        id -> safe_id(id)
+      end)
+      |> Enum.filter(&(&1 == :all or MapSet.member?(owned, &1)))
+
+    all_pos = Enum.find_index(entries, &(&1 == :all))
+    ids = Enum.reject(entries, &(&1 == :all))
+
+    {:ok, _} =
+      Repo.transact(fn ->
+        ids
+        |> Enum.with_index()
+        |> Enum.each(fn {id, pos} ->
+          Repo.update_all(from(f in Folder, where: f.id == ^id), set: [position: pos])
+        end)
+
+        if all_pos, do: put_all_chats_position(user.id, all_pos)
+        {:ok, :ok}
+      end)
+
+    broadcast_folders(user.id)
+    :ok
+  end
+
+  @doc "Position of the virtual \"All Chats\" tab among the user's folders (0 = first)."
+  def all_chats_position(%Scope{user: user}) do
+    Repo.one(from p in FolderPrefs, where: p.user_id == ^user.id, select: p.all_chats_position) ||
+      0
+  end
+
+  defp put_all_chats_position(user_id, position) do
+    Repo.insert!(%FolderPrefs{user_id: user_id, all_chats_position: position},
+      on_conflict: [set: [all_chats_position: position, updated_at: now()]],
+      conflict_target: :user_id
+    )
+  end
+
+  @doc """
+  Toggles a conversation's membership in one of the scoped user's folders. Both
+  the folder (must be the user's) and the conversation (must be a member) are
+  authorized. Returns `{:ok, :added | :removed}` or `{:error, :not_found}`.
+  """
+  def toggle_conversation_folder(%Scope{user: user} = scope, conversation_id, folder_id) do
+    with cid when is_integer(cid) <- safe_id(conversation_id),
+         true <- member?(scope, cid),
+         %Folder{id: fid} <- get_folder(scope, folder_id),
+         {:ok, result} <- do_toggle_folder(fid, cid) do
+      broadcast_folders(user.id)
+      {:ok, result}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # Concurrency-safe toggle: delete_all is a no-op when another session already
+  # removed the row (Repo.delete would raise StaleEntryError), and
+  # on_conflict: :nothing absorbs a duplicate insert. An insert that fails for a
+  # real reason (e.g. the folder was deleted mid-flight) surfaces as an error
+  # instead of a false {:ok, :added}.
+  defp do_toggle_folder(folder_id, conversation_id) do
+    existing =
+      Repo.one(
+        from fm in FolderMembership,
+          where: fm.folder_id == ^folder_id and fm.conversation_id == ^conversation_id
+      )
+
+    if existing do
+      Repo.delete_all(from fm in FolderMembership, where: fm.id == ^existing.id)
+      {:ok, :removed}
+    else
+      %FolderMembership{}
+      |> FolderMembership.changeset(%{folder_id: folder_id, conversation_id: conversation_id})
+      |> Repo.insert(on_conflict: :nothing)
+      |> case do
+        {:ok, _} -> {:ok, :added}
+        {:error, _} -> {:error, :conflict}
+      end
+    end
+  end
+
+  @doc "Ids of the scoped user's folders the conversation is filed in (for the picker)."
+  def conversation_folder_ids(%Scope{user: user}, conversation_id) do
+    case safe_id(conversation_id) do
+      cid when is_integer(cid) ->
+        Repo.all(
+          from fm in FolderMembership,
+            join: f in Folder,
+            on: f.id == fm.folder_id,
+            where: f.user_id == ^user.id and fm.conversation_id == ^cid,
+            select: fm.folder_id
+        )
+
+      _ ->
+        []
+    end
+  end
+
+  defp get_folder(%Scope{user: user}, folder_id) do
+    case safe_id(folder_id) do
+      id when is_integer(id) ->
+        Repo.one(from f in Folder, where: f.id == ^id and f.user_id == ^user.id)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp broadcast_folders(user_id),
+    do: Phoenix.PubSub.broadcast(@pubsub, user_topic(user_id), :folders_changed)
 
   ## Messages
 

@@ -40,8 +40,14 @@ defmodule EdenWeb.ChatLive do
         oldest_id: nil,
         other_read_at: nil,
         online_ids: EdenWeb.Presence.online_ids(),
-        composer: empty_composer()
+        composer: empty_composer(),
+        folders: [],
+        folder_tabs: [],
+        folder_id: nil,
+        folder_chat_id: nil,
+        folder_checked: MapSet.new()
       )
+      |> refresh_folders()
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
       # Accept anything: the server classifies by magic bytes and enforces the
@@ -221,6 +227,13 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  def handle_event("select_folder", %{"id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(folder_id: parse_folder_id(id))
+     |> stream_conversations(reset: true)}
+  end
+
   def handle_event("forward_prompt", %{"id" => id}, socket) do
     targets = Chat.list_conversations(socket.assigns.current_scope)
     {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
@@ -228,6 +241,32 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("close_forward", _params, socket) do
     {:noreply, assign(socket, forward_id: nil)}
+  end
+
+  def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+
+    case Chat.get_conversation(scope, id) do
+      {:ok, conversation} ->
+        checked = MapSet.new(Chat.conversation_folder_ids(scope, conversation.id))
+        {:noreply, assign(socket, folder_chat_id: conversation.id, folder_checked: checked)}
+
+      {:error, _} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_folder", %{"folder" => folder_id}, socket) do
+    %{current_scope: scope, folder_chat_id: cid} = socket.assigns
+    # The toggle broadcasts :folders_changed on the user topic, so this session's
+    # tabs/badges and list refresh via handle_info; here we just re-sync the picks.
+    Chat.toggle_conversation_folder(scope, cid, folder_id)
+    checked = MapSet.new(Chat.conversation_folder_ids(scope, cid))
+    {:noreply, assign(socket, folder_checked: checked)}
+  end
+
+  def handle_event("close_folders", _params, socket) do
+    {:noreply, assign(socket, folder_chat_id: nil)}
   end
 
   def handle_event("forward", %{"target" => target_id}, socket) do
@@ -329,10 +368,7 @@ defmodule EdenWeb.ChatLive do
         do: stream_delete_by_dom_id(socket, :messages, "messages-#{message_id}"),
         else: socket
 
-    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
-      {:ok, summary} -> {:noreply, stream_insert(socket, :conversations, summary)}
-      {:error, _} -> {:noreply, socket}
-    end
+    {:noreply, put_sidebar_conversation(socket, conversation_id)}
   end
 
   # A thumbnail finished generating: swap the full image for it, in place. Guard
@@ -363,9 +399,13 @@ defmodule EdenWeb.ChatLive do
   end
 
   # The user deleted a conversation (in this or another of their sessions): drop it
-  # from the sidebar, and leave the thread if it was the one open here.
+  # from the sidebar, refresh folder badges (its unread no longer counts), and
+  # leave the thread if it was the one open here.
   def handle_info({:conversation_left, conversation_id}, socket) do
-    socket = stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+    socket =
+      socket
+      |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")
+      |> refresh_folders()
 
     if open?(socket, conversation_id) do
       {:noreply, socket |> unsubscribe() |> assign(selected: nil) |> push_patch(to: ~p"/app")}
@@ -375,15 +415,19 @@ defmodule EdenWeb.ChatLive do
   end
 
   # A conversation the user belongs to changed: move it to the top of the list
-  # with refreshed unread/preview, without reloading the whole sidebar.
+  # with refreshed unread/preview, without reloading the whole sidebar. Folder
+  # unread badges may have changed too, so refresh the tabs.
   def handle_info({:conversation_activity, conversation_id}, socket) do
-    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
-      {:ok, conversation} ->
-        {:noreply, stream_insert(socket, :conversations, conversation, at: 0)}
+    {:noreply,
+     socket
+     |> put_sidebar_conversation(conversation_id, at: 0)
+     |> refresh_folders()}
+  end
 
-      {:error, _} ->
-        {:noreply, socket}
-    end
+  # Folder set / membership / order changed in one of the user's sessions: refresh
+  # the tab bar and re-apply the active filter to the conversation list.
+  def handle_info(:folders_changed, socket) do
+    {:noreply, socket |> refresh_folders() |> stream_conversations(reset: true)}
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
@@ -456,6 +500,38 @@ defmodule EdenWeb.ChatLive do
           </div>
         </header>
 
+        <nav
+          :if={@folders != []}
+          class="ed-folders"
+          aria-label={gettext("Chat folders")}
+        >
+          <%= for tab <- @folder_tabs do %>
+            <button
+              :if={tab == :all}
+              type="button"
+              class={["ed-folder-tab", @folder_id == nil && "ed-folder-tab--active"]}
+              phx-click="select_folder"
+              phx-value-id=""
+              aria-pressed={to_string(@folder_id == nil)}
+            >
+              {gettext("All Chats")}
+            </button>
+            <button
+              :if={tab != :all}
+              type="button"
+              class={["ed-folder-tab", @folder_id == tab.id && "ed-folder-tab--active"]}
+              phx-click="select_folder"
+              phx-value-id={tab.id}
+              aria-pressed={to_string(@folder_id == tab.id)}
+            >
+              {tab.name}
+              <span :if={tab.unread_count > 0} class="ed-folder-tab__badge">
+                {tab.unread_count}
+              </span>
+            </button>
+          <% end %>
+        </nav>
+
         <div class="flex-1 overflow-y-auto p-2 relative">
           <div id="conversations" phx-update="stream" class="space-y-0.5">
             <.conversation_item
@@ -467,16 +543,24 @@ defmodule EdenWeb.ChatLive do
               active={@selected && @selected.id == conversation.id}
             />
           </div>
-          <%!-- Shown via CSS only when the stream rendered no rows (e.g. you
-                deleted your last chat) — no server round-trip. --%>
+          <%!-- Shown via CSS only when the stream rendered no rows — no server
+                round-trip. Inside a folder it means "nothing filed here", not
+                "you have no chats", so the copy and CTA differ. --%>
           <div class="ed-convo-empty">
             <span style="color: var(--ed-muted);">
               <.icon name="hero-chat-bubble-left-right" class="size-7" />
             </span>
-            <p style="font-weight:600;">{gettext("No chats yet")}</p>
-            <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
-              <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
-            </button>
+            <%= if @folder_id do %>
+              <p style="font-weight:600;">{gettext("No chats in this folder")}</p>
+              <p style="color: var(--ed-muted); font-size:0.875rem;">
+                {gettext("Right-click a chat to move it here.")}
+              </p>
+            <% else %>
+              <p style="font-weight:600;">{gettext("No chats yet")}</p>
+              <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
+                <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
+              </button>
+            <% end %>
           </div>
         </div>
       </aside>
@@ -657,6 +741,7 @@ defmodule EdenWeb.ChatLive do
         user={@current_scope.user}
         online_ids={@online_ids}
       />
+      <.folder_modal :if={@folder_chat_id} folders={@folders} checked={@folder_checked} />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
@@ -1008,9 +1093,19 @@ defmodule EdenWeb.ChatLive do
           </span>
         </span>
       </.link>
-      <%!-- Future items (Mute #21, Move to folder… #20) slot in above the divider;
-            the destructive Delete stays last, separated by .ed-menu__sep. --%>
+      <%!-- Future items (Mute #21) slot in above the divider; the destructive
+            Delete stays last, separated by .ed-menu__sep. --%>
       <div class="ed-menu" id={"convo-menu-#{@conversation.id}"} data-menu role="menu" hidden>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="move_to_folder_prompt"
+          phx-value-id={@conversation.id}
+        >
+          <.icon name="hero-folder-micro" class="size-4" /> {gettext("Move to folder…")}
+        </button>
+        <div class="ed-menu__sep"></div>
         <button
           type="button"
           class="ed-menu__item ed-menu__item--danger"
@@ -1349,6 +1444,78 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :folders, :list, required: true
+  attr :checked, :any, required: true
+
+  # Move-to-folder sheet: toggle the chat's membership in each folder. Changes
+  # apply immediately (each tap dispatches a toggle); "All Chats" is virtual and
+  # not listed. Folders are created/managed in Settings.
+  defp folder_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_folders"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_folders"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Move to folder")}</h2>
+            <button class="ed-btn--icon" phx-click="close_folders" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <div :if={@folders == []} class="space-y-3 text-center py-2">
+            <p style="color: var(--ed-muted); font-size:0.875rem;">
+              {gettext("You don't have any folders yet.")}
+            </p>
+            <.link navigate={~p"/settings"} class="ed-btn ed-btn--primary inline-flex">
+              <.icon name="hero-cog-6-tooth-micro" class="size-4" /> {gettext("Manage folders")}
+            </.link>
+          </div>
+
+          <div :if={@folders != []} class="max-h-72 overflow-y-auto space-y-0.5">
+            <button
+              :for={folder <- @folders}
+              type="button"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              phx-click="toggle_folder"
+              phx-value-folder={folder.id}
+              aria-pressed={to_string(MapSet.member?(@checked, folder.id))}
+            >
+              <span class={[
+                "ed-check",
+                MapSet.member?(@checked, folder.id) && "ed-check--on"
+              ]}>
+                <.icon
+                  :if={MapSet.member?(@checked, folder.id)}
+                  name="hero-check-mini"
+                  class="size-4"
+                />
+              </span>
+              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
+                {folder.name}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   defp forwarded_label(%{sender: %{display_name: name}}),
     do: gettext("Forwarded from %{name}", name: name)
 
@@ -1571,10 +1738,50 @@ defmodule EdenWeb.ChatLive do
     |> refresh_sidebar()
   end
 
-  defp refresh_sidebar(socket) do
-    stream(socket, :conversations, Chat.list_conversations(socket.assigns.current_scope),
-      reset: true
+  defp refresh_sidebar(socket), do: stream_conversations(socket, reset: true)
+
+  # Re-stream the conversation list honoring the active folder filter.
+  defp stream_conversations(socket, opts) do
+    convos = Chat.list_conversations(socket.assigns.current_scope, socket.assigns.folder_id)
+    stream(socket, :conversations, convos, opts)
+  end
+
+  defp refresh_folders(socket) do
+    scope = socket.assigns.current_scope
+    folders = Chat.list_folders(scope)
+    ids = Enum.map(folders, & &1.id)
+    folder_id = if socket.assigns.folder_id in ids, do: socket.assigns.folder_id, else: nil
+
+    assign(socket,
+      folders: folders,
+      folder_id: folder_id,
+      folder_tabs: List.insert_at(folders, Chat.all_chats_position(scope), :all)
     )
+  end
+
+  # Insert/refresh one conversation in the sidebar, honoring the active folder:
+  # drop it from the view if it isn't in the selected folder.
+  defp put_sidebar_conversation(socket, conversation_id, insert_opts \\ []) do
+    scope = socket.assigns.current_scope
+    fid = socket.assigns.folder_id
+
+    if is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id) do
+      case Chat.get_conversation_summary(scope, conversation_id) do
+        {:ok, summary} -> stream_insert(socket, :conversations, summary, insert_opts)
+        {:error, _} -> socket
+      end
+    else
+      stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+    end
+  end
+
+  defp parse_folder_id(""), do: nil
+
+  defp parse_folder_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} -> n
+      _ -> nil
+    end
   end
 
   # When the updated user is a member of the open conversation, re-preload its
