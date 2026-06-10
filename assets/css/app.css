@@ -452,8 +452,11 @@
   /* Context menu (right-click / long-press), opened by the .ContextMenu hook on
      message bubbles and sidebar chats. */
   .ed-bubble,
-  .ed-convo-wrap {
-    /* Long-press shouldn't trigger the OS text-selection callout on the host. */
+  .ed-convo-wrap,
+  .ed-convo {
+    /* Long-press shouldn't trigger the OS text-selection callout on the host.
+       Also set on the inner <a>.ed-convo: iOS shows the link callout on the
+       anchor itself, where inheritance isn't dependable. */
     -webkit-touch-callout: none;
   }
   /* On touch, long-press opens the menu instead of selecting text; the message
@@ -473,6 +476,8 @@
     background: var(--ed-surface);
     border: 1px solid var(--ed-border);
     box-shadow: 0 12px 32px oklch(0 0 0 / 0.32);
+    /* Anchored at the pointer's top-left, so it should grow from that corner. */
+    transform-origin: top left;
     animation: ed-menu-in 120ms ease-out;
   }
   @keyframes ed-menu-in {
@@ -500,11 +505,19 @@
     color: var(--ed-ink);
     text-align: left;
   }
-  .ed-menu__item:hover {
+  .ed-menu__item:hover,
+  .ed-menu__item:focus-visible {
     background: var(--ed-surface-2);
+    outline: none;
   }
   .ed-menu__item--danger {
     color: var(--ed-danger);
+  }
+  /* Divider between menu groups (e.g. actions vs. the destructive Delete). */
+  .ed-menu__sep {
+    height: 1px;
+    margin: 0.25rem 0.125rem;
+    background: var(--ed-border);
   }
 
   /* Permalink target: briefly ring the message scrolled to. */

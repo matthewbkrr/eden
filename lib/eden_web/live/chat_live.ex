@@ -671,18 +671,29 @@ defmodule EdenWeb.ChatLive do
         // the host element — no visible trigger. The dropdown is position:fixed at
         // the pointer, clamped to the viewport, so no scroll container can clip it.
         // Copy items (when present) run client-side; the rest dispatch to the server.
+        //
+        // `active` (module-scoped) is the one menu currently open. Opening another
+        // closes it through close() so its document listeners are torn down — never
+        // by mutating `.hidden` directly (that would orphan the listeners). The host
+        // (this.el) and the menu node both carry stable ids, so their listeners
+        // survive a stream re-render; menu visibility/position is re-applied in
+        // updated(), which is why the markup needs no phx-update="ignore" and item
+        // labels stay free to change (e.g. a future Mute/Unmute toggle).
+        let active = null
         export default {
           mounted() {
-            this.menu = this.el.querySelector("[data-menu]")
             this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }
-            this.onKey = (e) => { if (e.key === "Escape") this.close() }
+            this.onKey = (e) => this.onKeydown(e)
             // Capture phase so a scroll in ANY ancestor container closes the menu.
             this.onScroll = () => this.close()
+            this.wire()
 
-            // Desktop: right-click the host.
+            // Desktop: right-click the host. A keyboard context-menu (Shift+F10 /
+            // Menu key) reports clientX/Y 0 — fall back to the host's top-left.
             this.el.addEventListener("contextmenu", (e) => {
               e.preventDefault()
-              this.open(e.clientX, e.clientY)
+              const r = this.el.getBoundingClientRect()
+              this.open(e.clientX || r.left + 8, e.clientY || r.top + 8)
             })
 
             // Touch: long-press (cancel if the finger moves — that's a scroll/select).
@@ -702,29 +713,61 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("click", (e) => {
               if (this.longPressed) { e.preventDefault(); e.stopPropagation(); this.longPressed = false }
             }, true)
-
-            this.menu.querySelectorAll("[data-copy-text]").forEach((b) =>
-              b.addEventListener("click", () => this.copy(b.dataset.text, "text")))
-            this.menu.querySelectorAll("[data-copy-link]").forEach((b) =>
-              b.addEventListener("click", () => this.copy(b.dataset.link, "link")))
-            // Any item click (forward/delete dispatch to the server) also closes.
-            this.menu.querySelectorAll("button").forEach((b) =>
-              b.addEventListener("click", () => this.close()))
+          },
+          // A stream re-render morphs the item; re-bind the (possibly new) menu node
+          // and restore the open state the server render doesn't know about.
+          updated() {
+            this.wire()
+            if (active === this) { this.menu.hidden = false; this.position(this.x, this.y) }
           },
           destroyed() { this.close() },
+          // Bind the menu node + its delegated click handler. Idempotent: re-runs on
+          // updated() and only attaches the listener to a freshly morphed-in node.
+          wire() {
+            this.menu = this.el.querySelector("[data-menu]")
+            if (this.menu && !this.menu._wired) {
+              this.menu._wired = true
+              this.menu.addEventListener("click", (e) => this.onItem(e))
+            }
+          },
+          onItem(e) {
+            const ct = e.target.closest("[data-copy-text]")
+            const cl = e.target.closest("[data-copy-link]")
+            if (ct) this.copy(ct.dataset.text, "text")
+            else if (cl) this.copy(cl.dataset.link, "link")
+            // Forward/delete dispatch to the server; either way the menu closes.
+            if (e.target.closest("button")) this.close()
+          },
+          onKeydown(e) {
+            if (e.key === "Escape") { this.close(); this.opener && this.opener.focus() }
+            else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault()
+              const items = [...this.menu.querySelectorAll("[role=menuitem]")]
+              if (!items.length) return
+              const i = items.indexOf(document.activeElement)
+              const n = e.key === "ArrowDown" ? i + 1 : i - 1
+              items[(n + items.length) % items.length].focus()
+            }
+          },
           open(x, y) {
-            // Close any other open menu first.
-            document.querySelectorAll(".ed-menu:not([hidden])").forEach((m) => (m.hidden = true))
+            if (active && active !== this) active.close()
+            active = this
+            this.x = x; this.y = y
+            // Remember a focused trigger (keyboard open) to restore focus on Escape.
+            this.opener = this.el.contains(document.activeElement) ? document.activeElement : null
             this.menu.hidden = false
             this.position(x, y)
+            const first = this.menu.querySelector("[role=menuitem]")
+            first && first.focus()
             // Defer the outside-click listener so the same gesture doesn't close it.
             setTimeout(() => document.addEventListener("click", this.onDoc), 0)
             document.addEventListener("keydown", this.onKey)
             document.addEventListener("scroll", this.onScroll, { capture: true, passive: true })
           },
           close() {
-            if (!this.menu || this.menu.hidden) return
-            this.menu.hidden = true
+            if (active === this) active = null
+            if (this.menu) this.menu.hidden = true
+            // removeEventListener is a no-op if not attached — safe to call always.
             document.removeEventListener("click", this.onDoc)
             document.removeEventListener("keydown", this.onKey)
             document.removeEventListener("scroll", this.onScroll, { capture: true })
@@ -928,6 +971,7 @@ defmodule EdenWeb.ChatLive do
       <.link
         patch={~p"/app/c/#{@conversation.id}"}
         class={["ed-convo", @active && "ed-convo--active"]}
+        aria-haspopup="menu"
       >
         <.avatar
           name={title(@conversation, @user)}
@@ -951,14 +995,9 @@ defmodule EdenWeb.ChatLive do
           </span>
         </span>
       </.link>
-      <div
-        class="ed-menu"
-        id={"convo-menu-#{@conversation.id}"}
-        phx-update="ignore"
-        data-menu
-        role="menu"
-        hidden
-      >
+      <%!-- Future items (Mute #21, Move to folder… #20) slot in above the divider;
+            the destructive Delete stays last, separated by .ed-menu__sep. --%>
+      <div class="ed-menu" id={"convo-menu-#{@conversation.id}"} data-menu role="menu" hidden>
         <button
           type="button"
           class="ed-menu__item ed-menu__item--danger"
@@ -1004,6 +1043,7 @@ defmodule EdenWeb.ChatLive do
         class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
         id={"bubble-#{@message.id}"}
         phx-hook=".ContextMenu"
+        aria-haspopup="menu"
       >
         <span
           :if={@group and not @mine and @message.sender}
@@ -1049,10 +1089,11 @@ defmodule EdenWeb.ChatLive do
 
   # The message context menu — opened by right-click / long-press on the bubble
   # (the `.ContextMenu` hook). Copy actions run client-side; forward/delete dispatch
-  # to the LiveView. `phx-update="ignore"` keeps it from being reset on re-render.
+  # to the LiveView. The hook re-applies the open state after a re-render, so no
+  # phx-update="ignore" is needed and item labels stay free to change.
   defp message_menu(assigns) do
     ~H"""
-    <div class="ed-menu" id={"menu-#{@message.id}"} phx-update="ignore" data-menu role="menu" hidden>
+    <div class="ed-menu" id={"menu-#{@message.id}"} data-menu role="menu" hidden>
       <button
         :if={@message.body != ""}
         type="button"
