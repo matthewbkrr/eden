@@ -208,6 +208,19 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  def handle_event("delete_chat", %{"id" => id}, socket) do
+    # Removal from the sidebar (and navigating away if it's the open one) is driven
+    # by the {:conversation_left} broadcast on the user's own topic, so every one of
+    # their sessions stays in sync.
+    case Chat.delete_conversation(socket.assigns.current_scope, id) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't delete that chat."))}
+    end
+  end
+
   def handle_event("forward_prompt", %{"id" => id}, socket) do
     targets = Chat.list_conversations(socket.assigns.current_scope)
     {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
@@ -344,6 +357,18 @@ defmodule EdenWeb.ChatLive do
       {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
 
       {:noreply, socket |> assign(other_read_at: read_at) |> stream(:messages, messages)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # The user deleted a conversation (in this or another of their sessions): drop it
+  # from the sidebar, and leave the thread if it was the one open here.
+  def handle_info({:conversation_left, conversation_id}, socket) do
+    socket = stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+
+    if open?(socket, conversation_id) do
+      {:noreply, socket |> unsubscribe() |> assign(selected: nil) |> push_patch(to: ~p"/app")}
     else
       {:noreply, socket}
     end
@@ -640,20 +665,21 @@ defmodule EdenWeb.ChatLive do
           toBottom() { this.el.scrollTop = this.el.scrollHeight }
         }
       </script>
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".MsgMenu">
-        // Telegram-style message context menu: open it with a right-click (desktop)
-        // or a long-press (touch) anywhere on the bubble — no visible trigger. The
-        // dropdown is position:fixed at the pointer, clamped to the viewport, so the
-        // scroll container can't clip it. Copy runs client-side.
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ContextMenu">
+        // Telegram-style context menu, shared by message bubbles and sidebar chats:
+        // open it with a right-click (desktop) or a long-press (touch) anywhere on
+        // the host element — no visible trigger. The dropdown is position:fixed at
+        // the pointer, clamped to the viewport, so no scroll container can clip it.
+        // Copy items (when present) run client-side; the rest dispatch to the server.
         export default {
           mounted() {
             this.menu = this.el.querySelector("[data-menu]")
-            this.scroller = document.getElementById("message-scroll")
             this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }
             this.onKey = (e) => { if (e.key === "Escape") this.close() }
+            // Capture phase so a scroll in ANY ancestor container closes the menu.
             this.onScroll = () => this.close()
 
-            // Desktop: right-click the bubble.
+            // Desktop: right-click the host.
             this.el.addEventListener("contextmenu", (e) => {
               e.preventDefault()
               this.open(e.clientX, e.clientY)
@@ -671,7 +697,8 @@ defmodule EdenWeb.ChatLive do
               if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) cancel()
             }, { passive: true })
             this.el.addEventListener("touchend", cancel)
-            // Swallow the click a long-press would otherwise fire (e.g. a photo opening).
+            // Swallow the click/navigation a long-press would otherwise fire
+            // (a photo opening, or following a sidebar chat link).
             this.el.addEventListener("click", (e) => {
               if (this.longPressed) { e.preventDefault(); e.stopPropagation(); this.longPressed = false }
             }, true)
@@ -693,14 +720,14 @@ defmodule EdenWeb.ChatLive do
             // Defer the outside-click listener so the same gesture doesn't close it.
             setTimeout(() => document.addEventListener("click", this.onDoc), 0)
             document.addEventListener("keydown", this.onKey)
-            this.scroller && this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
+            document.addEventListener("scroll", this.onScroll, { capture: true, passive: true })
           },
           close() {
             if (!this.menu || this.menu.hidden) return
             this.menu.hidden = true
             document.removeEventListener("click", this.onDoc)
             document.removeEventListener("keydown", this.onKey)
-            this.scroller && this.scroller.removeEventListener("scroll", this.onScroll)
+            document.removeEventListener("scroll", this.onScroll, { capture: true })
           },
           position(x, y) {
             const mw = this.menu.offsetWidth || 220
@@ -897,33 +924,53 @@ defmodule EdenWeb.ChatLive do
 
   defp conversation_item(assigns) do
     ~H"""
-    <.link
-      id={@id}
-      patch={~p"/app/c/#{@conversation.id}"}
-      class={["ed-convo", @active && "ed-convo--active"]}
-    >
-      <.avatar
-        name={title(@conversation, @user)}
-        src={avatar_src(peer(@conversation, @user))}
-        online={online?(@conversation, @user, @online_ids)}
-      />
-      <span class="ed-convo__body">
-        <span class="ed-convo__top">
-          <span class="ed-convo__name">{title(@conversation, @user)}</span>
-          <.local_time
-            :if={@conversation.last_message_at}
-            at={@conversation.last_message_at}
-            class="ed-convo__time"
-          />
-        </span>
-        <span class="ed-convo__top">
-          <span class="ed-convo__preview">{convo_preview(@conversation)}</span>
-          <span :if={@conversation.unread_count > 0} class="ed-badge">
-            {@conversation.unread_count}
+    <div id={@id} class="ed-convo-wrap" phx-hook=".ContextMenu">
+      <.link
+        patch={~p"/app/c/#{@conversation.id}"}
+        class={["ed-convo", @active && "ed-convo--active"]}
+      >
+        <.avatar
+          name={title(@conversation, @user)}
+          src={avatar_src(peer(@conversation, @user))}
+          online={online?(@conversation, @user, @online_ids)}
+        />
+        <span class="ed-convo__body">
+          <span class="ed-convo__top">
+            <span class="ed-convo__name">{title(@conversation, @user)}</span>
+            <.local_time
+              :if={@conversation.last_message_at}
+              at={@conversation.last_message_at}
+              class="ed-convo__time"
+            />
+          </span>
+          <span class="ed-convo__top">
+            <span class="ed-convo__preview">{convo_preview(@conversation)}</span>
+            <span :if={@conversation.unread_count > 0} class="ed-badge">
+              {@conversation.unread_count}
+            </span>
           </span>
         </span>
-      </span>
-    </.link>
+      </.link>
+      <div
+        class="ed-menu"
+        id={"convo-menu-#{@conversation.id}"}
+        phx-update="ignore"
+        data-menu
+        role="menu"
+        hidden
+      >
+        <button
+          type="button"
+          class="ed-menu__item ed-menu__item--danger"
+          role="menuitem"
+          phx-click="delete_chat"
+          phx-value-id={@conversation.id}
+          data-confirm={gettext("Delete this chat? It will be removed from your list.")}
+        >
+          <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete chat")}
+        </button>
+      </div>
+    </div>
     """
   end
 
@@ -956,7 +1003,7 @@ defmodule EdenWeb.ChatLive do
       <div
         class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
         id={"bubble-#{@message.id}"}
-        phx-hook=".MsgMenu"
+        phx-hook=".ContextMenu"
       >
         <span
           :if={@group and not @mine and @message.sender}
@@ -1001,7 +1048,7 @@ defmodule EdenWeb.ChatLive do
   attr :mine, :boolean, required: true
 
   # The message context menu — opened by right-click / long-press on the bubble
-  # (the `.MsgMenu` hook). Copy actions run client-side; forward/delete dispatch
+  # (the `.ContextMenu` hook). Copy actions run client-side; forward/delete dispatch
   # to the LiveView. `phx-update="ignore"` keeps it from being reset on re-render.
   defp message_menu(assigns) do
     ~H"""

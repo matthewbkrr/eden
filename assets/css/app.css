@@ -449,15 +449,18 @@
     text-underline-offset: 2px;
   }
 
-  /* Message context menu (right-click / long-press), opened by the .MsgMenu hook. */
-  .ed-bubble {
-    /* Long-press shouldn't trigger the OS text-selection callout on the bubble. */
+  /* Context menu (right-click / long-press), opened by the .ContextMenu hook on
+     message bubbles and sidebar chats. */
+  .ed-bubble,
+  .ed-convo-wrap {
+    /* Long-press shouldn't trigger the OS text-selection callout on the host. */
     -webkit-touch-callout: none;
   }
-  /* On touch, long-press opens the menu instead of selecting text; the menu has
-     "Copy text". Desktop keeps normal selection. */
+  /* On touch, long-press opens the menu instead of selecting text; the message
+     menu has "Copy text". Desktop keeps normal selection. */
   @media (hover: none) {
-    .ed-bubble {
+    .ed-bubble,
+    .ed-convo-wrap {
       user-select: none;
     }
   }
