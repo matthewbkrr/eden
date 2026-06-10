@@ -173,18 +173,34 @@ defmodule Eden.Chat do
   """
   def delete_conversation(%Scope{user: user} = scope, conversation_id) do
     with id when is_integer(id) <- safe_id(conversation_id),
-         true <- member?(scope, id) do
-      Repo.update_all(
-        from(m in Membership, where: m.conversation_id == ^id and m.user_id == ^user.id),
-        set: [left_at: now()]
-      )
-
-      if all_members_left?(id), do: gc_conversation(id)
+         true <- member?(scope, id),
+         {:ok, orphan_keys} <- leave_and_maybe_gc(user, id) do
+      # Side effect (irreversible) only after the DB change commits.
+      delete_unreferenced_blobs(orphan_keys)
       Phoenix.PubSub.broadcast(@pubsub, user_topic(user.id), {:conversation_left, id})
       :ok
     else
-      _ -> {:error, :not_found}
+      false -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
     end
+  end
+
+  # Mark the actor as left and, if nobody is left, garbage-collect the
+  # conversation — atomically, so a concurrent deliver can't slip a message (and
+  # clear left_at) between the "is anyone left?" check and the hard delete.
+  # Returns the blob keys to delete after the transaction commits.
+  defp leave_and_maybe_gc(user, conversation_id) do
+    Repo.transact(fn ->
+      Repo.update_all(
+        from(m in Membership,
+          where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
+        ),
+        set: [left_at: now()]
+      )
+
+      {:ok, if(all_members_left?(conversation_id), do: gc_collect(conversation_id), else: [])}
+    end)
   end
 
   defp all_members_left?(conversation_id) do
@@ -193,10 +209,9 @@ defmodule Eden.Chat do
     )
   end
 
-  # Hard-delete an abandoned conversation. The DB cascades messages, memberships,
-  # attachments and message_deletions; we collect blob keys first and delete the
-  # unreferenced ones after (a forwarded copy elsewhere may share a blob).
-  defp gc_conversation(conversation_id) do
+  # In-transaction GC: collect the conversation's blob keys, then hard-delete it.
+  # The DB cascades messages, memberships, attachments and message_deletions.
+  defp gc_collect(conversation_id) do
     keys =
       Repo.all(
         from a in Attachment,
@@ -210,7 +225,7 @@ defmodule Eden.Chat do
       |> Enum.uniq()
 
     Repo.delete_all(from c in Conversation, where: c.id == ^conversation_id)
-    keys |> Enum.reject(&blob_referenced?/1) |> Enum.each(&Storage.delete/1)
+    keys
   end
 
   ## Messages
@@ -359,12 +374,10 @@ defmodule Eden.Chat do
     with {:ok, message} <- fetch_message(scope, message_id),
          :ok <- ensure_sender(message, user.id),
          {:ok, {tombstone, candidate_keys}} <- soft_delete(message) do
-      # Storage.delete is an irreversible side effect, so it runs only after the
-      # tombstone commits. Re-check references here (the attachment row is gone):
-      # this closes the window where a concurrent forward grabbed the same blob.
-      candidate_keys
-      |> Enum.reject(&blob_referenced?/1)
-      |> Enum.each(&Storage.delete/1)
+      # Storage.delete is irreversible, so it runs only after the tombstone
+      # commits, re-checking references (the attachment row is gone) to close the
+      # window where a concurrent forward grabbed the same blob.
+      delete_unreferenced_blobs(candidate_keys)
 
       broadcast(message.conversation_id, {:message_deleted, tombstone})
       notify_members(message.conversation_id)
@@ -465,10 +478,27 @@ defmodule Eden.Chat do
     )
   end
 
-  # Whether any attachment still references the blob (used post-commit, when the
-  # deleting attachment's row is already gone).
-  defp blob_referenced?(key) do
-    Repo.exists?(from a in Attachment, where: a.storage_key == ^key or a.thumbnail_key == ^key)
+  # Delete each blob no remaining attachment references — the one place every
+  # delete path (message delete-for-both, conversation GC) funnels through, so the
+  # "spare a blob a forward still shares" invariant can't drift. Runs post-commit,
+  # when the deleting rows are already gone; one query, not one per key.
+  defp delete_unreferenced_blobs([]), do: :ok
+
+  defp delete_unreferenced_blobs(keys) do
+    referenced =
+      Repo.all(
+        from a in Attachment,
+          where: a.storage_key in ^keys or a.thumbnail_key in ^keys,
+          select: [a.storage_key, a.thumbnail_key]
+      )
+      |> List.flatten()
+      |> MapSet.new()
+
+    keys
+    |> Enum.reject(&MapSet.member?(referenced, &1))
+    |> Enum.each(&Storage.delete/1)
+
+    :ok
   end
 
   defp insert_forward(user, target_conversation_id, source) do
