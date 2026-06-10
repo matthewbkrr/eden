@@ -258,7 +258,9 @@ defmodule Eden.Chat do
   def list_folders(%Scope{user: user}) do
     unread = folder_unread_counts(user)
 
-    Repo.all(from f in Folder, where: f.user_id == ^user.id, order_by: [asc: f.position, asc: f.id])
+    Repo.all(
+      from f in Folder, where: f.user_id == ^user.id, order_by: [asc: f.position, asc: f.id]
+    )
     |> Enum.map(&%{&1 | unread_count: Map.get(unread, &1.id, 0)})
   end
 
@@ -298,7 +300,9 @@ defmodule Eden.Chat do
   end
 
   defp next_folder_position(user) do
-    Repo.one(from f in Folder, where: f.user_id == ^user.id, select: coalesce(max(f.position), -1)) +
+    Repo.one(
+      from f in Folder, where: f.user_id == ^user.id, select: coalesce(max(f.position), -1)
+    ) +
       1
   end
 
@@ -390,24 +394,28 @@ defmodule Eden.Chat do
 
   @doc "Ids of the scoped user's folders the conversation is filed in (for the picker)."
   def conversation_folder_ids(%Scope{user: user}, conversation_id) do
-    with cid when is_integer(cid) <- safe_id(conversation_id) do
-      Repo.all(
-        from fm in FolderMembership,
-          join: f in Folder,
-          on: f.id == fm.folder_id,
-          where: f.user_id == ^user.id and fm.conversation_id == ^cid,
-          select: fm.folder_id
-      )
-    else
-      _ -> []
+    case safe_id(conversation_id) do
+      cid when is_integer(cid) ->
+        Repo.all(
+          from fm in FolderMembership,
+            join: f in Folder,
+            on: f.id == fm.folder_id,
+            where: f.user_id == ^user.id and fm.conversation_id == ^cid,
+            select: fm.folder_id
+        )
+
+      _ ->
+        []
     end
   end
 
   defp get_folder(%Scope{user: user}, folder_id) do
-    with id when is_integer(id) <- safe_id(folder_id) do
-      Repo.one(from f in Folder, where: f.id == ^id and f.user_id == ^user.id)
-    else
-      _ -> nil
+    case safe_id(folder_id) do
+      id when is_integer(id) ->
+        Repo.one(from f in Folder, where: f.id == ^id and f.user_id == ^user.id)
+
+      _ ->
+        nil
     end
   end
 

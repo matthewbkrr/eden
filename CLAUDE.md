@@ -65,6 +65,15 @@ design — built incrementally as features land.)
     The `:media` Oban worker fills the preview asynchronously (image thumbnail, or
     video poster + duration/dimensions via ffmpeg). Per-kind upload caps and a
     decompression-bomb guard are enforced server-side.
+  - `Folder` / `FolderMembership` — **per-user, Telegram-style chat folders**: a
+    personal grouping of the owner's sidebar that never affects other members.
+    `Folder` (name, `position`) is created/renamed/reordered/deleted in Settings;
+    `FolderMembership` is the folder↔conversation join (a chat can be in many
+    folders). **"All Chats" is virtual** (no row). `list_conversations/2` takes an
+    optional `folder_id` (the folder is joined on `user_id`, so a foreign id yields
+    nothing); `list_folders/1` carries a per-folder unread badge. Folder changes
+    broadcast `:folders_changed` on the user topic. Left/hidden chats (`left_at`)
+    drop out of folder views; a GC'd conversation cascades its folder rows.
   - **Profile visibility is authorized here, not in the web layer:**
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads
