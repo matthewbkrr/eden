@@ -407,4 +407,56 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#conversations-#{ctx.conversation.id}")
     end
   end
+
+  describe "folders" do
+    setup [:setup_conversation]
+
+    test "no folder tabs until the user has a folder", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app")
+      refute html =~ "All Chats"
+
+      {:ok, _} = Chat.create_folder(Scope.for_user(ctx.alice), %{"name" => "Work"})
+      # The tab bar appears for new sessions once a folder exists.
+      {:ok, _view2, html2} = live(conn, ~p"/app")
+      assert html2 =~ "All Chats"
+      assert html2 =~ "Work"
+    end
+
+    test "selecting a folder filters the list", ctx do
+      scope = Scope.for_user(ctx.alice)
+      carol = user_fixture(%{username: "carolfold"})
+      {:ok, other} = Chat.create_conversation(scope, [carol.id])
+      {:ok, folder} = Chat.create_folder(scope, %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope, ctx.conversation.id, folder.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      assert has_element?(view, "#conversations-#{other.id}")
+
+      render_click(view, "select_folder", %{"id" => to_string(folder.id)})
+      assert has_element?(view, "#conversations-#{ctx.conversation.id}")
+      refute has_element?(view, "#conversations-#{other.id}")
+
+      render_click(view, "select_folder", %{"id" => ""})
+      assert has_element?(view, "#conversations-#{other.id}")
+    end
+
+    test "move-to-folder modal toggles membership", ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, folder} = Chat.create_folder(scope, %{"name" => "Work"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      render_click(view, "move_to_folder_prompt", %{"id" => to_string(ctx.conversation.id)})
+      assert render(view) =~ "Move to folder"
+
+      render_click(view, "toggle_folder", %{"folder" => to_string(folder.id)})
+      assert [folder.id] == Chat.conversation_folder_ids(scope, ctx.conversation.id)
+
+      render_click(view, "toggle_folder", %{"folder" => to_string(folder.id)})
+      assert [] == Chat.conversation_folder_ids(scope, ctx.conversation.id)
+    end
+  end
 end

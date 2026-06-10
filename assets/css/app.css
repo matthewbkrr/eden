@@ -660,6 +660,23 @@
     font: 600 0.6875rem/1 var(--ed-mono);
   }
 
+  /* Checkbox affordance (folder picker) -------------------------------- */
+  .ed-check {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--ed-radius-sm);
+    border: 1.5px solid var(--ed-border);
+    color: #fff;
+  }
+  .ed-check--on {
+    background: var(--ed-primary);
+    border-color: var(--ed-primary);
+  }
+
   /* Typing indicator ---------------------------------------------------- */
   .ed-typing { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.625rem 0.75rem; }
   .ed-typing span {

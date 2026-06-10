@@ -43,7 +43,8 @@ defmodule EdenWeb.ChatLive do
         composer: empty_composer(),
         folders: Chat.list_folders(scope),
         folder_id: nil,
-        folder_chat_id: nil
+        folder_chat_id: nil,
+        folder_checked: MapSet.new()
       )
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
@@ -238,6 +239,32 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("close_forward", _params, socket) do
     {:noreply, assign(socket, forward_id: nil)}
+  end
+
+  def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+
+    case Chat.get_conversation(scope, id) do
+      {:ok, conversation} ->
+        checked = MapSet.new(Chat.conversation_folder_ids(scope, conversation.id))
+        {:noreply, assign(socket, folder_chat_id: conversation.id, folder_checked: checked)}
+
+      {:error, _} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_folder", %{"folder" => folder_id}, socket) do
+    %{current_scope: scope, folder_chat_id: cid} = socket.assigns
+    # The toggle broadcasts :folders_changed on the user topic, so this session's
+    # tabs/badges and list refresh via handle_info; here we just re-sync the picks.
+    Chat.toggle_conversation_folder(scope, cid, folder_id)
+    checked = MapSet.new(Chat.conversation_folder_ids(scope, cid))
+    {:noreply, assign(socket, folder_checked: checked)}
+  end
+
+  def handle_event("close_folders", _params, socket) do
+    {:noreply, assign(socket, folder_chat_id: nil)}
   end
 
   def handle_event("forward", %{"target" => target_id}, socket) do
@@ -477,7 +504,7 @@ defmodule EdenWeb.ChatLive do
             class={["ed-folder-tab", @folder_id == nil && "ed-folder-tab--active"]}
             phx-click="select_folder"
             phx-value-id=""
-            aria-pressed={@folder_id == nil}
+            aria-pressed={to_string(@folder_id == nil)}
           >
             {gettext("All Chats")}
           </button>
@@ -487,7 +514,7 @@ defmodule EdenWeb.ChatLive do
             class={["ed-folder-tab", @folder_id == folder.id && "ed-folder-tab--active"]}
             phx-click="select_folder"
             phx-value-id={folder.id}
-            aria-pressed={@folder_id == folder.id}
+            aria-pressed={to_string(@folder_id == folder.id)}
           >
             {folder.name}
             <span :if={folder.unread_count > 0} class="ed-folder-tab__badge">
@@ -697,6 +724,7 @@ defmodule EdenWeb.ChatLive do
         user={@current_scope.user}
         online_ids={@online_ids}
       />
+      <.folder_modal :if={@folder_chat_id} folders={@folders} checked={@folder_checked} />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
@@ -1048,9 +1076,19 @@ defmodule EdenWeb.ChatLive do
           </span>
         </span>
       </.link>
-      <%!-- Future items (Mute #21, Move to folder… #20) slot in above the divider;
-            the destructive Delete stays last, separated by .ed-menu__sep. --%>
+      <%!-- Future items (Mute #21) slot in above the divider; the destructive
+            Delete stays last, separated by .ed-menu__sep. --%>
       <div class="ed-menu" id={"convo-menu-#{@conversation.id}"} data-menu role="menu" hidden>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="move_to_folder_prompt"
+          phx-value-id={@conversation.id}
+        >
+          <.icon name="hero-folder-micro" class="size-4" /> {gettext("Move to folder…")}
+        </button>
+        <div class="ed-menu__sep"></div>
         <button
           type="button"
           class="ed-menu__item ed-menu__item--danger"
@@ -1380,6 +1418,78 @@ defmodule EdenWeb.ChatLive do
               />
               <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
                 {title(c, @user)}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :folders, :list, required: true
+  attr :checked, :any, required: true
+
+  # Move-to-folder sheet: toggle the chat's membership in each folder. Changes
+  # apply immediately (each tap dispatches a toggle); "All Chats" is virtual and
+  # not listed. Folders are created/managed in Settings.
+  defp folder_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_folders"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_folders"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Move to folder")}</h2>
+            <button class="ed-btn--icon" phx-click="close_folders" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <div :if={@folders == []} class="space-y-3 text-center py-2">
+            <p style="color: var(--ed-muted); font-size:0.875rem;">
+              {gettext("You don't have any folders yet.")}
+            </p>
+            <.link navigate={~p"/settings"} class="ed-btn ed-btn--primary inline-flex">
+              <.icon name="hero-cog-6-tooth-micro" class="size-4" /> {gettext("Manage folders")}
+            </.link>
+          </div>
+
+          <div :if={@folders != []} class="max-h-72 overflow-y-auto space-y-0.5">
+            <button
+              :for={folder <- @folders}
+              type="button"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              phx-click="toggle_folder"
+              phx-value-folder={folder.id}
+              aria-pressed={to_string(MapSet.member?(@checked, folder.id))}
+            >
+              <span class={[
+                "ed-check",
+                MapSet.member?(@checked, folder.id) && "ed-check--on"
+              ]}>
+                <.icon
+                  :if={MapSet.member?(@checked, folder.id)}
+                  name="hero-check-mini"
+                  class="size-4"
+                />
+              </span>
+              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
+                {folder.name}
               </span>
             </button>
           </div>
