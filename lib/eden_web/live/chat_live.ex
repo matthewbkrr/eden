@@ -10,6 +10,8 @@ defmodule EdenWeb.ChatLive do
   alias Eden.{Accounts, Chat}
 
   @page 50
+  # Bare http/https URLs in message text, turned into links (see linkify/1).
+  @url_regex ~r{https?://[^\s<]+}i
 
   @impl true
   def mount(_params, _session, socket) do
@@ -968,7 +970,12 @@ defmodule EdenWeb.ChatLive do
           {forwarded_label(@message.forwarded_from)}
         </span>
         <.attachment_view :if={@message.attachment} attachment={@message.attachment} />
-        <span :if={@message.body != ""}>{@message.body}</span>
+        <span :if={@message.body != ""} class="break-words">
+          <.body_part
+            :for={part <- linkify(@message.body)}
+            part={part}
+          />
+        </span>
         <span class="ed-bubble__meta">
           <.local_time at={@message.inserted_at} />
           <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
@@ -1245,6 +1252,47 @@ defmodule EdenWeb.ChatLive do
     do: gettext("Forwarded from %{name}", name: name)
 
   defp forwarded_label(_forwarded_from), do: gettext("Forwarded")
+
+  attr :part, :any, required: true
+
+  # Renders one piece of a linkified message body: a link or escaped text.
+  defp body_part(%{part: {:link, url}} = assigns) do
+    assigns = assign(assigns, :url, url)
+
+    ~H"""
+    <a class="ed-link" href={@url} target="_blank" rel="noopener noreferrer">{@url}</a>
+    """
+  end
+
+  defp body_part(%{part: {:text, text}} = assigns) do
+    assigns = assign(assigns, :text, text)
+    ~H"{@text}"
+  end
+
+  # Split message text into `{:text, _}` / `{:link, url}` parts, turning bare
+  # http(s) URLs into links. Trailing sentence punctuation stays as text. The URL
+  # only ever feeds an `href`/text node that HEEx escapes, so there's no XSS path.
+  defp linkify(text) do
+    @url_regex
+    |> Regex.split(text, include_captures: true)
+    |> Enum.flat_map(&classify_body_part/1)
+  end
+
+  defp classify_body_part(""), do: []
+
+  defp classify_body_part(part) do
+    if String.starts_with?(part, ["http://", "https://"]) do
+      {url, trailing} = strip_trailing_punct(part)
+      [{:link, url} | if(trailing == "", do: [], else: [{:text, trailing}])]
+    else
+      [{:text, part}]
+    end
+  end
+
+  defp strip_trailing_punct(url) do
+    trimmed = Regex.replace(~r/[.,;:!?)\]}'"]+$/u, url, "")
+    {trimmed, String.replace_prefix(url, trimmed, "")}
+  end
 
   attr :user, :map, required: true
   attr :online, :boolean, required: true

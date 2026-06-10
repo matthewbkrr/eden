@@ -441,6 +441,14 @@
     opacity: 0.75;
   }
 
+  /* Links inside message text. Inherit the bubble's color (legible on both the
+     cobalt "me" and neutral "them" sides); the underline carries the affordance. */
+  .ed-link {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
   /* Message context menu (right-click / long-press), opened by the .MsgMenu hook. */
   .ed-bubble {
     /* Long-press shouldn't trigger the OS text-selection callout on the bubble. */

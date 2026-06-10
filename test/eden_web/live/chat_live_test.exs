@@ -65,6 +65,22 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "hello there"
     end
 
+    test "linkifies bare URLs in message text", ctx do
+      {:ok, _m} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "see https://example.com/x now"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ ~s(href="https://example.com/x")
+      assert html =~ ~s(rel="noopener noreferrer")
+      # Surrounding text is preserved.
+      assert html =~ "see "
+      assert html =~ " now"
+    end
+
     test "the active highlight follows the selected conversation", ctx do
       carol = user_fixture(%{username: "carol_hl", display_name: "Carol"})
       {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
