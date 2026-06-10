@@ -15,6 +15,8 @@ defmodule EdenWeb.ShellComponents do
     router: EdenWeb.Router,
     statics: EdenWeb.static_paths()
 
+  alias Eden.Channels.Channel
+
   attr :channels, :list, required: true
   attr :active, :any, required: true, doc: ":messenger or a channel id"
   attr :class, :any, default: nil
@@ -100,12 +102,12 @@ defmodule EdenWeb.ShellComponents do
             <.ed_field
               field={@form[:name]}
               label={gettext("Channel name")}
-              maxlength={Eden.Channels.Channel.max_name()}
+              maxlength={Channel.max_name()}
             />
             <.ed_field
               field={@form[:about]}
               label={gettext("About (optional)")}
-              maxlength={Eden.Channels.Channel.max_about()}
+              maxlength={Channel.max_about()}
             />
             <div class="flex justify-end">
               <button type="submit" class="ed-btn ed-btn--primary">{@submit_label}</button>

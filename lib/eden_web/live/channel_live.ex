@@ -51,8 +51,13 @@ defmodule EdenWeb.ChannelLive do
 
   @impl true
   def handle_event("open_rename", _params, socket) do
-    form = to_form(Channels.change_channel(socket.assigns.channel))
-    {:noreply, assign(socket, show_rename: true, rename_form: form)}
+    # The context re-checks on write; this just keeps the modal admin-only.
+    if socket.assigns.channel.role in ~w(owner admin) do
+      form = to_form(Channels.change_channel(socket.assigns.channel))
+      {:noreply, assign(socket, show_rename: true, rename_form: form)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("close_rename", _params, socket) do
@@ -131,7 +136,15 @@ defmodule EdenWeb.ChannelLive do
               {@channel.about}
             </div>
           </div>
-          <div class="relative shrink-0">
+          <%!-- click-away lives on the wrapper, not the menu: the opening click
+                (on the button) is inside the wrapper, so it can't instantly
+                re-hide what the toggle just showed. --%>
+          <div
+            class="relative shrink-0"
+            phx-click-away={JS.hide(to: "#channel-menu")}
+            phx-window-keydown={JS.hide(to: "#channel-menu")}
+            phx-key="escape"
+          >
             <button
               type="button"
               class="ed-btn--icon"
@@ -141,12 +154,14 @@ defmodule EdenWeb.ChannelLive do
             >
               <.icon name="hero-ellipsis-horizontal-mini" class="size-5" />
             </button>
+            <%!-- display:none inline, NOT the hidden attribute: Tailwind's
+                  preflight makes [hidden] !important, which would override the
+                  inline display JS.toggle applies. --%>
             <div
               id="channel-menu"
               class="ed-menu ed-menu--anchored"
               role="menu"
-              hidden
-              phx-click-away={JS.hide(to: "#channel-menu")}
+              style="display: none;"
             >
               <button
                 :if={@channel.role in ~w(owner admin)}

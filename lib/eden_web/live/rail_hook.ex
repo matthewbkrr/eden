@@ -68,6 +68,10 @@ defmodule EdenWeb.RailHook do
     end
   end
 
+  # A hand-crafted "rail_create_channel" without the form payload must not fall
+  # through to a LiveView that has no clause for it (FunctionClauseError).
+  defp rail_event("rail_create_channel", _params, socket), do: {:halt, socket}
+
   defp rail_event(_event, _params, socket), do: {:cont, socket}
 
   defp rail_info(:channels_changed, socket) do
