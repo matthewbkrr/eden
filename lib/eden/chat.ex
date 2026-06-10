@@ -11,7 +11,16 @@ defmodule Eden.Chat do
   require Logger
 
   alias Eden.Accounts.{Scope, User}
-  alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
+
+  alias Eden.Chat.{
+    Attachment,
+    Conversation,
+    Membership,
+    Message,
+    MessageDeletion,
+    ThumbnailWorker
+  }
+
   alias Eden.Repo
   alias Eden.Storage
 
@@ -62,27 +71,26 @@ defmodule Eden.Chat do
       |> Repo.all()
 
     ids = Enum.map(conversations, & &1.id)
-    previews = last_message_previews(ids)
+    previews = last_message_previews(user, ids)
     unread = unread_counts(user, ids)
 
     Enum.map(conversations, fn conversation ->
-      preview = previews[conversation.id]
-
-      %{
-        conversation
-        | last_message_body: preview && preview.body,
-          last_message_kind: preview && preview.kind,
-          unread_count: Map.get(unread, conversation.id, 0)
-      }
+      %{conversation | unread_count: Map.get(unread, conversation.id, 0)}
+      |> apply_preview(previews[conversation.id])
     end)
   end
 
-  defp last_message_previews([]), do: %{}
+  # The conversation's preview is the latest message the user can still see — one
+  # they haven't "deleted for me" — so a hidden last message falls back to the one
+  # before it. A "deleted for both" tombstone is shown as such.
+  defp last_message_previews(_user, []), do: %{}
 
-  defp last_message_previews(ids) do
+  defp last_message_previews(user, ids) do
     from(m in Message,
       left_join: a in assoc(m, :attachment),
-      where: m.conversation_id in ^ids,
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: m.conversation_id in ^ids and is_nil(d.id) and is_nil(m.deleted_at),
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
       select: {m.conversation_id, %{body: m.body, kind: a.kind}}
@@ -91,14 +99,24 @@ defmodule Eden.Chat do
     |> Map.new()
   end
 
+  defp apply_preview(conversation, nil),
+    do: %{conversation | last_message_body: nil, last_message_kind: nil}
+
+  defp apply_preview(conversation, preview),
+    do: %{conversation | last_message_body: preview.body, last_message_kind: preview.kind}
+
   defp unread_counts(_user, []), do: %{}
 
   defp unread_counts(user, ids) do
     from(m in Message,
       join: mem in Membership,
       on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      # Don't count tombstones or messages this user deleted for themselves.
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
       where:
         m.conversation_id in ^ids and m.sender_id != ^user.id and
+          is_nil(m.deleted_at) and is_nil(d.id) and
           (is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at),
       group_by: m.conversation_id,
       select: {m.conversation_id, count(m.id)}
@@ -125,15 +143,8 @@ defmodule Eden.Chat do
   @doc "Like get_conversation/2 but with the virtual unread_count / last_message_body filled in."
   def get_conversation_summary(%Scope{user: user} = scope, id) do
     with {:ok, conversation} <- get_conversation(scope, id) do
-      preview = last_message_previews([id])[id]
-
-      {:ok,
-       %{
-         conversation
-         | last_message_body: preview && preview.body,
-           last_message_kind: preview && preview.kind,
-           unread_count: Map.get(unread_counts(user, [id]), id, 0)
-       }}
+      conversation = %{conversation | unread_count: Map.get(unread_counts(user, [id]), id, 0)}
+      {:ok, apply_preview(conversation, last_message_previews(user, [id])[id])}
     end
   end
 
@@ -161,17 +172,23 @@ defmodule Eden.Chat do
   to size the page (default #{@default_page}). `{:error, :not_found}` if the user
   is not a member.
   """
-  def list_messages(%Scope{} = scope, conversation_id, opts \\ []) do
+  def list_messages(%Scope{user: user} = scope, conversation_id, opts \\ []) do
     if member?(scope, conversation_id) do
       limit = Keyword.get(opts, :limit, @default_page)
 
       messages =
         Message
         |> where([m], m.conversation_id == ^conversation_id)
+        # Drop "deleted for everyone" rows entirely, and ones this user hid.
+        |> where([m], is_nil(m.deleted_at))
+        |> join(:left, [m], d in MessageDeletion,
+          on: d.message_id == m.id and d.user_id == ^user.id
+        )
+        |> where([_m, d], is_nil(d.id))
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload([:sender, :attachment])
+        |> preload([:sender, :attachment, forwarded_from: :sender])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -258,6 +275,196 @@ defmodule Eden.Chat do
   # they start nil here.
   defp media_dimensions("image", path), do: image_dimensions(path)
   defp media_dimensions(_kind, _path), do: {nil, nil}
+
+  ## Message management (delete, forward)
+
+  @doc """
+  Hides a message from the scoped user only ("delete for me"). Idempotent; the
+  message stays visible to everyone else. Broadcasts to the user's other sessions
+  so they hide it too. `{:error, :not_found}` if not a member / unknown id.
+  """
+  def delete_message_for_me(%Scope{user: user} = scope, message_id) do
+    with {:ok, message} <- fetch_message(scope, message_id),
+         {:ok, _deletion} <-
+           %MessageDeletion{}
+           |> Ecto.Changeset.change(message_id: message.id, user_id: user.id)
+           |> Repo.insert(on_conflict: :nothing, conflict_target: [:message_id, :user_id]) do
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user.id),
+        {:message_hidden, message.conversation_id, message.id}
+      )
+
+      :ok
+    end
+  end
+
+  @doc """
+  Deletes a message for everyone ("delete for both") — sender only. Soft-deletes
+  the row (tombstone: `deleted_at` set, body cleared, attachment removed),
+  deletes the attachment's blobs unless another attachment still references them
+  (a forward shares the blob), and broadcasts the tombstone. `{:error, :not_found}`
+  for unknown/non-member, `{:error, :forbidden}` if not the sender.
+  """
+  def delete_message_for_both(%Scope{user: user} = scope, message_id) do
+    with {:ok, message} <- fetch_message(scope, message_id),
+         :ok <- ensure_sender(message, user.id),
+         {:ok, {tombstone, candidate_keys}} <- soft_delete(message) do
+      # Storage.delete is an irreversible side effect, so it runs only after the
+      # tombstone commits. Re-check references here (the attachment row is gone):
+      # this closes the window where a concurrent forward grabbed the same blob.
+      candidate_keys
+      |> Enum.reject(&blob_referenced?/1)
+      |> Enum.each(&Storage.delete/1)
+
+      broadcast(message.conversation_id, {:message_deleted, tombstone})
+      notify_members(message.conversation_id)
+      :ok
+    end
+  end
+
+  @doc """
+  Forwards a message into another conversation the scoped user belongs to: a new
+  message copying the body and (re-referencing) the attachment, attributed to the
+  forwarder. The copied attachment points at the same blob; serving stays
+  authorized by the target conversation's membership. `{:error, :not_found |
+  :deleted}`.
+  """
+  def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id) do
+    with {:ok, source} <- fetch_message(scope, message_id),
+         :ok <- ensure_not_deleted(source),
+         target_id when is_integer(target_id) <- safe_id(target_conversation_id),
+         :ok <- ensure_member(scope, target_id) do
+      do_forward(user, target_id, Repo.preload(source, :attachment))
+    else
+      :error -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  defp do_forward(user, target_conversation_id, source) do
+    case insert_forward_tx(user, target_conversation_id, source) do
+      {:ok, message} -> {:ok, deliver(target_conversation_id, message)}
+      error -> error
+    end
+  end
+
+  defp insert_forward_tx(user, target_conversation_id, source) do
+    Repo.transact(fn ->
+      with {:ok, message} <- insert_forward(user, target_conversation_id, source),
+           :ok <- copy_attachment(message.id, source.attachment) do
+        {:ok, message}
+      end
+    end)
+  end
+
+  # Fetches a message in a conversation the scoped user belongs to (authorization).
+  defp fetch_message(%Scope{user: user}, message_id) do
+    with id when is_integer(id) <- safe_id(message_id),
+         %Message{} = message <-
+           Repo.one(
+             from m in Message,
+               join: mem in Membership,
+               on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+               where: m.id == ^id
+           ) do
+      {:ok, message}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp ensure_sender(%Message{sender_id: sender_id}, user_id) when sender_id == user_id, do: :ok
+  defp ensure_sender(_message, _user_id), do: {:error, :forbidden}
+
+  defp ensure_not_deleted(message),
+    do: if(Message.deleted?(message), do: {:error, :deleted}, else: :ok)
+
+  defp ensure_member(scope, conversation_id),
+    do: if(member?(scope, conversation_id), do: :ok, else: {:error, :not_found})
+
+  # Tombstone the message and delete its attachment row inside one transaction,
+  # returning the blob keys safe to delete afterwards (no side effects in the txn).
+  defp soft_delete(message) do
+    Repo.transact(fn ->
+      message = Repo.preload(message, :attachment)
+      orphan_keys = unshared_blob_keys(message.attachment)
+      if message.attachment, do: Repo.delete(message.attachment)
+
+      with {:ok, tombstone} <-
+             message
+             |> Ecto.Changeset.change(deleted_at: now(), body: "")
+             |> Repo.update() do
+        {:ok, {Repo.preload(tombstone, [:sender, :attachment], force: true), orphan_keys}}
+      end
+    end)
+  end
+
+  # Blob keys that no OTHER attachment references — safe to delete once this
+  # attachment's row is gone. (Forwards re-reference the same storage_key.)
+  defp unshared_blob_keys(nil), do: []
+
+  defp unshared_blob_keys(%Attachment{} = attachment) do
+    [attachment.storage_key, attachment.thumbnail_key]
+    |> Enum.reject(fn key -> is_nil(key) or blob_shared?(key, attachment.id) end)
+  end
+
+  defp blob_shared?(key, exclude_id) do
+    Repo.exists?(
+      from a in Attachment,
+        where: a.id != ^exclude_id and (a.storage_key == ^key or a.thumbnail_key == ^key)
+    )
+  end
+
+  # Whether any attachment still references the blob (used post-commit, when the
+  # deleting attachment's row is already gone).
+  defp blob_referenced?(key) do
+    Repo.exists?(from a in Attachment, where: a.storage_key == ^key or a.thumbnail_key == ^key)
+  end
+
+  defp insert_forward(user, target_conversation_id, source) do
+    # Forwarding a forward keeps the original author as the attribution root.
+    %Message{
+      conversation_id: target_conversation_id,
+      sender_id: user.id,
+      forwarded_from_id: source.forwarded_from_id || source.id
+    }
+    |> Message.photo_changeset(%{"body" => source.body || ""})
+    |> Repo.insert()
+  end
+
+  defp copy_attachment(_message_id, nil), do: :ok
+
+  defp copy_attachment(message_id, %Attachment{} = source) do
+    attrs =
+      Map.take(source, [
+        :kind,
+        :storage_key,
+        :content_type,
+        :byte_size,
+        :filename,
+        :width,
+        :height,
+        :duration,
+        :thumbnail_key
+      ])
+
+    %Attachment{message_id: message_id}
+    |> Attachment.changeset(attrs)
+    |> Repo.insert()
+    |> case do
+      {:ok, attachment} ->
+        # If we forwarded before the source's preview existed, generate one for
+        # the copy (it owns its own thumbnail blob).
+        if is_nil(attachment.thumbnail_key) and needs_media_processing?(attachment.kind),
+          do: enqueue_thumbnail(attachment)
+
+        :ok
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
 
   @doc "Marks the conversation read up to now for the scoped user, broadcasting a read receipt."
   def mark_read(%Scope{user: user}, conversation_id) do

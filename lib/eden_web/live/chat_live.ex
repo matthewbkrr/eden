@@ -10,6 +10,8 @@ defmodule EdenWeb.ChatLive do
   alias Eden.{Accounts, Chat}
 
   @page 50
+  # Bare http/https URLs in message text, turned into links (see linkify/1).
+  @url_regex ~r{https?://[^\s<]+}i
 
   @impl true
   def mount(_params, _session, socket) do
@@ -31,6 +33,8 @@ defmodule EdenWeb.ChatLive do
         show_new: false,
         show_members: false,
         profile: nil,
+        forward_id: nil,
+        forward_targets: [],
         people: [],
         has_more: false,
         oldest_id: nil,
@@ -53,21 +57,46 @@ defmodule EdenWeb.ChatLive do
   end
 
   @impl true
+  def handle_params(%{"id" => id, "message_id" => message_id}, _uri, socket) do
+    case Chat.get_conversation(socket.assigns.current_scope, id) do
+      {:ok, conversation} ->
+        # The client scrolls to and highlights the message if it's on the page,
+        # otherwise reports back so we can say it's unavailable (deleted/old).
+        socket =
+          socket
+          |> select_conversation(conversation)
+          |> push_event("focus_message", %{domId: "messages-#{message_id}"})
+
+        {:noreply, socket}
+
+      {:error, :not_found} ->
+        {:noreply, conversation_gone(socket)}
+    end
+  end
+
   def handle_params(%{"id" => id}, _uri, socket) do
     case Chat.get_conversation(socket.assigns.current_scope, id) do
       {:ok, conversation} ->
         {:noreply, select_conversation(socket, conversation)}
 
       {:error, :not_found} ->
-        {:noreply,
-         socket
-         |> put_flash(:error, gettext("Conversation not found."))
-         |> push_navigate(to: ~p"/app")}
+        {:noreply, conversation_gone(socket)}
     end
   end
 
   def handle_params(_params, _uri, socket) do
     {:noreply, socket |> unsubscribe() |> assign(selected: nil) |> refresh_sidebar()}
+  end
+
+  defp conversation_gone(socket) do
+    socket
+    |> put_flash(:error, gettext("Conversation not found."))
+    |> push_navigate(to: ~p"/app")
+  end
+
+  # Whether the given conversation is the one currently open.
+  defp open?(socket, conversation_id) do
+    match?(%{id: ^conversation_id}, socket.assigns.selected)
   end
 
   @impl true
@@ -162,6 +191,61 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, show_members: false)}
   end
 
+  # --- Message actions -------------------------------------------------------
+
+  def handle_event("delete_for_me", %{"id" => id}, socket) do
+    Chat.delete_message_for_me(socket.assigns.current_scope, id)
+    {:noreply, socket}
+  end
+
+  def handle_event("delete_for_both", %{"id" => id}, socket) do
+    case Chat.delete_message_for_both(socket.assigns.current_scope, id) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't delete that message."))}
+    end
+  end
+
+  def handle_event("forward_prompt", %{"id" => id}, socket) do
+    targets = Chat.list_conversations(socket.assigns.current_scope)
+    {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
+  end
+
+  def handle_event("close_forward", _params, socket) do
+    {:noreply, assign(socket, forward_id: nil)}
+  end
+
+  def handle_event("forward", %{"target" => target_id}, socket) do
+    %{current_scope: scope, forward_id: forward_id} = socket.assigns
+
+    case Chat.forward_message(scope, forward_id, target_id) do
+      {:ok, _message} ->
+        {:noreply,
+         socket
+         |> assign(forward_id: nil)
+         |> put_flash(:info, gettext("Forwarded."))
+         |> push_patch(to: ~p"/app/c/#{target_id}")}
+
+      {:error, _reason} ->
+        {:noreply,
+         socket
+         |> assign(forward_id: nil)
+         |> put_flash(:error, gettext("Couldn't forward that message."))}
+    end
+  end
+
+  # Clipboard copies are done client-side; the hook reports back for feedback.
+  def handle_event("copied", %{"what" => "link"}, socket),
+    do: {:noreply, put_flash(socket, :info, gettext("Link copied."))}
+
+  def handle_event("copied", _params, socket),
+    do: {:noreply, put_flash(socket, :info, gettext("Copied."))}
+
+  def handle_event("message_unavailable", _params, socket),
+    do: {:noreply, put_flash(socket, :error, gettext("That message is unavailable."))}
+
   # "Send message" from a profile: open (or reuse) a 1:1 with that user. The
   # profile was reached through a shared conversation, so re-checking the share
   # both authorizes and validates the id before creating anything.
@@ -215,6 +299,29 @@ defmodule EdenWeb.ChatLive do
     {:noreply, stream_insert(socket, :messages, message)}
   end
 
+  # Delete-for-both: the message is removed from the conversation for everyone.
+  def handle_info({:message_deleted, message}, socket) do
+    if open?(socket, message.conversation_id) do
+      {:noreply, stream_delete_by_dom_id(socket, :messages, "messages-#{message.id}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Delete-for-me (on the user's own topic): drop the message from this session
+  # and refresh the sidebar preview (the hidden message may have been the last one).
+  def handle_info({:message_hidden, conversation_id, message_id}, socket) do
+    socket =
+      if open?(socket, conversation_id),
+        do: stream_delete_by_dom_id(socket, :messages, "messages-#{message_id}"),
+        else: socket
+
+    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
+      {:ok, summary} -> {:noreply, stream_insert(socket, :conversations, summary)}
+      {:error, _} -> {:noreply, socket}
+    end
+  end
+
   # A thumbnail finished generating: swap the full image for it, in place. Guard
   # against a late broadcast arriving after the user switched conversations.
   def handle_info({:thumbnail_ready, message}, socket) do
@@ -227,15 +334,16 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # The other participant read up to read_at — refresh delivery ticks.
+  # The other participant read up to read_at — refresh delivery ticks. Re-stream
+  # without reset so existing rows are morphed in place (keeps an open action menu
+  # and any loaded older messages) instead of being torn down and recreated.
   def handle_info({:read, reader_id, read_at}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
 
     if conversation && reader_id != scope.user.id do
       {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
 
-      {:noreply,
-       socket |> assign(other_read_at: read_at) |> stream(:messages, messages, reset: true)}
+      {:noreply, socket |> assign(other_read_at: read_at) |> stream(:messages, messages)}
     else
       {:noreply, socket}
     end
@@ -393,6 +501,7 @@ defmodule EdenWeb.ChatLive do
                 :for={{dom_id, message} <- @streams.messages}
                 id={dom_id}
                 message={message}
+                conversation_id={@selected.id}
                 mine={message.sender_id == @current_scope.user.id}
                 group={@selected.is_group}
                 read={read?(message, @other_read_at)}
@@ -504,15 +613,124 @@ defmodule EdenWeb.ChatLive do
         user={@profile}
         online={MapSet.member?(@online_ids, @profile.id)}
       />
+      <.forward_modal
+        :if={@forward_id}
+        targets={@forward_targets}
+        user={@current_scope.user}
+        online_ids={@online_ids}
+      />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
-          mounted() { this.toBottom() },
+          mounted() {
+            this.toBottom()
+            // Permalink: scroll to and briefly highlight a message, or report it's gone.
+            this.handleEvent("focus_message", ({ domId }) => {
+              const el = document.getElementById(domId)
+              if (!el) { this.pushEvent("message_unavailable"); return }
+              el.scrollIntoView({ block: "center", behavior: "smooth" })
+              el.classList.add("ed-msg--focus")
+              setTimeout(() => el.classList.remove("ed-msg--focus"), 2200)
+            })
+          },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
           },
           updated() { if (this.pinned) this.toBottom() },
           toBottom() { this.el.scrollTop = this.el.scrollHeight }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".MsgMenu">
+        // Telegram-style message context menu: open it with a right-click (desktop)
+        // or a long-press (touch) anywhere on the bubble — no visible trigger. The
+        // dropdown is position:fixed at the pointer, clamped to the viewport, so the
+        // scroll container can't clip it. Copy runs client-side.
+        export default {
+          mounted() {
+            this.menu = this.el.querySelector("[data-menu]")
+            this.scroller = document.getElementById("message-scroll")
+            this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }
+            this.onKey = (e) => { if (e.key === "Escape") this.close() }
+            this.onScroll = () => this.close()
+
+            // Desktop: right-click the bubble.
+            this.el.addEventListener("contextmenu", (e) => {
+              e.preventDefault()
+              this.open(e.clientX, e.clientY)
+            })
+
+            // Touch: long-press (cancel if the finger moves — that's a scroll/select).
+            let timer, sx, sy
+            this.el.addEventListener("touchstart", (e) => {
+              const t = e.touches[0]; sx = t.clientX; sy = t.clientY
+              timer = setTimeout(() => { this.open(sx, sy); this.longPressed = true }, 450)
+            }, { passive: true })
+            const cancel = () => clearTimeout(timer)
+            this.el.addEventListener("touchmove", (e) => {
+              const t = e.touches[0]
+              if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) cancel()
+            }, { passive: true })
+            this.el.addEventListener("touchend", cancel)
+            // Swallow the click a long-press would otherwise fire (e.g. a photo opening).
+            this.el.addEventListener("click", (e) => {
+              if (this.longPressed) { e.preventDefault(); e.stopPropagation(); this.longPressed = false }
+            }, true)
+
+            this.menu.querySelectorAll("[data-copy-text]").forEach((b) =>
+              b.addEventListener("click", () => this.copy(b.dataset.text, "text")))
+            this.menu.querySelectorAll("[data-copy-link]").forEach((b) =>
+              b.addEventListener("click", () => this.copy(b.dataset.link, "link")))
+            // Any item click (forward/delete dispatch to the server) also closes.
+            this.menu.querySelectorAll("button").forEach((b) =>
+              b.addEventListener("click", () => this.close()))
+          },
+          destroyed() { this.close() },
+          open(x, y) {
+            // Close any other open menu first.
+            document.querySelectorAll(".ed-menu:not([hidden])").forEach((m) => (m.hidden = true))
+            this.menu.hidden = false
+            this.position(x, y)
+            // Defer the outside-click listener so the same gesture doesn't close it.
+            setTimeout(() => document.addEventListener("click", this.onDoc), 0)
+            document.addEventListener("keydown", this.onKey)
+            this.scroller && this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
+          },
+          close() {
+            if (!this.menu || this.menu.hidden) return
+            this.menu.hidden = true
+            document.removeEventListener("click", this.onDoc)
+            document.removeEventListener("keydown", this.onKey)
+            this.scroller && this.scroller.removeEventListener("scroll", this.onScroll)
+          },
+          position(x, y) {
+            const mw = this.menu.offsetWidth || 220
+            const mh = this.menu.offsetHeight || 240
+            const left = Math.max(8, Math.min(x, window.innerWidth - mw - 8))
+            const top = Math.max(8, Math.min(y, window.innerHeight - mh - 8))
+            this.menu.style.left = `${left}px`
+            this.menu.style.top = `${top}px`
+          },
+          copy(text, what) {
+            const done = () => this.pushEvent("copied", { what })
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(text).then(done).catch(() => this.legacyCopy(text, done))
+            } else {
+              this.legacyCopy(text, done)
+            }
+            this.close()
+          },
+          // Fallback for non-secure contexts (HTTP, old WebViews) where the async
+          // Clipboard API is unavailable.
+          legacyCopy(text, done) {
+            const ta = document.createElement("textarea")
+            ta.value = text
+            ta.style.position = "fixed"
+            ta.style.opacity = "0"
+            document.body.appendChild(ta)
+            ta.focus()
+            ta.select()
+            try { if (document.execCommand("copy")) done() } finally { ta.remove() }
+          }
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTime">
@@ -727,14 +945,19 @@ defmodule EdenWeb.ChatLive do
 
   attr :id, :string, required: true
   attr :message, :map, required: true
+  attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
   attr :group, :boolean, required: true
   attr :read, :boolean, required: true
 
   defp message_bubble(assigns) do
     ~H"""
-    <div id={@id} class={["flex", @mine && "justify-end"]}>
-      <div class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}>
+    <div id={@id} class={["ed-msg flex", @mine && "justify-end"]}>
+      <div
+        class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
+        id={"bubble-#{@message.id}"}
+        phx-hook=".MsgMenu"
+      >
         <span
           :if={@group and not @mine and @message.sender}
           class="block"
@@ -742,8 +965,17 @@ defmodule EdenWeb.ChatLive do
         >
           {@message.sender.display_name}
         </span>
+        <span :if={@message.forwarded_from} class="ed-forwarded">
+          <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+          {forwarded_label(@message.forwarded_from)}
+        </span>
         <.attachment_view :if={@message.attachment} attachment={@message.attachment} />
-        <span :if={@message.body != ""}>{@message.body}</span>
+        <span :if={@message.body != ""} class="break-words">
+          <.body_part
+            :for={part <- linkify(@message.body)}
+            part={part}
+          />
+        </span>
         <span class="ed-bubble__meta">
           <.local_time at={@message.inserted_at} />
           <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
@@ -754,7 +986,74 @@ defmodule EdenWeb.ChatLive do
             </span>
           </span>
         </span>
+        <.message_menu
+          message={@message}
+          conversation_id={@conversation_id}
+          mine={@mine}
+        />
       </div>
+    </div>
+    """
+  end
+
+  attr :message, :map, required: true
+  attr :conversation_id, :any, required: true
+  attr :mine, :boolean, required: true
+
+  # The message context menu — opened by right-click / long-press on the bubble
+  # (the `.MsgMenu` hook). Copy actions run client-side; forward/delete dispatch
+  # to the LiveView. `phx-update="ignore"` keeps it from being reset on re-render.
+  defp message_menu(assigns) do
+    ~H"""
+    <div class="ed-menu" id={"menu-#{@message.id}"} phx-update="ignore" data-menu role="menu" hidden>
+      <button
+        :if={@message.body != ""}
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        data-copy-text
+        data-text={@message.body}
+      >
+        <.icon name="hero-clipboard-micro" class="size-4" /> {gettext("Copy text")}
+      </button>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        data-copy-link
+        data-link={url(~p"/app/c/#{@conversation_id}/m/#{@message.id}")}
+      >
+        <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
+      </button>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="forward_prompt"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
+      </button>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="delete_for_me"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-eye-slash-micro" class="size-4" /> {gettext("Delete for me")}
+      </button>
+      <button
+        :if={@mine}
+        type="button"
+        class="ed-menu__item ed-menu__item--danger"
+        role="menuitem"
+        phx-click="delete_for_both"
+        phx-value-id={@message.id}
+        data-confirm={gettext("Delete this message for everyone?")}
+      >
+        <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete for everyone")}
+      </button>
     </div>
     """
   end
@@ -887,6 +1186,112 @@ defmodule EdenWeb.ChatLive do
       </div>
     </div>
     """
+  end
+
+  attr :targets, :list, required: true
+  attr :user, :map, required: true
+  attr :online_ids, :any, required: true
+
+  # Pick a conversation to forward the pending message into.
+  defp forward_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_forward"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_forward"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Forward to")}</h2>
+            <button class="ed-btn--icon" phx-click="close_forward" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <p :if={@targets == []} style="color: var(--ed-muted); font-size:0.875rem;">
+            {gettext("No conversations yet.")}
+          </p>
+          <div class="max-h-72 overflow-y-auto space-y-0.5">
+            <button
+              :for={c <- @targets}
+              type="button"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              phx-click="forward"
+              phx-value-target={c.id}
+            >
+              <.avatar
+                name={title(c, @user)}
+                src={avatar_src(peer(c, @user))}
+                online={online?(c, @user, @online_ids)}
+                size={:sm}
+              />
+              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
+                {title(c, @user)}
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp forwarded_label(%{sender: %{display_name: name}}),
+    do: gettext("Forwarded from %{name}", name: name)
+
+  defp forwarded_label(_forwarded_from), do: gettext("Forwarded")
+
+  attr :part, :any, required: true
+
+  # Renders one piece of a linkified message body: a link or escaped text.
+  defp body_part(%{part: {:link, url}} = assigns) do
+    assigns = assign(assigns, :url, url)
+
+    ~H"""
+    <a class="ed-link" href={@url} target="_blank" rel="noopener noreferrer">{@url}</a>
+    """
+  end
+
+  defp body_part(%{part: {:text, text}} = assigns) do
+    assigns = assign(assigns, :text, text)
+    ~H"{@text}"
+  end
+
+  # Split message text into `{:text, _}` / `{:link, url}` parts, turning bare
+  # http(s) URLs into links. Trailing sentence punctuation stays as text. The URL
+  # only ever feeds an `href`/text node that HEEx escapes, so there's no XSS path.
+  defp linkify(text) do
+    @url_regex
+    |> Regex.split(text, include_captures: true)
+    |> Enum.flat_map(&classify_body_part/1)
+  end
+
+  defp classify_body_part(""), do: []
+
+  defp classify_body_part(part) do
+    if String.starts_with?(part, ["http://", "https://"]) do
+      {url, trailing} = strip_trailing_punct(part)
+      [{:link, url} | if(trailing == "", do: [], else: [{:text, trailing}])]
+    else
+      [{:text, part}]
+    end
+  end
+
+  defp strip_trailing_punct(url) do
+    trimmed = Regex.replace(~r/[.,;:!?)\]}'"]+$/u, url, "")
+    {trimmed, String.replace_prefix(url, trimmed, "")}
   end
 
   attr :user, :map, required: true

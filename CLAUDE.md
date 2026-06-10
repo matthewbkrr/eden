@@ -40,7 +40,13 @@ design — built incrementally as features land.)
   - `Membership` — join between a `Conversation` and a user (role, joined_at,
     last_read, etc.). A conversation has many memberships.
   - `Message` — belongs to a conversation and a sender; carries text and/or one
-    `Attachment` (referenced by storage key, see Storage).
+    `Attachment` (referenced by storage key, see Storage). Lifecycle: **delete for
+    me** hides it for one user (`message_deletions` join, filtered out of
+    `list_messages/3`); **delete for both** (sender only) soft-deletes via
+    `deleted_at` + a "Message deleted" tombstone and cleans up blobs; **forward**
+    copies it into another conversation (re-referencing the same blob,
+    `forwarded_from_id` for attribution). A `/app/c/:id/m/:message_id` permalink
+    deep-links to a message.
   - `Attachment` — one per message, classified by **magic bytes** into a `kind`
     (`image | video | file | audio`), never the client content-type. Images and
     video render inline (image lightbox; in-app `<video>` with a poster + Range
@@ -157,7 +163,7 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   Build an S3 adapter to satisfy Phase 3's "storage swaps by one config line"; it
   needs `local_path/1` to return `:error` so file serving falls back to streaming
   bytes.
-- **Attachment blob cleanup on delete** — `attachments.message_id` is
-  `on_delete: :delete_all`, so deleting a message drops the row but **not** the
-  stored blobs (`storage_key` + `thumbnail_key`). When message deletion lands,
-  delete both objects via `Eden.Storage.delete/1` first, or storage leaks.
+- ~~**Attachment blob cleanup on delete**~~ — **resolved** by message "delete for
+  both": `delete_message_for_both/2` deletes the `storage_key` + `thumbnail_key`
+  blobs (after the tombstone commits, and only if no forwarded copy still
+  references them). Any new delete path must do the same.

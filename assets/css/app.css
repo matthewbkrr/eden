@@ -332,6 +332,7 @@
 
   /* Message bubbles ----------------------------------------------------- */
   .ed-bubble {
+    position: relative;
     max-width: 30rem;
     width: fit-content;
     padding: 0.5rem 0.75rem;
@@ -428,6 +429,99 @@
     border-radius: var(--ed-radius);
     background: var(--ed-surface-2);
     color: var(--ed-muted);
+  }
+
+  /* "Forwarded from" attribution, inside a bubble. */
+  .ed-forwarded {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.75rem;
+    opacity: 0.75;
+  }
+
+  /* Links inside message text. Inherit the bubble's color (legible on both the
+     cobalt "me" and neutral "them" sides); the underline carries the affordance. */
+  .ed-link {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  /* Message context menu (right-click / long-press), opened by the .MsgMenu hook. */
+  .ed-bubble {
+    /* Long-press shouldn't trigger the OS text-selection callout on the bubble. */
+    -webkit-touch-callout: none;
+  }
+  /* On touch, long-press opens the menu instead of selecting text; the menu has
+     "Copy text". Desktop keeps normal selection. */
+  @media (hover: none) {
+    .ed-bubble {
+      user-select: none;
+    }
+  }
+  .ed-menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 12rem;
+    padding: 0.25rem;
+    border-radius: var(--ed-radius);
+    background: var(--ed-surface);
+    border: 1px solid var(--ed-border);
+    box-shadow: 0 12px 32px oklch(0 0 0 / 0.32);
+    animation: ed-menu-in 120ms ease-out;
+  }
+  @keyframes ed-menu-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-menu {
+      animation: none;
+    }
+  }
+  .ed-menu[hidden] {
+    display: none;
+  }
+  .ed-menu__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.625rem;
+    border-radius: var(--ed-radius-sm);
+    font-size: 0.875rem;
+    color: var(--ed-ink);
+    text-align: left;
+  }
+  .ed-menu__item:hover {
+    background: var(--ed-surface-2);
+  }
+  .ed-menu__item--danger {
+    color: var(--ed-danger);
+  }
+
+  /* Permalink target: briefly ring the message scrolled to. */
+  @keyframes ed-msg-focus {
+    0%,
+    65% {
+      box-shadow: 0 0 0 2px var(--ed-primary);
+    }
+    100% {
+      box-shadow: 0 0 0 2px transparent;
+    }
+  }
+  .ed-msg--focus .ed-bubble {
+    animation: ed-msg-focus 2.2s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-msg--focus .ed-bubble {
+      animation: none;
+      box-shadow: 0 0 0 2px var(--ed-primary);
+    }
   }
 
   /* In-app image lightbox (toggled by the .Lightbox hook) -------------- */

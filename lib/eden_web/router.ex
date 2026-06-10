@@ -49,6 +49,8 @@ defmodule EdenWeb.Router do
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_authenticated}] do
       live "/app", ChatLive
       live "/app/c/:id", ChatLive
+      # Permalink: open the conversation scrolled to a specific message.
+      live "/app/c/:id/m/:message_id", ChatLive
     end
 
     # Device preferences — available signed out (current_scope may be nil).

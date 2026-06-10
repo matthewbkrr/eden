@@ -19,13 +19,22 @@ defmodule Eden.Chat.Message do
     field :body, :string
     # Client-generated idempotency key (UUID). See the migration / Chat dedup.
     field :client_id, :string
+    # "Delete for both" tombstone: when set, body/attachment are cleared and the
+    # row renders as "Message deleted".
+    field :deleted_at, :utc_datetime
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :sender, Eden.Accounts.User
+    # Self-reference: the original this message was forwarded from (if any).
+    belongs_to :forwarded_from, Eden.Chat.Message
     has_one :attachment, Eden.Chat.Attachment
 
     timestamps(type: :utc_datetime)
   end
+
+  @doc "Whether the message has been deleted for everyone (tombstoned)."
+  def deleted?(%__MODULE__{deleted_at: nil}), do: false
+  def deleted?(%__MODULE__{}), do: true
 
   @doc "Changeset for a text message: a non-blank body is required."
   def changeset(message, attrs) do

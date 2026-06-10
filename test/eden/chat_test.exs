@@ -6,7 +6,15 @@ defmodule Eden.ChatTest do
 
   alias Eden.Accounts.Scope
   alias Eden.Chat
-  alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
+
+  alias Eden.Chat.{
+    Attachment,
+    Conversation,
+    Membership,
+    Message,
+    MessageDeletion,
+    ThumbnailWorker
+  }
 
   defp scope(user), do: Scope.for_user(user)
 
@@ -324,6 +332,170 @@ defmodule Eden.ChatTest do
       assert first.id == second.id
       assert Repo.aggregate(Message, :count) == 1
       assert Repo.aggregate(Attachment, :count) == 1
+    end
+  end
+
+  describe "delete_message_for_me/2" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "secret"})
+      %{conv: conv, msg: msg}
+    end
+
+    test "hides the message for that user only", %{alice: alice, bob: bob, conv: conv, msg: msg} do
+      assert :ok = Chat.delete_message_for_me(scope(bob), msg.id)
+
+      {:ok, for_bob} = Chat.list_messages(scope(bob), conv.id)
+      assert for_bob == []
+
+      {:ok, for_alice} = Chat.list_messages(scope(alice), conv.id)
+      assert [%{id: id}] = for_alice
+      assert id == msg.id
+    end
+
+    test "is idempotent", %{bob: bob, msg: msg} do
+      assert :ok = Chat.delete_message_for_me(scope(bob), msg.id)
+      assert :ok = Chat.delete_message_for_me(scope(bob), msg.id)
+      assert Repo.aggregate(MessageDeletion, :count) == 1
+    end
+
+    test "broadcasts to the user's own sessions", %{bob: bob, conv: conv, msg: msg} do
+      Chat.subscribe_user(scope(bob))
+      :ok = Chat.delete_message_for_me(scope(bob), msg.id)
+      assert_receive {:message_hidden, conversation_id, message_id}
+      assert conversation_id == conv.id
+      assert message_id == msg.id
+    end
+
+    test "a non-member cannot hide", %{conv: conv, msg: msg} do
+      dave = user_fixture(%{username: "davedel"})
+      assert {:error, :not_found} = Chat.delete_message_for_me(scope(dave), msg.id)
+      # nothing in the conv to begin with, but the point is no row was written
+      assert Repo.aggregate(MessageDeletion, :count) == 0
+      _ = conv
+    end
+  end
+
+  describe "delete_message_for_both/2" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "removes the message from the thread for everyone", %{alice: alice, conv: conv} do
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "oops"})
+
+      assert :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+
+      # The row is kept soft-deleted (for blob cleanup / forward attribution) but
+      # no longer appears in the conversation for anyone.
+      reloaded = Repo.get!(Message, msg.id)
+      assert reloaded.deleted_at
+      assert reloaded.body == ""
+      assert {:ok, []} = Chat.list_messages(scope(alice), conv.id)
+    end
+
+    test "a non-sender cannot delete for both", %{alice: alice, bob: bob, conv: conv} do
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "mine"})
+      assert {:error, :forbidden} = Chat.delete_message_for_both(scope(bob), msg.id)
+      refute Repo.get!(Message, msg.id).deleted_at
+    end
+
+    test "broadcasts a tombstone", %{alice: alice, conv: conv} do
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "bye"})
+      Chat.subscribe(conv.id)
+      :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+      assert_receive {:message_deleted, tombstone}
+      assert tombstone.id == msg.id
+      assert Message.deleted?(tombstone)
+    end
+
+    test "deletes the attachment row and blob", %{alice: alice, conv: conv} do
+      {:ok, msg} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
+      key = msg.attachment.storage_key
+      assert Eden.Storage.exists?(key)
+
+      assert :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+
+      refute Eden.Storage.exists?(key)
+      assert Repo.aggregate(Attachment, :count) == 0
+    end
+  end
+
+  describe "forward_message/3" do
+    setup %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol_fwd"})
+      {:ok, source_conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, target_conv} = Chat.create_conversation(scope(alice), [carol.id])
+      %{carol: carol, source_conv: source_conv, target_conv: target_conv}
+    end
+
+    test "copies a text message into the target, attributed to the forwarder", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+      {:ok, original} = Chat.create_message(scope(alice), src.id, %{"body" => "look at this"})
+
+      assert {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, tgt.id)
+      assert forwarded.conversation_id == tgt.id
+      assert forwarded.body == "look at this"
+      assert forwarded.forwarded_from_id == original.id
+      assert forwarded.sender_id == alice.id
+
+      {:ok, [listed]} = Chat.list_messages(scope(alice), tgt.id)
+      assert listed.id == forwarded.id
+    end
+
+    test "copies the attachment by re-referencing the same blob", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+      {:ok, original} = Chat.create_attachment_message(scope(alice), src.id, %{path: real_png()})
+
+      assert {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, tgt.id)
+      forwarded = Repo.preload(forwarded, :attachment)
+
+      assert forwarded.attachment.id != original.attachment.id
+      assert forwarded.attachment.storage_key == original.attachment.storage_key
+      assert Repo.aggregate(Attachment, :count) == 2
+    end
+
+    test "keeps the shared blob until the last referencing message is deleted", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+      {:ok, original} = Chat.create_attachment_message(scope(alice), src.id, %{path: real_png()})
+      key = original.attachment.storage_key
+      {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, tgt.id)
+
+      # Deleting the original must NOT remove the blob the forward still references.
+      assert :ok = Chat.delete_message_for_both(scope(alice), original.id)
+      assert Eden.Storage.exists?(key)
+
+      # Deleting the last referencing message removes it.
+      assert :ok = Chat.delete_message_for_both(scope(alice), forwarded.id)
+      refute Eden.Storage.exists?(key)
+    end
+
+    test "refuses to forward a deleted message", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+      {:ok, original} = Chat.create_message(scope(alice), src.id, %{"body" => "gone"})
+      :ok = Chat.delete_message_for_both(scope(alice), original.id)
+
+      assert {:error, :deleted} = Chat.forward_message(scope(alice), original.id, tgt.id)
+    end
+
+    test "refuses a target the user does not belong to", ctx do
+      %{alice: alice, bob: bob, source_conv: src} = ctx
+      {:ok, original} = Chat.create_message(scope(alice), src.id, %{"body" => "hi"})
+      {:ok, other} = Chat.create_conversation(scope(bob), [ctx.carol.id])
+
+      assert {:error, :not_found} = Chat.forward_message(scope(alice), original.id, other.id)
+    end
+
+    test "forwarding a forward keeps the original as the attribution root", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+      {:ok, original} = Chat.create_message(scope(alice), src.id, %{"body" => "root"})
+      {:ok, first} = Chat.forward_message(scope(alice), original.id, tgt.id)
+      assert first.forwarded_from_id == original.id
+
+      {:ok, second} = Chat.forward_message(scope(alice), first.id, src.id)
+      # Attribution points at the original author, not the intermediate forward.
+      assert second.forwarded_from_id == original.id
     end
   end
 
@@ -676,6 +848,43 @@ defmodule Eden.ChatTest do
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "back to text"})
       [text_last] = Chat.list_conversations(scope(alice))
       assert is_nil(text_last.last_message_kind)
+    end
+
+    test "the preview skips a message the user deleted for themselves", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _first} = Chat.create_message(scope(alice), conv.id, %{"body" => "first"})
+      {:ok, last} = Chat.create_message(scope(alice), conv.id, %{"body" => "last"})
+
+      :ok = Chat.delete_message_for_me(scope(bob), last.id)
+
+      # Bob's preview falls back to the message before the one he hid.
+      assert [%{last_message_body: "first"}] = Chat.list_conversations(scope(bob))
+      # Alice still sees the latest.
+      assert [%{last_message_body: "last"}] = Chat.list_conversations(scope(alice))
+    end
+
+    test "the preview skips a deleted-for-both last message", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _first} = Chat.create_message(scope(alice), conv.id, %{"body" => "keep"})
+      {:ok, last} = Chat.create_message(scope(alice), conv.id, %{"body" => "remove"})
+      :ok = Chat.delete_message_for_both(scope(alice), last.id)
+
+      # Falls back to the message before the deleted one.
+      assert [%{last_message_body: "keep"}] = Chat.list_conversations(scope(bob))
+    end
+
+    test "unread skips tombstones and self-hidden messages", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _one} = Chat.create_message(scope(alice), conv.id, %{"body" => "1"})
+      {:ok, two} = Chat.create_message(scope(alice), conv.id, %{"body" => "2"})
+      {:ok, three} = Chat.create_message(scope(alice), conv.id, %{"body" => "3"})
+
+      assert [%{unread_count: 3}] = Chat.list_conversations(scope(bob))
+
+      :ok = Chat.delete_message_for_both(scope(alice), two.id)
+      :ok = Chat.delete_message_for_me(scope(bob), three.id)
+
+      assert [%{unread_count: 1}] = Chat.list_conversations(scope(bob))
     end
   end
 
