@@ -157,6 +157,35 @@ defmodule EdenWeb.SettingsLiveTest do
       assert ["Family"] == Enum.map(Chat.list_folders(scope), & &1.name)
     end
 
+    test "renames save on blur (clicking away), with confirmation", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      [folder] = Chat.list_folders(scope)
+
+      # Blur carries the input value (no Enter needed).
+      html =
+        view
+        |> element("#folder-name-#{folder.id}")
+        |> render_blur(%{"folder_id" => to_string(folder.id), "value" => "Job"})
+
+      assert html =~ "Folder renamed."
+      assert [%{name: "Job"}] = Chat.list_folders(scope)
+
+      # A blur with the unchanged name is a no-op (no new flash, no write).
+      render_click(view, "lv:clear-flash", %{"key" => "info"})
+
+      html =
+        view
+        |> element("#folder-name-#{folder.id}")
+        |> render_blur(%{"folder_id" => to_string(folder.id), "value" => "Job"})
+
+      refute html =~ "Folder renamed."
+    end
+
     test "a blank rename shows a blank-name error, not a length error", %{conn: conn} do
       user = user_fixture()
       scope = Scope.for_user(user)

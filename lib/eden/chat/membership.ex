@@ -12,6 +12,8 @@ defmodule Eden.Chat.Membership do
     field :last_read_at, :utc_datetime
     # Set when the user "deletes" (hides) the conversation; cleared on new activity.
     field :left_at, :utc_datetime
+    # Per-user chat mute: set = muted (unread no longer emphasized in badges).
+    field :muted_at, :utc_datetime
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :user, Eden.Accounts.User

@@ -1136,4 +1136,76 @@ defmodule Eden.ChatTest do
       assert {:error, :not_found} = Chat.delete_folder(scope(bob), folder.id)
     end
   end
+
+  describe "mute" do
+    test "toggling a chat mutes it for that user only", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      assert {:ok, :muted} = Chat.toggle_conversation_mute(scope(alice), conv.id)
+      assert [%{muted: true}] = Chat.list_conversations(scope(alice))
+      assert [%{muted: false}] = Chat.list_conversations(scope(bob))
+
+      assert {:ok, :unmuted} = Chat.toggle_conversation_mute(scope(alice), conv.id)
+      assert [%{muted: false}] = Chat.list_conversations(scope(alice))
+    end
+
+    test "a non-member cannot mute", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      carol = user_fixture(%{username: "carolmute"})
+      assert {:error, :not_found} = Chat.toggle_conversation_mute(scope(carol), conv.id)
+    end
+
+    test "a muted chat stops counting toward folder badges", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "ping"})
+
+      assert [%{unread_count: 1}] = Chat.list_folders(scope(alice))
+
+      {:ok, :muted} = Chat.toggle_conversation_mute(scope(alice), conv.id)
+      assert [%{unread_count: 0}] = Chat.list_folders(scope(alice))
+      # The chat's own unread is still tracked (just de-emphasized in the UI).
+      assert [%{unread_count: 1, muted: true}] = Chat.list_conversations(scope(alice))
+    end
+
+    test "muting a folder mutes its chats everywhere", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carolfm"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _other} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, muted_folder} = Chat.create_folder(scope(alice), %{"name" => "Muted"})
+      {:ok, other_folder} = Chat.create_folder(scope(alice), %{"name" => "Other"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, muted_folder.id)
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, other_folder.id)
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "ping"})
+
+      assert {:ok, :muted} = Chat.toggle_folder_mute(scope(alice), muted_folder.id)
+
+      # The chat is effectively muted, and contributes to NO folder badge —
+      # including the other, unmuted folder it also lives in.
+      muted_ids =
+        Chat.list_conversations(scope(alice)) |> Enum.filter(& &1.muted) |> Enum.map(& &1.id)
+
+      assert muted_ids == [conv.id]
+      assert Enum.all?(Chat.list_folders(scope(alice)), &(&1.unread_count == 0))
+    end
+
+    test "un-muting a folder keeps a direct chat mute", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+
+      {:ok, :muted} = Chat.toggle_conversation_mute(scope(alice), conv.id)
+      {:ok, :muted} = Chat.toggle_folder_mute(scope(alice), folder.id)
+      {:ok, :unmuted} = Chat.toggle_folder_mute(scope(alice), folder.id)
+
+      assert [%{muted: true}] = Chat.list_conversations(scope(alice))
+    end
+
+    test "a foreign folder cannot be muted", %{alice: alice, bob: _bob} do
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Mine"})
+      dave = user_fixture(%{username: "davemute"})
+      assert {:error, :not_found} = Chat.toggle_folder_mute(scope(dave), folder.id)
+    end
+  end
 end

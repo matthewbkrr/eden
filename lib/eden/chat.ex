@@ -82,11 +82,33 @@ defmodule Eden.Chat do
     ids = Enum.map(conversations, & &1.id)
     previews = last_message_previews(user, ids)
     unread = unread_counts(user, ids)
+    muted = muted_conversation_ids(user, ids)
 
     Enum.map(conversations, fn conversation ->
-      %{conversation | unread_count: Map.get(unread, conversation.id, 0)}
+      %{
+        conversation
+        | unread_count: Map.get(unread, conversation.id, 0),
+          muted: conversation.id in muted
+      }
       |> apply_preview(previews[conversation.id])
     end)
+  end
+
+  # Conversations the user muted — directly (memberships.muted_at) or by muting
+  # a folder the chat lives in. Muted-anywhere wins: it stops contributing to
+  # every badge, and the row renders de-emphasized. Returns a plain id list
+  # (sidebar-sized; also sidesteps dialyzer's opaque-MapSet false positive).
+  defp muted_conversation_ids(_user, []), do: []
+
+  defp muted_conversation_ids(user, ids) do
+    direct =
+      from m in Membership,
+        where: m.user_id == ^user.id and m.conversation_id in ^ids and not is_nil(m.muted_at),
+        select: m.conversation_id
+
+    via_folder = muted_via_folder_query(user) |> where([fm], fm.conversation_id in ^ids)
+
+    Enum.uniq(Repo.all(direct) ++ Repo.all(via_folder))
   end
 
   defp filter_by_folder(query, nil, _user_id), do: query
@@ -161,10 +183,15 @@ defmodule Eden.Chat do
     end
   end
 
-  @doc "Like get_conversation/2 but with the virtual unread_count / last_message_body filled in."
+  @doc "Like get_conversation/2 but with the virtual unread_count / last_message_body / muted filled in."
   def get_conversation_summary(%Scope{user: user} = scope, id) do
     with {:ok, conversation} <- get_conversation(scope, id) do
-      conversation = %{conversation | unread_count: Map.get(unread_counts(user, [id]), id, 0)}
+      conversation = %{
+        conversation
+        | unread_count: Map.get(unread_counts(user, [id]), id, 0),
+          muted: id in muted_conversation_ids(user, [id])
+      }
+
       {:ok, apply_preview(conversation, last_message_previews(user, [id])[id])}
     end
   end
@@ -273,7 +300,10 @@ defmodule Eden.Chat do
   end
 
   # Per-folder unread totals — same rule as unread_counts/2, grouped by folder
-  # (a chat in several folders counts toward each). Left conversations are skipped.
+  # (a chat in several folders counts toward each). Left conversations are
+  # skipped, and so are muted ones: muted directly (memberships.muted_at) or
+  # living in ANY muted folder — a muted chat stops contributing to every badge
+  # (a muted folder's own badge therefore naturally drops to zero).
   defp folder_unread_counts(user) do
     from(f in Folder,
       join: fm in FolderMembership,
@@ -281,19 +311,29 @@ defmodule Eden.Chat do
       join: mem in Membership,
       on:
         mem.conversation_id == fm.conversation_id and mem.user_id == ^user.id and
-          is_nil(mem.left_at),
+          is_nil(mem.left_at) and is_nil(mem.muted_at),
       join: msg in Message,
       on: msg.conversation_id == fm.conversation_id,
       left_join: d in MessageDeletion,
       on: d.message_id == msg.id and d.user_id == ^user.id,
-      where:
-        f.user_id == ^user.id and msg.sender_id != ^user.id and is_nil(msg.deleted_at) and
-          is_nil(d.id) and (is_nil(mem.last_read_at) or msg.inserted_at > mem.last_read_at),
+      where: f.user_id == ^user.id,
+      where: fm.conversation_id not in subquery(muted_via_folder_query(user)),
+      where: msg.sender_id != ^user.id and is_nil(msg.deleted_at) and is_nil(d.id),
+      where: is_nil(mem.last_read_at) or msg.inserted_at > mem.last_read_at,
       group_by: f.id,
       select: {f.id, count(msg.id)}
     )
     |> Repo.all()
     |> Map.new()
+  end
+
+  # Conversations sitting in any of the user's muted folders.
+  defp muted_via_folder_query(user) do
+    from fm in FolderMembership,
+      join: f in Folder,
+      on: f.id == fm.folder_id,
+      where: f.user_id == ^user.id and not is_nil(f.muted_at),
+      select: fm.conversation_id
   end
 
   # A generous sanity cap — Telegram allows about this many. Keeps a runaway
@@ -399,6 +439,55 @@ defmodule Eden.Chat do
       on_conflict: [set: [all_chats_position: position, updated_at: now()]],
       conflict_target: :user_id
     )
+  end
+
+  ## Mute
+
+  @doc """
+  Mutes / unmutes a conversation for the scoped user (their membership's
+  `muted_at`). Muting only affects badge emphasis — eden has no push or sound.
+  Returns `{:ok, :muted | :unmuted}` or `{:error, :not_found}`.
+  """
+  def toggle_conversation_mute(%Scope{user: user}, conversation_id) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         %Membership{} = membership <-
+           Repo.get_by(Membership, conversation_id: id, user_id: user.id) do
+      muted_at = if membership.muted_at, do: nil, else: now()
+
+      # update_all: a no-op (not a StaleEntryError) if the membership vanished
+      # concurrently — e.g. the conversation was GC'd mid-click.
+      Repo.update_all(from(m in Membership, where: m.id == ^membership.id),
+        set: [muted_at: muted_at]
+      )
+
+      broadcast_folders(user.id)
+      {:ok, if(muted_at, do: :muted, else: :unmuted)}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Mutes / unmutes one of the scoped user's folders (`chat_folders.muted_at`):
+  every chat in it stops contributing to badges. Un-muting the folder does not
+  un-mute chats that were muted directly. Returns `{:ok, :muted | :unmuted}` or
+  `{:error, :not_found}`.
+  """
+  def toggle_folder_mute(%Scope{user: user} = scope, folder_id) do
+    case get_folder(scope, folder_id) do
+      %Folder{} = folder ->
+        muted_at = if folder.muted_at, do: nil, else: now()
+
+        # update_all: a no-op (not a StaleEntryError) if the folder was deleted
+        # concurrently in Settings.
+        Repo.update_all(from(f in Folder, where: f.id == ^folder.id), set: [muted_at: muted_at])
+
+        broadcast_folders(user.id)
+        {:ok, if(muted_at, do: :muted, else: :unmuted)}
+
+      nil ->
+        {:error, :not_found}
+    end
   end
 
   @doc """
