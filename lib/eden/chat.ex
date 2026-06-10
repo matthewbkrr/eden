@@ -11,7 +11,16 @@ defmodule Eden.Chat do
   require Logger
 
   alias Eden.Accounts.{Scope, User}
-  alias Eden.Chat.{Attachment, Conversation, Membership, Message, ThumbnailWorker}
+
+  alias Eden.Chat.{
+    Attachment,
+    Conversation,
+    Membership,
+    Message,
+    MessageDeletion,
+    ThumbnailWorker
+  }
+
   alias Eden.Repo
   alias Eden.Storage
 
@@ -161,17 +170,22 @@ defmodule Eden.Chat do
   to size the page (default #{@default_page}). `{:error, :not_found}` if the user
   is not a member.
   """
-  def list_messages(%Scope{} = scope, conversation_id, opts \\ []) do
+  def list_messages(%Scope{user: user} = scope, conversation_id, opts \\ []) do
     if member?(scope, conversation_id) do
       limit = Keyword.get(opts, :limit, @default_page)
 
       messages =
         Message
         |> where([m], m.conversation_id == ^conversation_id)
+        # Exclude messages this user "deleted for me" (still visible to others).
+        |> join(:left, [m], d in MessageDeletion,
+          on: d.message_id == m.id and d.user_id == ^user.id
+        )
+        |> where([_m, d], is_nil(d.id))
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload([:sender, :attachment])
+        |> preload([:sender, :attachment, forwarded_from: :sender])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -258,6 +272,172 @@ defmodule Eden.Chat do
   # they start nil here.
   defp media_dimensions("image", path), do: image_dimensions(path)
   defp media_dimensions(_kind, _path), do: {nil, nil}
+
+  ## Message management (delete, forward)
+
+  @doc """
+  Hides a message from the scoped user only ("delete for me"). Idempotent; the
+  message stays visible to everyone else. Broadcasts to the user's other sessions
+  so they hide it too. `{:error, :not_found}` if not a member / unknown id.
+  """
+  def delete_message_for_me(%Scope{user: user} = scope, message_id) do
+    with {:ok, message} <- fetch_message(scope, message_id) do
+      %MessageDeletion{}
+      |> Ecto.Changeset.change(message_id: message.id, user_id: user.id)
+      |> Repo.insert(on_conflict: :nothing, conflict_target: [:message_id, :user_id])
+
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user.id),
+        {:message_hidden, message.conversation_id, message.id}
+      )
+
+      :ok
+    end
+  end
+
+  @doc """
+  Deletes a message for everyone ("delete for both") — sender only. Soft-deletes
+  the row (tombstone: `deleted_at` set, body cleared, attachment removed),
+  deletes the attachment's blobs unless another attachment still references them
+  (a forward shares the blob), and broadcasts the tombstone. `{:error, :not_found}`
+  for unknown/non-member, `{:error, :forbidden}` if not the sender.
+  """
+  def delete_message_for_both(%Scope{user: user} = scope, message_id) do
+    with {:ok, message} <- fetch_message(scope, message_id),
+         :ok <- ensure_sender(message, user.id),
+         {:ok, tombstone} <- soft_delete(message) do
+      broadcast(message.conversation_id, {:message_deleted, tombstone})
+      notify_members(message.conversation_id)
+      :ok
+    end
+  end
+
+  @doc """
+  Forwards a message into another conversation the scoped user belongs to: a new
+  message copying the body and (re-referencing) the attachment, attributed to the
+  forwarder. The copied attachment points at the same blob; serving stays
+  authorized by the target conversation's membership. `{:error, :not_found |
+  :deleted}`.
+  """
+  def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id) do
+    with {:ok, source} <- fetch_message(scope, message_id),
+         :ok <- ensure_not_deleted(source),
+         :ok <- ensure_member(scope, target_conversation_id) do
+      do_forward(user, target_conversation_id, Repo.preload(source, :attachment))
+    end
+  end
+
+  defp do_forward(user, target_conversation_id, source) do
+    case insert_forward_tx(user, target_conversation_id, source) do
+      {:ok, message} -> {:ok, deliver(target_conversation_id, message)}
+      error -> error
+    end
+  end
+
+  defp insert_forward_tx(user, target_conversation_id, source) do
+    Repo.transact(fn ->
+      with {:ok, message} <- insert_forward(user, target_conversation_id, source),
+           :ok <- copy_attachment(message.id, source.attachment) do
+        {:ok, message}
+      end
+    end)
+  end
+
+  # Fetches a message in a conversation the scoped user belongs to (authorization).
+  defp fetch_message(%Scope{user: user}, message_id) do
+    with id when is_integer(id) <- safe_id(message_id),
+         %Message{} = message <-
+           Repo.one(
+             from m in Message,
+               join: mem in Membership,
+               on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+               where: m.id == ^id
+           ) do
+      {:ok, message}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp ensure_sender(%Message{sender_id: sender_id}, user_id) when sender_id == user_id, do: :ok
+  defp ensure_sender(_message, _user_id), do: {:error, :forbidden}
+
+  defp ensure_not_deleted(message),
+    do: if(Message.deleted?(message), do: {:error, :deleted}, else: :ok)
+
+  defp ensure_member(scope, conversation_id),
+    do: if(member?(scope, conversation_id), do: :ok, else: {:error, :not_found})
+
+  defp soft_delete(message) do
+    Repo.transact(fn ->
+      message = Repo.preload(message, :attachment)
+      if message.attachment, do: delete_attachment(message.attachment)
+
+      with {:ok, tombstone} <-
+             message
+             |> Ecto.Changeset.change(deleted_at: now(), body: "")
+             |> Repo.update() do
+        {:ok, Repo.preload(tombstone, [:sender, :attachment], force: true)}
+      end
+    end)
+  end
+
+  # Delete the attachment row and its blobs, but keep a blob alive if another
+  # attachment still points at it (forwards re-reference the same storage_key).
+  defp delete_attachment(%Attachment{} = attachment) do
+    maybe_delete_blob(attachment.storage_key, attachment.id)
+    maybe_delete_blob(attachment.thumbnail_key, attachment.id)
+    Repo.delete(attachment)
+  end
+
+  defp maybe_delete_blob(nil, _exclude_id), do: :ok
+
+  defp maybe_delete_blob(key, exclude_id) do
+    shared? =
+      Repo.exists?(
+        from a in Attachment,
+          where: a.id != ^exclude_id and (a.storage_key == ^key or a.thumbnail_key == ^key)
+      )
+
+    unless shared?, do: Storage.delete(key)
+    :ok
+  end
+
+  defp insert_forward(user, target_conversation_id, source) do
+    %Message{
+      conversation_id: target_conversation_id,
+      sender_id: user.id,
+      forwarded_from_id: source.id
+    }
+    |> Message.photo_changeset(%{"body" => source.body || ""})
+    |> Repo.insert()
+  end
+
+  defp copy_attachment(_message_id, nil), do: :ok
+
+  defp copy_attachment(message_id, %Attachment{} = source) do
+    attrs =
+      Map.take(source, [
+        :kind,
+        :storage_key,
+        :content_type,
+        :byte_size,
+        :filename,
+        :width,
+        :height,
+        :duration,
+        :thumbnail_key
+      ])
+
+    %Attachment{message_id: message_id}
+    |> Attachment.changeset(attrs)
+    |> Repo.insert()
+    |> case do
+      {:ok, _attachment} -> :ok
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
 
   @doc "Marks the conversation read up to now for the scoped user, broadcasting a read receipt."
   def mark_read(%Scope{user: user}, conversation_id) do
