@@ -40,7 +40,10 @@ defmodule EdenWeb.ChatLive do
         oldest_id: nil,
         other_read_at: nil,
         online_ids: EdenWeb.Presence.online_ids(),
-        composer: empty_composer()
+        composer: empty_composer(),
+        folders: Chat.list_folders(scope),
+        folder_id: nil,
+        folder_chat_id: nil
       )
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
@@ -221,6 +224,13 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  def handle_event("select_folder", %{"id" => id}, socket) do
+    {:noreply,
+     socket
+     |> assign(folder_id: parse_folder_id(id))
+     |> stream_conversations(reset: true)}
+  end
+
   def handle_event("forward_prompt", %{"id" => id}, socket) do
     targets = Chat.list_conversations(socket.assigns.current_scope)
     {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
@@ -329,10 +339,7 @@ defmodule EdenWeb.ChatLive do
         do: stream_delete_by_dom_id(socket, :messages, "messages-#{message_id}"),
         else: socket
 
-    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
-      {:ok, summary} -> {:noreply, stream_insert(socket, :conversations, summary)}
-      {:error, _} -> {:noreply, socket}
-    end
+    {:noreply, put_sidebar_conversation(socket, conversation_id)}
   end
 
   # A thumbnail finished generating: swap the full image for it, in place. Guard
@@ -375,15 +382,19 @@ defmodule EdenWeb.ChatLive do
   end
 
   # A conversation the user belongs to changed: move it to the top of the list
-  # with refreshed unread/preview, without reloading the whole sidebar.
+  # with refreshed unread/preview, without reloading the whole sidebar. Folder
+  # unread badges may have changed too, so refresh the tabs.
   def handle_info({:conversation_activity, conversation_id}, socket) do
-    case Chat.get_conversation_summary(socket.assigns.current_scope, conversation_id) do
-      {:ok, conversation} ->
-        {:noreply, stream_insert(socket, :conversations, conversation, at: 0)}
+    {:noreply,
+     socket
+     |> put_sidebar_conversation(conversation_id, at: 0)
+     |> refresh_folders()}
+  end
 
-      {:error, _} ->
-        {:noreply, socket}
-    end
+  # Folder set / membership / order changed in one of the user's sessions: refresh
+  # the tab bar and re-apply the active filter to the conversation list.
+  def handle_info(:folders_changed, socket) do
+    {:noreply, socket |> refresh_folders() |> stream_conversations(reset: true)}
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
@@ -455,6 +466,35 @@ defmodule EdenWeb.ChatLive do
             </.link>
           </div>
         </header>
+
+        <nav
+          :if={@folders != []}
+          class="ed-folders"
+          aria-label={gettext("Chat folders")}
+        >
+          <button
+            type="button"
+            class={["ed-folder-tab", @folder_id == nil && "ed-folder-tab--active"]}
+            phx-click="select_folder"
+            phx-value-id=""
+            aria-pressed={@folder_id == nil}
+          >
+            {gettext("All Chats")}
+          </button>
+          <button
+            :for={folder <- @folders}
+            type="button"
+            class={["ed-folder-tab", @folder_id == folder.id && "ed-folder-tab--active"]}
+            phx-click="select_folder"
+            phx-value-id={folder.id}
+            aria-pressed={@folder_id == folder.id}
+          >
+            {folder.name}
+            <span :if={folder.unread_count > 0} class="ed-folder-tab__badge">
+              {folder.unread_count}
+            </span>
+          </button>
+        </nav>
 
         <div class="flex-1 overflow-y-auto p-2 relative">
           <div id="conversations" phx-update="stream" class="space-y-0.5">
@@ -1571,10 +1611,44 @@ defmodule EdenWeb.ChatLive do
     |> refresh_sidebar()
   end
 
-  defp refresh_sidebar(socket) do
-    stream(socket, :conversations, Chat.list_conversations(socket.assigns.current_scope),
-      reset: true
-    )
+  defp refresh_sidebar(socket), do: stream_conversations(socket, reset: true)
+
+  # Re-stream the conversation list honoring the active folder filter.
+  defp stream_conversations(socket, opts) do
+    convos = Chat.list_conversations(socket.assigns.current_scope, socket.assigns.folder_id)
+    stream(socket, :conversations, convos, opts)
+  end
+
+  defp refresh_folders(socket) do
+    folders = Chat.list_folders(socket.assigns.current_scope)
+    ids = Enum.map(folders, & &1.id)
+    folder_id = if socket.assigns.folder_id in ids, do: socket.assigns.folder_id, else: nil
+    assign(socket, folders: folders, folder_id: folder_id)
+  end
+
+  # Insert/refresh one conversation in the sidebar, honoring the active folder:
+  # drop it from the view if it isn't in the selected folder.
+  defp put_sidebar_conversation(socket, conversation_id, insert_opts \\ []) do
+    scope = socket.assigns.current_scope
+    fid = socket.assigns.folder_id
+
+    if is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id) do
+      case Chat.get_conversation_summary(scope, conversation_id) do
+        {:ok, summary} -> stream_insert(socket, :conversations, summary, insert_opts)
+        {:error, _} -> socket
+      end
+    else
+      stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+    end
+  end
+
+  defp parse_folder_id(""), do: nil
+
+  defp parse_folder_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} -> n
+      _ -> nil
+    end
   end
 
   # When the updated user is a member of the open conversation, re-preload its
