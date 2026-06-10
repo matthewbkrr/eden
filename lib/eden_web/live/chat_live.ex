@@ -45,7 +45,9 @@ defmodule EdenWeb.ChatLive do
         folder_tabs: [],
         folder_id: nil,
         folder_chat_id: nil,
-        folder_checked: MapSet.new()
+        folder_checked: MapSet.new(),
+        search: "",
+        search_results: nil
       )
       |> refresh_folders()
       |> stream(:conversations, Chat.list_conversations(scope))
@@ -232,6 +234,25 @@ defmodule EdenWeb.ChatLive do
      socket
      |> assign(folder_id: parse_folder_id(id))
      |> stream_conversations(reset: true)}
+  end
+
+  def handle_event("search", %{"q" => query}, socket) do
+    if String.trim(query) == "" do
+      {:noreply, assign(socket, search: "", search_results: nil)}
+    else
+      {:noreply,
+       assign(socket,
+         search: query,
+         search_results: Chat.search(socket.assigns.current_scope, query)
+       )}
+    end
+  end
+
+  def handle_event("clear_search", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(search: "", search_results: nil)
+     |> push_event("clear-search", %{})}
   end
 
   # Sidebar/tab refreshes are driven by the :folders_changed broadcast both
@@ -519,8 +540,38 @@ defmodule EdenWeb.ChatLive do
           </div>
         </header>
 
+        <form
+          id="sidebar-search"
+          class="ed-search"
+          phx-change="search"
+          phx-submit="search"
+          phx-hook=".SearchBox"
+          role="search"
+        >
+          <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
+          <input
+            type="search"
+            name="q"
+            value={@search}
+            placeholder={gettext("Search")}
+            class="ed-search__input"
+            phx-debounce="250"
+            autocomplete="off"
+            aria-label={gettext("Search chats and messages")}
+          />
+          <button
+            :if={@search != ""}
+            type="button"
+            class="ed-btn--icon"
+            phx-click="clear_search"
+            aria-label={gettext("Clear search")}
+          >
+            <.icon name="hero-x-mark-micro" class="size-4" />
+          </button>
+        </form>
+
         <nav
-          :if={@folders != []}
+          :if={@folders != [] and @search == ""}
           class="ed-folders"
           aria-label={gettext("Chat folders")}
         >
@@ -577,7 +628,9 @@ defmodule EdenWeb.ChatLive do
           <% end %>
         </nav>
 
-        <div class="flex-1 overflow-y-auto p-2 relative">
+        <%!-- The stream container is only hidden (not removed) while searching,
+              so its client-side items survive and updates keep applying. --%>
+        <div class={["flex-1 overflow-y-auto p-2 relative", @search != "" && "hidden"]}>
           <div id="conversations" phx-update="stream" class="space-y-0.5">
             <.conversation_item
               :for={{dom_id, conversation} <- @streams.conversations}
@@ -607,6 +660,15 @@ defmodule EdenWeb.ChatLive do
               </button>
             <% end %>
           </div>
+        </div>
+        <div :if={@search != ""} class="flex-1 overflow-y-auto p-2">
+          <.search_results
+            :if={@search_results}
+            results={@search_results}
+            query={@search}
+            user={@current_scope.user}
+            online_ids={@online_ids}
+          />
         </div>
       </aside>
 
@@ -788,6 +850,21 @@ defmodule EdenWeb.ChatLive do
       />
       <.folder_modal :if={@folder_chat_id} folders={@folders} checked={@folder_checked} />
 
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SearchBox">
+        // Keeps the search input in sync with server-side clears: morphdom won't
+        // patch a focused input's value, so the server pushes "clear-search" and
+        // we empty it here. Also forwards the native type=search Escape-clear
+        // (which fires "search", not "input") to the server.
+        export default {
+          mounted() {
+            this.input = this.el.querySelector("input[type=search]")
+            this.handleEvent("clear-search", () => { this.input.value = "" })
+            this.input.addEventListener("search", () => {
+              if (this.input.value === "") this.pushEvent("clear_search", {})
+            })
+          }
+        }
+      </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
           mounted() {
@@ -1184,6 +1261,105 @@ defmodule EdenWeb.ChatLive do
       </div>
     </div>
     """
+  end
+
+  attr :results, :map, required: true
+  attr :query, :string, required: true
+  attr :user, :map, required: true
+  attr :online_ids, :any, required: true
+
+  # Grouped search results: conversations (by participant/title) and messages
+  # (by content). A message row opens its permalink — the existing scroll-to +
+  # highlight flow. Matched terms render inside <mark>.
+  defp search_results(assigns) do
+    ~H"""
+    <div class="space-y-3">
+      <p
+        :if={@results.conversations == [] and @results.messages == []}
+        class="text-center py-8"
+        style="color: var(--ed-muted); font-size:0.875rem;"
+      >
+        {gettext("No results for “%{query}”", query: String.trim(@query))}
+      </p>
+
+      <section :if={@results.conversations != []}>
+        <h3 class="ed-search__group">{gettext("Chats")}</h3>
+        <.link
+          :for={conversation <- @results.conversations}
+          patch={~p"/app/c/#{conversation.id}"}
+          class="ed-convo"
+        >
+          <.avatar
+            name={title(conversation, @user)}
+            src={avatar_src(peer(conversation, @user))}
+            online={online?(conversation, @user, @online_ids)}
+          />
+          <span class="ed-convo__body">
+            <span class="ed-convo__name">
+              <.highlighted text={title(conversation, @user)} query={@query} />
+            </span>
+          </span>
+        </.link>
+      </section>
+
+      <section :if={@results.messages != []}>
+        <h3 class="ed-search__group">{gettext("Messages")}</h3>
+        <.link
+          :for={message <- @results.messages}
+          patch={~p"/app/c/#{message.conversation_id}/m/#{message.id}"}
+          class="ed-convo"
+        >
+          <.avatar
+            name={title(message.conversation, @user)}
+            src={avatar_src(peer(message.conversation, @user))}
+            online={online?(message.conversation, @user, @online_ids)}
+          />
+          <span class="ed-convo__body">
+            <span class="ed-convo__top">
+              <span class="ed-convo__name">{title(message.conversation, @user)}</span>
+              <.local_time at={message.inserted_at} class="ed-convo__time" />
+            </span>
+            <span class="ed-convo__preview">
+              <.highlighted text={snippet(message.body, @query)} query={@query} />
+            </span>
+          </span>
+        </.link>
+      </section>
+    </div>
+    """
+  end
+
+  attr :text, :string, required: true
+  attr :query, :string, required: true
+
+  # Wraps case-insensitive occurrences of the query in <mark>. Parts are plain
+  # text nodes (HEEx-escaped), so user content can't inject markup.
+  defp highlighted(assigns) do
+    query = String.trim(assigns.query)
+
+    parts =
+      if query == "" do
+        [assigns.text]
+      else
+        String.split(assigns.text, ~r/#{Regex.escape(query)}/iu, include_captures: true)
+      end
+
+    assigns = assign(assigns, :parts, parts)
+
+    ~H"""
+    <%= for part <- @parts do %><%= if String.downcase(part) == String.downcase(String.trim(@query)) do %><mark class="ed-mark">{part}</mark><% else %>{part}<% end %><% end %>
+    """
+  end
+
+  # A short window of the message body around the first match, so long messages
+  # show the relevant part. Grapheme-based (byte offsets would split UTF-8).
+  defp snippet(body, query) do
+    q = String.downcase(String.trim(query))
+    before = body |> String.downcase() |> String.split(q, parts: 2) |> hd()
+
+    start = max(String.length(before) - 24, 0)
+    prefix = if start > 0, do: "…", else: ""
+    prefix <> String.slice(body, start, 110)
   end
 
   # Sidebar preview line. An attachment shows "<emoji> <caption|kind>" so the row

@@ -408,6 +408,53 @@ defmodule EdenWeb.ChatLiveTest do
     end
   end
 
+  describe "search" do
+    setup [:setup_conversation]
+
+    test "shows grouped results with highlight; clear restores the list", ctx do
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "let's plan the picnic"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "picnic"})
+      assert html =~ "Messages"
+      assert html =~ ~s(<mark class="ed-mark">picnic</mark>)
+
+      html = render_change(view, "search", %{"q" => "Bob"})
+      assert html =~ "Chats"
+      assert html =~ ~s(<mark class="ed-mark">Bob</mark>)
+
+      html = render_click(view, "clear_search", %{})
+      refute html =~ "ed-search__group"
+      assert has_element?(view, "#conversations-#{ctx.conversation.id}")
+    end
+
+    test "a message result links to its permalink", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "remember the anchor point"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "anchor"})
+      assert html =~ ~s(href="/app/c/#{ctx.conversation.id}/m/#{msg.id}")
+    end
+
+    test "shows the no-results state", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "zzznothing"})
+      assert html =~ "No results for"
+    end
+  end
+
   describe "folders" do
     setup [:setup_conversation]
 
