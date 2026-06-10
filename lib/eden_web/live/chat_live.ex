@@ -41,11 +41,13 @@ defmodule EdenWeb.ChatLive do
         other_read_at: nil,
         online_ids: EdenWeb.Presence.online_ids(),
         composer: empty_composer(),
-        folders: Chat.list_folders(scope),
+        folders: [],
+        folder_tabs: [],
         folder_id: nil,
         folder_chat_id: nil,
         folder_checked: MapSet.new()
       )
+      |> refresh_folders()
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
       # Accept anything: the server classifies by magic bytes and enforces the
@@ -499,28 +501,31 @@ defmodule EdenWeb.ChatLive do
           class="ed-folders"
           aria-label={gettext("Chat folders")}
         >
-          <button
-            type="button"
-            class={["ed-folder-tab", @folder_id == nil && "ed-folder-tab--active"]}
-            phx-click="select_folder"
-            phx-value-id=""
-            aria-pressed={to_string(@folder_id == nil)}
-          >
-            {gettext("All Chats")}
-          </button>
-          <button
-            :for={folder <- @folders}
-            type="button"
-            class={["ed-folder-tab", @folder_id == folder.id && "ed-folder-tab--active"]}
-            phx-click="select_folder"
-            phx-value-id={folder.id}
-            aria-pressed={to_string(@folder_id == folder.id)}
-          >
-            {folder.name}
-            <span :if={folder.unread_count > 0} class="ed-folder-tab__badge">
-              {folder.unread_count}
-            </span>
-          </button>
+          <%= for tab <- @folder_tabs do %>
+            <button
+              :if={tab == :all}
+              type="button"
+              class={["ed-folder-tab", @folder_id == nil && "ed-folder-tab--active"]}
+              phx-click="select_folder"
+              phx-value-id=""
+              aria-pressed={to_string(@folder_id == nil)}
+            >
+              {gettext("All Chats")}
+            </button>
+            <button
+              :if={tab != :all}
+              type="button"
+              class={["ed-folder-tab", @folder_id == tab.id && "ed-folder-tab--active"]}
+              phx-click="select_folder"
+              phx-value-id={tab.id}
+              aria-pressed={to_string(@folder_id == tab.id)}
+            >
+              {tab.name}
+              <span :if={tab.unread_count > 0} class="ed-folder-tab__badge">
+                {tab.unread_count}
+              </span>
+            </button>
+          <% end %>
         </nav>
 
         <div class="flex-1 overflow-y-auto p-2 relative">
@@ -1730,10 +1735,16 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp refresh_folders(socket) do
-    folders = Chat.list_folders(socket.assigns.current_scope)
+    scope = socket.assigns.current_scope
+    folders = Chat.list_folders(scope)
     ids = Enum.map(folders, & &1.id)
     folder_id = if socket.assigns.folder_id in ids, do: socket.assigns.folder_id, else: nil
-    assign(socket, folders: folders, folder_id: folder_id)
+
+    assign(socket,
+      folders: folders,
+      folder_id: folder_id,
+      folder_tabs: List.insert_at(folders, Chat.all_chats_position(scope), :all)
+    )
   end
 
   # Insert/refresh one conversation in the sidebar, honoring the active folder:

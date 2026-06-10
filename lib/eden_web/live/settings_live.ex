@@ -22,11 +22,21 @@ defmodule EdenWeb.SettingsLive do
     {:ok, socket}
   end
 
-  # Folders are account-scoped, so they only appear when signed in.
+  # Folders are account-scoped, so they only appear when signed in. `folder_rows`
+  # is the management list: the user's folders with the virtual :all row inserted
+  # at its stored position (movable, not deletable).
   defp assign_folders(socket) do
     case socket.assigns[:current_scope] do
-      %{user: %User{}} = scope -> assign(socket, folders: Chat.list_folders(scope))
-      _ -> assign(socket, folders: [])
+      %{user: %User{}} = scope ->
+        folders = Chat.list_folders(scope)
+
+        assign(socket,
+          folders: folders,
+          folder_rows: List.insert_at(folders, Chat.all_chats_position(scope), :all)
+        )
+
+      _ ->
+        assign(socket, folders: [], folder_rows: [])
     end
   end
 
@@ -254,58 +264,68 @@ defmodule EdenWeb.SettingsLive do
           >
             <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Group your chats. Drag to reorder; \"All Chats\" always comes first.")}
+              {gettext(
+                "Group your chats. Drag to reorder — \"All Chats\" can be moved but not deleted."
+              )}
             </p>
 
-            <div class="ed-folder-row ed-folder-row--pinned">
-              <span class="ed-folder-row__handle" aria-hidden="true">
-                <.icon name="hero-bars-3-micro" class="size-4" />
-              </span>
-              <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
-                {gettext("All Chats")}
-              </span>
-              <span style="color: var(--ed-muted); font-size:0.75rem;">{gettext("Default")}</span>
-            </div>
-
-            <ul id="folder-list" phx-hook=".Sortable" class="mt-1.5 space-y-1.5">
-              <li
-                :for={folder <- @folders}
-                draggable="true"
-                data-id={folder.id}
-                class="ed-folder-row"
-              >
-                <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
-                  <.icon name="hero-bars-3-micro" class="size-4" />
-                </span>
-                <form
-                  id={"rename-folder-#{folder.id}"}
-                  phx-submit="rename_folder"
-                  class="flex-1 min-w-0"
+            <ul id="folder-list" phx-hook=".Sortable" class="space-y-1.5">
+              <%= for row <- @folder_rows do %>
+                <li
+                  :if={row == :all}
+                  draggable="true"
+                  data-id="all"
+                  class="ed-folder-row ed-folder-row--pinned"
                 >
-                  <input type="hidden" name="folder_id" value={folder.id} />
-                  <input
-                    name="name"
-                    value={folder.name}
-                    maxlength={Eden.Chat.Folder.max_name()}
-                    class="ed-folder-row__name"
-                    aria-label={gettext("Folder name")}
-                    draggable="false"
-                  />
-                </form>
-                <button
-                  type="button"
-                  class="ed-btn--icon"
-                  style="color: var(--ed-danger);"
-                  phx-click="delete_folder"
-                  phx-value-id={folder.id}
-                  data-confirm={
-                    gettext("Delete this folder? Your chats stay; only the grouping is removed.")
-                  }
-                  aria-label={gettext("Delete folder")}
+                  <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
+                    <.icon name="hero-bars-3-micro" class="size-4" />
+                  </span>
+                  <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
+                    {gettext("All Chats")}
+                  </span>
+                  <span style="color: var(--ed-muted); font-size:0.75rem;">
+                    {gettext("Default")}
+                  </span>
+                </li>
+                <li
+                  :if={row != :all}
+                  draggable="true"
+                  data-id={row.id}
+                  class="ed-folder-row"
                 >
-                  <.icon name="hero-trash-micro" class="size-4" />
-                </button>
-              </li>
+                  <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
+                    <.icon name="hero-bars-3-micro" class="size-4" />
+                  </span>
+                  <form
+                    id={"rename-folder-#{row.id}"}
+                    phx-submit="rename_folder"
+                    class="flex-1 min-w-0"
+                  >
+                    <input type="hidden" name="folder_id" value={row.id} />
+                    <input
+                      name="name"
+                      value={row.name}
+                      maxlength={Eden.Chat.Folder.max_name()}
+                      class="ed-folder-row__name"
+                      aria-label={gettext("Folder name")}
+                      draggable="false"
+                    />
+                  </form>
+                  <button
+                    type="button"
+                    class="ed-btn--icon"
+                    style="color: var(--ed-danger);"
+                    phx-click="delete_folder"
+                    phx-value-id={row.id}
+                    data-confirm={
+                      gettext("Delete this folder? Your chats stay; only the grouping is removed.")
+                    }
+                    aria-label={gettext("Delete folder")}
+                  >
+                    <.icon name="hero-trash-micro" class="size-4" />
+                  </button>
+                </li>
+              <% end %>
             </ul>
 
             <form
@@ -445,8 +465,7 @@ defmodule EdenWeb.SettingsLive do
     {:noreply, reload_folders(socket)}
   end
 
-  defp reload_folders(socket),
-    do: assign(socket, folders: Chat.list_folders(socket.assigns.current_scope))
+  defp reload_folders(socket), do: assign_folders(socket)
 
   # Store the pending avatar (if any) inside the consume callback while the temp
   # file exists; return the (possibly updated) user plus any processing error.

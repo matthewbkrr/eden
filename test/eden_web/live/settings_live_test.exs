@@ -140,9 +140,14 @@ defmodule EdenWeb.SettingsLiveTest do
 
       assert "Job" == hd(Chat.list_folders(scope)).name
 
-      # reorder via the hook's pushed event
-      render_hook(view, "reorder_folders", %{"ids" => [to_string(family.id), to_string(work.id)]})
+      # reorder via the hook's pushed event — "All Chats" is part of the list
+      # (movable, not deletable) and its position persists
+      render_hook(view, "reorder_folders", %{
+        "ids" => [to_string(family.id), "all", to_string(work.id)]
+      })
+
       assert ["Family", "Job"] == Enum.map(Chat.list_folders(scope), & &1.name)
+      assert 1 == Chat.all_chats_position(scope)
 
       # delete
       view

@@ -1027,6 +1027,23 @@ defmodule Eden.ChatTest do
       assert ["Bob"] == Enum.map(Chat.list_folders(scope(bob)), & &1.name)
     end
 
+    test "the virtual All Chats tab can be reordered (but has no row)", %{alice: alice} do
+      {:ok, a} = Chat.create_folder(scope(alice), %{"name" => "A"})
+      {:ok, b} = Chat.create_folder(scope(alice), %{"name" => "B"})
+
+      # Defaults to first.
+      assert 0 == Chat.all_chats_position(scope(alice))
+
+      :ok = Chat.reorder_folders(scope(alice), [to_string(a.id), "all", to_string(b.id)])
+      assert 1 == Chat.all_chats_position(scope(alice))
+      assert ["A", "B"] == Enum.map(Chat.list_folders(scope(alice)), & &1.name)
+
+      # Reordering again overwrites (upsert), and folder order still applies.
+      :ok = Chat.reorder_folders(scope(alice), [to_string(b.id), to_string(a.id), "all"])
+      assert 2 == Chat.all_chats_position(scope(alice))
+      assert ["B", "A"] == Enum.map(Chat.list_folders(scope(alice)), & &1.name)
+    end
+
     test "toggle adds then removes a chat; conversation_folder_ids reflects it", %{
       alice: alice,
       bob: bob

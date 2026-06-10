@@ -17,6 +17,7 @@ defmodule Eden.Chat do
     Conversation,
     Folder,
     FolderMembership,
+    FolderPrefs,
     Membership,
     Message,
     MessageDeletion,
@@ -333,16 +334,23 @@ defmodule Eden.Chat do
 
   @doc """
   Reorders the scoped user's folders to match `ordered_ids` (ids not owned by the
-  user are ignored). Positions are reassigned 0..n by list order, in one tx.
+  user are ignored). Positions are reassigned 0..n by list order, in one tx. The
+  list may contain the `"all"` sentinel — the virtual "All Chats" tab — whose
+  index in the list is persisted as the user's `all_chats_position`.
   """
   def reorder_folders(%Scope{user: user}, ordered_ids) do
-    owned = Repo.all(from f in Folder, where: f.user_id == ^user.id, select: f.id)
-    owned_set = MapSet.new(owned)
+    owned = MapSet.new(Repo.all(from f in Folder, where: f.user_id == ^user.id, select: f.id))
 
-    ids =
+    entries =
       ordered_ids
-      |> Enum.map(&safe_id/1)
-      |> Enum.filter(&MapSet.member?(owned_set, &1))
+      |> Enum.map(fn
+        "all" -> :all
+        id -> safe_id(id)
+      end)
+      |> Enum.filter(&(&1 == :all or MapSet.member?(owned, &1)))
+
+    all_pos = Enum.find_index(entries, &(&1 == :all))
+    ids = Enum.reject(entries, &(&1 == :all))
 
     Repo.transact(fn ->
       ids
@@ -351,11 +359,25 @@ defmodule Eden.Chat do
         Repo.update_all(from(f in Folder, where: f.id == ^id), set: [position: pos])
       end)
 
+      if all_pos, do: put_all_chats_position(user.id, all_pos)
       {:ok, :ok}
     end)
 
     broadcast_folders(user.id)
     :ok
+  end
+
+  @doc "Position of the virtual \"All Chats\" tab among the user's folders (0 = first)."
+  def all_chats_position(%Scope{user: user}) do
+    Repo.one(from p in FolderPrefs, where: p.user_id == ^user.id, select: p.all_chats_position) ||
+      0
+  end
+
+  defp put_all_chats_position(user_id, position) do
+    Repo.insert!(%FolderPrefs{user_id: user_id, all_chats_position: position},
+      on_conflict: [set: [all_chats_position: position, updated_at: now()]],
+      conflict_target: :user_id
+    )
   end
 
   @doc """

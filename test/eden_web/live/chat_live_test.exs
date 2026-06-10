@@ -442,6 +442,20 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#conversations-#{other.id}")
     end
 
+    test "the All Chats tab renders at its stored position", ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, work} = Chat.create_folder(scope, %{"name" => "Work"})
+      :ok = Chat.reorder_folders(scope, [to_string(work.id), "all"])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app")
+
+      # Work's tab comes before the All Chats tab in the carousel.
+      [nav] = Regex.run(~r/<nav class="ed-folders".*?<\/nav>/s, html)
+      assert [work_at, all_at] = [:binary.match(nav, "Work"), :binary.match(nav, "All Chats")]
+      assert elem(work_at, 0) < elem(all_at, 0)
+    end
+
     test "move-to-folder modal toggles membership", ctx do
       scope = Scope.for_user(ctx.alice)
       {:ok, folder} = Chat.create_folder(scope, %{"name" => "Work"})
