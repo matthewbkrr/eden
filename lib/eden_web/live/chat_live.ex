@@ -1347,7 +1347,13 @@ defmodule EdenWeb.ChatLive do
     assigns = assign(assigns, :parts, parts)
 
     ~H"""
-    <%= for part <- @parts do %><%= if String.downcase(part) == String.downcase(String.trim(@query)) do %><mark class="ed-mark">{part}</mark><% else %>{part}<% end %><% end %>
+    <%= for part <- @parts do %>
+      <%= if String.downcase(part) == String.downcase(String.trim(@query)) do %>
+        <mark class="ed-mark">{part}</mark>
+      <% else %>
+        {part}
+      <% end %>
+    <% end %>
     """
   end
 

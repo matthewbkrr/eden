@@ -1230,7 +1230,9 @@ defmodule Eden.ChatTest do
     } do
       carol = user_fixture(%{username: "carolsrch", display_name: "Carol Searchova"})
       {:ok, direct} = Chat.create_conversation(scope(alice), [carol.id])
-      {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Expedition")
+
+      {:ok, group} =
+        Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Expedition")
 
       # Carol is in both the 1:1 and the group — both surface.
       assert %{conversations: convs} = Chat.search(scope(alice), "Searchova")
