@@ -490,6 +490,80 @@ defmodule Eden.Chat do
     end
   end
 
+  ## Search
+
+  @search_limit 20
+  @search_min_chars 2
+
+  @doc "Shortest query `search/2` will run (shorter ones return empty results)."
+  def search_min_chars, do: @search_min_chars
+
+  @doc """
+  Searches the scoped user's chats: conversations by participant display name /
+  username (or group title) and messages by body. Everything is scoped through
+  the user's memberships — nothing outside their conversations can match.
+
+  Plain `ILIKE '%term%'` substring matching, right-sized for this scale; the
+  upgrade path (Postgres FTS / pg_trgm) is documented in issue #12. Returns
+  `%{conversations: [...], messages: [...]}` (each capped at #{@search_limit});
+  a blank or single-character query returns empty lists.
+  """
+  def search(%Scope{user: user}, query) do
+    term = query |> to_string() |> String.trim()
+
+    if String.length(term) < @search_min_chars do
+      %{conversations: [], messages: []}
+    else
+      pattern = "%" <> escape_like(term) <> "%"
+
+      %{
+        conversations: search_conversations(user, pattern),
+        messages: search_messages(user, pattern)
+      }
+    end
+  end
+
+  # %, _ and \ are LIKE metacharacters; escape them so they match literally.
+  defp escape_like(term), do: String.replace(term, ~r/[\\%_]/, fn ch -> "\\" <> ch end)
+
+  defp search_conversations(user, pattern) do
+    # No SQL limit: DISTINCT ON orders by c.id, so a limit there would cap by
+    # conversation age, dropping the most recent matches. A user belongs to a
+    # few dozen conversations at most — sort by recency in memory, then cap.
+    from(c in Conversation,
+      join: my in Membership,
+      on: my.conversation_id == c.id and my.user_id == ^user.id and is_nil(my.left_at),
+      join: m in Membership,
+      on: m.conversation_id == c.id,
+      join: u in User,
+      on: u.id == m.user_id,
+      where:
+        ilike(c.title, ^pattern) or
+          (u.id != ^user.id and (ilike(u.display_name, ^pattern) or ilike(u.username, ^pattern))),
+      distinct: c.id,
+      preload: [memberships: :user]
+    )
+    |> Repo.all()
+    |> Enum.sort_by(&(&1.last_message_at || ~U[1970-01-01 00:00:00Z]), {:desc, DateTime})
+    |> Enum.take(@search_limit)
+  end
+
+  defp search_messages(user, pattern) do
+    from(m in Message,
+      join: mem in Membership,
+      on:
+        mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
+          is_nil(mem.left_at),
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: ilike(m.body, ^pattern) and is_nil(m.deleted_at) and is_nil(d.id),
+      order_by: [desc: m.id],
+      limit: @search_limit,
+      preload: [:sender, conversation: [memberships: :user]]
+    )
+    |> Repo.all()
+  end
+
   @doc """
   Toggles a conversation's membership in one of the scoped user's folders. Both
   the folder (must be the user's) and the conversation (must be a member) are

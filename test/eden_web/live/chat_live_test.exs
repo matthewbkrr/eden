@@ -408,6 +408,92 @@ defmodule EdenWeb.ChatLiveTest do
     end
   end
 
+  describe "search" do
+    setup [:setup_conversation]
+
+    test "shows grouped results with highlight; clear restores the list", ctx do
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "let's plan the picnic"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "picnic"})
+      assert html =~ "Messages"
+      assert html =~ ~s(<mark class="ed-mark">picnic</mark>)
+
+      html = render_change(view, "search", %{"q" => "Bob"})
+      assert html =~ "Chats"
+      assert html =~ ~s(<mark class="ed-mark">Bob</mark>)
+
+      html = render_click(view, "clear_search", %{})
+      refute html =~ "ed-search__group"
+      assert has_element?(view, "#conversations-#{ctx.conversation.id}")
+    end
+
+    test "a message result links to its permalink", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "remember the anchor point"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "anchor"})
+      assert html =~ ~s(href="/app/c/#{ctx.conversation.id}/m/#{msg.id}")
+    end
+
+    test "shows the no-results state", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "zzznothing"})
+      assert html =~ "No results for"
+    end
+
+    test "a too-short query shows a hint, not a false no-results", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "a"})
+      assert html =~ "Type at least"
+      refute html =~ "No results for"
+    end
+
+    test "a mid-word highlight stays glued to the rest of the word", ctx do
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "Свет на озере был нереальный"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "озе"})
+      # No whitespace may separate the mark from its word ("озе ре" bug).
+      assert html =~ ~s(<mark class="ed-mark">озе</mark>ре)
+    end
+
+    test "group message results show the sender", ctx do
+      carol = user_fixture(%{username: "carolgrp", display_name: "Carol"})
+
+      {:ok, group} =
+        Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id], title: "Trip")
+
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), group.id, %{"body" => "bonfire tonight"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html = render_change(view, "search", %{"q" => "bonfire"})
+      assert html =~ "Bob"
+    end
+  end
+
   describe "folders" do
     setup [:setup_conversation]
 

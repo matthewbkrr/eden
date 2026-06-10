@@ -82,6 +82,13 @@ design — built incrementally as features land.)
     muted folder stops counting toward every folder badge (its own unread stays
     tracked but renders de-emphasized), and un-muting a folder never un-mutes
     directly-muted chats.
+  - **Search** (`search/2`) — conversations by participant display name /
+    username (or group title) and messages by body, all scoped through the
+    user's non-left memberships (deleted/hidden messages never match). Plain
+    escaped `ILIKE '%term%'` (min 2 chars, 20 per group) — right-sized for this
+    scale; the FTS/pg_trgm upgrade path is documented in issue #12. The sidebar
+    search bar renders grouped results; a message result deep-links via the
+    permalink (scroll-to + highlight).
   - **Profile visibility is authorized here, not in the web layer:**
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads

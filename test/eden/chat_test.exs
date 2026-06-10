@@ -1208,4 +1208,95 @@ defmodule Eden.ChatTest do
       assert {:error, :not_found} = Chat.toggle_folder_mute(scope(dave), folder.id)
     end
   end
+
+  describe "search/2" do
+    test "finds messages by content, scoped to own conversations", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(bob), conv.id, %{"body" => "secret rendezvous"})
+
+      # Dave shares nothing with them — must see no results.
+      dave = user_fixture(%{username: "daves"})
+
+      assert %{messages: [found]} = Chat.search(scope(alice), "rendezvous")
+      assert found.id == msg.id
+      assert found.conversation.id == conv.id
+
+      assert %{messages: [], conversations: []} = Chat.search(scope(dave), "rendezvous")
+    end
+
+    test "finds conversations by participant name, username, and group title", %{
+      alice: alice,
+      bob: bob
+    } do
+      carol = user_fixture(%{username: "carolsrch", display_name: "Carol Searchova"})
+      {:ok, direct} = Chat.create_conversation(scope(alice), [carol.id])
+
+      {:ok, group} =
+        Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Expedition")
+
+      # Carol is in both the 1:1 and the group — both surface.
+      assert %{conversations: convs} = Chat.search(scope(alice), "Searchova")
+      assert Enum.sort(Enum.map(convs, & &1.id)) == Enum.sort([direct.id, group.id])
+
+      assert %{conversations: by_username} = Chat.search(scope(alice), "carolsrch")
+      assert Enum.sort(Enum.map(by_username, & &1.id)) == Enum.sort([direct.id, group.id])
+
+      assert %{conversations: [by_title]} = Chat.search(scope(alice), "Expedi")
+      assert by_title.id == group.id
+    end
+
+    test "your own name never matches a conversation", %{alice: alice, bob: bob} do
+      {:ok, _conv} = Chat.create_conversation(scope(alice), [bob.id])
+      assert %{conversations: []} = Chat.search(scope(alice), "Alice")
+    end
+
+    test "blank or single-character queries return nothing", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "x marks the spot"})
+
+      assert %{conversations: [], messages: []} = Chat.search(scope(alice), "")
+      assert %{conversations: [], messages: []} = Chat.search(scope(alice), "   ")
+      assert %{conversations: [], messages: []} = Chat.search(scope(alice), "x")
+    end
+
+    test "ILIKE metacharacters match literally", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "discount 100% off"})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "underscore_name here"})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "plain text"})
+
+      assert %{messages: [m]} = Chat.search(scope(alice), "100%")
+      assert m.body == "discount 100% off"
+
+      # "_" must not act as a single-char wildcard ("plain" would match "pl_in").
+      assert %{messages: [u]} = Chat.search(scope(alice), "score_name")
+      assert u.body == "underscore_name here"
+    end
+
+    test "deleted, hidden, and left-chat messages never match", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, gone} = Chat.create_message(scope(bob), conv.id, %{"body" => "needle gone"})
+      {:ok, hidden} = Chat.create_message(scope(bob), conv.id, %{"body" => "needle hidden"})
+      :ok = Chat.delete_message_for_both(scope(bob), gone.id)
+      :ok = Chat.delete_message_for_me(scope(alice), hidden.id)
+
+      assert %{messages: []} = Chat.search(scope(alice), "needle")
+
+      # Leaving the chat removes its messages from search too.
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "needle fresh"})
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      assert %{messages: []} = Chat.search(scope(alice), "needle")
+    end
+
+    test "message results are capped", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      for n <- 1..25 do
+        {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "haystack #{n}"})
+      end
+
+      assert %{messages: messages} = Chat.search(scope(alice), "haystack")
+      assert length(messages) == 20
+    end
+  end
 end
