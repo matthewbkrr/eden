@@ -306,7 +306,10 @@ defmodule Eden.Chat do
   def delete_message_for_both(%Scope{user: user} = scope, message_id) do
     with {:ok, message} <- fetch_message(scope, message_id),
          :ok <- ensure_sender(message, user.id),
-         {:ok, tombstone} <- soft_delete(message) do
+         {:ok, {tombstone, orphan_keys}} <- soft_delete(message) do
+      # Storage.delete is an irreversible side effect, so it runs only after the
+      # tombstone has committed — never inside the transaction.
+      Enum.each(orphan_keys, &Storage.delete/1)
       broadcast(message.conversation_id, {:message_deleted, tombstone})
       notify_members(message.conversation_id)
       :ok
@@ -373,39 +376,37 @@ defmodule Eden.Chat do
   defp ensure_member(scope, conversation_id),
     do: if(member?(scope, conversation_id), do: :ok, else: {:error, :not_found})
 
+  # Tombstone the message and delete its attachment row inside one transaction,
+  # returning the blob keys safe to delete afterwards (no side effects in the txn).
   defp soft_delete(message) do
     Repo.transact(fn ->
       message = Repo.preload(message, :attachment)
-      if message.attachment, do: delete_attachment(message.attachment)
+      orphan_keys = unshared_blob_keys(message.attachment)
+      if message.attachment, do: Repo.delete(message.attachment)
 
       with {:ok, tombstone} <-
              message
              |> Ecto.Changeset.change(deleted_at: now(), body: "")
              |> Repo.update() do
-        {:ok, Repo.preload(tombstone, [:sender, :attachment], force: true)}
+        {:ok, {Repo.preload(tombstone, [:sender, :attachment], force: true), orphan_keys}}
       end
     end)
   end
 
-  # Delete the attachment row and its blobs, but keep a blob alive if another
-  # attachment still points at it (forwards re-reference the same storage_key).
-  defp delete_attachment(%Attachment{} = attachment) do
-    maybe_delete_blob(attachment.storage_key, attachment.id)
-    maybe_delete_blob(attachment.thumbnail_key, attachment.id)
-    Repo.delete(attachment)
+  # Blob keys that no OTHER attachment references — safe to delete once this
+  # attachment's row is gone. (Forwards re-reference the same storage_key.)
+  defp unshared_blob_keys(nil), do: []
+
+  defp unshared_blob_keys(%Attachment{} = attachment) do
+    [attachment.storage_key, attachment.thumbnail_key]
+    |> Enum.reject(fn key -> is_nil(key) or blob_shared?(key, attachment.id) end)
   end
 
-  defp maybe_delete_blob(nil, _exclude_id), do: :ok
-
-  defp maybe_delete_blob(key, exclude_id) do
-    shared? =
-      Repo.exists?(
-        from a in Attachment,
-          where: a.id != ^exclude_id and (a.storage_key == ^key or a.thumbnail_key == ^key)
-      )
-
-    unless shared?, do: Storage.delete(key)
-    :ok
+  defp blob_shared?(key, exclude_id) do
+    Repo.exists?(
+      from a in Attachment,
+        where: a.id != ^exclude_id and (a.storage_key == ^key or a.thumbnail_key == ^key)
+    )
   end
 
   defp insert_forward(user, target_conversation_id, source) do
@@ -438,8 +439,16 @@ defmodule Eden.Chat do
     |> Attachment.changeset(attrs)
     |> Repo.insert()
     |> case do
-      {:ok, _attachment} -> :ok
-      {:error, changeset} -> {:error, changeset}
+      {:ok, attachment} ->
+        # If we forwarded before the source's preview existed, generate one for
+        # the copy (it owns its own thumbnail blob).
+        if is_nil(attachment.thumbnail_key) and needs_media_processing?(attachment.kind),
+          do: enqueue_thumbnail(attachment)
+
+        :ok
+
+      {:error, changeset} ->
+        {:error, changeset}
     end
   end
 
