@@ -295,7 +295,7 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, "#messages-#{msg.id}")
     end
 
-    test "delete for both shows a tombstone in real time", ctx do
+    test "delete for both removes the message for everyone in real time", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "regret"})
 
@@ -303,11 +303,10 @@ defmodule EdenWeb.ChatLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
       render_click(view, "delete_for_both", %{"id" => to_string(msg.id)})
-      assert has_element?(view, "#messages-#{msg.id}", "Message deleted")
-      refute has_element?(view, "#messages-#{msg.id}", "regret")
+      refute has_element?(view, "#messages-#{msg.id}")
     end
 
-    test "a previously deleted message renders as a tombstone", ctx do
+    test "a deleted-for-both message is not shown", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "gone"})
 
@@ -316,7 +315,6 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
       refute html =~ "gone"
-      assert html =~ "Message deleted"
     end
 
     test "forward copies the message into the chosen conversation", ctx do
@@ -348,20 +346,6 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}/m/#{msg.id}")
       assert html =~ "anchor"
-    end
-
-    test "a tombstone offers only delete-for-me", ctx do
-      {:ok, msg} =
-        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "x"})
-
-      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), msg.id)
-
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      assert has_element?(view, ~s(#messages-#{msg.id} [phx-click="delete_for_me"]))
-      refute has_element?(view, ~s(#messages-#{msg.id} [phx-click="delete_for_both"]))
-      refute has_element?(view, ~s(#messages-#{msg.id} [phx-click="forward_prompt"]))
     end
   end
 end

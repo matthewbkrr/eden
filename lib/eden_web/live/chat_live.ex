@@ -297,10 +297,10 @@ defmodule EdenWeb.ChatLive do
     {:noreply, stream_insert(socket, :messages, message)}
   end
 
-  # Delete-for-both: replace the message in place with its tombstone.
-  def handle_info({:message_deleted, tombstone}, socket) do
-    if open?(socket, tombstone.conversation_id) do
-      {:noreply, stream_insert(socket, :messages, tombstone)}
+  # Delete-for-both: the message is removed from the conversation for everyone.
+  def handle_info({:message_deleted, message}, socket) do
+    if open?(socket, message.conversation_id) do
+      {:noreply, stream_delete_by_dom_id(socket, :messages, "messages-#{message.id}")}
     else
       {:noreply, socket}
     end
@@ -639,36 +639,59 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".MsgMenu">
-        // Per-message action menu. The dropdown is position:fixed (set on open) so
-        // the scroll container can't clip it; copy actions run client-side and ping
-        // the server only for the "copied" toast.
+        // Telegram-style message context menu: open it with a right-click (desktop)
+        // or a long-press (touch) anywhere on the bubble — no visible trigger. The
+        // dropdown is position:fixed at the pointer, clamped to the viewport, so the
+        // scroll container can't clip it. Copy runs client-side.
         export default {
           mounted() {
             this.menu = this.el.querySelector("[data-menu]")
-            this.trigger = this.el.querySelector("[data-menu-trigger]")
             this.scroller = document.getElementById("message-scroll")
-            this.onDoc = (e) => { if (!this.el.contains(e.target) && !this.menu.contains(e.target)) this.close() }
+            this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }
             this.onKey = (e) => { if (e.key === "Escape") this.close() }
             this.onScroll = () => this.close()
-            this.trigger.addEventListener("click", (e) => { e.stopPropagation(); this.toggle() })
-            this.el.querySelectorAll("[data-copy-text]").forEach((b) =>
+
+            // Desktop: right-click the bubble.
+            this.el.addEventListener("contextmenu", (e) => {
+              e.preventDefault()
+              this.open(e.clientX, e.clientY)
+            })
+
+            // Touch: long-press (cancel if the finger moves — that's a scroll/select).
+            let timer, sx, sy
+            this.el.addEventListener("touchstart", (e) => {
+              const t = e.touches[0]; sx = t.clientX; sy = t.clientY
+              timer = setTimeout(() => { this.open(sx, sy); this.longPressed = true }, 450)
+            }, { passive: true })
+            const cancel = () => clearTimeout(timer)
+            this.el.addEventListener("touchmove", (e) => {
+              const t = e.touches[0]
+              if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) cancel()
+            }, { passive: true })
+            this.el.addEventListener("touchend", cancel)
+            // Swallow the click a long-press would otherwise fire (e.g. a photo opening).
+            this.el.addEventListener("click", (e) => {
+              if (this.longPressed) { e.preventDefault(); e.stopPropagation(); this.longPressed = false }
+            }, true)
+
+            this.menu.querySelectorAll("[data-copy-text]").forEach((b) =>
               b.addEventListener("click", () => this.copy(b.dataset.text, "text")))
-            this.el.querySelectorAll("[data-copy-link]").forEach((b) =>
+            this.menu.querySelectorAll("[data-copy-link]").forEach((b) =>
               b.addEventListener("click", () => this.copy(b.dataset.link, "link")))
             // Any item click (forward/delete dispatch to the server) also closes.
             this.menu.querySelectorAll("button").forEach((b) =>
               b.addEventListener("click", () => this.close()))
           },
           destroyed() { this.close() },
-          toggle() { this.menu.hidden ? this.open() : this.close() },
-          open() {
+          open(x, y) {
             // Close any other open menu first.
             document.querySelectorAll(".ed-menu:not([hidden])").forEach((m) => (m.hidden = true))
             this.menu.hidden = false
-            this.position()
-            document.addEventListener("click", this.onDoc)
+            this.position(x, y)
+            // Defer the outside-click listener so the same gesture doesn't close it.
+            setTimeout(() => document.addEventListener("click", this.onDoc), 0)
             document.addEventListener("keydown", this.onKey)
-            this.scroller && this.scroller.addEventListener("scroll", this.onScroll)
+            this.scroller && this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
           },
           close() {
             if (!this.menu || this.menu.hidden) return
@@ -677,15 +700,13 @@ defmodule EdenWeb.ChatLive do
             document.removeEventListener("keydown", this.onKey)
             this.scroller && this.scroller.removeEventListener("scroll", this.onScroll)
           },
-          position() {
-            const r = this.trigger.getBoundingClientRect()
+          position(x, y) {
             const mw = this.menu.offsetWidth || 220
             const mh = this.menu.offsetHeight || 240
-            let left = Math.max(8, r.right - mw)
-            let top = r.bottom + 4
-            if (top + mh > window.innerHeight - 8) top = Math.max(8, r.top - mh - 4)
-            this.menu.style.top = `${top}px`
+            const left = Math.max(8, Math.min(x, window.innerWidth - mw - 8))
+            const top = Math.max(8, Math.min(y, window.innerHeight - mh - 8))
             this.menu.style.left = `${left}px`
+            this.menu.style.top = `${top}px`
           },
           copy(text, what) {
             const done = () => this.pushEvent("copied", { what })
@@ -906,8 +927,6 @@ defmodule EdenWeb.ChatLive do
 
   # Sidebar preview line. An attachment shows "<emoji> <caption|kind>" so the row
   # is never blank (keeps item height + the time position consistent).
-  defp convo_preview(%{last_message_deleted: true}), do: gettext("Message deleted")
-
   defp convo_preview(%{last_message_kind: kind} = conversation)
        when kind in ~w(image video file) do
     {emoji, label} = attachment_label(kind)
@@ -929,22 +948,14 @@ defmodule EdenWeb.ChatLive do
   attr :group, :boolean, required: true
   attr :read, :boolean, required: true
 
-  defp message_bubble(%{message: %{deleted_at: deleted}} = assigns) when not is_nil(deleted) do
-    ~H"""
-    <div id={@id} class={["ed-msg flex", @mine && "justify-end"]}>
-      <div class="ed-bubble ed-bubble--tombstone">
-        <.icon name="hero-no-symbol-micro" class="size-3.5" />
-        <span>{gettext("Message deleted")}</span>
-        <.message_menu message={@message} conversation_id={@conversation_id} mine={@mine} deleted />
-      </div>
-    </div>
-    """
-  end
-
   defp message_bubble(assigns) do
     ~H"""
     <div id={@id} class={["ed-msg flex", @mine && "justify-end"]}>
-      <div class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}>
+      <div
+        class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
+        id={"bubble-#{@message.id}"}
+        phx-hook=".MsgMenu"
+      >
         <span
           :if={@group and not @mine and @message.sender}
           class="block"
@@ -981,75 +992,61 @@ defmodule EdenWeb.ChatLive do
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
-  attr :deleted, :boolean, default: false
 
-  # Per-message action menu (⋯). Copy actions are handled client-side by the hook;
-  # forward/delete dispatch to the LiveView. `phx-update="ignore"` keeps the menu's
-  # open/closed state across re-renders of the bubble (read ticks, thumbnails).
+  # The message context menu — opened by right-click / long-press on the bubble
+  # (the `.MsgMenu` hook). Copy actions run client-side; forward/delete dispatch
+  # to the LiveView. `phx-update="ignore"` keeps it from being reset on re-render.
   defp message_menu(assigns) do
     ~H"""
-    <div class="ed-msg-actions" id={"actions-#{@message.id}"} phx-hook=".MsgMenu">
+    <div class="ed-menu" id={"menu-#{@message.id}"} phx-update="ignore" data-menu role="menu" hidden>
+      <button
+        :if={@message.body != ""}
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        data-copy-text
+        data-text={@message.body}
+      >
+        <.icon name="hero-clipboard-micro" class="size-4" /> {gettext("Copy text")}
+      </button>
       <button
         type="button"
-        class="ed-msg-actions__trigger"
-        data-menu-trigger
-        aria-haspopup="true"
-        aria-label={gettext("Message actions")}
+        class="ed-menu__item"
+        role="menuitem"
+        data-copy-link
+        data-link={url(~p"/app/c/#{@conversation_id}/m/#{@message.id}")}
       >
-        <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
+        <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
       </button>
-      <div class="ed-menu" id={"menu-#{@message.id}"} phx-update="ignore" data-menu role="menu" hidden>
-        <button
-          :if={not @deleted and @message.body != ""}
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          data-copy-text
-          data-text={@message.body}
-        >
-          <.icon name="hero-clipboard-micro" class="size-4" /> {gettext("Copy text")}
-        </button>
-        <button
-          :if={not @deleted}
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          data-copy-link
-          data-link={url(~p"/app/c/#{@conversation_id}/m/#{@message.id}")}
-        >
-          <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
-        </button>
-        <button
-          :if={not @deleted}
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="forward_prompt"
-          phx-value-id={@message.id}
-        >
-          <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
-        </button>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="delete_for_me"
-          phx-value-id={@message.id}
-        >
-          <.icon name="hero-eye-slash-micro" class="size-4" /> {gettext("Delete for me")}
-        </button>
-        <button
-          :if={@mine and not @deleted}
-          type="button"
-          class="ed-menu__item ed-menu__item--danger"
-          role="menuitem"
-          phx-click="delete_for_both"
-          phx-value-id={@message.id}
-          data-confirm={gettext("Delete this message for everyone?")}
-        >
-          <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete for everyone")}
-        </button>
-      </div>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="forward_prompt"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
+      </button>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="delete_for_me"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-eye-slash-micro" class="size-4" /> {gettext("Delete for me")}
+      </button>
+      <button
+        :if={@mine}
+        type="button"
+        class="ed-menu__item ed-menu__item--danger"
+        role="menuitem"
+        phx-click="delete_for_both"
+        phx-value-id={@message.id}
+        data-confirm={gettext("Delete this message for everyone?")}
+      >
+        <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete for everyone")}
+      </button>
     </div>
     """
   end

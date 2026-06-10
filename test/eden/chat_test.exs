@@ -382,19 +382,17 @@ defmodule Eden.ChatTest do
       %{conv: conv}
     end
 
-    test "the sender tombstones the message and clears the body", %{alice: alice, conv: conv} do
+    test "removes the message from the thread for everyone", %{alice: alice, conv: conv} do
       {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "oops"})
 
       assert :ok = Chat.delete_message_for_both(scope(alice), msg.id)
 
+      # The row is kept soft-deleted (for blob cleanup / forward attribution) but
+      # no longer appears in the conversation for anyone.
       reloaded = Repo.get!(Message, msg.id)
       assert reloaded.deleted_at
       assert reloaded.body == ""
-
-      # The tombstone still lists (rendered as "Message deleted"), not hidden.
-      {:ok, [listed]} = Chat.list_messages(scope(alice), conv.id)
-      assert listed.id == msg.id
-      assert Message.deleted?(listed)
+      assert {:ok, []} = Chat.list_messages(scope(alice), conv.id)
     end
 
     test "a non-sender cannot delete for both", %{alice: alice, bob: bob, conv: conv} do
@@ -865,13 +863,14 @@ defmodule Eden.ChatTest do
       assert [%{last_message_body: "last"}] = Chat.list_conversations(scope(alice))
     end
 
-    test "the preview marks a deleted-for-both last message", %{alice: alice, bob: bob} do
+    test "the preview skips a deleted-for-both last message", %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
-      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "bye"})
-      :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+      {:ok, _first} = Chat.create_message(scope(alice), conv.id, %{"body" => "keep"})
+      {:ok, last} = Chat.create_message(scope(alice), conv.id, %{"body" => "remove"})
+      :ok = Chat.delete_message_for_both(scope(alice), last.id)
 
-      assert [%{last_message_deleted: true, last_message_body: ""}] =
-               Chat.list_conversations(scope(bob))
+      # Falls back to the message before the deleted one.
+      assert [%{last_message_body: "keep"}] = Chat.list_conversations(scope(bob))
     end
 
     test "unread skips tombstones and self-hidden messages", %{alice: alice, bob: bob} do

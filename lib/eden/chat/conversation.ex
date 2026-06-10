@@ -19,8 +19,6 @@ defmodule Eden.Chat.Conversation do
     # The last message's attachment kind (image|video|file) or nil, for the
     # sidebar preview line.
     field :last_message_kind, :string, virtual: true
-    # Whether that last message is a "deleted for everyone" tombstone.
-    field :last_message_deleted, :boolean, virtual: true, default: false
 
     # Stable order so an unnamed group's title (built from member names) and the
     # member list don't reshuffle each time the list is re-preloaded.

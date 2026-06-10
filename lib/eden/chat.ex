@@ -90,32 +90,20 @@ defmodule Eden.Chat do
       left_join: a in assoc(m, :attachment),
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
-      where: m.conversation_id in ^ids and is_nil(d.id),
+      where: m.conversation_id in ^ids and is_nil(d.id) and is_nil(m.deleted_at),
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
-      select:
-        {m.conversation_id, %{body: m.body, kind: a.kind, deleted: not is_nil(m.deleted_at)}}
+      select: {m.conversation_id, %{body: m.body, kind: a.kind}}
     )
     |> Repo.all()
     |> Map.new()
   end
 
   defp apply_preview(conversation, nil),
-    do: %{
-      conversation
-      | last_message_body: nil,
-        last_message_kind: nil,
-        last_message_deleted: false
-    }
+    do: %{conversation | last_message_body: nil, last_message_kind: nil}
 
-  defp apply_preview(conversation, preview) do
-    %{
-      conversation
-      | last_message_body: preview.body,
-        last_message_kind: preview.kind,
-        last_message_deleted: preview.deleted
-    }
-  end
+  defp apply_preview(conversation, preview),
+    do: %{conversation | last_message_body: preview.body, last_message_kind: preview.kind}
 
   defp unread_counts(_user, []), do: %{}
 
@@ -191,7 +179,8 @@ defmodule Eden.Chat do
       messages =
         Message
         |> where([m], m.conversation_id == ^conversation_id)
-        # Exclude messages this user "deleted for me" (still visible to others).
+        # Drop "deleted for everyone" rows entirely, and ones this user hid.
+        |> where([m], is_nil(m.deleted_at))
         |> join(:left, [m], d in MessageDeletion,
           on: d.message_id == m.id and d.user_id == ^user.id
         )
