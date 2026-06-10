@@ -12,6 +12,8 @@ defmodule Eden.Chat.Folder do
   schema "chat_folders" do
     field :name, :string
     field :position, :integer, default: 0
+    # Folder mute: set = the whole grouping is muted (suppressed from badges).
+    field :muted_at, :utc_datetime
 
     # Per-folder unread total, computed for the tab badge (Chat.list_folders/1).
     field :unread_count, :integer, virtual: true, default: 0
