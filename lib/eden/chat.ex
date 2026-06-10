@@ -1141,16 +1141,7 @@ defmodule Eden.Chat do
 
   # Like normalize_id/1 but never raises — for ids that arrive straight from a
   # client event, where a non-numeric value should mean "not found", not a crash.
-  defp safe_id(id) when is_integer(id), do: id
-
-  defp safe_id(id) when is_binary(id) do
-    case Integer.parse(id) do
-      {int, ""} -> int
-      _ -> :error
-    end
-  end
-
-  defp safe_id(_id), do: :error
+  defp safe_id(id), do: Eden.Ids.normalize(id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 

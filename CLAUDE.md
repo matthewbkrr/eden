@@ -93,6 +93,16 @@ design — built incrementally as features land.)
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads
     profiles from already-authorized, preloaded memberships.
+- **Channels** — the corporate layer (epic #26): a `Channel` (≈ Mattermost team /
+  Discord server) groups thematic chat rooms and carries per-user
+  `Membership` roles (`owner | admin | member`; the creator becomes owner).
+  Authorization mirrors Chat: every function takes a `%Scope{}` and is scoped
+  by membership — non-members get `:not_found` (existence not leaked), members
+  lacking the required role get `:forbidden`. Channel-scoped events broadcast
+  on `channel:<id>` (subscribe only after `get_channel/2`); rail-level changes
+  ping each member's `user:<id>:channels` topic with `:channels_changed`.
+  Rooms (conversations bound to a channel), invites, and threads land with
+  #29–#31.
 - **Storage** — file/photo persistence behind an **adapter behaviour**
   (`Eden.Storage.Adapter`). Local disk in dev, object storage (S3-compatible) in
   prod, swappable without touching callers. Callers store only the file **key +
