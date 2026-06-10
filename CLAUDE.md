@@ -39,10 +39,14 @@ design — built incrementally as features land.)
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.
     **Delete chat** (`delete_conversation/2`) is per-user: it sets the member's
     `left_at` to hide the thread from their list (`list_conversations/1` filters
-    `left_at`), and new activity clears it so the chat re-surfaces. When the last
-    member has left, the conversation is **garbage-collected** — the DB cascades
-    messages/memberships/attachments and the orphaned blobs are deleted (blobs a
-    forward elsewhere still references are spared).
+    `left_at`). For a **1:1**, new activity clears `left_at` so the chat
+    re-surfaces (messaging someone back re-opens it); **leaving a group is
+    permanent** (`resurface_direct/1` only un-hides non-group threads, and
+    `notify_members/1` skips members who left). The mark-left + last-member check
+    + GC run in one transaction; when the last member has left the conversation is
+    **garbage-collected** — the DB cascades messages/memberships/attachments and
+    the orphaned blobs are deleted via the shared `delete_unreferenced_blobs/1`
+    (blobs a forward elsewhere still references are spared).
   - `Membership` — join between a `Conversation` and a user (role, joined_at,
     last_read, `left_at` for per-user chat deletion, etc.). A conversation has
     many memberships.

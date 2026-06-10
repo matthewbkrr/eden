@@ -762,7 +762,8 @@ defmodule Eden.Chat do
       from(m in Membership,
         join: c in Conversation,
         on: c.id == m.conversation_id,
-        where: m.conversation_id == ^conversation_id and not is_nil(m.left_at) and c.is_group == false
+        where:
+          m.conversation_id == ^conversation_id and not is_nil(m.left_at) and c.is_group == false
       ),
       set: [left_at: nil]
     )
