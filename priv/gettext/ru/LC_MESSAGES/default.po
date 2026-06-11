@@ -27,8 +27,8 @@ msgstr "Внешний вид"
 msgid "Attempting to reconnect"
 msgstr "Переподключение…"
 
-#: lib/eden_web/live/chat_live.ex:1426
-#: lib/eden_web/live/chat_live.ex:1624
+#: lib/eden_web/live/chat_live.ex:1429
+#: lib/eden_web/live/chat_live.ex:1630
 #: lib/eden_web/live/settings_live.ex:69
 #, elixir-autogen, elixir-format
 msgid "Back"
@@ -65,7 +65,7 @@ msgstr "Язык"
 msgid "Light"
 msgstr "Светлая"
 
-#: lib/eden_web/live/chat_live.ex:1259
+#: lib/eden_web/live/chat_live.ex:1262
 #: lib/eden_web/live/settings_live.ex:20
 #: lib/eden_web/live/settings_live.ex:72
 #, elixir-autogen, elixir-format
@@ -161,7 +161,7 @@ msgstr "Войти"
 msgid "Log in to eden"
 msgstr "Вход в eden"
 
-#: lib/eden_web/live/chat_live.ex:1266
+#: lib/eden_web/live/chat_live.ex:1269
 #, elixir-autogen, elixir-format
 msgid "Log out"
 msgstr "Выйти"
@@ -233,32 +233,32 @@ msgid "You were invited. Pick a username and password."
 msgstr "Вас пригласили. Придумайте имя пользователя и пароль."
 
 #: lib/eden_web/live/chat_live.ex:34
-#: lib/eden_web/live/chat_live.ex:2228
+#: lib/eden_web/live/chat_live.ex:2292
 #, elixir-autogen, elixir-format
 msgid "Chats"
 msgstr "Чаты"
 
-#: lib/eden_web/components/shell_components.ex:81
-#: lib/eden_web/components/shell_components.ex:96
-#: lib/eden_web/live/chat_live.ex:1639
-#: lib/eden_web/live/chat_live.ex:2411
-#: lib/eden_web/live/chat_live.ex:2432
-#: lib/eden_web/live/chat_live.ex:2543
-#: lib/eden_web/live/chat_live.ex:2558
-#: lib/eden_web/live/chat_live.ex:2621
-#: lib/eden_web/live/chat_live.ex:2636
-#: lib/eden_web/live/chat_live.ex:2717
-#: lib/eden_web/live/chat_live.ex:2732
-#: lib/eden_web/live/chat_live.ex:3077
-#: lib/eden_web/live/chat_live.ex:3092
+#: lib/eden_web/components/shell_components.ex:113
+#: lib/eden_web/components/shell_components.ex:128
+#: lib/eden_web/live/chat_live.ex:1645
+#: lib/eden_web/live/chat_live.ex:2475
+#: lib/eden_web/live/chat_live.ex:2496
+#: lib/eden_web/live/chat_live.ex:2607
+#: lib/eden_web/live/chat_live.ex:2622
+#: lib/eden_web/live/chat_live.ex:2685
+#: lib/eden_web/live/chat_live.ex:2700
+#: lib/eden_web/live/chat_live.ex:2781
+#: lib/eden_web/live/chat_live.ex:2796
 #: lib/eden_web/live/chat_live.ex:3148
 #: lib/eden_web/live/chat_live.ex:3163
-#: lib/eden_web/live/chat_live.ex:3209
-#: lib/eden_web/live/chat_live.ex:3224
-#: lib/eden_web/live/chat_live.ex:3326
-#: lib/eden_web/live/chat_live.ex:3341
+#: lib/eden_web/live/chat_live.ex:3219
+#: lib/eden_web/live/chat_live.ex:3234
+#: lib/eden_web/live/chat_live.ex:3280
+#: lib/eden_web/live/chat_live.ex:3295
 #: lib/eden_web/live/chat_live.ex:3397
 #: lib/eden_web/live/chat_live.ex:3412
+#: lib/eden_web/live/chat_live.ex:3468
+#: lib/eden_web/live/chat_live.ex:3483
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr "Закрыть"
@@ -269,90 +269,90 @@ msgstr "Закрыть"
 msgid "Conversation not found."
 msgstr "Беседа не найдена."
 
-#: lib/eden_web/live/chat_live.ex:790
-#: lib/eden_web/live/chat_live.ex:810
+#: lib/eden_web/live/chat_live.ex:788
+#: lib/eden_web/live/chat_live.ex:808
 #, elixir-autogen, elixir-format
 msgid "Couldn't start the conversation."
 msgstr "Не удалось начать беседу."
 
-#: lib/eden_web/live/chat_live.ex:3107
+#: lib/eden_web/live/chat_live.ex:3178
 #, elixir-autogen, elixir-format
 msgid "Group name (optional)"
 msgstr "Название группы (необязательно)"
 
-#: lib/eden_web/live/chat_live.ex:3733
+#: lib/eden_web/live/chat_live.ex:3821
 #, elixir-autogen, elixir-format
 msgid "Just you"
 msgstr "Только вы"
 
-#: lib/eden_web/live/chat_live.ex:1481
+#: lib/eden_web/live/chat_live.ex:1484
 #, elixir-autogen, elixir-format
 msgid "Load older"
 msgstr "Загрузить ранние"
 
-#: lib/eden_web/live/chat_live.ex:1576
+#: lib/eden_web/live/chat_live.ex:1582
 #, elixir-autogen, elixir-format
 msgid "Message"
 msgstr "Сообщение"
 
-#: lib/eden_web/live/chat_live.ex:1255
-#: lib/eden_web/live/chat_live.ex:1389
-#: lib/eden_web/live/chat_live.ex:1606
-#: lib/eden_web/live/chat_live.ex:3091
+#: lib/eden_web/live/chat_live.ex:1258
+#: lib/eden_web/live/chat_live.ex:1392
+#: lib/eden_web/live/chat_live.ex:1612
+#: lib/eden_web/live/chat_live.ex:3162
 #, elixir-autogen, elixir-format
 msgid "New conversation"
 msgstr "Новая беседа"
 
-#: lib/eden_web/live/chat_live.ex:1601
+#: lib/eden_web/live/chat_live.ex:1607
 #, elixir-autogen, elixir-format
 msgid "No conversation selected"
 msgstr "Беседа не выбрана"
 
-#: lib/eden_web/live/chat_live.ex:3099
+#: lib/eden_web/live/chat_live.ex:3170
 #, elixir-autogen, elixir-format
 msgid "No one else has joined yet."
 msgstr "Пока больше никто не присоединился."
 
-#: lib/eden_web/live/chat_live.ex:1603
+#: lib/eden_web/live/chat_live.ex:1609
 #, elixir-autogen, elixir-format
 msgid "Pick a chat or start a new one."
 msgstr "Выберите чат или начните новый."
 
-#: lib/eden_web/live/chat_live.ex:807
-#: lib/eden_web/live/chat_live.ex:815
+#: lib/eden_web/live/chat_live.ex:805
+#: lib/eden_web/live/chat_live.ex:813
 #, elixir-autogen, elixir-format
 msgid "Pick at least one person."
 msgstr "Выберите хотя бы одного человека."
 
-#: lib/eden_web/live/chat_live.ex:1583
-#: lib/eden_web/live/chat_live.ex:1687
+#: lib/eden_web/live/chat_live.ex:1589
+#: lib/eden_web/live/chat_live.ex:1696
 #, elixir-autogen, elixir-format
 msgid "Send"
 msgstr "Отправить"
 
-#: lib/eden_web/live/chat_live.ex:3127
+#: lib/eden_web/live/chat_live.ex:3198
 #, elixir-autogen, elixir-format
 msgid "Start"
 msgstr "Начать"
 
-#: lib/eden_web/live/chat_live.ex:2763
+#: lib/eden_web/live/chat_live.ex:2827
 #, elixir-autogen, elixir-format
 msgid "No messages yet"
 msgstr "Пока нет сообщений"
 
-#: lib/eden_web/live/chat_live.ex:1466
-#: lib/eden_web/live/chat_live.ex:3359
+#: lib/eden_web/live/chat_live.ex:1469
+#: lib/eden_web/live/chat_live.ex:3430
 #, elixir-autogen, elixir-format
 msgid "offline"
 msgstr "не в сети"
 
-#: lib/eden_web/live/chat_live.ex:1465
-#: lib/eden_web/live/chat_live.ex:3359
+#: lib/eden_web/live/chat_live.ex:1468
+#: lib/eden_web/live/chat_live.ex:3430
 #, elixir-autogen, elixir-format
 msgid "online"
 msgstr "в сети"
 
-#: lib/eden_web/live/chat_live.ex:3796
+#: lib/eden_web/live/chat_live.ex:3884
 #, elixir-autogen, elixir-format
 msgid "Message is too long (up to 4000 characters)."
 msgstr "Сообщение слишком длинное (до 4000 символов)."
@@ -362,20 +362,20 @@ msgstr "Сообщение слишком длинное (до 4000 символ
 msgid "Images only"
 msgstr "Только изображения"
 
-#: lib/eden_web/live/chat_live.ex:3843
+#: lib/eden_web/live/chat_live.ex:3931
 #: lib/eden_web/live/settings_live.ex:558
 #, elixir-autogen, elixir-format
 msgid "Invalid file"
 msgstr "Недопустимый файл"
 
-#: lib/eden_web/live/chat_live.ex:1559
+#: lib/eden_web/live/chat_live.ex:1565
 #: lib/eden_web/live/settings_live.ex:122
 #, elixir-autogen, elixir-format
 msgid "Remove"
 msgstr "Удалить"
 
-#: lib/eden_web/live/chat_live.ex:2765
-#: lib/eden_web/live/chat_live.ex:3028
+#: lib/eden_web/live/chat_live.ex:2829
+#: lib/eden_web/live/chat_live.ex:3099
 #, elixir-autogen, elixir-format
 msgid "Photo"
 msgstr "Фото"
@@ -410,7 +410,7 @@ msgstr "JPEG или PNG, до 5 МБ."
 msgid "One photo"
 msgstr "Только одно фото"
 
-#: lib/eden_web/live/chat_live.ex:3338
+#: lib/eden_web/live/chat_live.ex:3409
 #: lib/eden_web/live/settings_live.ex:83
 #, elixir-autogen, elixir-format
 msgid "Profile"
@@ -421,8 +421,8 @@ msgstr "Профиль"
 msgid "Profile saved."
 msgstr "Профиль сохранён."
 
-#: lib/eden_web/live/chat_live.ex:1729
-#: lib/eden_web/live/chat_live.ex:1735
+#: lib/eden_web/live/chat_live.ex:1738
+#: lib/eden_web/live/chat_live.ex:1744
 #: lib/eden_web/live/settings_live.ex:180
 #, elixir-autogen, elixir-format
 msgid "Save"
@@ -443,7 +443,7 @@ msgstr "До 5 МБ"
 msgid "Upload photo"
 msgstr "Загрузить фото"
 
-#: lib/eden_web/live/chat_live.ex:1472
+#: lib/eden_web/live/chat_live.ex:1475
 #, elixir-autogen, elixir-format
 msgid "%{count} member"
 msgid_plural "%{count} members"
@@ -451,14 +451,14 @@ msgstr[0] "%{count} участник"
 msgstr[1] "%{count} участника"
 msgstr[2] "%{count} участников"
 
-#: lib/eden_web/live/chat_live.ex:3433
+#: lib/eden_web/live/chat_live.ex:3504
 #, elixir-autogen, elixir-format
 msgid "(you)"
 msgstr "(вы)"
 
-#: lib/eden_web/live/chat_live.ex:1146
-#: lib/eden_web/live/chat_live.ex:2426
-#: lib/eden_web/live/chat_live.ex:3411
+#: lib/eden_web/live/chat_live.ex:1149
+#: lib/eden_web/live/chat_live.ex:2490
+#: lib/eden_web/live/chat_live.ex:3482
 #, elixir-autogen, elixir-format
 msgid "Members"
 msgstr "Участники"
@@ -468,64 +468,64 @@ msgstr "Участники"
 msgid "Profile unavailable."
 msgstr "Профиль недоступен."
 
-#: lib/eden_web/live/chat_live.ex:3376
+#: lib/eden_web/live/chat_live.ex:3447
 #, elixir-autogen, elixir-format
 msgid "Send message"
 msgstr "Написать"
 
-#: lib/eden_web/live/chat_live.ex:1448
+#: lib/eden_web/live/chat_live.ex:1451
 #, elixir-autogen, elixir-format
 msgid "View profile"
 msgstr "Открыть профиль"
 
-#: lib/eden_web/live/chat_live.ex:1566
+#: lib/eden_web/live/chat_live.ex:1572
 #, elixir-autogen, elixir-format
 msgid "Attach a file"
 msgstr "Прикрепить файл"
 
-#: lib/eden_web/live/chat_live.ex:3838
+#: lib/eden_web/live/chat_live.ex:3926
 #, elixir-autogen, elixir-format
 msgid "Couldn't send that file."
 msgstr "Не удалось отправить файл."
 
-#: lib/eden_web/live/chat_live.ex:2767
-#: lib/eden_web/live/chat_live.ex:3061
+#: lib/eden_web/live/chat_live.ex:2831
+#: lib/eden_web/live/chat_live.ex:3132
 #, elixir-autogen, elixir-format
 msgid "File"
 msgstr "Файл"
 
-#: lib/eden_web/live/chat_live.ex:3841
+#: lib/eden_web/live/chat_live.ex:3929
 #, elixir-autogen, elixir-format
 msgid "File too large"
 msgstr "Файл слишком большой"
 
-#: lib/eden_web/live/chat_live.ex:3842
+#: lib/eden_web/live/chat_live.ex:3930
 #, elixir-autogen, elixir-format
 msgid "One file at a time"
 msgstr "По одному файлу за раз"
 
-#: lib/eden_web/live/chat_live.ex:3836
+#: lib/eden_web/live/chat_live.ex:3924
 #, elixir-autogen, elixir-format
 msgid "That file is too large."
 msgstr "Этот файл слишком большой."
 
-#: lib/eden_web/live/chat_live.ex:2766
-#: lib/eden_web/live/chat_live.ex:3040
+#: lib/eden_web/live/chat_live.ex:2830
+#: lib/eden_web/live/chat_live.ex:3111
 #, elixir-autogen, elixir-format
 msgid "Video"
 msgstr "Видео"
 
-#: lib/eden_web/live/chat_live.ex:3055
+#: lib/eden_web/live/chat_live.ex:3126
 #, elixir-autogen, elixir-format
 msgid "Download %{name}"
 msgstr "Скачать %{name}"
 
-#: lib/eden_web/live/chat_live.ex:3055
+#: lib/eden_web/live/chat_live.ex:3126
 #, elixir-autogen, elixir-format
 msgid "file"
 msgstr "файл"
 
-#: lib/eden_web/live/chat_live.ex:3837
+#: lib/eden_web/live/chat_live.ex:3925
 #, elixir-autogen, elixir-format
 msgid "That file is empty."
 msgstr "Этот файл пустой."
@@ -535,12 +535,12 @@ msgstr "Этот файл пустой."
 msgid "Copied."
 msgstr "Скопировано."
 
-#: lib/eden_web/live/chat_live.ex:2971
+#: lib/eden_web/live/chat_live.ex:3042
 #, elixir-autogen, elixir-format
 msgid "Copy link"
 msgstr "Скопировать ссылку"
 
-#: lib/eden_web/live/chat_live.ex:2962
+#: lib/eden_web/live/chat_live.ex:3033
 #, elixir-autogen, elixir-format
 msgid "Copy text"
 msgstr "Скопировать текст"
@@ -555,37 +555,37 @@ msgstr "Не удалось удалить сообщение."
 msgid "Couldn't forward that message."
 msgstr "Не удалось переслать сообщение."
 
-#: lib/eden_web/live/chat_live.ex:3000
+#: lib/eden_web/live/chat_live.ex:3071
 #, elixir-autogen, elixir-format
 msgid "Delete for everyone"
 msgstr "Удалить у всех"
 
-#: lib/eden_web/live/chat_live.ex:2989
+#: lib/eden_web/live/chat_live.ex:3060
 #, elixir-autogen, elixir-format
 msgid "Delete for me"
 msgstr "Удалить у себя"
 
-#: lib/eden_web/live/chat_live.ex:2998
+#: lib/eden_web/live/chat_live.ex:3069
 #, elixir-autogen, elixir-format
 msgid "Delete this message for everyone?"
 msgstr "Удалить это сообщение у всех?"
 
-#: lib/eden_web/live/chat_live.ex:2980
+#: lib/eden_web/live/chat_live.ex:3051
 #, elixir-autogen, elixir-format
 msgid "Forward"
 msgstr "Переслать"
 
-#: lib/eden_web/live/chat_live.ex:3162
+#: lib/eden_web/live/chat_live.ex:3233
 #, elixir-autogen, elixir-format
 msgid "Forward to"
 msgstr "Переслать в"
 
-#: lib/eden_web/live/chat_live.ex:3271
+#: lib/eden_web/live/chat_live.ex:3342
 #, elixir-autogen, elixir-format
 msgid "Forwarded"
 msgstr "Переслано"
 
-#: lib/eden_web/live/chat_live.ex:3269
+#: lib/eden_web/live/chat_live.ex:3340
 #, elixir-autogen, elixir-format
 msgid "Forwarded from %{name}"
 msgstr "Переслано от %{name}"
@@ -600,12 +600,12 @@ msgstr "Переслано."
 msgid "Link copied."
 msgstr "Ссылка скопирована."
 
-#: lib/eden_web/live/chat_live.ex:3169
+#: lib/eden_web/live/chat_live.ex:3240
 #, elixir-autogen, elixir-format
 msgid "No conversations yet."
 msgstr "Пока нет бесед."
 
-#: lib/eden_web/live/chat_live.ex:774
+#: lib/eden_web/live/chat_live.ex:772
 #, elixir-autogen, elixir-format
 msgid "That message is unavailable."
 msgstr "Это сообщение недоступно."
@@ -615,34 +615,34 @@ msgstr "Это сообщение недоступно."
 msgid "Couldn't delete that chat."
 msgstr "Не удалось удалить чат."
 
-#: lib/eden_web/live/chat_live.ex:2201
+#: lib/eden_web/live/chat_live.ex:2265
 #, elixir-autogen, elixir-format
 msgid "Delete chat"
 msgstr "Удалить чат"
 
-#: lib/eden_web/live/chat_live.ex:2199
+#: lib/eden_web/live/chat_live.ex:2263
 #, elixir-autogen, elixir-format
 msgid "Delete this chat? It will be removed from your list."
 msgstr "Удалить этот чат? Он исчезнет из вашего списка."
 
-#: lib/eden_web/live/chat_live.ex:1387
+#: lib/eden_web/live/chat_live.ex:1390
 #, elixir-autogen, elixir-format
 msgid "No chats yet"
 msgstr "Пока нет чатов"
 
-#: lib/eden_web/live/chat_live.ex:2602
+#: lib/eden_web/live/chat_live.ex:2666
 #: lib/eden_web/live/settings_live.ex:353
 #, elixir-autogen, elixir-format
 msgid "Add"
 msgstr "Добавить"
 
-#: lib/eden_web/live/chat_live.ex:1317
+#: lib/eden_web/live/chat_live.ex:1320
 #: lib/eden_web/live/settings_live.ex:286
 #, elixir-autogen, elixir-format
 msgid "All Chats"
 msgstr "Все чаты"
 
-#: lib/eden_web/live/chat_live.ex:1306
+#: lib/eden_web/live/chat_live.ex:1309
 #: lib/eden_web/live/settings_live.ex:267
 #, elixir-autogen, elixir-format
 msgid "Chat folders"
@@ -669,17 +669,17 @@ msgstr "Удалить эту папку? Чаты останутся — уда
 msgid "Folder name"
 msgstr "Название папки"
 
-#: lib/eden_web/live/chat_live.ex:3234
+#: lib/eden_web/live/chat_live.ex:3305
 #, elixir-autogen, elixir-format
 msgid "Manage folders"
 msgstr "Управление папками"
 
-#: lib/eden_web/live/chat_live.ex:3223
+#: lib/eden_web/live/chat_live.ex:3294
 #, elixir-autogen, elixir-format
 msgid "Move to folder"
 msgstr "В папку"
 
-#: lib/eden_web/live/chat_live.ex:2190
+#: lib/eden_web/live/chat_live.ex:2254
 #, elixir-autogen, elixir-format
 msgid "Move to folder…"
 msgstr "В папку…"
@@ -689,7 +689,7 @@ msgstr "В папку…"
 msgid "New folder name"
 msgstr "Название новой папки"
 
-#: lib/eden_web/live/chat_live.ex:3231
+#: lib/eden_web/live/chat_live.ex:3302
 #, elixir-autogen, elixir-format
 msgid "You don't have any folders yet."
 msgstr "У вас пока нет папок."
@@ -705,12 +705,12 @@ msgstr "Сгруппируйте чаты. Перетащите, чтобы из
 msgid "Couldn't save that folder."
 msgstr "Не удалось сохранить папку."
 
-#: lib/eden_web/live/chat_live.ex:1382
+#: lib/eden_web/live/chat_live.ex:1385
 #, elixir-autogen, elixir-format
 msgid "No chats in this folder"
 msgstr "В этой папке нет чатов"
 
-#: lib/eden_web/live/chat_live.ex:1384
+#: lib/eden_web/live/chat_live.ex:1387
 #, elixir-autogen, elixir-format
 msgid "Right-click a chat to move it here."
 msgstr "Кликните по чату правой кнопкой, чтобы переместить его сюда."
@@ -725,24 +725,24 @@ msgstr "Можно создать не более %{count} папок."
 msgid "Folder renamed."
 msgstr "Папка переименована."
 
-#: lib/eden_web/live/chat_live.ex:2181
-#: lib/eden_web/live/chat_live.ex:2368
+#: lib/eden_web/live/chat_live.ex:2245
+#: lib/eden_web/live/chat_live.ex:2432
 #, elixir-autogen, elixir-format
 msgid "Mute"
 msgstr "Заглушить"
 
-#: lib/eden_web/live/chat_live.ex:1354
+#: lib/eden_web/live/chat_live.ex:1357
 #, elixir-autogen, elixir-format
 msgid "Mute folder"
 msgstr "Заглушить папку"
 
-#: lib/eden_web/live/chat_live.ex:2181
-#: lib/eden_web/live/chat_live.ex:2368
+#: lib/eden_web/live/chat_live.ex:2245
+#: lib/eden_web/live/chat_live.ex:2432
 #, elixir-autogen, elixir-format
 msgid "Unmute"
 msgstr "Снять заглушение"
 
-#: lib/eden_web/live/chat_live.ex:1354
+#: lib/eden_web/live/chat_live.ex:1357
 #, elixir-autogen, elixir-format
 msgid "Unmute folder"
 msgstr "Снять заглушение с папки"
@@ -757,46 +757,46 @@ msgstr "Не удалось обновить чат."
 msgid "Couldn't update that folder."
 msgstr "Не удалось обновить папку."
 
-#: lib/eden_web/live/chat_live.ex:1335
-#: lib/eden_web/live/chat_live.ex:2149
-#: lib/eden_web/live/chat_live.ex:2349
+#: lib/eden_web/live/chat_live.ex:1338
+#: lib/eden_web/live/chat_live.ex:2213
+#: lib/eden_web/live/chat_live.ex:2413
 #, elixir-autogen, elixir-format
 msgid "Muted"
 msgstr "Заглушено"
 
-#: lib/eden_web/live/chat_live.ex:1297
+#: lib/eden_web/live/chat_live.ex:1300
 #, elixir-autogen, elixir-format
 msgid "Clear search"
 msgstr "Очистить поиск"
 
 #: lib/eden_web/components/shell_components.ex:35
 #: lib/eden_web/components/shell_components.ex:36
-#: lib/eden_web/live/chat_live.ex:2248
+#: lib/eden_web/live/chat_live.ex:2312
 #, elixir-autogen, elixir-format
 msgid "Messages"
 msgstr "Сообщения"
 
-#: lib/eden_web/live/chat_live.ex:2224
+#: lib/eden_web/live/chat_live.ex:2288
 #, elixir-autogen, elixir-format
 msgid "No results for “%{query}”"
 msgstr "Ничего не найдено по запросу «%{query}»"
 
-#: lib/eden_web/live/chat_live.ex:1286
+#: lib/eden_web/live/chat_live.ex:1289
 #, elixir-autogen, elixir-format
 msgid "Search"
 msgstr "Поиск"
 
-#: lib/eden_web/live/chat_live.ex:1290
+#: lib/eden_web/live/chat_live.ex:1293
 #, elixir-autogen, elixir-format
 msgid "Search chats and messages"
 msgstr "Поиск по чатам и сообщениям"
 
-#: lib/eden_web/live/chat_live.ex:1400
+#: lib/eden_web/live/chat_live.ex:1403
 #, elixir-autogen, elixir-format
 msgid "Type at least %{count} characters to search."
 msgstr "Введите минимум %{count} символа для поиска."
 
-#: lib/eden_web/components/shell_components.ex:109
+#: lib/eden_web/components/shell_components.ex:141
 #, elixir-autogen, elixir-format
 msgid "About (optional)"
 msgstr "Описание (необязательно)"
@@ -806,12 +806,12 @@ msgstr "Описание (необязательно)"
 msgid "Channel deleted."
 msgstr "Канал удалён."
 
-#: lib/eden_web/live/chat_live.ex:1130
+#: lib/eden_web/live/chat_live.ex:1133
 #, elixir-autogen, elixir-format
 msgid "Channel menu"
 msgstr "Меню канала"
 
-#: lib/eden_web/components/shell_components.ex:104
+#: lib/eden_web/components/shell_components.ex:136
 #, elixir-autogen, elixir-format
 msgid "Channel name"
 msgstr "Название канала"
@@ -831,35 +831,35 @@ msgstr "Не удалось удалить канал."
 msgid "Couldn't update that channel."
 msgstr "Не удалось обновить канал."
 
-#: lib/eden_web/live/chat_live.ex:1720
+#: lib/eden_web/live/chat_live.ex:1729
 #, elixir-autogen, elixir-format
 msgid "Create channel"
 msgstr "Создать канал"
 
-#: lib/eden_web/live/chat_live.ex:1204
+#: lib/eden_web/live/chat_live.ex:1207
 #, elixir-autogen, elixir-format
 msgid "Delete channel"
 msgstr "Удалить канал"
 
-#: lib/eden_web/live/chat_live.ex:1202
+#: lib/eden_web/live/chat_live.ex:1205
 #, elixir-autogen, elixir-format
 msgid "Delete this channel for everyone? This cannot be undone."
 msgstr "Удалить этот канал для всех? Это действие необратимо."
 
-#: lib/eden_web/live/chat_live.ex:1173
-#: lib/eden_web/live/chat_live.ex:1725
+#: lib/eden_web/live/chat_live.ex:1176
+#: lib/eden_web/live/chat_live.ex:1734
 #, elixir-autogen, elixir-format
 msgid "Edit channel"
 msgstr "Изменить канал"
 
-#: lib/eden_web/components/shell_components.ex:57
-#: lib/eden_web/components/shell_components.ex:58
-#: lib/eden_web/live/chat_live.ex:1716
+#: lib/eden_web/components/shell_components.ex:89
+#: lib/eden_web/components/shell_components.ex:90
+#: lib/eden_web/live/chat_live.ex:1725
 #, elixir-autogen, elixir-format
 msgid "New channel"
 msgstr "Новый канал"
 
-#: lib/eden_web/live/chat_live.ex:991
+#: lib/eden_web/live/chat_live.ex:994
 #, elixir-autogen, elixir-format
 msgid "This channel was deleted."
 msgstr "Этот канал был удалён."
@@ -884,71 +884,71 @@ msgstr "Не удалось удалить комнату."
 msgid "Couldn't save that room."
 msgstr "Не удалось сохранить комнату."
 
-#: lib/eden_web/live/chat_live.ex:1735
+#: lib/eden_web/live/chat_live.ex:1744
 #, elixir-autogen, elixir-format
 msgid "Create room"
 msgstr "Создать комнату"
 
-#: lib/eden_web/live/chat_live.ex:2390
+#: lib/eden_web/live/chat_live.ex:2454
 #, elixir-autogen, elixir-format
 msgid "Delete room"
 msgstr "Удалить комнату"
 
-#: lib/eden_web/live/chat_live.ex:2388
+#: lib/eden_web/live/chat_live.ex:2452
 #, elixir-autogen, elixir-format
 msgid "Delete this room and all its messages? This cannot be undone."
 msgstr "Удалить эту комнату со всеми сообщениями? Это действие необратимо."
 
-#: lib/eden_web/live/chat_live.ex:1182
-#: lib/eden_web/live/chat_live.ex:1226
-#: lib/eden_web/live/chat_live.ex:1733
+#: lib/eden_web/live/chat_live.ex:1185
+#: lib/eden_web/live/chat_live.ex:1229
+#: lib/eden_web/live/chat_live.ex:1742
 #, elixir-autogen, elixir-format
 msgid "New room"
 msgstr "Новая комната"
 
-#: lib/eden_web/live/chat_live.ex:1233
+#: lib/eden_web/live/chat_live.ex:1236
 #, elixir-autogen, elixir-format
 msgid "No rooms yet."
 msgstr "Комнат пока нет."
 
-#: lib/eden_web/live/chat_live.ex:1597
+#: lib/eden_web/live/chat_live.ex:1603
 #, elixir-autogen, elixir-format
 msgid "Pick a room to start reading."
 msgstr "Выберите комнату, чтобы начать."
 
-#: lib/eden_web/live/chat_live.ex:1733
-#: lib/eden_web/live/chat_live.ex:2378
+#: lib/eden_web/live/chat_live.ex:1742
+#: lib/eden_web/live/chat_live.ex:2442
 #, elixir-autogen, elixir-format
 msgid "Rename room"
 msgstr "Переименовать комнату"
 
-#: lib/eden_web/live/chat_live.ex:2740
+#: lib/eden_web/live/chat_live.ex:2804
 #, elixir-autogen, elixir-format
 msgid "Room name"
 msgstr "Название комнаты"
 
-#: lib/eden_web/live/chat_live.ex:2672
+#: lib/eden_web/live/chat_live.ex:2736
 #, elixir-autogen, elixir-format
 msgid "Active links"
 msgstr "Действующие ссылки"
 
-#: lib/eden_web/live/chat_live.ex:1155
-#: lib/eden_web/live/chat_live.ex:2557
+#: lib/eden_web/live/chat_live.ex:1158
+#: lib/eden_web/live/chat_live.ex:2621
 #, elixir-autogen, elixir-format
 msgid "Add members"
 msgstr "Добавить участников"
 
-#: lib/eden_web/live/chat_live.ex:2654
+#: lib/eden_web/live/chat_live.ex:2718
 #, elixir-autogen, elixir-format
 msgid "Copied!"
 msgstr "Скопировано!"
 
-#: lib/eden_web/live/chat_live.ex:2656
+#: lib/eden_web/live/chat_live.ex:2720
 #, elixir-autogen, elixir-format
 msgid "Copy"
 msgstr "Копировать"
 
-#: lib/eden_web/live/chat_live.ex:2644
+#: lib/eden_web/live/chat_live.ex:2708
 #, elixir-autogen, elixir-format
 msgid "Copy this link now — it won't be shown again."
 msgstr "Скопируйте ссылку сейчас — она больше не будет показана."
@@ -988,76 +988,76 @@ msgstr "Не удалось отозвать ссылку."
 msgid "Couldn't transfer ownership."
 msgstr "Не удалось передать владение."
 
-#: lib/eden_web/live/chat_live.ex:2667
+#: lib/eden_web/live/chat_live.ex:2731
 #, elixir-autogen, elixir-format
 msgid "Create invite link"
 msgstr "Создать ссылку-приглашение"
 
-#: lib/eden_web/live/chat_live.ex:2564
+#: lib/eden_web/live/chat_live.ex:2628
 #, elixir-autogen, elixir-format
 msgid "Everyone is already here."
 msgstr "Здесь уже все."
 
-#: lib/eden_web/live/chat_live.ex:2495
+#: lib/eden_web/live/chat_live.ex:2559
 #, elixir-autogen, elixir-format
 msgid "Hand this channel over? You will become an admin."
 msgstr "Передать канал? Вы станете админом."
 
-#: lib/eden_web/live/chat_live.ex:1164
+#: lib/eden_web/live/chat_live.ex:1167
 #, elixir-autogen, elixir-format
 msgid "Invite link"
 msgstr "Ссылка-приглашение"
 
-#: lib/eden_web/live/chat_live.ex:2635
+#: lib/eden_web/live/chat_live.ex:2699
 #, elixir-autogen, elixir-format
 msgid "Invite links"
 msgstr "Ссылки-приглашения"
 
-#: lib/eden_web/live/chat_live.ex:1192
+#: lib/eden_web/live/chat_live.ex:1195
 #, elixir-autogen, elixir-format
 msgid "Leave channel"
 msgstr "Покинуть канал"
 
-#: lib/eden_web/live/chat_live.ex:1190
+#: lib/eden_web/live/chat_live.ex:1193
 #, elixir-autogen, elixir-format
 msgid "Leave this channel?"
 msgstr "Покинуть этот канал?"
 
-#: lib/eden_web/live/chat_live.ex:2467
-#: lib/eden_web/live/chat_live.ex:2468
+#: lib/eden_web/live/chat_live.ex:2531
+#: lib/eden_web/live/chat_live.ex:2532
 #, elixir-autogen, elixir-format
 msgid "Make admin"
 msgstr "Сделать админом"
 
-#: lib/eden_web/live/chat_live.ex:2479
-#: lib/eden_web/live/chat_live.ex:2480
+#: lib/eden_web/live/chat_live.ex:2543
+#: lib/eden_web/live/chat_live.ex:2544
 #, elixir-autogen, elixir-format
 msgid "Remove admin"
 msgstr "Снять админа"
 
-#: lib/eden_web/live/chat_live.ex:2503
-#: lib/eden_web/live/chat_live.ex:2504
+#: lib/eden_web/live/chat_live.ex:2567
+#: lib/eden_web/live/chat_live.ex:2568
 #, elixir-autogen, elixir-format
 msgid "Remove from channel"
 msgstr "Удалить из канала"
 
-#: lib/eden_web/live/chat_live.ex:2507
+#: lib/eden_web/live/chat_live.ex:2571
 #, elixir-autogen, elixir-format
 msgid "Remove this member from the channel?"
 msgstr "Удалить этого участника из канала?"
 
-#: lib/eden_web/live/chat_live.ex:2695
+#: lib/eden_web/live/chat_live.ex:2759
 #, elixir-autogen, elixir-format
 msgid "Revoke"
 msgstr "Отозвать"
 
-#: lib/eden_web/live/chat_live.ex:2693
+#: lib/eden_web/live/chat_live.ex:2757
 #, elixir-autogen, elixir-format
 msgid "Revoke this link? Anyone holding it loses access."
 msgstr "Отозвать эту ссылку? Все, у кого она есть, потеряют доступ."
 
-#: lib/eden_web/live/chat_live.ex:2491
-#: lib/eden_web/live/chat_live.ex:2492
+#: lib/eden_web/live/chat_live.ex:2555
+#: lib/eden_web/live/chat_live.ex:2556
 #, elixir-autogen, elixir-format
 msgid "Transfer ownership"
 msgstr "Передать владение"
@@ -1067,7 +1067,7 @@ msgstr "Передать владение"
 msgid "Transfer ownership or delete the channel before leaving."
 msgstr "Передайте владение или удалите канал, прежде чем выходить."
 
-#: lib/eden_web/live/chat_live.ex:2681
+#: lib/eden_web/live/chat_live.ex:2745
 #, elixir-autogen, elixir-format
 msgid "Uses: %{used}%{cap}"
 msgstr "Использований: %{used}%{cap}"
@@ -1082,39 +1082,39 @@ msgstr "Добро пожаловать в %{name}!"
 msgid "You left the channel."
 msgstr "Вы покинули канал."
 
-#: lib/eden_web/live/chat_live.ex:1016
+#: lib/eden_web/live/chat_live.ex:1019
 #, elixir-autogen, elixir-format
 msgid "You no longer have access to this channel."
 msgstr "У вас больше нет доступа к этому каналу."
 
-#: lib/eden_web/live/chat_live.ex:2521
+#: lib/eden_web/live/chat_live.ex:2585
 #, elixir-autogen, elixir-format
 msgid "admin"
 msgstr "админ"
 
-#: lib/eden_web/live/chat_live.ex:2684
+#: lib/eden_web/live/chat_live.ex:2748
 #, elixir-autogen, elixir-format
 msgid "expires"
 msgstr "истекает"
 
-#: lib/eden_web/live/chat_live.ex:2522
+#: lib/eden_web/live/chat_live.ex:2586
 #, elixir-autogen, elixir-format
 msgid "member"
 msgstr "участник"
 
-#: lib/eden_web/live/chat_live.ex:2520
+#: lib/eden_web/live/chat_live.ex:2584
 #, elixir-autogen, elixir-format
 msgid "owner"
 msgstr "владелец"
 
-#: lib/eden_web/live/chat_live.ex:2453
+#: lib/eden_web/live/chat_live.ex:2517
 #, elixir-autogen, elixir-format
 msgid "you"
 msgstr "вы"
 
-#: lib/eden_web/live/chat_live.ex:1654
-#: lib/eden_web/live/chat_live.ex:2828
-#: lib/eden_web/live/chat_live.ex:2920
+#: lib/eden_web/live/chat_live.ex:1663
+#: lib/eden_web/live/chat_live.ex:2899
+#: lib/eden_web/live/chat_live.ex:2991
 #, elixir-autogen, elixir-format
 msgid "%{count} reply"
 msgid_plural "%{count} replies"
@@ -1122,47 +1122,62 @@ msgstr[0] "%{count} ответ"
 msgstr[1] "%{count} ответа"
 msgstr[2] "%{count} ответов"
 
-#: lib/eden_web/live/chat_live.ex:2800
+#: lib/eden_web/live/chat_live.ex:2871
 #, elixir-autogen, elixir-format
 msgid "Deleted account"
 msgstr "Удалённый аккаунт"
 
-#: lib/eden_web/live/chat_live.ex:2851
-#: lib/eden_web/live/chat_live.ex:2852
+#: lib/eden_web/live/chat_live.ex:2922
+#: lib/eden_web/live/chat_live.ex:2923
 #, elixir-autogen, elixir-format
 msgid "More actions"
 msgstr "Ещё действия"
 
-#: lib/eden_web/live/chat_live.ex:1683
+#: lib/eden_web/live/chat_live.ex:1692
 #, elixir-autogen, elixir-format
 msgid "Reply"
 msgstr "Ответ"
 
-#: lib/eden_web/live/chat_live.ex:2840
-#: lib/eden_web/live/chat_live.ex:2841
-#: lib/eden_web/live/chat_live.ex:2952
+#: lib/eden_web/live/chat_live.ex:2911
+#: lib/eden_web/live/chat_live.ex:2912
+#: lib/eden_web/live/chat_live.ex:3023
 #, elixir-autogen, elixir-format
 msgid "Reply in thread"
 msgstr "Ответить в треде"
 
-#: lib/eden_web/live/chat_live.ex:1682
+#: lib/eden_web/live/chat_live.ex:1691
 #, elixir-autogen, elixir-format
 msgid "Reply…"
 msgstr "Ответить…"
 
-#: lib/eden_web/live/chat_live.ex:762
+#: lib/eden_web/live/chat_live.ex:760
 #, elixir-autogen, elixir-format
 msgid "That reply can't be sent."
 msgstr "Этот ответ нельзя отправить."
 
-#: lib/eden_web/live/chat_live.ex:1615
-#: lib/eden_web/live/chat_live.ex:1629
+#: lib/eden_web/live/chat_live.ex:1621
+#: lib/eden_web/live/chat_live.ex:1635
 #, elixir-autogen, elixir-format
 msgid "Thread"
 msgstr "Тред"
 
-#: lib/eden_web/live/chat_live.ex:768
-#: lib/eden_web/live/chat_live.ex:3677
+#: lib/eden_web/live/chat_live.ex:766
+#: lib/eden_web/live/chat_live.ex:3765
 #, elixir-autogen, elixir-format
 msgid "Thread not found."
 msgstr "Тред не найден."
+
+#: lib/eden_web/components/shell_components.ex:166
+#, elixir-autogen, elixir-format
+msgid "%{name}, %{count} unread"
+msgstr "%{name}, непрочитано: %{count}"
+
+#: lib/eden_web/components/shell_components.ex:80
+#, elixir-autogen, elixir-format
+msgid "Mute channel"
+msgstr "Новый канал"
+
+#: lib/eden_web/components/shell_components.ex:80
+#, elixir-autogen, elixir-format
+msgid "Unmute channel"
+msgstr "Снять заглушение"

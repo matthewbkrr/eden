@@ -53,7 +53,7 @@ defmodule EdenWeb.ShellComponents do
           navigate={~p"/channels/#{channel.id}"}
           class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
           title={channel.name}
-          aria-label={channel.name}
+          aria-label={rail_label(channel)}
           aria-haspopup="menu"
         >
           {channel_initials(channel.name)}
@@ -63,7 +63,7 @@ defmodule EdenWeb.ShellComponents do
           class={["ed-rail__badge", channel.muted && "ed-rail__badge--muted"]}
           aria-hidden="true"
         >
-          {min(channel.unread_count, 99)}
+          {rail_badge_text(channel.unread_count)}
         </span>
         <div class="ed-menu" id={"rail-menu-#{channel.id}"} data-menu role="menu" hidden>
           <button
@@ -159,4 +159,15 @@ defmodule EdenWeb.ShellComponents do
     |> Enum.map_join(&String.first/1)
     |> String.upcase()
   end
+
+  # The visual badge is aria-hidden, so the unread count rides the icon link's
+  # accessible name instead (a screen reader hears "Engineering, 3 unread").
+  defp rail_label(%{unread_count: n, name: name}) when n > 0,
+    do: gettext("%{name}, %{count} unread", name: name, count: n)
+
+  defp rail_label(%{name: name}), do: name
+
+  # The badge is ~18px; cap the rendered count so 3+ digits don't overflow.
+  defp rail_badge_text(n) when n > 99, do: "99+"
+  defp rail_badge_text(n), do: Integer.to_string(n)
 end

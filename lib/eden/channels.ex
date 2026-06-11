@@ -105,7 +105,14 @@ defmodule Eden.Channels do
          %Membership{} = membership <-
            Repo.one(from m in Membership, where: m.channel_id == ^id and m.user_id == ^user.id) do
       muted_at = if membership.muted_at, do: nil, else: now()
-      {:ok, _} = membership |> Ecto.Changeset.change(muted_at: muted_at) |> Repo.update()
+
+      # update_all (not Repo.update on the struct): a no-op, not a
+      # StaleEntryError crash, if the membership vanished concurrently — e.g.
+      # the user was removed from the channel mid-click.
+      Repo.update_all(from(m in Membership, where: m.id == ^membership.id),
+        set: [muted_at: muted_at]
+      )
+
       broadcast_user(user.id, :channels_changed)
       {:ok, not is_nil(muted_at)}
     else
