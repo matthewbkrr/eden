@@ -81,7 +81,13 @@ design — built incrementally as features land.)
     `chat_folders.muted_at` mutes a folder; a chat muted directly or via ANY
     muted folder stops counting toward every folder badge (its own unread stays
     tracked but renders de-emphasized), and un-muting a folder never un-mutes
-    directly-muted chats.
+    directly-muted chats. The corporate layer extends this:
+    `channel_memberships.muted_at` mutes a whole channel from the rail's context
+    menu; `Eden.Channels.list_channels/1` carries a per-channel **rail badge**
+    aggregating the user's joined-room unreads (via `Chat.channel_unread_counts/1`,
+    directly-muted rooms excluded, replies never counted), and a muted channel's
+    badge renders de-emphasized. Rooms can't enter folders (guarded in
+    `toggle_conversation_folder/3`), so room unread never leaks into folder badges.
   - **Search** (`search/2`) — conversations by participant display name /
     username (or group title) and messages by body, all scoped through the
     user's non-left memberships (deleted/hidden messages never match). Plain

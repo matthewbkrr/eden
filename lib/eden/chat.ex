@@ -162,19 +162,20 @@ defmodule Eden.Chat do
   tombstones never count (mirrors `unread_counts/2`).
   """
   def channel_unread_counts(%Scope{user: user}) do
+    # Conditions split across several `where:` (Ecto ANDs them) rather than one
+    # compound expression — keeps cyclomatic complexity in check.
     from(m in Message,
       join: mem in Membership,
-      on:
-        mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
-          is_nil(mem.left_at) and is_nil(mem.muted_at),
+      on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
       join: c in Conversation,
       on: c.id == m.conversation_id,
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
-      where:
-        not is_nil(c.channel_id) and m.sender_id != ^user.id and
-          is_nil(m.deleted_at) and is_nil(d.id) and is_nil(m.root_id) and
-          (is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at),
+      where: not is_nil(c.channel_id),
+      where: is_nil(mem.left_at) and is_nil(mem.muted_at),
+      where: m.sender_id != ^user.id,
+      where: is_nil(m.deleted_at) and is_nil(d.id) and is_nil(m.root_id),
+      where: is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at,
       group_by: c.channel_id,
       select: {c.channel_id, count(m.id)}
     )
@@ -552,6 +553,9 @@ defmodule Eden.Chat do
       where: f.user_id == ^user.id,
       where: fm.conversation_id not in subquery(muted_via_folder_query(user)),
       where: msg.sender_id != ^user.id and is_nil(msg.deleted_at) and is_nil(d.id),
+      # Thread replies never count as unread (consistent with unread_counts/2
+      # and the channel aggregate) — a DM can carry threads too since #31.
+      where: is_nil(msg.root_id),
       where: is_nil(mem.last_read_at) or msg.inserted_at > mem.last_read_at,
       group_by: f.id,
       select: {f.id, count(msg.id)}
@@ -812,6 +816,10 @@ defmodule Eden.Chat do
   def toggle_conversation_folder(%Scope{user: user} = scope, conversation_id, folder_id) do
     with cid when is_integer(cid) <- safe_id(conversation_id),
          true <- member?(scope, cid),
+         # Rooms are not sidebar conversations — they can't enter folders (the
+         # UI never offers it; this guards the context so a room's unread can't
+         # leak into a folder badge).
+         false <- room?(cid),
          %Folder{id: fid} <- get_folder(scope, folder_id),
          {:ok, result} <- do_toggle_folder(fid, cid) do
       broadcast_folders(user.id)

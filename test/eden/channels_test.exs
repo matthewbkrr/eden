@@ -565,6 +565,61 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "cross-layer (#32)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_rooms(channel.id, bob.id)
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      {:ok, dm} = Eden.Chat.create_conversation(scope(alice), [bob.id])
+      %{channel: channel, general: general, dm: dm}
+    end
+
+    test "forwarding works both directions between a DM and a room", ctx do
+      %{alice: alice, general: general, dm: dm} = ctx
+
+      {:ok, in_dm} = Eden.Chat.create_message(scope(alice), dm.id, %{"body" => "from dm"})
+      {:ok, fwd_to_room} = Eden.Chat.forward_message(scope(alice), in_dm.id, general.id)
+      assert fwd_to_room.conversation_id == general.id
+      # It really landed in the room (a channel conversation), reads back there.
+      {:ok, room_msgs} = Eden.Chat.list_messages(scope(alice), general.id)
+      assert Enum.any?(room_msgs, &(&1.id == fwd_to_room.id and &1.forwarded_from_id == in_dm.id))
+
+      {:ok, in_room} =
+        Eden.Chat.create_message(scope(alice), general.id, %{"body" => "from room"})
+
+      {:ok, fwd_to_dm} = Eden.Chat.forward_message(scope(alice), in_room.id, dm.id)
+      assert fwd_to_dm.conversation_id == dm.id
+      {:ok, dm_msgs} = Eden.Chat.list_messages(scope(alice), dm.id)
+      assert Enum.any?(dm_msgs, &(&1.id == fwd_to_dm.id))
+    end
+
+    test "folder badges ignore room unread (rooms can't enter folders)", ctx do
+      %{alice: alice, bob: bob, general: general, dm: dm} = ctx
+
+      {:ok, folder} = Eden.Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, :added} = Eden.Chat.toggle_conversation_folder(scope(alice), dm.id, folder.id)
+
+      backdate_last_read(dm.id, alice.id)
+      backdate_last_read(general.id, alice.id)
+      {:ok, _} = Eden.Chat.create_message(scope(bob), dm.id, %{"body" => "dm unread"})
+      {:ok, _} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "room unread"})
+
+      # The folder reflects only its DM; the room's unread never leaks in.
+      assert [%{id: fid, unread_count: 1}] = Eden.Chat.list_folders(scope(alice))
+      assert fid == folder.id
+    end
+
+    test "a room can't be added to a folder", ctx do
+      %{alice: alice, general: general} = ctx
+      {:ok, folder} = Eden.Chat.create_folder(scope(alice), %{"name" => "Nope"})
+
+      # Rooms aren't sidebar conversations; the move-to-folder path refuses them.
+      assert {:error, :not_found} =
+               Eden.Chat.toggle_conversation_folder(scope(alice), general.id, folder.id)
+    end
+  end
+
   defp backdate_last_read(conversation_id, user_id) do
     past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
 
