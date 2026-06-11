@@ -29,68 +29,95 @@ defmodule EdenWeb.ShellComponents do
   def rail(assigns) do
     ~H"""
     <nav class={["ed-rail", @class]} aria-label={gettext("Workspaces")}>
-      <.link
-        navigate={~p"/app"}
-        class={["ed-rail__btn ed-rail__btn--home", @active == :messenger && "ed-rail__btn--active"]}
-        title={gettext("Messages")}
-        aria-label={gettext("Messages")}
-      >
-        <.icon name="hero-chat-bubble-left-right" class="size-5" />
-      </.link>
+      <%!-- The channel list scrolls; the bottom block (settings/logout) is
+            pinned outside it so it never scrolls away with many channels. --%>
+      <div class="ed-rail__scroll">
+        <.link
+          navigate={~p"/app"}
+          class={[
+            "ed-rail__btn ed-rail__btn--home",
+            @active == :messenger && "ed-rail__btn--active"
+          ]}
+          title={gettext("Messages")}
+          aria-label={gettext("Messages")}
+        >
+          <.icon name="hero-chat-bubble-left-right" class="size-5" />
+        </.link>
 
-      <div :if={@channels != []} class="ed-rail__sep"></div>
+        <div :if={@channels != []} class="ed-rail__sep"></div>
 
-      <%!-- Full hook name, not the ".ContextMenu" shorthand: colocated hooks
+        <%!-- Full hook name, not the ".ContextMenu" shorthand: colocated hooks
             resolve relative to the template's module, and this template
             compiles in ShellComponents — the hook lives in ChatLive. --%>
-      <span
-        :for={channel <- @channels}
-        id={"rail-channel-#{channel.id}"}
-        class="ed-rail__slot"
-        phx-hook="EdenWeb.ChatLive.ContextMenu"
-      >
-        <.link
-          navigate={~p"/channels/#{channel.id}"}
-          class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
-          title={channel.name}
-          aria-label={rail_label(channel)}
-          aria-haspopup="menu"
-        >
-          {channel_initials(channel.name)}
-        </.link>
         <span
-          :if={channel.unread_count > 0}
-          class={["ed-rail__badge", channel.muted && "ed-rail__badge--muted"]}
-          aria-hidden="true"
+          :for={channel <- @channels}
+          id={"rail-channel-#{channel.id}"}
+          class="ed-rail__slot"
+          phx-hook="EdenWeb.ChatLive.ContextMenu"
         >
-          {rail_badge_text(channel.unread_count)}
-        </span>
-        <div class="ed-menu" id={"rail-menu-#{channel.id}"} data-menu role="menu" hidden>
-          <button
-            type="button"
-            class="ed-menu__item"
-            role="menuitem"
-            phx-click="toggle_channel_mute"
-            phx-value-id={channel.id}
+          <.link
+            navigate={~p"/channels/#{channel.id}"}
+            class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
+            title={channel.name}
+            aria-label={rail_label(channel)}
+            aria-haspopup="menu"
           >
-            <.icon
-              name={if channel.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
-              class="size-4"
-            />
-            {if channel.muted, do: gettext("Unmute channel"), else: gettext("Mute channel")}
-          </button>
-        </div>
-      </span>
+            {channel_initials(channel.name)}
+          </.link>
+          <span
+            :if={channel.unread_count > 0}
+            class={["ed-rail__badge", channel.muted && "ed-rail__badge--muted"]}
+            aria-hidden="true"
+          >
+            {rail_badge_text(channel.unread_count)}
+          </span>
+          <div class="ed-menu" id={"rail-menu-#{channel.id}"} data-menu role="menu" hidden>
+            <button
+              type="button"
+              class="ed-menu__item"
+              role="menuitem"
+              phx-click="toggle_channel_mute"
+              phx-value-id={channel.id}
+            >
+              <.icon
+                name={if channel.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
+                class="size-4"
+              />
+              {if channel.muted, do: gettext("Unmute channel"), else: gettext("Mute channel")}
+            </button>
+          </div>
+        </span>
 
-      <button
-        type="button"
-        class="ed-rail__btn ed-rail__btn--new"
-        phx-click="rail_new_channel"
-        title={gettext("New channel")}
-        aria-label={gettext("New channel")}
-      >
-        <.icon name="hero-plus-micro" class="size-5" />
-      </button>
+        <button
+          type="button"
+          class="ed-rail__btn ed-rail__btn--new"
+          phx-click="rail_new_channel"
+          title={gettext("New channel")}
+          aria-label={gettext("New channel")}
+        >
+          <.icon name="hero-plus-micro" class="size-5" />
+        </button>
+      </div>
+
+      <div class="ed-rail__bottom">
+        <.link
+          navigate={~p"/settings"}
+          class="ed-rail__btn ed-rail__btn--ghost"
+          title={gettext("Settings")}
+          aria-label={gettext("Settings")}
+        >
+          <.icon name="hero-cog-6-tooth" class="size-5" />
+        </.link>
+        <.link
+          href={~p"/users/log_out"}
+          method="delete"
+          class="ed-rail__btn ed-rail__btn--ghost"
+          title={gettext("Log out")}
+          aria-label={gettext("Log out")}
+        >
+          <.icon name="hero-arrow-right-start-on-rectangle" class="size-5" />
+        </.link>
+      </div>
     </nav>
     """
   end

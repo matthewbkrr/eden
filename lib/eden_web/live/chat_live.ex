@@ -1250,27 +1250,14 @@ defmodule EdenWeb.ChatLive do
           class="flex items-center justify-between gap-2 px-4 h-14 border-b"
           style="border-color: var(--ed-border);"
         >
-          <span class="font-semibold tracking-tight">eden</span>
-          <div class="flex items-center gap-1">
-            <button
-              class="ed-btn--icon"
-              phx-click="toggle_new"
-              aria-label={gettext("New conversation")}
-            >
-              <.icon name="hero-pencil-square-mini" class="size-5" />
-            </button>
-            <.link navigate={~p"/settings"} class="ed-btn--icon" aria-label={gettext("Settings")}>
-              <.icon name="hero-cog-6-tooth-mini" class="size-5" />
-            </.link>
-            <.link
-              href={~p"/users/log_out"}
-              method="delete"
-              class="ed-btn--icon"
-              aria-label={gettext("Log out")}
-            >
-              <.icon name="hero-arrow-right-start-on-rectangle-mini" class="size-5" />
-            </.link>
-          </div>
+          <span class="font-semibold tracking-tight">{gettext("Chats")}</span>
+          <button
+            class="ed-btn--icon"
+            phx-click="toggle_new"
+            aria-label={gettext("New conversation")}
+          >
+            <.icon name="hero-pencil-square-mini" class="size-5" />
+          </button>
         </header>
 
         <form
