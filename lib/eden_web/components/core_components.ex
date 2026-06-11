@@ -540,7 +540,7 @@ defmodule EdenWeb.CoreComponents do
   attr :field, Phoenix.HTML.FormField, required: true
   attr :label, :string, required: true
   attr :type, :string, default: "text"
-  attr :rest, :global, include: ~w(autocomplete autofocus required)
+  attr :rest, :global, include: ~w(autocomplete autofocus required maxlength placeholder)
 
   def ed_field(assigns) do
     ~H"""

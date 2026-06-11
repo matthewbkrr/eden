@@ -28,6 +28,10 @@ defmodule Eden.Channels do
   @doc "Most channels one user can create (`create_channel/2` returns `{:error, :limit}` beyond it)."
   def max_channels, do: @max_channels
 
+  @doc "A changeset for channel forms (create / rename)."
+  def change_channel(%Channel{} = channel \\ %Channel{}, attrs \\ %{}),
+    do: Channel.changeset(channel, attrs)
+
   ## Channels
 
   @doc """

@@ -7,6 +7,10 @@ defmodule EdenWeb.ChatLive do
   """
   use EdenWeb, :live_view
 
+  on_mount EdenWeb.RailHook
+
+  import EdenWeb.ShellComponents
+
   alias Eden.{Accounts, Chat}
 
   @page 50
@@ -518,8 +522,15 @@ defmodule EdenWeb.ChatLive do
         <.ed_flash flash={@flash} />
       </div>
 
+      <%!-- Discord-style shell: the messenger is the rail's top-left item. On
+            mobile the rail hides with the sidebar while a chat is open. --%>
+      <.rail channels={@channels} active={:messenger} class={@selected && "hidden md:flex"} />
+
       <aside
-        class={["w-full md:w-80 shrink-0 border-r flex flex-col", @selected && "hidden md:flex"]}
+        class={[
+          "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
+          @selected && "hidden md:flex"
+        ]}
         style="border-color: var(--ed-border);"
       >
         <header
@@ -867,6 +878,15 @@ defmodule EdenWeb.ChatLive do
         online_ids={@online_ids}
       />
       <.folder_modal :if={@folder_chat_id} folders={@folders} checked={@folder_checked} />
+      <.channel_form_modal
+        :if={@show_new_channel}
+        id="new-channel"
+        title={gettext("New channel")}
+        form={@new_channel_form}
+        submit="rail_create_channel"
+        close="rail_close_new_channel"
+        submit_label={gettext("Create channel")}
+      />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SearchBox">
         // Keeps the search input in sync with server-side clears: morphdom won't
