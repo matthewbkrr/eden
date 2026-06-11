@@ -1890,6 +1890,14 @@ defmodule EdenWeb.ChatLive do
               trigger._wired = true
               trigger.addEventListener("click", (e) => {
                 e.preventDefault(); e.stopPropagation()
+                // Toggle: a second click on the trigger closes the open menu.
+                // stopPropagation above keeps onDoc from firing, so without
+                // this branch open() just re-opens (active === this) and the
+                // menu never closes from the trigger.
+                if (active === this && this.menu && !this.menu.hidden) {
+                  this.close()
+                  return
+                }
                 const r = trigger.getBoundingClientRect()
                 this.open(r.left, r.bottom + 4)
               })
