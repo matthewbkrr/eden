@@ -422,6 +422,142 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "threads" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, root} = Chat.create_message(scope(alice), conv.id, %{"body" => "root post"})
+      %{conv: conv, root: root}
+    end
+
+    test "create_reply bumps counters, broadcasts, and stays out of the main stream", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      Chat.subscribe(conv.id)
+
+      assert {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "a reply"})
+      assert reply.root_id == root.id
+
+      assert_receive {:thread_reply, fresh_root, ^reply}
+      assert fresh_root.reply_count == 1
+      assert fresh_root.last_reply_at == reply.inserted_at
+
+      # Main stream, previews, and unread badges ignore replies.
+      {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
+      refute Enum.any?(messages, &(&1.id == reply.id))
+      [sidebar] = Chat.list_conversations(scope(alice))
+      assert sidebar.last_message_body == "root post"
+      assert sidebar.unread_count == 0
+    end
+
+    test "flat rule: a reply can't root another thread; tombstoned roots reject replies", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "level 1"})
+      assert {:error, :not_a_root} = Chat.create_reply(scope(alice), reply.id, %{"body" => "no"})
+
+      {:ok, lone} =
+        Chat.create_message(scope(alice), root.conversation_id, %{"body" => "to delete"})
+
+      :ok = Chat.delete_message_for_both(scope(alice), lone.id)
+      assert {:error, :deleted} = Chat.create_reply(scope(bob), lone.id, %{"body" => "no"})
+    end
+
+    test "non-members can't reply or read a thread", %{bob: bob, root: root} do
+      carol = user_fixture(%{username: "carolt"})
+      assert {:error, :not_found} = Chat.create_reply(scope(carol), root.id, %{"body" => "hi"})
+      assert {:error, :not_found} = Chat.list_thread(scope(carol), root.id)
+
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "ok"})
+      assert {:ok, _root, [_reply]} = Chat.list_thread(scope(bob), root.id)
+    end
+
+    test "list_thread hides per-user-deleted and tombstoned replies", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+      {:ok, _r3} = Chat.create_reply(scope(alice), root.id, %{"body" => "three"})
+
+      :ok = Chat.delete_message_for_me(scope(alice), r1.id)
+      :ok = Chat.delete_message_for_both(scope(bob), r2.id)
+
+      assert {:ok, _root, replies} = Chat.list_thread(scope(alice), root.id)
+      assert ["three"] == Enum.map(replies, & &1.body)
+
+      # The for-both delete decremented the root's counter (one visible-to-all
+      # delete out of three replies).
+      assert {:ok, %{reply_count: 2}, _} = Chat.list_thread(scope(bob), root.id)
+    end
+
+    test "a root with replies refuses delete-for-both; replies delete fine", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "keeps root alive"})
+
+      assert {:error, :has_replies} = Chat.delete_message_for_both(scope(alice), root.id)
+      assert :ok = Chat.delete_message_for_both(scope(bob), reply.id)
+      assert {:ok, %{reply_count: 0}, []} = Chat.list_thread(scope(alice), root.id)
+    end
+
+    test "thread_root_for routes permalinks; forwarding a reply drops the thread", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "fwd me"})
+
+      assert {:ok, root_id} = Chat.thread_root_for(scope(alice), reply.id)
+      assert root_id == root.id
+      assert :none = Chat.thread_root_for(scope(alice), root.id)
+
+      carol = user_fixture(%{username: "carolfw"})
+      {:ok, dm} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, forwarded} = Chat.forward_message(scope(alice), reply.id, dm.id)
+      assert forwarded.root_id == nil
+    end
+
+    test "thread_participants builds the facepile per root", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "b1"})
+      {:ok, _} = Chat.create_reply(scope(alice), root.id, %{"body" => "a1"})
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "b2"})
+
+      participants = Chat.thread_participants(scope(alice), conv.id, [root.id])
+      # Distinct repliers, most recent first: bob (b2), then alice.
+      assert [bob.id, alice.id] == Enum.map(participants[root.id], & &1.id)
+
+      # Non-member sees nothing.
+      carol = user_fixture(%{username: "carolpp"})
+      assert %{} == Chat.thread_participants(scope(carol), conv.id, [root.id])
+    end
+
+    test "replies dedup on client_id like top-level messages", %{bob: bob, root: root} do
+      cid = Ecto.UUID.generate()
+
+      {:ok, first} =
+        Chat.create_reply(scope(bob), root.id, %{"body" => "once", "client_id" => cid})
+
+      {:ok, again} =
+        Chat.create_reply(scope(bob), root.id, %{"body" => "once", "client_id" => cid})
+
+      assert first.id == again.id
+      assert {:ok, %{reply_count: 1}, _} = Chat.list_thread(scope(bob), root.id)
+    end
+  end
+
   describe "forward_message/3" do
     setup %{alice: alice, bob: bob} do
       carol = user_fixture(%{username: "carol_fwd"})

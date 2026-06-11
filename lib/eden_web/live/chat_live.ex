@@ -68,8 +68,16 @@ defmodule EdenWeb.ChatLive do
         add_selected: MapSet.new(),
         invites_open: false,
         invites: [],
-        new_invite_url: nil
+        new_invite_url: nil,
+        # Threads: the open thread's root message + reply composer state; the
+        # facepile (root_id => repliers) and the compact-run tracker for the
+        # flat room layout.
+        thread_root: nil,
+        reply_composer: to_form(%{"body" => ""}, as: "reply"),
+        thread_participants: %{},
+        last_flat: nil
       )
+      |> stream(:thread, [])
       |> refresh_folders()
       |> stream(:conversations, Chat.list_conversations(scope))
       |> stream(:messages, [])
@@ -124,11 +132,12 @@ defmodule EdenWeb.ChatLive do
       {:ok, conversation} ->
         # The client scrolls to and highlights the message if it's on the page,
         # otherwise reports back so we can say it's unavailable (deleted/old).
+        # A reply permalink opens its thread panel and focuses inside it.
         socket =
           socket
           |> leave_channel_mode()
           |> select_conversation(conversation)
-          |> push_event("focus_message", %{domId: "messages-#{message_id}"})
+          |> focus_message_target(message_id)
 
         {:noreply, socket}
 
@@ -166,7 +175,7 @@ defmodule EdenWeb.ChatLive do
 
         socket =
           if message_id,
-            do: push_event(socket, "focus_message", %{domId: "messages-#{message_id}"}),
+            do: focus_message_target(socket, message_id),
             else: socket
 
         {:noreply, socket}
@@ -722,6 +731,43 @@ defmodule EdenWeb.ChatLive do
   def handle_event("copied", _params, socket),
     do: {:noreply, put_flash(socket, :info, gettext("Copied."))}
 
+  ## Threads
+
+  def handle_event("open_thread", %{"id" => id}, socket) do
+    {:noreply, open_thread(socket, id)}
+  end
+
+  def handle_event("close_thread", _params, socket) do
+    {:noreply, assign(socket, thread_root: nil)}
+  end
+
+  def handle_event("reply_changed", %{"reply" => %{"body" => body}}, socket) do
+    {:noreply, assign(socket, reply_composer: to_form(%{"body" => body}, as: "reply"))}
+  end
+
+  def handle_event("send_reply", %{"reply" => %{"body" => body}}, socket) do
+    root = socket.assigns.thread_root
+
+    if is_nil(root) or String.trim(body) == "" do
+      {:noreply, socket}
+    else
+      case Chat.create_reply(socket.assigns.current_scope, root.id, %{"body" => body}) do
+        {:ok, _reply} ->
+          # The reply itself arrives via the {:thread_reply} broadcast.
+          {:noreply, assign(socket, reply_composer: to_form(%{"body" => ""}, as: "reply"))}
+
+        {:error, %Ecto.Changeset{}} ->
+          {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
+
+        {:error, _} ->
+          {:noreply,
+           socket
+           |> assign(thread_root: nil)
+           |> put_flash(:error, gettext("Thread not found."))}
+      end
+    end
+  end
+
   def handle_event("message_unavailable", _params, socket),
     do: {:noreply, put_flash(socket, :error, gettext("That message is unavailable."))}
 
@@ -775,13 +821,71 @@ defmodule EdenWeb.ChatLive do
       Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
     end
 
+    # Room flat layout: continue (or break) the compact run live.
+    {message, socket} =
+      case {socket.assigns.selected, socket.assigns.last_flat} do
+        {%{channel_id: cid}, last} when not is_nil(cid) ->
+          marked = %{message | compact: compact?(message, last)}
+          {marked, assign(socket, last_flat: {message.sender_id, message.inserted_at})}
+
+        _ ->
+          {message, socket}
+      end
+
     {:noreply, stream_insert(socket, :messages, message)}
+  end
+
+  # A reply landed in a thread of the open conversation: refresh the root's
+  # footer (count/time/facepile) and append to the panel if it's open.
+  def handle_info({:thread_reply, root, reply}, socket) do
+    socket =
+      if open?(socket, root.conversation_id) do
+        socket
+        |> stream_insert(:messages, root)
+        |> bump_facepile(root.id, reply.sender)
+      else
+        socket
+      end
+
+    if thread_open_for?(socket, root.id) do
+      {:noreply, socket |> assign(thread_root: root) |> stream_insert(:thread, reply)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A reply was deleted for everyone: the root's footer changed.
+  def handle_info({:thread_updated, root}, socket) do
+    socket =
+      if open?(socket, root.conversation_id) do
+        participants =
+          Chat.thread_participants(socket.assigns.current_scope, root.conversation_id, [root.id])
+
+        socket
+        |> stream_insert(:messages, root)
+        |> assign(
+          :thread_participants,
+          Map.merge(socket.assigns.thread_participants, participants)
+        )
+      else
+        socket
+      end
+
+    if thread_open_for?(socket, root.id) do
+      {:noreply, assign(socket, thread_root: root)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Delete-for-both: the message is removed from the conversation for everyone.
   def handle_info({:message_deleted, message}, socket) do
     if open?(socket, message.conversation_id) do
-      {:noreply, stream_delete_by_dom_id(socket, :messages, "messages-#{message.id}")}
+      {:noreply,
+       socket
+       |> stream_delete_by_dom_id(:messages, "messages-#{message.id}")
+       |> stream_delete_by_dom_id(:thread, "thread-#{message.id}")
+       |> close_thread_if_root_gone(message.id)}
     else
       {:noreply, socket}
     end
@@ -792,7 +896,11 @@ defmodule EdenWeb.ChatLive do
   def handle_info({:message_hidden, conversation_id, message_id}, socket) do
     socket =
       if open?(socket, conversation_id),
-        do: stream_delete_by_dom_id(socket, :messages, "messages-#{message_id}"),
+        do:
+          socket
+          |> stream_delete_by_dom_id(:messages, "messages-#{message_id}")
+          |> stream_delete_by_dom_id(:thread, "thread-#{message_id}")
+          |> close_thread_if_root_gone(message_id),
         else: socket
 
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
@@ -1373,16 +1481,31 @@ defmodule EdenWeb.ChatLive do
                 {gettext("Load older")}
               </button>
             </div>
-            <div class="flex flex-col gap-2" id="messages" phx-update="stream">
-              <.message_bubble
-                :for={{dom_id, message} <- @streams.messages}
-                id={dom_id}
-                message={message}
-                conversation_id={@selected.id}
-                mine={message.sender_id == @current_scope.user.id}
-                group={@selected.is_group}
-                read={read?(message, @other_read_at)}
-              />
+            <div
+              class={["flex flex-col", (@selected.channel_id && "ed-flat-list") || "gap-2"]}
+              id="messages"
+              phx-update="stream"
+            >
+              <%= for {dom_id, message} <- @streams.messages do %>
+                <%= if @selected.channel_id do %>
+                  <.flat_message
+                    id={dom_id}
+                    message={message}
+                    conversation_id={@selected.id}
+                    mine={message.sender_id == @current_scope.user.id}
+                    participants={Map.get(@thread_participants, message.id, [])}
+                  />
+                <% else %>
+                  <.message_bubble
+                    id={dom_id}
+                    message={message}
+                    conversation_id={@selected.id}
+                    mine={message.sender_id == @current_scope.user.id}
+                    group={@selected.is_group}
+                    read={read?(message, @other_read_at)}
+                  />
+                <% end %>
+              <% end %>
             </div>
             <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
             <div class="flex flex-col gap-2 mt-2" id="pending-messages" phx-update="ignore"></div>
@@ -1486,6 +1609,90 @@ defmodule EdenWeb.ChatLive do
           </div>
         <% end %>
       </main>
+
+      <%!-- Thread panel (Mattermost RHS): a right column on desktop, a
+            full-screen overlay on mobile. --%>
+      <aside :if={@thread_root && @selected} class="ed-thread" aria-label={gettext("Thread")}>
+        <header
+          class="flex items-center gap-2 px-4 h-14 border-b shrink-0"
+          style="border-color: var(--ed-border);"
+        >
+          <button
+            type="button"
+            class="ed-btn--icon md:hidden"
+            phx-click="close_thread"
+            aria-label={gettext("Back")}
+          >
+            <.icon name="hero-arrow-left-mini" class="size-5" />
+          </button>
+          <div class="min-w-0 flex-1">
+            <div class="font-semibold" style="font-size:0.9375rem;">{gettext("Thread")}</div>
+            <div class="truncate" style="font-size:0.6875rem; color: var(--ed-muted);">
+              {(@selected.channel_id && @selected.name) ||
+                title(@selected, @current_scope.user)}
+            </div>
+          </div>
+          <button
+            type="button"
+            class="ed-btn--icon hidden md:inline-flex"
+            phx-click="close_thread"
+            aria-label={gettext("Close")}
+          >
+            <.icon name="hero-x-mark-mini" class="size-5" />
+          </button>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-4" id="thread-scroll" phx-hook=".ScrollBottom">
+          <%!-- in_thread: the "N replies" separator right below makes the
+                root's own footer pill redundant. --%>
+          <.flat_message
+            id={"thread-root-#{@thread_root.id}"}
+            message={%{@thread_root | compact: false}}
+            conversation_id={@selected.id}
+            mine={@thread_root.sender_id == @current_scope.user.id}
+            menu={false}
+            in_thread
+          />
+          <div class="ed-thread__sep">
+            {ngettext("%{count} reply", "%{count} replies", @thread_root.reply_count)}
+          </div>
+          <div class="flex flex-col ed-flat-list" id="thread-replies" phx-update="stream">
+            <.flat_message
+              :for={{dom_id, reply} <- @streams.thread}
+              id={dom_id}
+              message={reply}
+              conversation_id={@selected.id}
+              mine={reply.sender_id == @current_scope.user.id}
+              in_thread
+            />
+          </div>
+        </div>
+
+        <.form
+          for={@reply_composer}
+          id="reply-composer"
+          phx-change="reply_changed"
+          phx-submit="send_reply"
+          class="p-3 border-t shrink-0"
+          style="border-color: var(--ed-border);"
+        >
+          <div class="flex items-center gap-2">
+            <input
+              type="text"
+              name="reply[body]"
+              value={@reply_composer[:body].value}
+              class="ed-input flex-1"
+              placeholder={gettext("Reply…")}
+              aria-label={gettext("Reply")}
+              autocomplete="off"
+              maxlength="4000"
+            />
+            <button type="submit" class="ed-btn ed-btn--primary" aria-label={gettext("Send")}>
+              <.icon name="hero-paper-airplane-micro" class="size-4" />
+            </button>
+          </div>
+        </.form>
+      </aside>
 
       <.new_conversation_modal :if={@show_new} people={@people} />
       <.members_modal
@@ -1675,6 +1882,18 @@ defmodule EdenWeb.ChatLive do
               this.menu._wired = true
               this.menu.addEventListener("click", (e) => this.onItem(e))
             }
+            // Optional visible trigger (the flat rows' hover "⋯") — anchors the
+            // same menu under the button. Wired here so a stream morph that
+            // replaces the node re-attaches the listener.
+            const trigger = this.el.querySelector("[data-menu-trigger]")
+            if (trigger && !trigger._wired) {
+              trigger._wired = true
+              trigger.addEventListener("click", (e) => {
+                e.preventDefault(); e.stopPropagation()
+                const r = trigger.getBoundingClientRect()
+                this.open(r.left, r.bottom + 4)
+              })
+            }
           },
           onItem(e) {
             const ct = e.target.closest("[data-copy-text]")
@@ -1696,6 +1915,8 @@ defmodule EdenWeb.ChatLive do
             }
           },
           open(x, y) {
+            // Hosts without a menu node (e.g. the thread panel root) no-op.
+            if (!this.menu) return
             if (active && active !== this) active.close()
             active = this
             this.x = x; this.y = y
@@ -2554,6 +2775,110 @@ defmodule EdenWeb.ChatLive do
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
+  attr :participants, :list, default: []
+  attr :in_thread, :boolean, default: false
+  attr :menu, :boolean, default: true
+
+  # A Mattermost-style flat row (channel rooms + the thread panel): avatar ·
+  # name · time on one line, content below, left-aligned for everyone.
+  # Consecutive same-author messages collapse (virtual `compact`). Desktop
+  # hover reveals quick actions; right-click/long-press opens the full menu.
+  defp flat_message(assigns) do
+    ~H"""
+    <%!-- phx-hook must stay a LITERAL: colocated hook names are rewritten at
+          compile time only in literal attributes — a dynamic string reaches
+          the client as the unresolvable ".ContextMenu". Menu-less hosts
+          (the thread panel root) are handled by the hook's missing-menu
+          guard instead. --%>
+    <div
+      id={@id}
+      class={["ed-flat", @message.compact && "ed-flat--compact"]}
+      phx-hook=".ContextMenu"
+      aria-haspopup={@menu && "menu"}
+    >
+      <div class="ed-flat__gutter">
+        <.avatar
+          :if={!@message.compact}
+          name={(@message.sender && @message.sender.display_name) || "?"}
+          src={@message.sender && avatar_src(@message.sender)}
+          size={:sm}
+        />
+      </div>
+      <div class="ed-flat__main">
+        <div :if={!@message.compact} class="ed-flat__head">
+          <span class="ed-flat__name">
+            {(@message.sender && @message.sender.display_name) || gettext("Deleted account")}
+          </span>
+          <span class="ed-flat__time"><.local_time at={@message.inserted_at} /></span>
+        </div>
+        <span :if={@message.forwarded_from} class="ed-forwarded">
+          <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+          {forwarded_label(@message.forwarded_from)}
+        </span>
+        <.attachment_view :if={@message.attachment} attachment={@message.attachment} />
+        <div :if={@message.body != ""} class="break-words ed-flat__body">
+          <.body_part :for={part <- linkify(@message.body)} part={part} />
+        </div>
+        <button
+          :if={@message.reply_count > 0 and not @in_thread}
+          type="button"
+          class="ed-thread-footer"
+          phx-click="open_thread"
+          phx-value-id={@message.id}
+        >
+          <span class="ed-facepile">
+            <.avatar
+              :for={user <- Enum.reverse(@participants)}
+              name={user.display_name}
+              src={avatar_src(user)}
+              size={:sm}
+            />
+          </span>
+          <span class="ed-thread-footer__count">
+            {ngettext("%{count} reply", "%{count} replies", @message.reply_count)}
+          </span>
+          <span :if={@message.last_reply_at} class="ed-thread-footer__time">
+            <.local_time at={@message.last_reply_at} />
+          </span>
+        </button>
+      </div>
+      <div :if={@menu} class="ed-flat__actions">
+        <button
+          :if={not @in_thread}
+          type="button"
+          class="ed-btn--icon"
+          title={gettext("Reply in thread")}
+          aria-label={gettext("Reply in thread")}
+          phx-click="open_thread"
+          phx-value-id={@message.id}
+        >
+          <.icon name="hero-chat-bubble-left-micro" class="size-4" />
+        </button>
+        <button
+          type="button"
+          class="ed-btn--icon"
+          data-menu-trigger
+          title={gettext("More actions")}
+          aria-label={gettext("More actions")}
+        >
+          <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
+        </button>
+      </div>
+      <.message_menu
+        :if={@menu}
+        message={@message}
+        conversation_id={@conversation_id}
+        mine={@mine}
+        in_thread={@in_thread}
+      />
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :message, :map, required: true
+  attr :conversation_id, :any, required: true
+  attr :mine, :boolean, required: true
   attr :group, :boolean, required: true
   attr :read, :boolean, required: true
 
@@ -2594,6 +2919,16 @@ defmodule EdenWeb.ChatLive do
             </span>
           </span>
         </span>
+        <button
+          :if={@message.reply_count > 0}
+          type="button"
+          class="ed-bubble__thread"
+          phx-click="open_thread"
+          phx-value-id={@message.id}
+        >
+          <.icon name="hero-chat-bubble-left-micro" class="size-3.5" />
+          {ngettext("%{count} reply", "%{count} replies", @message.reply_count)}
+        </button>
         <.message_menu
           message={@message}
           conversation_id={@conversation_id}
@@ -2607,6 +2942,7 @@ defmodule EdenWeb.ChatLive do
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
+  attr :in_thread, :boolean, default: false
 
   # The message context menu — opened by right-click / long-press on the bubble
   # (the `.ContextMenu` hook). Copy actions run client-side; forward/delete dispatch
@@ -2615,6 +2951,16 @@ defmodule EdenWeb.ChatLive do
   defp message_menu(assigns) do
     ~H"""
     <div class="ed-menu" id={"menu-#{@message.id}"} data-menu role="menu" hidden>
+      <button
+        :if={not @in_thread and is_nil(@message.root_id)}
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="open_thread"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-chat-bubble-left-micro" class="size-4" /> {gettext("Reply in thread")}
+      </button>
       <button
         :if={@message.body != ""}
         type="button"
@@ -3135,6 +3481,8 @@ defmodule EdenWeb.ChatLive do
     Chat.mark_read(scope, conversation.id)
 
     {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+    # Room flat layout: collapse consecutive same-author runs + facepiles.
+    {messages, last_flat} = mark_compact(messages, conversation)
 
     socket
     |> assign(
@@ -3142,8 +3490,12 @@ defmodule EdenWeb.ChatLive do
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
-      oldest_id: messages |> List.first() |> then(&(&1 && &1.id))
+      oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
+      thread_root: nil,
+      last_flat: last_flat,
+      thread_participants: facepiles(scope, conversation, messages)
     )
+    |> stream(:thread, [], reset: true)
     |> stream(:messages, messages, reset: true)
     # Re-stream the sidebar so the active highlight follows the selection (stream
     # items don't re-render on assign changes) and the opened conversation's
@@ -3255,6 +3607,93 @@ defmodule EdenWeb.ChatLive do
     case Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id) do
       {:ok, invites} -> assign(socket, invites: invites)
       {:error, _} -> assign(socket, invites_open: false)
+    end
+  end
+
+  ## Threads + flat room layout helpers
+
+  # Consecutive same-author messages within this window collapse (no repeated
+  # avatar/name) in the room flat layout — the Mattermost grouping.
+  @compact_window_s 300
+
+  # Marks each message's virtual `compact` flag and returns the run tracker
+  # for live appends. DMs keep bubbles — no marking there.
+  defp mark_compact(messages, %{channel_id: nil}), do: {messages, nil}
+
+  defp mark_compact(messages, _room) do
+    Enum.map_reduce(messages, nil, fn message, prev ->
+      {%{message | compact: compact?(message, prev)}, {message.sender_id, message.inserted_at}}
+    end)
+  end
+
+  defp compact?(message, {sender_id, ts}) do
+    message.sender_id == sender_id and
+      DateTime.diff(message.inserted_at, ts) < @compact_window_s
+  end
+
+  defp compact?(_message, nil), do: false
+
+  defp facepiles(_scope, %{channel_id: nil}, _messages), do: %{}
+
+  defp facepiles(scope, room, messages) do
+    root_ids = for m <- messages, m.reply_count > 0, do: m.id
+    Chat.thread_participants(scope, room.id, root_ids)
+  end
+
+  # A reply arrived: bump the facepile locally (no query) — newest first, capped.
+  defp bump_facepile(socket, root_id, sender) do
+    participants =
+      [sender | Map.get(socket.assigns.thread_participants, root_id, [])]
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.take(5)
+
+    assign(
+      socket,
+      :thread_participants,
+      Map.put(socket.assigns.thread_participants, root_id, participants)
+    )
+  end
+
+  defp thread_open_for?(socket, root_id) do
+    match?(%{id: ^root_id}, socket.assigns.thread_root)
+  end
+
+  # The open panel's root was deleted (for both) or hidden (for me): the panel
+  # would keep showing the stale root forever — close it instead.
+  defp close_thread_if_root_gone(socket, message_id) do
+    if thread_open_for?(socket, message_id) do
+      assign(socket, thread_root: nil)
+    else
+      socket
+    end
+  end
+
+  # Permalinks may point at a reply — those live in the thread panel, not the
+  # main stream, so open the thread first and focus inside it.
+  defp focus_message_target(socket, message_id) do
+    case Chat.thread_root_for(socket.assigns.current_scope, message_id) do
+      {:ok, root_id} ->
+        socket
+        |> open_thread(root_id)
+        |> push_event("focus_message", %{domId: "thread-#{message_id}"})
+
+      _ ->
+        push_event(socket, "focus_message", %{domId: "messages-#{message_id}"})
+    end
+  end
+
+  defp open_thread(socket, root_id) do
+    case Chat.list_thread(socket.assigns.current_scope, root_id) do
+      {:ok, root, replies} ->
+        socket
+        |> assign(
+          thread_root: root,
+          reply_composer: to_form(%{"body" => ""}, as: "reply")
+        )
+        |> stream(:thread, replies, reset: true)
+
+      {:error, _} ->
+        put_flash(socket, :error, gettext("Thread not found."))
     end
   end
 

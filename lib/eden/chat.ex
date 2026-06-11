@@ -136,7 +136,10 @@ defmodule Eden.Chat do
       left_join: a in assoc(m, :attachment),
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
-      where: m.conversation_id in ^ids and is_nil(d.id) and is_nil(m.deleted_at),
+      # Thread replies never become the sidebar preview (they live in threads).
+      where:
+        m.conversation_id in ^ids and is_nil(d.id) and is_nil(m.deleted_at) and
+          is_nil(m.root_id),
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
       select: {m.conversation_id, %{body: m.body, kind: a.kind}}
@@ -160,9 +163,11 @@ defmodule Eden.Chat do
       # Don't count tombstones or messages this user deleted for themselves.
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
+      # Thread replies are excluded from unread badges in v1 (per-thread
+      # unreads are the CRT follow-up) — the thread footer carries the count.
       where:
         m.conversation_id in ^ids and m.sender_id != ^user.id and
-          is_nil(m.deleted_at) and is_nil(d.id) and
+          is_nil(m.deleted_at) and is_nil(d.id) and is_nil(m.root_id) and
           (is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at),
       group_by: m.conversation_id,
       select: {m.conversation_id, count(m.id)}
@@ -859,6 +864,8 @@ defmodule Eden.Chat do
       messages =
         Message
         |> where([m], m.conversation_id == ^conversation_id)
+        # Replies live only inside their thread panel, never the main stream.
+        |> where([m], is_nil(m.root_id))
         # Drop "deleted for everyone" rows entirely, and ones this user hid.
         |> where([m], is_nil(m.deleted_at))
         |> join(:left, [m], d in MessageDeletion,
@@ -989,6 +996,9 @@ defmodule Eden.Chat do
   def delete_message_for_both(%Scope{user: user} = scope, message_id) do
     with {:ok, message} <- fetch_message(scope, message_id),
          :ok <- ensure_sender(message, user.id),
+         # A root with replies can't be deleted for everyone in v1 (no
+         # tombstone rendering for thread roots yet) — clear error instead.
+         :ok <- ensure_no_replies(message),
          {:ok, {tombstone, candidate_keys}} <- soft_delete(message) do
       # Storage.delete is irreversible, so it runs only after the tombstone
       # commits, re-checking references (the attachment row is gone) to close the
@@ -996,9 +1006,170 @@ defmodule Eden.Chat do
       delete_unreferenced_blobs(candidate_keys)
 
       broadcast(message.conversation_id, {:message_deleted, tombstone})
+      sync_thread_after_delete(tombstone)
       notify_members(message.conversation_id)
       :ok
     end
+  end
+
+  defp ensure_no_replies(%Message{reply_count: count}) when count > 0,
+    do: {:error, :has_replies}
+
+  defp ensure_no_replies(_message), do: :ok
+
+  # Deleting a reply for everyone keeps the root's counter honest (floored at
+  # zero against races) and lets open panels/footers refresh.
+  defp sync_thread_after_delete(%Message{root_id: nil}), do: :ok
+
+  defp sync_thread_after_delete(%Message{root_id: root_id, conversation_id: conversation_id}) do
+    from(m in Message,
+      where: m.id == ^root_id,
+      update: [set: [reply_count: fragment("GREATEST(reply_count - 1, 0)")]]
+    )
+    |> Repo.update_all([])
+
+    case preloaded_message(root_id) do
+      nil -> :ok
+      root -> broadcast(conversation_id, {:thread_updated, root})
+    end
+  end
+
+  ## Threads (flat, Mattermost-style)
+  #
+  # A reply is a message whose `root_id` points at a non-reply message in the
+  # same conversation. Replies never enter the main stream, sidebar previews,
+  # or unread badges (v1 — per-thread unreads are the CRT follow-up); the root
+  # carries denormalized `reply_count`/`last_reply_at` maintained here.
+
+  @thread_cap 500
+  @facepile_cap 5
+
+  @doc """
+  Posts a reply into a message's thread. Authorized via the root's
+  conversation membership; the flat rule holds (the root may not itself be a
+  reply). Counters bump atomically; broadcasts `{:thread_reply, root, reply}`
+  on the conversation topic — deliberately NOT `deliver/2`: replies don't
+  reorder the sidebar, resurface 1:1s, or count as unread.
+  """
+  def create_reply(%Scope{user: user} = scope, root_id, attrs) do
+    with {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root) do
+      %Message{conversation_id: root.conversation_id, sender_id: user.id, root_id: root.id}
+      |> Message.changeset(attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, reply} -> {:ok, deliver_reply(root, reply)}
+        {:error, changeset} -> resolve_duplicate(changeset, user.id)
+      end
+    end
+  end
+
+  @doc """
+  A thread: the root (preloaded) plus its visible replies, oldest first
+  (capped at #{@thread_cap}). `{:error, :not_found | :deleted}`.
+  """
+  def list_thread(%Scope{user: user} = scope, root_id) do
+    with {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root) do
+      replies =
+        Message
+        |> where([m], m.root_id == ^root.id and is_nil(m.deleted_at))
+        |> join(:left, [m], d in MessageDeletion,
+          on: d.message_id == m.id and d.user_id == ^user.id
+        )
+        |> where([_m, d], is_nil(d.id))
+        |> order_by([m], asc: m.id)
+        |> limit(@thread_cap)
+        |> preload([:sender, :attachment, forwarded_from: :sender])
+        |> Repo.all()
+
+      {:ok, Repo.preload(root, [:sender, :attachment, forwarded_from: :sender]), replies}
+    end
+  end
+
+  @doc """
+  Where a message lives: `{:ok, root_id}` if it is a reply, `:none` if it is a
+  top-level message — used by permalinks to open the right surface.
+  """
+  def thread_root_for(%Scope{} = scope, message_id) do
+    with {:ok, message} <- fetch_message(scope, message_id) do
+      case message.root_id do
+        nil -> :none
+        root_id -> {:ok, root_id}
+      end
+    end
+  end
+
+  @doc """
+  Facepile data: up to #{@facepile_cap} distinct repliers per root (most recent
+  first), `%{root_id => [user]}`. Roots must come from an already-authorized
+  message list; membership is still re-checked against the conversation.
+  """
+  def thread_participants(%Scope{} = scope, conversation_id, root_ids) do
+    ids = Enum.reject(root_ids, &is_nil/1)
+
+    if ids != [] and member?(scope, conversation_id) do
+      rows =
+        Repo.all(
+          from m in Message,
+            where:
+              m.root_id in ^ids and m.conversation_id == ^conversation_id and
+                is_nil(m.deleted_at),
+            group_by: [m.root_id, m.sender_id],
+            select: {m.root_id, m.sender_id, max(m.id)}
+        )
+
+      user_ids = rows |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+      users = Map.new(Repo.all(from u in User, where: u.id in ^user_ids), &{&1.id, &1})
+
+      rows
+      |> Enum.group_by(&elem(&1, 0))
+      |> Map.new(fn {root_id, entries} ->
+        participants =
+          entries
+          |> Enum.sort_by(&elem(&1, 2), :desc)
+          |> Enum.take(@facepile_cap)
+          |> Enum.map(&Map.fetch!(users, elem(&1, 1)))
+
+        {root_id, participants}
+      end)
+    else
+      %{}
+    end
+  end
+
+  defp ensure_root(%Message{root_id: nil}), do: :ok
+  defp ensure_root(_reply), do: {:error, :not_a_root}
+
+  # Counter bump + fanout. The root is re-read fresh so every session renders
+  # the same footer (count, last reply time). A 0-row bump means the root was
+  # hard-deleted underneath us (admin deleted the room mid-send) — everything
+  # cascaded, so there is nobody left to notify; don't crash the sender.
+  defp deliver_reply(root, reply) do
+    {bumped, _} =
+      Repo.update_all(from(m in Message, where: m.id == ^root.id),
+        inc: [reply_count: 1],
+        set: [last_reply_at: reply.inserted_at]
+      )
+
+    reply = Repo.preload(reply, [:sender, :attachment, forwarded_from: :sender])
+
+    with 1 <- bumped,
+         %Message{} = fresh_root <- preloaded_message(root.id) do
+      broadcast(root.conversation_id, {:thread_reply, fresh_root, reply})
+    end
+
+    reply
+  end
+
+  defp preloaded_message(id) do
+    Repo.one(
+      from m in Message,
+        where: m.id == ^id,
+        preload: [:sender, :attachment, forwarded_from: :sender]
+    )
   end
 
   @doc """
