@@ -263,6 +263,9 @@ defmodule Eden.Channels do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       ids = user_ids |> Enum.map(&Ids.normalize/1) |> Enum.filter(&is_integer/1)
+      # Intersect with real users: a phantom id would raise an FK violation
+      # inside insert_all (on_conflict only absorbs unique conflicts).
+      ids = Repo.all(from u in User, where: u.id in ^ids, select: u.id)
 
       {:ok, added} =
         Repo.transact(fn ->
@@ -385,6 +388,10 @@ defmodule Eden.Channels do
     end
   end
 
+  # A hand-crafted role (e.g. "owner") must be an error, not a
+  # FunctionClauseError crash bubbling through the LiveView.
+  def set_member_role(_scope, _channel_id, _user_id, _role), do: {:error, :invalid_role}
+
   @doc """
   Hands the channel to another member: they become `owner`, the current owner
   becomes `admin` (one transaction). Unblocks the owner's leave.
@@ -394,14 +401,8 @@ defmodule Eden.Channels do
          :ok <- ensure_role(channel.role, ~w(owner)),
          target_id when is_integer(target_id) <- Ids.normalize(user_id),
          false <- target_id == actor.id,
-         target_role when is_binary(target_role) <- role_of(channel.id, target_id) do
-      {:ok, :ok} =
-        Repo.transact(fn ->
-          update_role(channel.id, target_id, "owner")
-          update_role(channel.id, actor.id, "admin")
-          {:ok, :ok}
-        end)
-
+         target_role when is_binary(target_role) <- role_of(channel.id, target_id),
+         :ok <- transfer_tx(channel.id, actor.id, target_id) do
       broadcast_channel(channel.id, {:members_changed, channel.id})
       broadcast_user(target_id, :channels_changed)
       :ok
@@ -410,6 +411,25 @@ defmodule Eden.Channels do
       nil -> {:error, :not_found}
       :error -> {:error, :not_found}
       {:error, _} = error -> error
+    end
+  end
+
+  # The target's promotion is count-checked: if they left between the read and
+  # the write, rolling back keeps the channel from ending up ownerless.
+  defp transfer_tx(channel_id, actor_id, target_id) do
+    Repo.transact(fn ->
+      case update_role(channel_id, target_id, "owner") do
+        {1, _} ->
+          update_role(channel_id, actor_id, "admin")
+          {:ok, :ok}
+
+        _ ->
+          {:error, :not_found}
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      error -> error
     end
   end
 

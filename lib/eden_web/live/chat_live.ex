@@ -194,7 +194,18 @@ defmodule EdenWeb.ChatLive do
 
   defp leave_channel_mode(socket) do
     if old = socket.assigns.channel_topic_id, do: Channels.unsubscribe_channel(old)
-    assign(socket, channel: nil, channel_topic_id: nil, rooms: [])
+
+    # Modal flags reset too — otherwise a members/invites modal left open
+    # would auto-reopen on the next visit to any channel.
+    assign(socket,
+      channel: nil,
+      channel_topic_id: nil,
+      rooms: [],
+      members_open: false,
+      add_open: false,
+      invites_open: false,
+      new_invite_url: nil
+    )
   end
 
   defp conversation_gone(socket) do
@@ -505,10 +516,9 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("open_add_members", _params, socket) do
-    if socket.assigns.channel.role in ~w(owner admin) do
-      {:ok, members} =
-        Channels.list_members(socket.assigns.current_scope, socket.assigns.channel.id)
-
+    with true <- socket.assigns.channel.role in ~w(owner admin),
+         {:ok, members} <-
+           Channels.list_members(socket.assigns.current_scope, socket.assigns.channel.id) do
       member_ids = MapSet.new(members, & &1.user.id)
 
       addable =
@@ -518,7 +528,8 @@ defmodule EdenWeb.ChatLive do
 
       {:noreply, assign(socket, add_open: true, addable: addable, add_selected: MapSet.new())}
     else
-      {:noreply, socket}
+      # Not an admin anymore / kicked between render and click — no modal.
+      _ -> {:noreply, socket}
     end
   end
 
@@ -568,8 +579,9 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  def handle_event("set_member_role", %{"id" => id, "role" => role}, socket)
-      when role in ["admin", "member"] do
+  # No guard: the context validates the role and errors on crafted values —
+  # a guarded clause here would FunctionClauseError on them instead.
+  def handle_event("set_member_role", %{"id" => id, "role" => role}, socket) do
     case Channels.set_member_role(
            socket.assigns.current_scope,
            socket.assigns.channel.id,
@@ -629,11 +641,10 @@ defmodule EdenWeb.ChatLive do
   def handle_event("create_invite", _params, socket) do
     case Channels.create_invite(socket.assigns.current_scope, socket.assigns.channel.id) do
       {:ok, _invite, raw} ->
-        {:ok, invites} =
-          Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id)
-
         {:noreply,
-         assign(socket, invites: invites, new_invite_url: url(~p"/channels/join/#{raw}"))}
+         socket
+         |> refresh_invites()
+         |> assign(new_invite_url: url(~p"/channels/join/#{raw}"))}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't create an invite link."))}
@@ -643,10 +654,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("revoke_invite", %{"id" => id}, socket) do
     case Channels.revoke_invite(socket.assigns.current_scope, id) do
       :ok ->
-        {:ok, invites} =
-          Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id)
-
-        {:noreply, assign(socket, invites: invites)}
+        {:noreply, refresh_invites(socket)}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't revoke that link."))}
@@ -2457,7 +2465,7 @@ defmodule EdenWeb.ChatLive do
                   {gettext("Uses: %{used}%{cap}",
                     used: invite.used_count,
                     cap: if(invite.max_uses, do: " / #{invite.max_uses}", else: "")
-                  )} · {gettext("expires")} <.local_time at={invite.expires_at} />
+                  )} · {gettext("expires")} {Calendar.strftime(invite.expires_at, "%Y-%m-%d")}
                 </span>
               </span>
               <button
@@ -3239,6 +3247,14 @@ defmodule EdenWeb.ChatLive do
       end
     else
       socket
+    end
+  end
+
+  # Tolerates a role lost mid-flight (list_invites turning :forbidden).
+  defp refresh_invites(socket) do
+    case Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id) do
+      {:ok, invites} -> assign(socket, invites: invites)
+      {:error, _} -> assign(socket, invites_open: false)
     end
   end
 

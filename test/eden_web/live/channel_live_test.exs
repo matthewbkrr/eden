@@ -319,6 +319,17 @@ defmodule EdenWeb.ChannelModeTest do
       render_click(view, "create_invite", %{})
       assert {:error, :forbidden} = Channels.list_invites(scope(ctx.bob), ctx.channel.id)
     end
+
+    test "a crafted role value is an error, not a crash", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html =
+        render_click(view, "set_member_role", %{"id" => to_string(ctx.bob.id), "role" => "owner"})
+
+      assert html =~ "Couldn&#39;t change that role." or html =~ "Couldn't change that role."
+      assert Channels.member_role(scope(ctx.bob), ctx.channel.id) == "member"
+    end
   end
 
   describe "rail create flow (regression after the ChannelLive fold-in)" do
