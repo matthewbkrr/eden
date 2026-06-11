@@ -1913,6 +1913,8 @@ defmodule EdenWeb.ChatLive do
             }
           },
           open(x, y) {
+            // Hosts without a menu node (e.g. the thread panel root) no-op.
+            if (!this.menu) return
             if (active && active !== this) active.close()
             active = this
             this.x = x; this.y = y
@@ -2781,10 +2783,15 @@ defmodule EdenWeb.ChatLive do
   # hover reveals quick actions; right-click/long-press opens the full menu.
   defp flat_message(assigns) do
     ~H"""
+    <%!-- phx-hook must stay a LITERAL: colocated hook names are rewritten at
+          compile time only in literal attributes — a dynamic string reaches
+          the client as the unresolvable ".ContextMenu". Menu-less hosts
+          (the thread panel root) are handled by the hook's missing-menu
+          guard instead. --%>
     <div
       id={@id}
       class={["ed-flat", @message.compact && "ed-flat--compact"]}
-      phx-hook={@menu && ".ContextMenu"}
+      phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
       <div class="ed-flat__gutter">
