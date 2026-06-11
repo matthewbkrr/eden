@@ -1516,6 +1516,8 @@ defmodule EdenWeb.ChatLive do
             id="composer"
             phx-hook=".SendQueue"
             data-conversation-id={@selected.id}
+            data-layout={if @selected.channel_id, do: "flat", else: "bubble"}
+            data-sender-name={@current_scope.user.display_name}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -2051,14 +2053,33 @@ defmodule EdenWeb.ChatLive do
             }
           },
           addOptimistic(clientId, body) {
+            // Match the conversation's layout so the optimistic node doesn't
+            // flash as a DM bubble in a room (or vice versa) before the real
+            // message arrives. body/name are set via textContent, never
+            // interpolated into innerHTML — the template strings are static.
             const row = document.createElement("div")
-            row.className = "flex justify-end"
             row.dataset.clientId = clientId
-            const bubble = document.createElement("div")
-            bubble.className = "ed-bubble ed-bubble--me"
-            bubble.style.opacity = "0.55"
-            bubble.textContent = body
-            row.appendChild(bubble)
+            if (this.el.dataset.layout === "flat") {
+              row.className = "ed-flat"
+              row.style.opacity = "0.55"
+              row.innerHTML =
+                '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>' +
+                '<div class="ed-flat__main"><div class="ed-flat__head">' +
+                '<span class="ed-flat__name"></span></div>' +
+                '<div class="break-words ed-flat__body"></div></div>'
+              const name = this.el.dataset.senderName || ""
+              row.querySelector(".ed-avatar span").textContent =
+                (name.trim().charAt(0) || "?").toUpperCase()
+              row.querySelector(".ed-flat__name").textContent = name
+              row.querySelector(".ed-flat__body").textContent = body
+            } else {
+              row.className = "flex justify-end"
+              const bubble = document.createElement("div")
+              bubble.className = "ed-bubble ed-bubble--me"
+              bubble.style.opacity = "0.55"
+              bubble.textContent = body
+              row.appendChild(bubble)
+            }
             this.pending.appendChild(row)
             if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight
           },
@@ -2069,9 +2090,9 @@ defmodule EdenWeb.ChatLive do
           markFailed(clientId) {
             const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
             if (!node) return
-            const bubble = node.querySelector(".ed-bubble")
-            bubble.style.opacity = "1"
-            bubble.style.border = "1px solid var(--ed-danger)"
+            node.style.opacity = "1"
+            const target = node.querySelector(".ed-bubble") || node.querySelector(".ed-flat__body")
+            if (target) target.style.border = "1px solid var(--ed-danger)"
           },
         }
       </script>
