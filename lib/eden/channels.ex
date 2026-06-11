@@ -14,8 +14,9 @@ defmodule Eden.Channels do
   """
   import Ecto.Query, warn: false
 
-  alias Eden.Accounts.Scope
-  alias Eden.Channels.{Channel, Membership}
+  alias Eden.Accounts
+  alias Eden.Accounts.{Scope, User}
+  alias Eden.Channels.{Channel, Invite, Membership}
   alias Eden.Chat
   alias Eden.Ids
   alias Eden.Repo
@@ -223,6 +224,362 @@ defmodule Eden.Channels do
       :ok
     end
   end
+
+  ## Members
+
+  @doc """
+  Channel members with roles, ordered owner → admins → members (by name
+  within). Authorized by membership.
+  """
+  def list_members(%Scope{} = scope, channel_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id) do
+      members =
+        Repo.all(
+          from m in Membership,
+            join: u in User,
+            on: u.id == m.user_id,
+            where: m.channel_id == ^channel.id,
+            order_by: [
+              asc:
+                fragment(
+                  "case ? when 'owner' then 0 when 'admin' then 1 else 2 end",
+                  m.role
+                ),
+              asc: u.display_name
+            ],
+            select: %{user: u, role: m.role}
+        )
+
+      {:ok, members}
+    end
+  end
+
+  @doc """
+  Adds existing eden users to the channel (admin+). Membership and the room
+  materialization commit in one transaction (a join must never be half-done);
+  idempotent for users who are already members. Added users' rails refresh.
+  """
+  def add_members(%Scope{} = scope, channel_id, user_ids) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      ids = user_ids |> Enum.map(&Ids.normalize/1) |> Enum.filter(&is_integer/1)
+      # Intersect with real users: a phantom id would raise an FK violation
+      # inside insert_all (on_conflict only absorbs unique conflicts).
+      ids = Repo.all(from u in User, where: u.id in ^ids, select: u.id)
+
+      {:ok, added} =
+        Repo.transact(fn ->
+          added = Enum.filter(ids, &join_channel_tx(channel.id, &1))
+          {:ok, added}
+        end)
+
+      Enum.each(added, &broadcast_user(&1, :channels_changed))
+      if added != [], do: broadcast_channel(channel.id, {:members_changed, channel.id})
+      {:ok, added}
+    end
+  end
+
+  # Membership + room materialization, inside the caller's transaction.
+  # Returns false when the user was already a member (insert skipped).
+  defp join_channel_tx(channel_id, user_id) do
+    {count, _} =
+      Repo.insert_all(
+        Membership,
+        [
+          %{
+            channel_id: channel_id,
+            user_id: user_id,
+            role: "member",
+            inserted_at: now(),
+            updated_at: now()
+          }
+        ],
+        on_conflict: :nothing
+      )
+
+    if count == 1 do
+      :ok = Chat.join_rooms(channel_id, user_id)
+      true
+    else
+      false
+    end
+  end
+
+  @doc """
+  Removes a member (their room memberships go too, one transaction). Owners
+  may remove anyone but themselves; admins only plain members. The removed
+  user's sessions get `{:removed_from_channel, id}` and navigate away.
+  """
+  def remove_member(%Scope{user: actor} = scope, channel_id, user_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)),
+         target_id when is_integer(target_id) <- Ids.normalize(user_id),
+         false <- target_id == actor.id,
+         target_role when is_binary(target_role) <- role_of(channel.id, target_id),
+         :ok <- ensure_removable(channel.role, target_role) do
+      remove_membership_tx(channel.id, target_id)
+      notify_removed(channel.id, target_id)
+      :ok
+    else
+      true -> {:error, :self}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  # Owners out-rank admins; admins out-rank members. Nobody removes an owner.
+  defp ensure_removable("owner", target) when target in ~w(admin member), do: :ok
+  defp ensure_removable("admin", "member"), do: :ok
+  defp ensure_removable(_actor, _target), do: {:error, :forbidden}
+
+  @doc """
+  Leaves the channel. The owner can't leave — transfer ownership or delete
+  the channel instead (`{:error, :owner}`).
+  """
+  def leave_channel(%Scope{user: user} = scope, channel_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id) do
+      if channel.role == "owner" do
+        {:error, :owner}
+      else
+        remove_membership_tx(channel.id, user.id)
+        notify_removed(channel.id, user.id)
+        :ok
+      end
+    end
+  end
+
+  defp remove_membership_tx(channel_id, user_id) do
+    {:ok, :ok} =
+      Repo.transact(fn ->
+        Repo.delete_all(
+          from m in Membership, where: m.channel_id == ^channel_id and m.user_id == ^user_id
+        )
+
+        :ok = Chat.leave_rooms(channel_id, user_id)
+        {:ok, :ok}
+      end)
+  end
+
+  defp notify_removed(channel_id, user_id) do
+    broadcast_user(user_id, {:removed_from_channel, channel_id})
+    broadcast_user(user_id, :channels_changed)
+    broadcast_channel(channel_id, {:members_changed, channel_id})
+  end
+
+  @doc "Promotes/demotes between admin and member. Owner only; never the owner row."
+  def set_member_role(%Scope{user: actor} = scope, channel_id, user_id, role)
+      when role in ["admin", "member"] do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner)),
+         target_id when is_integer(target_id) <- Ids.normalize(user_id),
+         false <- target_id == actor.id,
+         target_role when is_binary(target_role) and target_role != "owner" <-
+           role_of(channel.id, target_id) do
+      update_role(channel.id, target_id, role)
+      broadcast_channel(channel.id, {:members_changed, channel.id})
+      :ok
+    else
+      true -> {:error, :self}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      "owner" -> {:error, :forbidden}
+      {:error, _} = error -> error
+    end
+  end
+
+  # A hand-crafted role (e.g. "owner") must be an error, not a
+  # FunctionClauseError crash bubbling through the LiveView.
+  def set_member_role(_scope, _channel_id, _user_id, _role), do: {:error, :invalid_role}
+
+  @doc """
+  Hands the channel to another member: they become `owner`, the current owner
+  becomes `admin` (one transaction). Unblocks the owner's leave.
+  """
+  def transfer_ownership(%Scope{user: actor} = scope, channel_id, user_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner)),
+         target_id when is_integer(target_id) <- Ids.normalize(user_id),
+         false <- target_id == actor.id,
+         target_role when is_binary(target_role) <- role_of(channel.id, target_id),
+         :ok <- transfer_tx(channel.id, actor.id, target_id) do
+      broadcast_channel(channel.id, {:members_changed, channel.id})
+      broadcast_user(target_id, :channels_changed)
+      :ok
+    else
+      true -> {:error, :self}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  # The target's promotion is count-checked: if they left between the read and
+  # the write, rolling back keeps the channel from ending up ownerless.
+  defp transfer_tx(channel_id, actor_id, target_id) do
+    Repo.transact(fn ->
+      case update_role(channel_id, target_id, "owner") do
+        {1, _} ->
+          update_role(channel_id, actor_id, "admin")
+          {:ok, :ok}
+
+        _ ->
+          {:error, :not_found}
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      error -> error
+    end
+  end
+
+  defp role_of(channel_id, user_id) do
+    Repo.one(
+      from m in Membership,
+        where: m.channel_id == ^channel_id and m.user_id == ^user_id,
+        select: m.role
+    )
+  end
+
+  defp update_role(channel_id, user_id, role) do
+    Repo.update_all(
+      from(m in Membership, where: m.channel_id == ^channel_id and m.user_id == ^user_id),
+      set: [role: role]
+    )
+  end
+
+  ## Invite links
+
+  @invite_ttl_days 7
+
+  @doc """
+  Creates a shareable invite link (admin+). Returns `{:ok, invite, raw_token}`
+  — the raw token exists only here (the DB stores its hash). Defaults: expires
+  in #{@invite_ttl_days} days, unlimited uses (`max_uses: n` to cap).
+  """
+  def create_invite(%Scope{user: user} = scope, channel_id, opts \\ []) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      raw = Accounts.build_token()
+
+      expires_at =
+        Keyword.get_lazy(opts, :expires_at, fn ->
+          DateTime.utc_now() |> DateTime.add(@invite_ttl_days, :day) |> DateTime.truncate(:second)
+        end)
+
+      %Invite{
+        channel_id: channel.id,
+        created_by_id: user.id,
+        hashed_token: Accounts.hash_token(raw)
+      }
+      |> Invite.create_changeset(%{expires_at: expires_at, max_uses: opts[:max_uses]})
+      |> Repo.insert()
+      |> case do
+        {:ok, invite} -> {:ok, invite, raw}
+        error -> error
+      end
+    end
+  end
+
+  @doc "Active (unrevoked, unexpired) invite links of a channel, newest first. Admin+."
+  def list_invites(%Scope{} = scope, channel_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      now = DateTime.utc_now()
+
+      {:ok,
+       Repo.all(
+         from i in Invite,
+           where: i.channel_id == ^channel.id and is_nil(i.revoked_at) and i.expires_at > ^now,
+           order_by: [desc: i.id]
+       )}
+    end
+  end
+
+  @doc "Revokes an invite link (admin+ of its channel)."
+  def revoke_invite(%Scope{} = scope, invite_id) do
+    with id when is_integer(id) <- Ids.normalize(invite_id),
+         %Invite{} = invite <- Repo.get(Invite, id),
+         {:ok, channel} <- get_channel(scope, invite.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      Repo.update_all(from(i in Invite, where: i.id == ^invite.id),
+        set: [revoked_at: now()]
+      )
+
+      :ok
+    else
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Joins a channel by invite token (any authenticated user). The invite row is
+  locked `FOR UPDATE` so two people racing on the last use cannot both
+  succeed; membership + room materialization commit in the same transaction.
+  Idempotent for existing members (no use consumed). Returns `{:ok, channel}`
+  or `{:error, :invalid | :expired | :revoked | :exhausted}`.
+  """
+  def join_by_token(%Scope{user: user}, raw_token) when is_binary(raw_token) do
+    hashed = Accounts.hash_token(raw_token)
+
+    result =
+      Repo.transact(fn ->
+        case lock_invite(hashed) do
+          nil -> {:error, :invalid}
+          invite -> redeem_invite(invite, user.id)
+        end
+      end)
+
+    with {:ok, {channel_id, status}} <- result do
+      if status == :joined do
+        broadcast_user(user.id, :channels_changed)
+        broadcast_channel(channel_id, {:members_changed, channel_id})
+      end
+
+      case Repo.get(Channel, channel_id) do
+        # The channel vanished between commit and read — treat as a dead link.
+        nil -> {:error, :invalid}
+        channel -> {:ok, %{channel | role: role_of(channel_id, user.id) || "member"}}
+      end
+    end
+  end
+
+  # Inside the locking transaction: validate, join (idempotent), count the use.
+  defp redeem_invite(invite, user_id) do
+    with :ok <- validate_invite(invite) do
+      if join_channel_tx(invite.channel_id, user_id) do
+        bump_used_count(invite)
+        {:ok, {invite.channel_id, :joined}}
+      else
+        {:ok, {invite.channel_id, :already}}
+      end
+    end
+  end
+
+  defp lock_invite(hashed) do
+    Repo.one(from i in Invite, where: i.hashed_token == ^hashed, lock: "FOR UPDATE")
+  end
+
+  defp validate_invite(invite) do
+    now = DateTime.utc_now()
+
+    cond do
+      invite.revoked_at -> {:error, :revoked}
+      DateTime.compare(invite.expires_at, now) != :gt -> {:error, :expired}
+      invite.max_uses && invite.used_count >= invite.max_uses -> {:error, :exhausted}
+      true -> :ok
+    end
+  end
+
+  defp bump_used_count(invite) do
+    Repo.update_all(from(i in Invite, where: i.id == ^invite.id),
+      inc: [used_count: 1]
+    )
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 
   ## Roles
 
