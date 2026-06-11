@@ -24,6 +24,7 @@ defmodule Eden.Chat do
     ThumbnailWorker
   }
 
+  alias Eden.Ids
   alias Eden.Repo
   alias Eden.Storage
 
@@ -74,6 +75,8 @@ defmodule Eden.Chat do
       |> join(:inner, [c], m in Membership,
         on: m.conversation_id == c.id and m.user_id == ^user.id and is_nil(m.left_at)
       )
+      # Channel rooms live in their channel's sidebar, not the DM list.
+      |> where([c], is_nil(c.channel_id))
       |> filter_by_folder(folder_id, user.id)
       |> order_by([c], desc_nulls_last: c.last_message_at, desc: c.id)
       |> preload(memberships: :user)
@@ -222,14 +225,17 @@ defmodule Eden.Chat do
   def delete_conversation(%Scope{user: user} = scope, conversation_id) do
     with id when is_integer(id) <- safe_id(conversation_id),
          true <- member?(scope, id),
+         # Rooms aren't individually deletable per-user — leaving happens at the
+         # channel level; room deletion is an admin action (Channels context).
+         false <- room?(id),
          {:ok, orphan_keys} <- leave_and_maybe_gc(user, id) do
       # Side effect (irreversible) only after the DB change commits.
       delete_unreferenced_blobs(orphan_keys)
       Phoenix.PubSub.broadcast(@pubsub, user_topic(user.id), {:conversation_left, id})
       :ok
     else
-      false -> {:error, :not_found}
-      :error -> {:error, :not_found}
+      # `true` is room?/1 saying "this is a room"; `false` is a failed member?.
+      result when result in [true, false, :error] -> {:error, :not_found}
       {:error, _} = error -> error
     end
   end
@@ -274,6 +280,200 @@ defmodule Eden.Chat do
 
     Repo.delete_all(from c in Conversation, where: c.id == ^conversation_id)
     keys
+  end
+
+  ## Rooms (channel-bound conversations)
+  #
+  # A room IS a conversation with a `channel_id`, so all message machinery
+  # (attachments + their authorization, unread, mute, realtime, permalinks)
+  # applies unchanged. These are data operations called by `Eden.Channels`
+  # AFTER it has authorized the actor's channel role — the web layer never
+  # calls them directly. Memberships are materialized (Mattermost's
+  # ChannelMembers shape): channel join/leave fans out to every room.
+
+  @doc """
+  Rooms of a channel the scoped user belongs to, ordered for the sidebar, with
+  unread badges and the muted flag filled (the user's room membership IS the
+  authorization — a non-member of the channel simply gets `[]`).
+  """
+  def list_rooms(%Scope{user: user}, channel_id) do
+    rooms =
+      from(c in Conversation,
+        join: m in Membership,
+        on: m.conversation_id == c.id and m.user_id == ^user.id,
+        where: c.channel_id == ^channel_id,
+        order_by: [asc: c.position, asc: c.id]
+      )
+      |> Repo.all()
+
+    ids = Enum.map(rooms, & &1.id)
+    unread = unread_counts(user, ids)
+    muted = muted_conversation_ids(user, ids)
+
+    Enum.map(rooms, fn room ->
+      %{room | unread_count: Map.get(unread, room.id, 0), muted: room.id in muted}
+    end)
+  end
+
+  @doc "A changeset for room forms (create / rename)."
+  def change_room(room \\ %Conversation{}, attrs \\ %{}),
+    do: Conversation.room_changeset(room, attrs)
+
+  @doc "Fetches a room (a conversation with a channel) by id — trusted callers only."
+  def get_room(room_id) do
+    case Ids.normalize(room_id) do
+      id when is_integer(id) ->
+        Repo.one(from c in Conversation, where: c.id == ^id and not is_nil(c.channel_id))
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Creates a room in a channel and materializes memberships for the given user
+  ids (their `last_read_at` starts now — no unread storm). Trusted caller:
+  `Eden.Channels` authorizes the actor first.
+  """
+  def create_room(channel_id, attrs, member_ids) do
+    Repo.transact(fn ->
+      changeset =
+        %Conversation{
+          channel_id: channel_id,
+          is_group: true,
+          position: next_room_position(channel_id)
+        }
+        |> Conversation.room_changeset(attrs)
+
+      with {:ok, room} <- Repo.insert(changeset) do
+        {_count, _} = Repo.insert_all(Membership, room_membership_entries([room.id], member_ids))
+        {:ok, room}
+      end
+    end)
+  end
+
+  @doc "Renames a room (stale rows become `:not_found`, not a crash)."
+  def update_room(%Conversation{} = room, attrs) do
+    room
+    |> Conversation.room_changeset(attrs)
+    |> Repo.update(stale_error_field: :id)
+    |> case do
+      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+        if Keyword.has_key?(errors, :id),
+          do: {:error, :not_found},
+          else: {:error, changeset}
+
+      result ->
+        result
+    end
+  end
+
+  @doc "Reorders a channel's rooms to match `ordered_ids` (foreign ids ignored)."
+  def reorder_rooms(channel_id, ordered_ids) do
+    owned =
+      MapSet.new(
+        Repo.all(from c in Conversation, where: c.channel_id == ^channel_id, select: c.id)
+      )
+
+    ids =
+      ordered_ids
+      |> Enum.map(&Ids.normalize/1)
+      |> Enum.filter(&MapSet.member?(owned, &1))
+
+    {:ok, _} =
+      Repo.transact(fn ->
+        ids
+        |> Enum.with_index()
+        |> Enum.each(fn {id, pos} ->
+          Repo.update_all(from(c in Conversation, where: c.id == ^id), set: [position: pos])
+        end)
+
+        {:ok, :ok}
+      end)
+
+    :ok
+  end
+
+  @doc """
+  Hard-deletes a conversation (admin room deletion): the DB cascades messages/
+  memberships/attachments, and orphaned blobs are removed forward-safely —
+  the same GC path as the last-member leave.
+  """
+  def hard_delete_conversation(conversation_id) do
+    {:ok, keys} = Repo.transact(fn -> {:ok, gc_collect(conversation_id)} end)
+    delete_unreferenced_blobs(keys)
+    :ok
+  end
+
+  @doc "Materializes the user's memberships in every room of the channel (idempotent)."
+  def join_rooms(channel_id, user_id) do
+    room_ids =
+      Repo.all(from c in Conversation, where: c.channel_id == ^channel_id, select: c.id)
+
+    {_count, _} =
+      Repo.insert_all(Membership, room_membership_entries(room_ids, [user_id]),
+        on_conflict: :nothing
+      )
+
+    :ok
+  end
+
+  @doc "Removes the user's memberships from every room of the channel."
+  def leave_rooms(channel_id, user_id) do
+    {_count, _} =
+      Repo.delete_all(
+        from m in Membership,
+          join: c in Conversation,
+          on: c.id == m.conversation_id,
+          where: c.channel_id == ^channel_id and m.user_id == ^user_id
+      )
+
+    :ok
+  end
+
+  @doc "Blob keys of every attachment in a channel's rooms (collect BEFORE the cascade delete)."
+  def channel_room_blob_keys(channel_id) do
+    Repo.all(
+      from a in Attachment,
+        join: m in Message,
+        on: m.id == a.message_id,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: c.channel_id == ^channel_id,
+        select: [a.storage_key, a.thumbnail_key]
+    )
+    |> List.flatten()
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp room_membership_entries(room_ids, user_ids) do
+    now = now()
+
+    for room_id <- room_ids, user_id <- user_ids do
+      %{
+        conversation_id: room_id,
+        user_id: user_id,
+        role: "member",
+        last_read_at: now,
+        inserted_at: now,
+        updated_at: now
+      }
+    end
+  end
+
+  defp next_room_position(channel_id) do
+    Repo.one(
+      from c in Conversation,
+        where: c.channel_id == ^channel_id,
+        select: coalesce(max(c.position), -1)
+    ) + 1
+  end
+
+  defp room?(conversation_id) do
+    Repo.exists?(
+      from c in Conversation, where: c.id == ^conversation_id and not is_nil(c.channel_id)
+    )
   end
 
   ## Folders
@@ -537,6 +737,9 @@ defmodule Eden.Chat do
       on: m.conversation_id == c.id,
       join: u in User,
       on: u.id == m.user_id,
+      # Channel rooms are excluded until search learns to present and route
+      # them (#32) — a room surfacing as a "chat" would deep-link wrongly.
+      where: is_nil(c.channel_id),
       where:
         ilike(c.title, ^pattern) or
           (u.id != ^user.id and (ilike(u.display_name, ^pattern) or ilike(u.username, ^pattern))),
@@ -554,8 +757,12 @@ defmodule Eden.Chat do
       on:
         mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
           is_nil(mem.left_at),
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
+      # Room messages join search with #32 (need channel-aware presentation).
+      where: is_nil(c.channel_id),
       where: ilike(m.body, ^pattern) and is_nil(m.deleted_at) and is_nil(d.id),
       order_by: [desc: m.id],
       limit: @search_limit,
@@ -887,13 +1094,16 @@ defmodule Eden.Chat do
     )
   end
 
-  # Delete each blob no remaining attachment references — the one place every
-  # delete path (message delete-for-both, conversation GC) funnels through, so the
-  # "spare a blob a forward still shares" invariant can't drift. Runs post-commit,
-  # when the deleting rows are already gone; one query, not one per key.
-  defp delete_unreferenced_blobs([]), do: :ok
+  @doc """
+  Deletes each blob no remaining attachment references — the one place every
+  delete path (message delete-for-both, conversation GC, channel deletion via
+  `Eden.Channels`) funnels through, so the "spare a blob a forward still
+  shares" invariant can't drift. Call post-commit, when the deleting rows are
+  already gone; one query, not one per key.
+  """
+  def delete_unreferenced_blobs([]), do: :ok
 
-  defp delete_unreferenced_blobs(keys) do
+  def delete_unreferenced_blobs(keys) do
     referenced =
       Repo.all(
         from a in Attachment,
@@ -1149,7 +1359,9 @@ defmodule Eden.Chat do
   defp deliver(conversation_id, message) do
     touch_conversation(conversation_id, message.inserted_at)
     resurface_direct(conversation_id)
-    message = Repo.preload(message, [:sender, :attachment])
+    # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
+    # bubble would phantom-render its "Forwarded" label on realtime messages.
+    message = Repo.preload(message, [:sender, :attachment, forwarded_from: :sender])
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
     message
@@ -1163,7 +1375,8 @@ defmodule Eden.Chat do
         join: c in Conversation,
         on: c.id == m.conversation_id,
         where:
-          m.conversation_id == ^conversation_id and not is_nil(m.left_at) and c.is_group == false
+          m.conversation_id == ^conversation_id and not is_nil(m.left_at) and
+            c.is_group == false and is_nil(c.channel_id)
       ),
       set: [left_at: nil]
     )
@@ -1297,7 +1510,7 @@ defmodule Eden.Chat do
         :ok
 
       message ->
-        message = Repo.preload(message, [:sender, :attachment])
+        message = Repo.preload(message, [:sender, :attachment, forwarded_from: :sender])
         broadcast(message.conversation_id, {:thumbnail_ready, message})
     end
   end

@@ -16,6 +16,7 @@ defmodule Eden.Channels do
 
   alias Eden.Accounts.Scope
   alias Eden.Channels.{Channel, Membership}
+  alias Eden.Chat
   alias Eden.Ids
   alias Eden.Repo
 
@@ -60,7 +61,9 @@ defmodule Eden.Channels do
     Repo.transact(fn ->
       with {:ok, channel} <-
              %Channel{creator_id: user.id} |> Channel.changeset(attrs) |> Repo.insert(),
-           {:ok, _membership} <- insert_membership(channel.id, user.id, "owner") do
+           {:ok, _membership} <- insert_membership(channel.id, user.id, "owner"),
+           # Every channel starts usable: a default room (Mattermost's Town Square).
+           {:ok, _room} <- Chat.create_room(channel.id, %{"name" => "general"}, [user.id]) do
         {:ok, channel}
       end
     end)
@@ -137,11 +140,16 @@ defmodule Eden.Channels do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner)) do
       member_ids = member_ids(channel.id)
+      # Collected BEFORE the delete — the FK cascade wipes the rows we'd query.
+      blob_keys = Chat.channel_room_blob_keys(channel.id)
 
       # stale_error_field: an already-deleted channel (e.g. a concurrent owner
       # session) is :not_found, not a StaleEntryError crash.
       case Repo.delete(channel, stale_error_field: :id) do
         {:ok, _} ->
+          # Rooms cascaded with the channel; reclaim their attachment blobs
+          # (forward-safely) only after the delete committed.
+          Chat.delete_unreferenced_blobs(blob_keys)
           broadcast_channel(channel.id, {:channel_deleted, channel.id})
           Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
           :ok
@@ -149,6 +157,70 @@ defmodule Eden.Channels do
         {:error, _stale} ->
           {:error, :not_found}
       end
+    end
+  end
+
+  ## Rooms (authorized orchestration over Chat's data operations)
+
+  @doc """
+  Rooms of a channel for the sidebar (unread badges + muted flags), authorized
+  by channel membership. `{:error, :not_found}` for non-members.
+  """
+  def list_rooms(%Scope{} = scope, channel_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id) do
+      {:ok, Chat.list_rooms(scope, channel.id)}
+    end
+  end
+
+  @doc "Creates a room (admin+); all current members are materialized into it."
+  def create_room(%Scope{} = scope, channel_id, attrs) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)),
+         {:ok, room} <- Chat.create_room(channel.id, attrs, member_ids(channel.id)) do
+      broadcast_channel(channel.id, {:room_created, room})
+      {:ok, room}
+    end
+  end
+
+  @doc "Renames a room (admin+ of its channel)."
+  def rename_room(%Scope{} = scope, room_id, attrs) do
+    with %{} = room <- Chat.get_room(room_id),
+         {:ok, channel} <- get_channel(scope, room.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)),
+         {:ok, renamed} <- Chat.update_room(room, attrs) do
+      broadcast_channel(channel.id, {:room_renamed, renamed})
+      {:ok, renamed}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @doc """
+  Deletes a room (admin+): messages and attachment blobs are reclaimed through
+  the Chat GC path. The default last room may also be deleted — an empty
+  channel is allowed.
+  """
+  def delete_room(%Scope{} = scope, room_id) do
+    with %{} = room <- Chat.get_room(room_id),
+         {:ok, channel} <- get_channel(scope, room.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      :ok = Chat.hard_delete_conversation(room.id)
+      broadcast_channel(channel.id, {:room_deleted, room.id})
+      :ok
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @doc "Reorders a channel's rooms (admin+)."
+  def reorder_rooms(%Scope{} = scope, channel_id, ordered_ids) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      :ok = Chat.reorder_rooms(channel.id, ordered_ids)
+      broadcast_channel(channel.id, :rooms_reordered)
+      :ok
     end
   end
 

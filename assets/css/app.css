@@ -602,6 +602,28 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Channel rooms (sidebar rows; reuse .ed-convo geometry) -------------- */
+  .ed-room {
+    gap: 0.5rem;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+  .ed-room__hash {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25rem;
+    color: var(--ed-muted);
+    font: 600 1rem/1 var(--ed-mono);
+  }
+  .ed-room--new {
+    color: var(--ed-muted);
+  }
+  .ed-room--new:hover {
+    color: var(--ed-ink);
+  }
+
   /* Sidebar empty state — revealed by CSS only when the stream has no rows. */
   .ed-convo-empty {
     display: none;

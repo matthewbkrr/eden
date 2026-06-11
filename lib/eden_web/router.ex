@@ -51,8 +51,11 @@ defmodule EdenWeb.Router do
       live "/app/c/:id", ChatLive
       # Permalink: open the conversation scrolled to a specific message.
       live "/app/c/:id/m/:message_id", ChatLive
-      # Corporate layer: a channel workspace (rooms arrive with #29).
-      live "/channels/:channel_id", ChannelLive
+      # Corporate layer: channel workspaces are ChatLive in channel mode — the
+      # message pane (composer, attachments, menus, realtime) is shared as-is.
+      live "/channels/:channel_id", ChatLive
+      live "/channels/:channel_id/r/:id", ChatLive
+      live "/channels/:channel_id/r/:id/m/:message_id", ChatLive
     end
 
     # Device preferences — available signed out (current_scope may be nil).

@@ -188,6 +188,158 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "rooms" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      # Bob joined after creation — materialize him into existing rooms (the
+      # public join flow lands with #30).
+      :ok = Eden.Chat.join_rooms(channel.id, bob.id)
+      %{channel: channel}
+    end
+
+    test "a channel is born with a general room every member can use", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      assert {:ok, [room]} = Channels.list_rooms(scope(alice), channel.id)
+      assert room.name == "general"
+
+      # Materialized memberships start read-up-to-now; unread comparison is
+      # strictly-greater at second granularity, so backdate alice's marker.
+      backdate_last_read(room.id, alice.id)
+
+      # Bob (materialized) can post into it through the ordinary Chat API.
+      assert {:ok, _} = Eden.Chat.create_message(scope(bob), room.id, %{"body" => "hello"})
+      assert {:ok, [%{unread_count: 1}]} = Channels.list_rooms(scope(alice), channel.id)
+    end
+
+    test "create_room is admin-only and materializes all members", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      assert {:error, :forbidden} =
+               Channels.create_room(scope(bob), channel.id, %{"name" => "ops"})
+
+      assert {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      assert room.position == 1
+
+      # Bob got a membership without doing anything.
+      assert {:ok, _} = Eden.Chat.create_message(scope(bob), room.id, %{"body" => "in!"})
+    end
+
+    test "rename and delete are admin-only; delete reclaims the room", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "temp"})
+
+      assert {:error, :forbidden} = Channels.rename_room(scope(bob), room.id, %{"name" => "x"})
+
+      assert {:ok, %{name: "ops2"}} =
+               Channels.rename_room(scope(alice), room.id, %{"name" => "ops2"})
+
+      assert {:error, :forbidden} = Channels.delete_room(scope(bob), room.id)
+      assert :ok = Channels.delete_room(scope(alice), room.id)
+      assert is_nil(Eden.Chat.get_room(room.id))
+    end
+
+    test "a non-member can't even see the rooms", %{channel: channel} do
+      carol = user_fixture(%{username: "carolrm"})
+      assert {:error, :not_found} = Channels.list_rooms(scope(carol), channel.id)
+      assert [] == Eden.Chat.list_rooms(scope(carol), channel.id)
+    end
+
+    test "rooms stay out of the DM sidebar and search", %{alice: alice, channel: channel} do
+      {:ok, [room]} = Channels.list_rooms(scope(alice), channel.id)
+      {:ok, _} = Eden.Chat.create_message(scope(alice), room.id, %{"body" => "findme rooms"})
+
+      assert [] == Eden.Chat.list_conversations(scope(alice))
+      assert %{messages: [], conversations: []} = Eden.Chat.search(scope(alice), "findme")
+    end
+
+    test "per-user delete-chat refuses rooms", %{alice: alice, channel: channel} do
+      {:ok, [room]} = Channels.list_rooms(scope(alice), channel.id)
+      assert {:error, :not_found} = Eden.Chat.delete_conversation(scope(alice), room.id)
+    end
+
+    test "leave_rooms drops the user's room memberships", %{bob: bob, channel: channel} do
+      :ok = Eden.Chat.leave_rooms(channel.id, bob.id)
+      assert [] == Eden.Chat.list_rooms(scope(bob), channel.id)
+    end
+
+    test "reorder_rooms is admin-only and reassigns positions", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      {:ok, [general, _]} = Channels.list_rooms(scope(alice), channel.id)
+
+      assert {:error, :forbidden} =
+               Channels.reorder_rooms(scope(bob), channel.id, [ops.id, general.id])
+
+      :ok = Channels.reorder_rooms(scope(alice), channel.id, [ops.id, general.id])
+      {:ok, rooms} = Channels.list_rooms(scope(alice), channel.id)
+      assert ["ops", "general"] == Enum.map(rooms, & &1.name)
+    end
+
+    test "deleting the channel reclaims room attachment blobs (forward-safe)", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      {:ok, [room]} = Channels.list_rooms(scope(alice), channel.id)
+
+      {:ok, msg} =
+        Eden.Chat.create_attachment_message(scope(alice), room.id, %{path: real_png()})
+
+      key = msg.attachment.storage_key
+
+      # A forward into a DM must keep the shared blob alive.
+      {:ok, dm} = Eden.Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Eden.Chat.forward_message(scope(alice), msg.id, dm.id)
+
+      :ok = Channels.delete_channel(scope(alice), channel.id)
+      assert Eden.Storage.exists?(key)
+
+      # Without the forward the blob would be gone — prove via a fresh channel.
+      {:ok, ch2} = Channels.create_channel(scope(alice), %{"name" => "Tmp"})
+      {:ok, [room2]} = Channels.list_rooms(scope(alice), ch2.id)
+
+      {:ok, msg2} =
+        Eden.Chat.create_attachment_message(scope(alice), room2.id, %{path: real_png()})
+
+      key2 = msg2.attachment.storage_key
+      :ok = Channels.delete_channel(scope(alice), ch2.id)
+      refute Eden.Storage.exists?(key2)
+    end
+  end
+
+  defp backdate_last_read(conversation_id, user_id) do
+    past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+
+    Repo.update_all(
+      from(m in Eden.Chat.Membership,
+        where: m.conversation_id == ^conversation_id and m.user_id == ^user_id
+      ),
+      set: [last_read_at: past]
+    )
+  end
+
+  # A real, decodable PNG for attachment GC tests.
+  defp real_png do
+    {:ok, img} = Image.new(600, 400, color: [40, 90, 200])
+    {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+    path = Path.join(System.tmp_dir!(), "ch-#{System.unique_integer([:positive])}")
+    File.write!(path, bytes)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   # Direct membership plumbing — the public add-member flow lands with #30.
   defp insert_member(channel_id, user_id, role) do
     %Membership{}
