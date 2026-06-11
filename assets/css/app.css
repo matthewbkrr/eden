@@ -715,6 +715,12 @@
     color: var(--ed-primary);
     cursor: pointer;
   }
+  /* Own bubbles are primary-filled — primary-on-primary would vanish. */
+  .ed-bubble--me .ed-bubble__thread {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
 
   /* Thread panel (Mattermost RHS): right column on desktop, full-screen
      overlay on mobile. */

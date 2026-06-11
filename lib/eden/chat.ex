@@ -1144,9 +1144,11 @@ defmodule Eden.Chat do
   defp ensure_root(_reply), do: {:error, :not_a_root}
 
   # Counter bump + fanout. The root is re-read fresh so every session renders
-  # the same footer (count, last reply time).
+  # the same footer (count, last reply time). A 0-row bump means the root was
+  # hard-deleted underneath us (admin deleted the room mid-send) — everything
+  # cascaded, so there is nobody left to notify; don't crash the sender.
   defp deliver_reply(root, reply) do
-    {1, _} =
+    {bumped, _} =
       Repo.update_all(from(m in Message, where: m.id == ^root.id),
         inc: [reply_count: 1],
         set: [last_reply_at: reply.inserted_at]
@@ -1154,9 +1156,9 @@ defmodule Eden.Chat do
 
     reply = Repo.preload(reply, [:sender, :attachment, forwarded_from: :sender])
 
-    case preloaded_message(root.id) do
-      nil -> :ok
-      fresh_root -> broadcast(root.conversation_id, {:thread_reply, fresh_root, reply})
+    with 1 <- bumped,
+         %Message{} = fresh_root <- preloaded_message(root.id) do
+      broadcast(root.conversation_id, {:thread_reply, fresh_root, reply})
     end
 
     reply

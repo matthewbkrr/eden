@@ -884,7 +884,8 @@ defmodule EdenWeb.ChatLive do
       {:noreply,
        socket
        |> stream_delete_by_dom_id(:messages, "messages-#{message.id}")
-       |> stream_delete_by_dom_id(:thread, "thread-#{message.id}")}
+       |> stream_delete_by_dom_id(:thread, "thread-#{message.id}")
+       |> close_thread_if_root_gone(message.id)}
     else
       {:noreply, socket}
     end
@@ -898,7 +899,8 @@ defmodule EdenWeb.ChatLive do
         do:
           socket
           |> stream_delete_by_dom_id(:messages, "messages-#{message_id}")
-          |> stream_delete_by_dom_id(:thread, "thread-#{message_id}"),
+          |> stream_delete_by_dom_id(:thread, "thread-#{message_id}")
+          |> close_thread_if_root_gone(message_id),
         else: socket
 
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
@@ -3654,6 +3656,16 @@ defmodule EdenWeb.ChatLive do
 
   defp thread_open_for?(socket, root_id) do
     match?(%{id: ^root_id}, socket.assigns.thread_root)
+  end
+
+  # The open panel's root was deleted (for both) or hidden (for me): the panel
+  # would keep showing the stale root forever — close it instead.
+  defp close_thread_if_root_gone(socket, message_id) do
+    if thread_open_for?(socket, message_id) do
+      assign(socket, thread_root: nil)
+    else
+      socket
+    end
   end
 
   # Permalinks may point at a reply — those live in the thread panel, not the

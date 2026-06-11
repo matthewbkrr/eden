@@ -464,6 +464,19 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "deep linked"
     end
 
+    test "a deleted (replyless) root closes its open panel in other sessions", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Bob opens an (empty) thread on alice's root; alice deletes the root.
+      render_click(bob_view, "open_thread", %{"id" => to_string(ctx.root.id)})
+      assert has_element?(bob_view, ".ed-thread")
+
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), ctx.root.id)
+
+      refute has_element?(bob_view, ".ed-thread")
+    end
+
     test "deleting a root with replies is refused (the root survives)", ctx do
       {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), ctx.root.id, %{"body" => "anchor"})
 
