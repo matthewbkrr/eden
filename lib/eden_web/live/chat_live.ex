@@ -1517,6 +1517,7 @@ defmodule EdenWeb.ChatLive do
             phx-hook=".SendQueue"
             data-conversation-id={@selected.id}
             data-layout={if @selected.channel_id, do: "flat", else: "bubble"}
+            data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
             phx-submit="send"
             phx-change="composer_changed"
@@ -2060,17 +2061,33 @@ defmodule EdenWeb.ChatLive do
             const row = document.createElement("div")
             row.dataset.clientId = clientId
             if (this.el.dataset.layout === "flat") {
-              row.className = "ed-flat"
+              // Mirror the server's compact rule (same author within 5 min):
+              // a continuation row drops the avatar/name. Without this the
+              // optimistic node always drew the avatar, which then vanished a
+              // frame later when the real (compact) row replaced it.
+              const myId = this.el.dataset.senderId
+              const last = this.lastFlatRow()
+              const compact = !!last && last.dataset.senderId === myId &&
+                (Date.now() / 1000 - Number(last.dataset.ts || 0)) < 300
+              row.className = compact ? "ed-flat ed-flat--compact" : "ed-flat"
               row.style.opacity = "0.55"
-              row.innerHTML =
-                '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>' +
-                '<div class="ed-flat__main"><div class="ed-flat__head">' +
-                '<span class="ed-flat__name"></span></div>' +
-                '<div class="break-words ed-flat__body"></div></div>'
+              row.dataset.senderId = myId
+              row.dataset.ts = Math.floor(Date.now() / 1000)
               const name = this.el.dataset.senderName || ""
-              row.querySelector(".ed-avatar span").textContent =
-                (name.trim().charAt(0) || "?").toUpperCase()
-              row.querySelector(".ed-flat__name").textContent = name
+              if (compact) {
+                row.innerHTML =
+                  '<div class="ed-flat__gutter"></div>' +
+                  '<div class="ed-flat__main"><div class="break-words ed-flat__body"></div></div>'
+              } else {
+                row.innerHTML =
+                  '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>' +
+                  '<div class="ed-flat__main"><div class="ed-flat__head">' +
+                  '<span class="ed-flat__name"></span></div>' +
+                  '<div class="break-words ed-flat__body"></div></div>'
+                row.querySelector(".ed-avatar span").textContent =
+                  (name.trim().charAt(0) || "?").toUpperCase()
+                row.querySelector(".ed-flat__name").textContent = name
+              }
               row.querySelector(".ed-flat__body").textContent = body
             } else {
               row.className = "flex justify-end"
@@ -2082,6 +2099,16 @@ defmodule EdenWeb.ChatLive do
             }
             this.pending.appendChild(row)
             if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight
+          },
+          // The last flat row to compare against for the compact rule: a queued
+          // optimistic node wins (rapid double-send), else the last streamed
+          // message. Returns null in an empty room (first message — full row).
+          lastFlatRow() {
+            if (this.pending && this.pending.lastElementChild) {
+              return this.pending.lastElementChild
+            }
+            const rows = document.querySelectorAll("#messages .ed-flat")
+            return rows[rows.length - 1] || null
           },
           remove(clientId) {
             const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
@@ -2822,6 +2849,8 @@ defmodule EdenWeb.ChatLive do
     <div
       id={@id}
       class={["ed-flat", @message.compact && "ed-flat--compact"]}
+      data-sender-id={@message.sender_id}
+      data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
