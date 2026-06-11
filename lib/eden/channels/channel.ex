@@ -16,6 +16,10 @@ defmodule Eden.Channels.Channel do
 
     # The scoped user's role in this channel, filled by Eden.Channels queries.
     field :role, :string, virtual: true
+    # Rail badge state, filled by list_channels/1: aggregate unread across the
+    # user's joined rooms (room-mute-aware) and whether the channel is muted.
+    field :unread_count, :integer, virtual: true, default: 0
+    field :muted, :boolean, virtual: true, default: false
 
     belongs_to :creator, Eden.Accounts.User
     has_many :memberships, Eden.Channels.Membership

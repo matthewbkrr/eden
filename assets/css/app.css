@@ -888,6 +888,35 @@
     height: 1px;
     background: var(--ed-border);
   }
+  /* Positioning context for a channel's unread badge + context menu. Sized to
+     the button so the active pill (::before on the button) still lands right. */
+  .ed-rail__slot {
+    position: relative;
+    flex: none;
+    display: inline-flex;
+  }
+  .ed-rail__badge {
+    position: absolute;
+    top: -0.125rem;
+    right: -0.125rem;
+    min-width: 1.125rem;
+    height: 1.125rem;
+    padding: 0 0.3125rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-primary);
+    color: var(--ed-on-primary);
+    font: 600 0.6875rem/1 var(--ed-font);
+    border: 2px solid var(--ed-surface);
+    pointer-events: none;
+  }
+  /* A muted channel still shows its count, de-emphasized (folder-mute parity). */
+  .ed-rail__badge--muted {
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
+  }
   @media (prefers-reduced-motion: reduce) {
     .ed-rail__btn {
       transition: none;

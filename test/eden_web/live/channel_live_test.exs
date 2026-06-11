@@ -350,6 +350,38 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "rail badges + channel mute (#32)" do
+    setup [:setup_channel]
+
+    test "the rail shows a channel's aggregate unread and clears it on read", ctx do
+      backdate_last_read(ctx.general.id, ctx.alice.id)
+      {:ok, _} = Chat.create_message(scope(ctx.bob), ctx.general.id, %{"body" => "ping"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      assert has_element?(view, "#rail-channel-#{ctx.channel.id} .ed-rail__badge", "1")
+
+      # Reading the room clears the badge.
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+      refute has_element?(view, "#rail-channel-#{ctx.channel.id} .ed-rail__badge")
+    end
+
+    test "muting a channel from the rail de-emphasizes its badge live", ctx do
+      backdate_last_read(ctx.general.id, ctx.alice.id)
+      {:ok, _} = Chat.create_message(scope(ctx.bob), ctx.general.id, %{"body" => "ping"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      refute has_element?(view, ".ed-rail__badge--muted")
+      render_click(view, "toggle_channel_mute", %{"id" => to_string(ctx.channel.id)})
+
+      assert has_element?(view, "#rail-channel-#{ctx.channel.id} .ed-rail__badge--muted")
+      assert [%{muted: true}] = Channels.list_channels(scope(ctx.alice))
+    end
+  end
+
   defp backdate_last_read(conversation_id, user_id) do
     import Ecto.Query
     past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)

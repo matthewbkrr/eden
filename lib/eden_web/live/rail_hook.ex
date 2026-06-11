@@ -72,6 +72,13 @@ defmodule EdenWeb.RailHook do
   # through to a LiveView that has no clause for it (FunctionClauseError).
   defp rail_event("rail_create_channel", _params, socket), do: {:halt, socket}
 
+  defp rail_event("toggle_channel_mute", %{"id" => id}, socket) do
+    # The toggle broadcasts :channels_changed, so the rail refreshes via
+    # rail_info/2 — no need to reassign channels here.
+    Channels.toggle_channel_mute(socket.assigns.current_scope, id)
+    {:halt, socket}
+  end
+
   defp rail_event(_event, _params, socket), do: {:cont, socket}
 
   defp rail_info(:channels_changed, socket) do

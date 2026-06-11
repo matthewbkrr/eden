@@ -960,7 +960,10 @@ defmodule EdenWeb.ChatLive do
     {:noreply,
      socket
      |> put_sidebar_conversation(conversation_id, at: 0)
-     |> refresh_folders()}
+     |> refresh_folders()
+     # Room activity bumps the channel's rail badge; for DM activity this is a
+     # cheap no-op recompute (DMs never contribute to channel aggregates).
+     |> refresh_rail()}
   end
 
   # Folder set / membership / order / mute changed in one of the user's
@@ -3561,6 +3564,8 @@ defmodule EdenWeb.ChatLive do
     # without the refresh, an opened room kept its stale unread badge.
     |> refresh_sidebar()
     |> refresh_rooms()
+    # Reading a room clears its unread, which lowers the channel's rail badge.
+    |> then(fn s -> if conversation.channel_id, do: refresh_rail(s), else: s end)
   end
 
   defp refresh_sidebar(socket), do: stream_conversations(socket, reset: true)
@@ -3636,6 +3641,12 @@ defmodule EdenWeb.ChatLive do
       channel ->
         assign(socket, rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id))
     end
+  end
+
+  # Recompute the rail's per-channel unread badges (the channel list carries
+  # the aggregate). Called when room activity arrives or a room is read.
+  defp refresh_rail(socket) do
+    assign(socket, channels: Channels.list_channels(socket.assigns.current_scope))
   end
 
   defp refresh_channel_access(socket, channel_id) do

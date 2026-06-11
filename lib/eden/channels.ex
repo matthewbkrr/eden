@@ -70,16 +70,54 @@ defmodule Eden.Channels do
     end)
   end
 
-  @doc "Channels the scoped user belongs to (creation order), each with the virtual `role` filled."
-  def list_channels(%Scope{user: user}) do
+  @doc """
+  Channels the scoped user belongs to (creation order), each with the virtual
+  `role`, `muted` flag, and `unread_count` (rail badge: aggregate of the user's
+  joined-room unreads, room-mute-aware) filled.
+  """
+  def list_channels(%Scope{user: user} = scope) do
+    unread = Chat.channel_unread_counts(scope)
+
     from(c in Channel,
       join: m in Membership,
       on: m.channel_id == c.id and m.user_id == ^user.id,
       order_by: [asc: c.id],
-      select: {c, m.role}
+      select: {c, m.role, m.muted_at}
     )
     |> Repo.all()
-    |> Enum.map(fn {channel, role} -> %{channel | role: role} end)
+    |> Enum.map(fn {channel, role, muted_at} ->
+      %{
+        channel
+        | role: role,
+          muted: not is_nil(muted_at),
+          unread_count: Map.get(unread, channel.id, 0)
+      }
+    end)
+  end
+
+  @doc """
+  Toggles the scoped user's mute on a channel (badge-only). Pings the user's
+  other sessions with `:channels_changed` so every rail refreshes. Returns
+  `{:ok, muted?}` or `{:error, :not_found}`.
+  """
+  def toggle_channel_mute(%Scope{user: user}, channel_id) do
+    with id when is_integer(id) <- Ids.normalize(channel_id),
+         %Membership{} = membership <-
+           Repo.one(from m in Membership, where: m.channel_id == ^id and m.user_id == ^user.id) do
+      muted_at = if membership.muted_at, do: nil, else: now()
+
+      # update_all (not Repo.update on the struct): a no-op, not a
+      # StaleEntryError crash, if the membership vanished concurrently — e.g.
+      # the user was removed from the channel mid-click.
+      Repo.update_all(from(m in Membership, where: m.id == ^membership.id),
+        set: [muted_at: muted_at]
+      )
+
+      broadcast_user(user.id, :channels_changed)
+      {:ok, not is_nil(muted_at)}
+    else
+      _ -> {:error, :not_found}
+    end
   end
 
   @doc "Fetches a channel the scoped user belongs to (virtual `role` filled), or `{:error, :not_found}`."
