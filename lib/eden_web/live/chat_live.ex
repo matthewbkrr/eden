@@ -1292,9 +1292,14 @@ defmodule EdenWeb.ChatLive do
 
         <nav
           :if={@folders != [] and @search == ""}
+          id="folder-tabs"
           class="ed-folders"
           aria-label={gettext("Chat folders")}
+          phx-hook=".FolderTabs"
         >
+          <%!-- The selected-tab oval; the .FolderTabs hook slides it under the
+                active tab so switching folders glides instead of teleporting. --%>
+          <span class="ed-folder-indicator" data-indicator aria-hidden="true"></span>
           <%= for tab <- @folder_tabs do %>
             <button
               :if={tab == :all}
@@ -1791,6 +1796,37 @@ defmodule EdenWeb.ChatLive do
           }
         }
       </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".FolderTabs">
+        // Slides the selected-tab oval under the active folder tab. The folder
+        // list persists across selection (phx-click, no navigation), so the
+        // indicator can transition between positions instead of teleporting.
+        export default {
+          mounted() {
+            this.indicator = this.el.querySelector("[data-indicator]")
+            this.place(false)
+            // Re-measure after fonts/layout settle and on container resize.
+            this.ro = new ResizeObserver(() => this.place(false))
+            this.ro.observe(this.el)
+          },
+          updated() { this.place(true) },
+          destroyed() { this.ro && this.ro.disconnect() },
+          place(animate) {
+            const active = this.el.querySelector(".ed-folder-tab--active")
+            if (!active || !this.indicator) return
+            // offsetLeft is relative to the scroll content, so it stays correct
+            // regardless of horizontal scroll (the indicator scrolls with it).
+            this.indicator.style.transition = animate ? "" : "none"
+            this.indicator.style.width = `${active.offsetWidth}px`
+            this.indicator.style.transform = `translateX(${active.offsetLeft}px)`
+            this.indicator.style.opacity = "1"
+            if (!animate) {
+              // Flush so the first real selection animates from the right spot.
+              void this.indicator.offsetWidth
+              this.indicator.style.transition = ""
+            }
+          }
+        }
+      </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
           mounted() {
@@ -1803,11 +1839,29 @@ defmodule EdenWeb.ChatLive do
               el.classList.add("ed-msg--focus")
               setTimeout(() => el.classList.remove("ed-msg--focus"), 2200)
             })
+            // Rise-in for messages added AFTER mount only — the initial list is
+            // already in the DOM when the observer starts, so it never animates
+            // (no page-load choreography). Optimistic pending nodes (data-client-id)
+            // appear instantly; their real replacement animates once, no double.
+            this.riser = new MutationObserver((muts) => {
+              for (const mut of muts) {
+                for (const node of mut.addedNodes) {
+                  if (node.nodeType !== 1) continue
+                  const row = node.matches?.(".ed-msg, .ed-flat") ? node
+                    : node.querySelector?.(".ed-msg, .ed-flat")
+                  if (!row || row.dataset.clientId) continue
+                  row.classList.add("ed-msg--enter")
+                  setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
+                }
+              }
+            })
+            this.riser.observe(this.el, { childList: true, subtree: true })
           },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
           },
           updated() { if (this.pinned) this.toBottom() },
+          destroyed() { this.riser && this.riser.disconnect() },
           toBottom() { this.el.scrollTop = this.el.scrollHeight }
         }
       </script>

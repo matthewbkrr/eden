@@ -528,6 +528,23 @@
     background: var(--ed-border);
   }
 
+  /* Newly arriving / sent messages rise in (the .RiseIn observer adds the
+     class only to nodes inserted AFTER mount — never the initial list, so no
+     page-load choreography). Subtle and quick: 4px + fade, 140ms. */
+  @keyframes ed-msg-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .ed-msg--enter {
+    animation: ed-msg-in 0.14s var(--ed-ease);
+  }
+
   /* Permalink target: briefly ring the message scrolled to. */
   @keyframes ed-msg-focus {
     0%,
@@ -870,36 +887,50 @@
     justify-content: center;
     width: 2.75rem;
     height: 2.75rem;
-    border-radius: var(--ed-radius-full);
+    /* Percentage radii (circle 50% → squircle 30%) interpolate smoothly; the
+       old 9999px → 10px transition was visibly stepped at large radii. */
+    border-radius: 50%;
     background: var(--ed-surface-2);
     color: var(--ed-ink);
     font: 600 0.8125rem/1 var(--ed-font);
     transition:
-      border-radius 0.16s var(--ed-ease),
-      background 0.16s var(--ed-ease),
-      color 0.16s var(--ed-ease);
+      border-radius 0.18s var(--ed-ease),
+      background 0.18s var(--ed-ease),
+      color 0.18s var(--ed-ease);
   }
   .ed-rail__btn:hover {
-    border-radius: var(--ed-radius);
+    border-radius: 30%;
     background: var(--ed-primary);
     color: var(--ed-on-primary);
   }
   .ed-rail__btn--active {
-    border-radius: var(--ed-radius);
+    border-radius: 30%;
     background: var(--ed-primary);
     color: var(--ed-on-primary);
   }
-  /* Discord-style active pill on the rail's left edge. */
+  /* Discord-style active pill on the rail's left edge. Channel switches remount
+     the LiveView, so the pill can't travel across mounts — it grows in at the
+     new location instead (transform-origin center), which reads as a quick,
+     intentional move. */
   .ed-rail__btn--active::before {
     content: "";
     position: absolute;
     left: -0.625rem;
     top: 50%;
-    transform: translateY(-50%);
     width: 0.25rem;
     height: 1.75rem;
     border-radius: 0 var(--ed-radius-full) var(--ed-radius-full) 0;
     background: var(--ed-ink);
+    transform: translateY(-50%) scaleY(1);
+    animation: ed-pill-in 0.18s var(--ed-ease);
+  }
+  @keyframes ed-pill-in {
+    from {
+      transform: translateY(-50%) scaleY(0);
+    }
+    to {
+      transform: translateY(-50%) scaleY(1);
+    }
   }
   .ed-rail__btn--new {
     background: transparent;
@@ -949,6 +980,10 @@
   @media (prefers-reduced-motion: reduce) {
     .ed-rail__btn {
       transition: none;
+    }
+    .ed-rail__btn--active::before,
+    .ed-msg--enter {
+      animation: none;
     }
   }
 
@@ -1010,6 +1045,7 @@
 
   /* Folder tabs (horizontal carousel above the chat list) -------------- */
   .ed-folders {
+    position: relative;
     display: flex;
     flex: none;
     gap: 0.25rem;
@@ -1026,7 +1062,25 @@
   .ed-folders::-webkit-scrollbar {
     display: none;
   }
+  /* The sliding oval behind the active tab (positioned by the .FolderTabs
+     hook). Sits at the leading inset; width/transform animate between tabs. */
+  .ed-folder-indicator {
+    position: absolute;
+    left: 0.5rem;
+    top: 0.5rem;
+    height: calc(100% - 1rem);
+    width: 0;
+    border-radius: 999px;
+    background: var(--ed-surface-2);
+    opacity: 0;
+    transform: translateX(0);
+    transition: transform 0.18s var(--ed-ease), width 0.18s var(--ed-ease);
+    pointer-events: none;
+    z-index: 0;
+  }
   .ed-folder-tab {
+    position: relative;
+    z-index: 1;
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -1036,15 +1090,14 @@
     white-space: nowrap;
     color: var(--ed-muted);
     font: 600 0.8125rem/1 var(--ed-font);
-    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+    transition: color 0.16s var(--ed-ease);
   }
   .ed-folder-tab:hover {
     color: var(--ed-ink);
-    background: var(--ed-surface);
   }
+  /* The active oval is the sliding indicator now — keep only the ink color. */
   .ed-folder-tab--active {
     color: var(--ed-ink);
-    background: var(--ed-surface-2);
   }
   /* Wrapper hosting the tab's context menu (right-click / long-press). */
   .ed-folder-tab-wrap {
@@ -1222,6 +1275,7 @@
 @media (prefers-reduced-motion: reduce) {
   .ed-typing span { animation: none; }
   .ed-btn, .ed-input, .ed-convo { transition: none; }
+  .ed-folder-indicator, .ed-search { transition: none; }
 }
 
 /* This file is for your main application CSS */

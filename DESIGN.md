@@ -79,9 +79,24 @@ Moderate, not playful. `--ed-radius-sm` 6px (inputs/small), `--ed-radius` 10px
 
 ## Motion
 
-150–250ms, ease-out. Conveys state only (hover, send, reconnect, reveal). No
-page-load choreography, no bounce/elastic. Every transition has a
-`prefers-reduced-motion: reduce` fallback (crossfade/instant).
+Light, fast, Telegram-style. ~120–180ms, ease-out (`--ed-ease`,
+`cubic-bezier(0.22, 1, 0.36, 1)`). Motion conveys state only — feedback,
+reveal, selection travel — never decoration. **No page-load choreography**
+(lists must not stagger-in on mount), no bounce/elastic. Every transition and
+keyframe has a `prefers-reduced-motion: reduce` fallback (instant/none).
+
+Established micro-interactions:
+- **Rail icons**: circle→squircle on hover/active via percentage radii
+  (`50% → 30%`) so the corner interpolates smoothly.
+- **Rail active pill**: grows in (`scaleY`) at the active icon — channel
+  switches remount the LiveView, so the pill can't FLIP-travel across mounts.
+- **Folder tab oval**: a single sliding indicator (`.ed-folder-indicator`,
+  positioned by the `.FolderTabs` hook) glides under the selected tab — the
+  folder list persists across selection, so it transitions rather than jumps.
+- **Message rise-in**: 4px + fade, 140ms, applied by a MutationObserver
+  (`.ScrollBottom`) only to nodes inserted **after** mount (never the initial
+  list); optimistic pending nodes appear instantly, so the ack swap doesn't
+  double-animate.
 
 ## Components
 

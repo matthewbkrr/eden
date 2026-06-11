@@ -665,7 +665,7 @@ defmodule EdenWeb.ChatLiveTest do
       {:ok, _view, html} = live(conn, ~p"/app")
 
       # Work's tab comes before the All Chats tab in the carousel.
-      [nav] = Regex.run(~r/<nav class="ed-folders".*?<\/nav>/s, html)
+      [nav] = Regex.run(~r/<nav [^>]*class="ed-folders".*?<\/nav>/s, html)
       assert [work_at, all_at] = [:binary.match(nav, "Work"), :binary.match(nav, "All Chats")]
       assert elem(work_at, 0) < elem(all_at, 0)
     end
