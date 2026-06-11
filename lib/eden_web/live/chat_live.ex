@@ -1516,6 +1516,9 @@ defmodule EdenWeb.ChatLive do
             id="composer"
             phx-hook=".SendQueue"
             data-conversation-id={@selected.id}
+            data-layout={if @selected.channel_id, do: "flat", else: "bubble"}
+            data-sender-id={@current_scope.user.id}
+            data-sender-name={@current_scope.user.display_name}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -1890,6 +1893,14 @@ defmodule EdenWeb.ChatLive do
               trigger._wired = true
               trigger.addEventListener("click", (e) => {
                 e.preventDefault(); e.stopPropagation()
+                // Toggle: a second click on the trigger closes the open menu.
+                // stopPropagation above keeps onDoc from firing, so without
+                // this branch open() just re-opens (active === this) and the
+                // menu never closes from the trigger.
+                if (active === this && this.menu && !this.menu.hidden) {
+                  this.close()
+                  return
+                }
                 const r = trigger.getBoundingClientRect()
                 this.open(r.left, r.bottom + 4)
               })
@@ -2043,16 +2054,61 @@ defmodule EdenWeb.ChatLive do
             }
           },
           addOptimistic(clientId, body) {
+            // Match the conversation's layout so the optimistic node doesn't
+            // flash as a DM bubble in a room (or vice versa) before the real
+            // message arrives. body/name are set via textContent, never
+            // interpolated into innerHTML — the template strings are static.
             const row = document.createElement("div")
-            row.className = "flex justify-end"
             row.dataset.clientId = clientId
-            const bubble = document.createElement("div")
-            bubble.className = "ed-bubble ed-bubble--me"
-            bubble.style.opacity = "0.55"
-            bubble.textContent = body
-            row.appendChild(bubble)
+            if (this.el.dataset.layout === "flat") {
+              // Mirror the server's compact rule (same author within 5 min):
+              // a continuation row drops the avatar/name. Without this the
+              // optimistic node always drew the avatar, which then vanished a
+              // frame later when the real (compact) row replaced it.
+              const myId = this.el.dataset.senderId
+              const last = this.lastFlatRow()
+              const compact = !!last && last.dataset.senderId === myId &&
+                (Date.now() / 1000 - Number(last.dataset.ts || 0)) < 300
+              row.className = compact ? "ed-flat ed-flat--compact" : "ed-flat"
+              row.style.opacity = "0.55"
+              row.dataset.senderId = myId
+              row.dataset.ts = Math.floor(Date.now() / 1000)
+              const name = this.el.dataset.senderName || ""
+              if (compact) {
+                row.innerHTML =
+                  '<div class="ed-flat__gutter"></div>' +
+                  '<div class="ed-flat__main"><div class="break-words ed-flat__body"></div></div>'
+              } else {
+                row.innerHTML =
+                  '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>' +
+                  '<div class="ed-flat__main"><div class="ed-flat__head">' +
+                  '<span class="ed-flat__name"></span></div>' +
+                  '<div class="break-words ed-flat__body"></div></div>'
+                row.querySelector(".ed-avatar span").textContent =
+                  (name.trim().charAt(0) || "?").toUpperCase()
+                row.querySelector(".ed-flat__name").textContent = name
+              }
+              row.querySelector(".ed-flat__body").textContent = body
+            } else {
+              row.className = "flex justify-end"
+              const bubble = document.createElement("div")
+              bubble.className = "ed-bubble ed-bubble--me"
+              bubble.style.opacity = "0.55"
+              bubble.textContent = body
+              row.appendChild(bubble)
+            }
             this.pending.appendChild(row)
             if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight
+          },
+          // The last flat row to compare against for the compact rule: a queued
+          // optimistic node wins (rapid double-send), else the last streamed
+          // message. Returns null in an empty room (first message — full row).
+          lastFlatRow() {
+            if (this.pending && this.pending.lastElementChild) {
+              return this.pending.lastElementChild
+            }
+            const rows = document.querySelectorAll("#messages .ed-flat")
+            return rows[rows.length - 1] || null
           },
           remove(clientId) {
             const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
@@ -2061,9 +2117,9 @@ defmodule EdenWeb.ChatLive do
           markFailed(clientId) {
             const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
             if (!node) return
-            const bubble = node.querySelector(".ed-bubble")
-            bubble.style.opacity = "1"
-            bubble.style.border = "1px solid var(--ed-danger)"
+            node.style.opacity = "1"
+            const target = node.querySelector(".ed-bubble") || node.querySelector(".ed-flat__body")
+            if (target) target.style.border = "1px solid var(--ed-danger)"
           },
         }
       </script>
@@ -2793,6 +2849,8 @@ defmodule EdenWeb.ChatLive do
     <div
       id={@id}
       class={["ed-flat", @message.compact && "ed-flat--compact"]}
+      data-sender-id={@message.sender_id}
+      data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
