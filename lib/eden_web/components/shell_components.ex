@@ -40,15 +40,47 @@ defmodule EdenWeb.ShellComponents do
 
       <div :if={@channels != []} class="ed-rail__sep"></div>
 
-      <.link
+      <%!-- Full hook name, not the ".ContextMenu" shorthand: colocated hooks
+            resolve relative to the template's module, and this template
+            compiles in ShellComponents — the hook lives in ChatLive. --%>
+      <span
         :for={channel <- @channels}
-        navigate={~p"/channels/#{channel.id}"}
-        class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
-        title={channel.name}
-        aria-label={channel.name}
+        id={"rail-channel-#{channel.id}"}
+        class="ed-rail__slot"
+        phx-hook="EdenWeb.ChatLive.ContextMenu"
       >
-        {channel_initials(channel.name)}
-      </.link>
+        <.link
+          navigate={~p"/channels/#{channel.id}"}
+          class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
+          title={channel.name}
+          aria-label={channel.name}
+          aria-haspopup="menu"
+        >
+          {channel_initials(channel.name)}
+        </.link>
+        <span
+          :if={channel.unread_count > 0}
+          class={["ed-rail__badge", channel.muted && "ed-rail__badge--muted"]}
+          aria-hidden="true"
+        >
+          {min(channel.unread_count, 99)}
+        </span>
+        <div class="ed-menu" id={"rail-menu-#{channel.id}"} data-menu role="menu" hidden>
+          <button
+            type="button"
+            class="ed-menu__item"
+            role="menuitem"
+            phx-click="toggle_channel_mute"
+            phx-value-id={channel.id}
+          >
+            <.icon
+              name={if channel.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
+              class="size-4"
+            />
+            {if channel.muted, do: gettext("Unmute channel"), else: gettext("Mute channel")}
+          </button>
+        </div>
+      </span>
 
       <button
         type="button"
