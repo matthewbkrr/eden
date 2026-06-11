@@ -464,6 +464,19 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "deep linked"
     end
 
+    test "jump-to-message from the thread panel closes it and focuses the root", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_click(view, "open_thread", %{"id" => to_string(ctx.root.id)})
+      assert has_element?(view, ".ed-thread")
+
+      # The "Go to message" affordance is present and closes the panel.
+      assert has_element?(view, ~s(button[phx-click="jump_to_root"]))
+      render_click(view, "jump_to_root", %{})
+      refute has_element?(view, ".ed-thread")
+    end
+
     test "a deleted (replyless) root closes its open panel in other sessions", ctx do
       conn = log_in_user(ctx.conn, ctx.bob)
       {:ok, bob_view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

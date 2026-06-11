@@ -741,6 +741,21 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, thread_root: nil)}
   end
 
+  # Jump to the thread's root in the main stream: close the panel (on mobile it
+  # covers the stream) and focus-highlight the root, reusing the permalink path.
+  def handle_event("jump_to_root", _params, socket) do
+    case socket.assigns.thread_root do
+      %{id: id} ->
+        {:noreply,
+         socket
+         |> assign(thread_root: nil)
+         |> push_event("focus_message", %{domId: "messages-#{id}"})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("reply_changed", %{"reply" => %{"body" => body}}, socket) do
     {:noreply, assign(socket, reply_composer: to_form(%{"body" => body}, as: "reply"))}
   end
@@ -1630,6 +1645,17 @@ defmodule EdenWeb.ChatLive do
                 title(@selected, @current_scope.user)}
             </div>
           </div>
+          <%!-- Jump to the root in the main stream (closes the panel — on mobile
+                it's a full-screen overlay covering the message). --%>
+          <button
+            type="button"
+            class="ed-btn--icon"
+            phx-click="jump_to_root"
+            title={gettext("Go to message")}
+            aria-label={gettext("Go to message")}
+          >
+            <.icon name="hero-arrow-up-right-mini" class="size-5" />
+          </button>
           <button
             type="button"
             class="ed-btn--icon hidden md:inline-flex"
