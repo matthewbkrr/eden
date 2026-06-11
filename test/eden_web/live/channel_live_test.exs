@@ -154,7 +154,23 @@ defmodule EdenWeb.ChannelModeTest do
       :ok = Channels.delete_room(scope(ctx.alice), ctx.general.id)
 
       assert_patch(bob_view, "/channels/#{ctx.channel.id}")
-      refute render(bob_view) =~ "form[phx-submit=send]"
+      refute has_element?(bob_view, "form[phx-submit=send]")
+    end
+
+    test "opening a room clears its unread badge", ctx do
+      backdate_last_read(ctx.general.id, ctx.alice.id)
+      {:ok, _} = Chat.create_message(scope(ctx.bob), ctx.general.id, %{"body" => "unread one"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+      assert html =~ "ed-badge"
+
+      view
+      |> element(~s(a[href="/channels/#{ctx.channel.id}/r/#{ctx.general.id}"]))
+      |> render_click()
+
+      # Regression: the rooms list refreshes on select, so the badge clears.
+      refute render(view) =~ "ed-badge\""
     end
 
     test "muting a room from its context menu de-emphasizes the badge", ctx do
@@ -230,6 +246,18 @@ defmodule EdenWeb.ChannelModeTest do
       {path, _flash} = assert_redirect(view)
       assert path =~ ~r{^/channels/\d+$}
     end
+  end
+
+  defp backdate_last_read(conversation_id, user_id) do
+    import Ecto.Query
+    past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
+
+    Eden.Repo.update_all(
+      from(m in Eden.Chat.Membership,
+        where: m.conversation_id == ^conversation_id and m.user_id == ^user_id
+      ),
+      set: [last_read_at: past]
+    )
   end
 
   # Direct membership plumbing — the public add-member flow lands with #30.

@@ -2557,8 +2557,10 @@ defmodule EdenWeb.ChatLive do
     |> stream(:messages, messages, reset: true)
     # Re-stream the sidebar so the active highlight follows the selection (stream
     # items don't re-render on assign changes) and the opened conversation's
-    # unread badge clears.
+    # unread badge clears. In channel mode the rooms list plays that role —
+    # without the refresh, an opened room kept its stale unread badge.
     |> refresh_sidebar()
+    |> refresh_rooms()
   end
 
   defp refresh_sidebar(socket), do: stream_conversations(socket, reset: true)
