@@ -511,6 +511,17 @@ defmodule EdenWeb.ChatLiveTest do
 
       view |> element(".ed-thread-footer") |> render_click()
       assert render(view) =~ "threaded"
+
+      # The composer advertises the room layout so the SendQueue hook renders
+      # a flat optimistic node, not a DM bubble (regression for the flash bug).
+      assert has_element?(view, ~s(#composer[data-layout="flat"]))
+    end
+
+    test "the composer advertises the bubble layout in DMs", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert has_element?(view, ~s(#composer[data-layout="bubble"]))
     end
   end
 
