@@ -547,6 +547,27 @@
       box-shadow: 0 0 0 2px var(--ed-primary);
     }
   }
+  /* Flat rows (rooms + thread panel) carry the focus class on the row itself,
+     not a child bubble — a full-width ring reads wrong, so flash the row
+     background instead (the Slack/Mattermost jump-to convention). */
+  @keyframes ed-flat-focus {
+    0%,
+    65% {
+      background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
+    }
+    100% {
+      background: transparent;
+    }
+  }
+  .ed-flat.ed-msg--focus {
+    animation: ed-flat-focus 2.2s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-flat.ed-msg--focus {
+      animation: none;
+      background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
+    }
+  }
 
   /* In-app image lightbox (toggled by the .Lightbox hook) -------------- */
   .ed-lightbox {
