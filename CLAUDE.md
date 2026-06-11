@@ -109,8 +109,15 @@ design — built incrementally as features land.)
   delete; room CRUD is admin-only via `Eden.Channels` (each channel is born
   with a "general" room); channel deletion reclaims room attachment blobs
   forward-safely. The web layer is ChatLive's channel mode (`/channels/...`
-  routes) — one message pane for DMs and rooms. Invites and threads land with
-  #30–#31.
+  routes) — one message pane for DMs and rooms. **Access**: members are added internally (admin+ picks
+  eden users; membership + room materialization commit in one transaction) or
+  via **invite links** mirroring registration invites (hash-only tokens,
+  expiry, optional max uses, `FOR UPDATE` redemption at
+  `/channels/join/:token`; the login flow preserves the link via
+  `user_return_to`). Removal matrix: owner > admin > member; the owner leaves
+  only after `transfer_ownership/3` (or deletes the channel); removed users'
+  sessions get `{:removed_from_channel, id}` and navigate away. Threads land
+  with #31.
 - **Storage** — file/photo persistence behind an **adapter behaviour**
   (`Eden.Storage.Adapter`). Local disk in dev, object storage (S3-compatible) in
   prod, swappable without touching callers. Callers store only the file **key +

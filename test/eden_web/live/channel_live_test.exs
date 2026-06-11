@@ -230,6 +230,97 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "channel access UI" do
+    setup [:setup_channel]
+
+    test "members modal lists roles; owner promotes and the target's header role updates live",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      bob_conn = log_in_user(build_conn(), ctx.bob)
+      {:ok, bob_view, _} = live(bob_conn, ~p"/channels/#{ctx.channel.id}")
+      refute render(bob_view) =~ "Edit channel"
+
+      html = render_click(view, "open_channel_members", %{})
+      assert html =~ "Members"
+      assert html =~ "owner"
+      assert html =~ "member"
+
+      render_click(view, "set_member_role", %{"id" => to_string(ctx.bob.id), "role" => "admin"})
+
+      # Bob's open session re-fetched its role: admin affordances appeared.
+      assert render(bob_view) =~ "Edit channel"
+    end
+
+    test "add-members flow materializes the new member", ctx do
+      carol = user_fixture(%{username: "carolx", display_name: "Carol"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_click(view, "open_add_members", %{})
+      assert html =~ "Carol"
+
+      render_click(view, "toggle_add_user", %{"id" => to_string(carol.id)})
+      render_click(view, "confirm_add_members", %{})
+
+      assert Channels.member_role(Scope.for_user(carol), ctx.channel.id) == "member"
+      assert {:ok, [_general]} = Channels.list_rooms(Scope.for_user(carol), ctx.channel.id)
+    end
+
+    test "invite modal creates a link shown once and revokes it", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "open_invites", %{})
+      html = render_click(view, "create_invite", %{})
+      assert html =~ "/channels/join/"
+      assert html =~ "Copy this link now"
+
+      {:ok, [invite]} = Channels.list_invites(scope(ctx.alice), ctx.channel.id)
+      html = render_click(view, "revoke_invite", %{"id" => to_string(invite.id)})
+      refute html =~ "Active links"
+      assert {:ok, []} = Channels.list_invites(scope(ctx.alice), ctx.channel.id)
+    end
+
+    test "a member can leave; the owner is told to transfer first", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "leave_channel", %{})
+      assert_redirect(view, "/app")
+      assert [] == Channels.list_channels(scope(ctx.bob))
+
+      owner_conn = log_in_user(build_conn(), ctx.alice)
+      {:ok, owner_view, _} = live(owner_conn, ~p"/channels/#{ctx.channel.id}")
+      html = render_click(owner_view, "leave_channel", %{})
+      assert html =~ "Transfer ownership or delete"
+    end
+
+    test "a removed member's open session is navigated away", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, _} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      :ok = Channels.remove_member(scope(ctx.alice), ctx.channel.id, ctx.bob.id)
+      assert_redirect(bob_view, "/app")
+    end
+
+    test "member forcing admin-only access events gets nothing", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "open_add_members", %{})
+      refute render(view) =~ "Add members</h2>"
+
+      render_click(view, "open_invites", %{})
+      refute render(view) =~ "Invite links"
+
+      render_click(view, "create_invite", %{})
+      assert {:error, :forbidden} = Channels.list_invites(scope(ctx.bob), ctx.channel.id)
+    end
+  end
+
   describe "rail create flow (regression after the ChannelLive fold-in)" do
     setup [:setup_channel]
 

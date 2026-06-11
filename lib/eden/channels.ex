@@ -507,18 +507,8 @@ defmodule Eden.Channels do
     result =
       Repo.transact(fn ->
         case lock_invite(hashed) do
-          nil ->
-            {:error, :invalid}
-
-          invite ->
-            with :ok <- validate_invite(invite) do
-              if join_channel_tx(invite.channel_id, user.id) do
-                bump_used_count(invite)
-                {:ok, {invite.channel_id, :joined}}
-              else
-                {:ok, {invite.channel_id, :already}}
-              end
-            end
+          nil -> {:error, :invalid}
+          invite -> redeem_invite(invite, user.id)
         end
       end)
 
@@ -532,6 +522,18 @@ defmodule Eden.Channels do
         # The channel vanished between commit and read — treat as a dead link.
         nil -> {:error, :invalid}
         channel -> {:ok, %{channel | role: role_of(channel_id, user.id) || "member"}}
+      end
+    end
+  end
+
+  # Inside the locking transaction: validate, join (idempotent), count the use.
+  defp redeem_invite(invite, user_id) do
+    with :ok <- validate_invite(invite) do
+      if join_channel_tx(invite.channel_id, user_id) do
+        bump_used_count(invite)
+        {:ok, {invite.channel_id, :joined}}
+      else
+        {:ok, {invite.channel_id, :already}}
       end
     end
   end

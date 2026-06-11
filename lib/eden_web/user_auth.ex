@@ -20,11 +20,13 @@ defmodule EdenWeb.UserAuth do
   """
   def log_in_user(conn, user, _params \\ %{}) do
     token = Accounts.generate_user_session_token(user)
+    # Captured before renew_session/1 wipes the session.
+    return_to = get_session(conn, :user_return_to)
 
     conn
     |> renew_session()
     |> put_token_in_session(token)
-    |> redirect(to: signed_in_path(conn))
+    |> redirect(to: return_to || signed_in_path(conn))
   end
 
   @doc "Logs the user out, revoking the session token and live sessions."
@@ -52,17 +54,27 @@ defmodule EdenWeb.UserAuth do
     assign(conn, :current_scope, Scope.for_user(user))
   end
 
-  @doc "Plug: requires an authenticated user (for protected controller routes), else redirects to /login."
+  @doc """
+  Plug: requires an authenticated user (for protected controller routes), else
+  redirects to /login — remembering where a GET was headed (e.g. a channel
+  invite link), so login lands back there.
+  """
   def require_authenticated_user(conn, _opts) do
     if conn.assigns.current_scope do
       conn
     else
       conn
       |> put_flash(:error, "You must log in to access this page.")
+      |> maybe_store_return_to()
       |> redirect(to: ~p"/login")
       |> halt()
     end
   end
+
+  defp maybe_store_return_to(%{method: "GET"} = conn),
+    do: put_session(conn, :user_return_to, current_path(conn))
+
+  defp maybe_store_return_to(conn), do: conn
 
   @doc "Plug: bounces already-authenticated users away from auth pages."
   def redirect_if_user_is_authenticated(conn, _opts) do

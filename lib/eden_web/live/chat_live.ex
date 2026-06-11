@@ -60,7 +60,15 @@ defmodule EdenWeb.ChatLive do
         show_channel_edit: false,
         channel_form: nil,
         room_modal: nil,
-        room_form: nil
+        room_form: nil,
+        members_open: false,
+        members: [],
+        add_open: false,
+        addable: [],
+        add_selected: MapSet.new(),
+        invites_open: false,
+        invites: [],
+        new_invite_url: nil
       )
       |> refresh_folders()
       |> stream(:conversations, Chat.list_conversations(scope))
@@ -483,6 +491,168 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  ## Channel access: members, add-members, invite links, leave
+
+  def handle_event("open_channel_members", _params, socket) do
+    case Channels.list_members(socket.assigns.current_scope, socket.assigns.channel.id) do
+      {:ok, members} -> {:noreply, assign(socket, members_open: true, members: members)}
+      {:error, _} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_channel_members", _params, socket) do
+    {:noreply, assign(socket, members_open: false)}
+  end
+
+  def handle_event("open_add_members", _params, socket) do
+    if socket.assigns.channel.role in ~w(owner admin) do
+      {:ok, members} =
+        Channels.list_members(socket.assigns.current_scope, socket.assigns.channel.id)
+
+      member_ids = MapSet.new(members, & &1.user.id)
+
+      addable =
+        socket.assigns.current_scope
+        |> Accounts.list_other_users()
+        |> Enum.reject(&MapSet.member?(member_ids, &1.id))
+
+      {:noreply, assign(socket, add_open: true, addable: addable, add_selected: MapSet.new())}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_add_members", _params, socket) do
+    {:noreply, assign(socket, add_open: false)}
+  end
+
+  def handle_event("toggle_add_user", %{"id" => id}, socket) do
+    case Integer.parse(id) do
+      {user_id, ""} ->
+        selected = socket.assigns.add_selected
+
+        selected =
+          if MapSet.member?(selected, user_id),
+            do: MapSet.delete(selected, user_id),
+            else: MapSet.put(selected, user_id)
+
+        {:noreply, assign(socket, add_selected: selected)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("confirm_add_members", _params, socket) do
+    ids = MapSet.to_list(socket.assigns.add_selected)
+
+    case Channels.add_members(socket.assigns.current_scope, socket.assigns.channel.id, ids) do
+      {:ok, _added} ->
+        {:noreply, assign(socket, add_open: false)}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> assign(add_open: false)
+         |> put_flash(:error, gettext("Couldn't add those members."))}
+    end
+  end
+
+  def handle_event("remove_member", %{"id" => id}, socket) do
+    case Channels.remove_member(socket.assigns.current_scope, socket.assigns.channel.id, id) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't remove that member."))}
+    end
+  end
+
+  def handle_event("set_member_role", %{"id" => id, "role" => role}, socket)
+      when role in ["admin", "member"] do
+    case Channels.set_member_role(
+           socket.assigns.current_scope,
+           socket.assigns.channel.id,
+           id,
+           role
+         ) do
+      :ok -> {:noreply, socket}
+      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't change that role."))}
+    end
+  end
+
+  def handle_event("transfer_ownership", %{"id" => id}, socket) do
+    case Channels.transfer_ownership(socket.assigns.current_scope, socket.assigns.channel.id, id) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't transfer ownership."))}
+    end
+  end
+
+  def handle_event("leave_channel", _params, socket) do
+    case Channels.leave_channel(socket.assigns.current_scope, socket.assigns.channel.id) do
+      :ok ->
+        {:noreply,
+         socket
+         |> put_flash(:info, gettext("You left the channel."))
+         |> push_navigate(to: ~p"/app")}
+
+      {:error, :owner} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Transfer ownership or delete the channel before leaving.")
+         )}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't leave the channel."))}
+    end
+  end
+
+  def handle_event("open_invites", _params, socket) do
+    case Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id) do
+      {:ok, invites} ->
+        {:noreply, assign(socket, invites_open: true, invites: invites, new_invite_url: nil)}
+
+      {:error, _} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_invites", _params, socket) do
+    {:noreply, assign(socket, invites_open: false, new_invite_url: nil)}
+  end
+
+  def handle_event("create_invite", _params, socket) do
+    case Channels.create_invite(socket.assigns.current_scope, socket.assigns.channel.id) do
+      {:ok, _invite, raw} ->
+        {:ok, invites} =
+          Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id)
+
+        {:noreply,
+         assign(socket, invites: invites, new_invite_url: url(~p"/channels/join/#{raw}"))}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't create an invite link."))}
+    end
+  end
+
+  def handle_event("revoke_invite", %{"id" => id}, socket) do
+    case Channels.revoke_invite(socket.assigns.current_scope, id) do
+      :ok ->
+        {:ok, invites} =
+          Channels.list_invites(socket.assigns.current_scope, socket.assigns.channel.id)
+
+        {:noreply, assign(socket, invites: invites)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't revoke that link."))}
+    end
+  end
+
   def handle_event("forward_prompt", %{"id" => id}, socket) do
     targets = Chat.list_conversations(socket.assigns.current_scope)
     {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
@@ -712,6 +882,28 @@ defmodule EdenWeb.ChatLive do
   def handle_info({:room_created, _room}, socket), do: {:noreply, refresh_rooms(socket)}
   def handle_info(:rooms_reordered, socket), do: {:noreply, refresh_rooms(socket)}
 
+  # Membership/roles changed (add/remove/promote/transfer): my own role might
+  # have moved too, so re-fetch the channel; refresh the members modal if open.
+  def handle_info({:members_changed, channel_id}, socket) do
+    if match?(%{id: ^channel_id}, socket.assigns.channel) do
+      {:noreply, refresh_channel_access(socket, channel_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # I was removed from (or left) a channel in another session: get out of it.
+  def handle_info({:removed_from_channel, channel_id}, socket) do
+    if match?(%{id: ^channel_id}, socket.assigns.channel) do
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("You no longer have access to this channel."))
+       |> push_navigate(to: ~p"/app")}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:room_renamed, room}, socket) do
     socket = refresh_rooms(socket)
 
@@ -830,6 +1022,32 @@ defmodule EdenWeb.ChatLive do
               style="display: none;"
             >
               <button
+                type="button"
+                class="ed-menu__item"
+                role="menuitem"
+                phx-click={JS.hide(to: "#channel-menu") |> JS.push("open_channel_members")}
+              >
+                <.icon name="hero-users-micro" class="size-4" /> {gettext("Members")}
+              </button>
+              <button
+                :if={@channel.role in ~w(owner admin)}
+                type="button"
+                class="ed-menu__item"
+                role="menuitem"
+                phx-click={JS.hide(to: "#channel-menu") |> JS.push("open_add_members")}
+              >
+                <.icon name="hero-user-plus-micro" class="size-4" /> {gettext("Add members")}
+              </button>
+              <button
+                :if={@channel.role in ~w(owner admin)}
+                type="button"
+                class="ed-menu__item"
+                role="menuitem"
+                phx-click={JS.hide(to: "#channel-menu") |> JS.push("open_invites")}
+              >
+                <.icon name="hero-link-micro" class="size-4" /> {gettext("Invite link")}
+              </button>
+              <button
                 :if={@channel.role in ~w(owner admin)}
                 type="button"
                 class="ed-menu__item"
@@ -847,7 +1065,18 @@ defmodule EdenWeb.ChatLive do
               >
                 <.icon name="hero-plus-micro" class="size-4" /> {gettext("New room")}
               </button>
-              <div :if={@channel.role == "owner"} class="ed-menu__sep"></div>
+              <div class="ed-menu__sep"></div>
+              <button
+                type="button"
+                class="ed-menu__item ed-menu__item--danger"
+                role="menuitem"
+                phx-click="leave_channel"
+                data-confirm={gettext("Leave this channel?")}
+              >
+                <.icon name="hero-arrow-right-start-on-rectangle-micro" class="size-4" /> {gettext(
+                  "Leave channel"
+                )}
+              </button>
               <button
                 :if={@channel.role == "owner"}
                 type="button"
@@ -1293,7 +1522,52 @@ defmodule EdenWeb.ChatLive do
         form={@room_form}
         submit_label={if @room_modal == :new, do: gettext("Create room"), else: gettext("Save")}
       />
+      <.channel_members_modal
+        :if={@members_open && @channel}
+        members={@members}
+        channel={@channel}
+        me={@current_scope.user}
+        online_ids={@online_ids}
+      />
+      <.add_members_modal
+        :if={@add_open && @channel}
+        addable={@addable}
+        selected={@add_selected}
+        online_ids={@online_ids}
+      />
+      <.invites_modal :if={@invites_open && @channel} invites={@invites} new_url={@new_invite_url} />
 
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyUrl">
+        // Copies data-url to the clipboard and briefly flips the label to
+        // data-copied. Falls back to a hidden textarea on non-secure contexts.
+        export default {
+          mounted() {
+            this.el.addEventListener("click", () => {
+              const text = this.el.dataset.url
+              const done = () => {
+                const old = this.el.textContent
+                this.el.textContent = this.el.dataset.copied
+                setTimeout(() => (this.el.textContent = old), 1500)
+              }
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done).catch(() => this.legacy(text, done))
+              } else {
+                this.legacy(text, done)
+              }
+            })
+          },
+          legacy(text, done) {
+            const ta = document.createElement("textarea")
+            ta.value = text
+            ta.style.position = "fixed"
+            ta.style.opacity = "0"
+            document.body.appendChild(ta)
+            ta.focus()
+            ta.select()
+            try { if (document.execCommand("copy")) done() } finally { ta.remove() }
+          }
+        }
+      </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SearchBox">
         // Keeps the search input in sync with server-side clears: morphdom won't
         // patch a focused input's value, so the server pushes "clear-search" and
@@ -1891,6 +2165,314 @@ defmodule EdenWeb.ChatLive do
         >
           <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete room")}
         </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :members, :list, required: true
+  attr :channel, :map, required: true
+  attr :me, :map, required: true
+  attr :online_ids, :any, required: true
+
+  # Channel members: roles, online dots, and the owner/admin action matrix
+  # (the context re-checks every action).
+  defp channel_members_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_channel_members"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-md rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_channel_members"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">
+              {gettext("Members")}
+              <span style="color: var(--ed-muted); font-weight:400;">· {length(@members)}</span>
+            </h2>
+            <button
+              class="ed-btn--icon"
+              phx-click="close_channel_members"
+              aria-label={gettext("Close")}
+            >
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <div class="max-h-80 overflow-y-auto space-y-0.5">
+            <div
+              :for={%{user: user, role: role} <- @members}
+              class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)]"
+            >
+              <.avatar
+                name={user.display_name}
+                src={avatar_src(user)}
+                online={MapSet.member?(@online_ids, user.id)}
+                size={:sm}
+              />
+              <span class="flex-1 min-w-0">
+                <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
+                  {user.display_name}
+                  <span :if={user.id == @me.id} style="color: var(--ed-muted); font-weight:400;">
+                    · {gettext("you")}
+                  </span>
+                </span>
+                <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
+                  @{user.username} · {role_label(role)}
+                </span>
+              </span>
+
+              <%!-- Owner: manage admins / hand over / remove. Admin: remove members. --%>
+              <span :if={member_actions?(@channel.role, role, user.id, @me.id)} class="flex gap-1">
+                <button
+                  :if={@channel.role == "owner" and role == "member"}
+                  type="button"
+                  class="ed-btn--icon"
+                  title={gettext("Make admin")}
+                  aria-label={gettext("Make admin")}
+                  phx-click="set_member_role"
+                  phx-value-id={user.id}
+                  phx-value-role="admin"
+                >
+                  <.icon name="hero-shield-check-micro" class="size-4" />
+                </button>
+                <button
+                  :if={@channel.role == "owner" and role == "admin"}
+                  type="button"
+                  class="ed-btn--icon"
+                  title={gettext("Remove admin")}
+                  aria-label={gettext("Remove admin")}
+                  phx-click="set_member_role"
+                  phx-value-id={user.id}
+                  phx-value-role="member"
+                >
+                  <.icon name="hero-shield-exclamation-micro" class="size-4" />
+                </button>
+                <button
+                  :if={@channel.role == "owner"}
+                  type="button"
+                  class="ed-btn--icon"
+                  title={gettext("Transfer ownership")}
+                  aria-label={gettext("Transfer ownership")}
+                  phx-click="transfer_ownership"
+                  phx-value-id={user.id}
+                  data-confirm={gettext("Hand this channel over? You will become an admin.")}
+                >
+                  <.icon name="hero-key-micro" class="size-4" />
+                </button>
+                <button
+                  type="button"
+                  class="ed-btn--icon"
+                  style="color: var(--ed-danger);"
+                  title={gettext("Remove from channel")}
+                  aria-label={gettext("Remove from channel")}
+                  phx-click="remove_member"
+                  phx-value-id={user.id}
+                  data-confirm={gettext("Remove this member from the channel?")}
+                >
+                  <.icon name="hero-user-minus-micro" class="size-4" />
+                </button>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp role_label("owner"), do: gettext("owner")
+  defp role_label("admin"), do: gettext("admin")
+  defp role_label(_member), do: gettext("member")
+
+  # Mirrors the context's removal matrix for showing the action cluster.
+  defp member_actions?(_my_role, _target_role, target_id, me_id) when target_id == me_id,
+    do: false
+
+  defp member_actions?("owner", target_role, _t, _m), do: target_role != "owner"
+  defp member_actions?("admin", "member", _t, _m), do: true
+  defp member_actions?(_my_role, _target_role, _t, _m), do: false
+
+  attr :addable, :list, required: true
+  attr :selected, :any, required: true
+  attr :online_ids, :any, required: true
+
+  defp add_members_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_add_members"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_add_members"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Add members")}</h2>
+            <button class="ed-btn--icon" phx-click="close_add_members" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <p :if={@addable == []} style="color: var(--ed-muted); font-size:0.875rem;">
+            {gettext("Everyone is already here.")}
+          </p>
+
+          <div class="max-h-72 overflow-y-auto space-y-0.5">
+            <button
+              :for={user <- @addable}
+              type="button"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              phx-click="toggle_add_user"
+              phx-value-id={user.id}
+              aria-pressed={to_string(MapSet.member?(@selected, user.id))}
+            >
+              <span class={["ed-check", MapSet.member?(@selected, user.id) && "ed-check--on"]}>
+                <.icon
+                  :if={MapSet.member?(@selected, user.id)}
+                  name="hero-check-mini"
+                  class="size-4"
+                />
+              </span>
+              <.avatar
+                name={user.display_name}
+                src={avatar_src(user)}
+                online={MapSet.member?(@online_ids, user.id)}
+                size={:sm}
+              />
+              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
+                {user.display_name}
+              </span>
+            </button>
+          </div>
+
+          <div class="flex justify-end">
+            <button
+              type="button"
+              class="ed-btn ed-btn--primary"
+              phx-click="confirm_add_members"
+              disabled={MapSet.size(@selected) == 0}
+            >
+              {gettext("Add")} ({MapSet.size(@selected)})
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr :invites, :list, required: true
+  attr :new_url, :any, required: true
+
+  defp invites_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_invites"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-md rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_invites"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Invite links")}</h2>
+            <button class="ed-btn--icon" phx-click="close_invites" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <%!-- The raw link exists only right after creation — copy it now. --%>
+          <div :if={@new_url} class="space-y-2">
+            <p style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext("Copy this link now — it won't be shown again.")}
+            </p>
+            <div class="flex items-center gap-2">
+              <input type="text" readonly value={@new_url} class="ed-input flex-1" />
+              <button
+                type="button"
+                id="copy-invite-url"
+                class="ed-btn ed-btn--primary"
+                phx-hook=".CopyUrl"
+                data-url={@new_url}
+                data-copied={gettext("Copied!")}
+              >
+                {gettext("Copy")}
+              </button>
+            </div>
+          </div>
+
+          <button
+            :if={is_nil(@new_url)}
+            type="button"
+            class="ed-btn ed-btn--primary w-full"
+            phx-click="create_invite"
+          >
+            <.icon name="hero-link-micro" class="size-4" /> {gettext("Create invite link")}
+          </button>
+
+          <div :if={@invites != []} class="space-y-2">
+            <p style="color: var(--ed-muted); font-size:0.75rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight:600;">
+              {gettext("Active links")}
+            </p>
+            <div
+              :for={invite <- @invites}
+              class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] border"
+              style="border-color: var(--ed-border);"
+            >
+              <span class="flex-1 min-w-0" style="font-size:0.8125rem;">
+                <span class="block" style="color: var(--ed-muted);">
+                  {gettext("Uses: %{used}%{cap}",
+                    used: invite.used_count,
+                    cap: if(invite.max_uses, do: " / #{invite.max_uses}", else: "")
+                  )} · {gettext("expires")} <.local_time at={invite.expires_at} />
+                </span>
+              </span>
+              <button
+                type="button"
+                class="ed-btn ed-btn--ghost text-sm"
+                style="color: var(--ed-danger);"
+                phx-click="revoke_invite"
+                phx-value-id={invite.id}
+                data-confirm={gettext("Revoke this link? Anyone holding it loses access.")}
+              >
+                {gettext("Revoke")}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     """
@@ -2635,6 +3217,28 @@ defmodule EdenWeb.ChatLive do
 
       channel ->
         assign(socket, rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id))
+    end
+  end
+
+  defp refresh_channel_access(socket, channel_id) do
+    case Channels.get_channel(socket.assigns.current_scope, channel_id) do
+      {:ok, channel} ->
+        socket |> assign(channel: channel) |> maybe_refresh_members(channel_id)
+
+      {:error, :not_found} ->
+        # Removal is announced separately; just stop touching this channel.
+        socket
+    end
+  end
+
+  defp maybe_refresh_members(socket, channel_id) do
+    if socket.assigns.members_open do
+      case Channels.list_members(socket.assigns.current_scope, channel_id) do
+        {:ok, members} -> assign(socket, members: members)
+        _ -> socket
+      end
+    else
+      socket
     end
   end
 
