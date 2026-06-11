@@ -485,6 +485,86 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "rail badges + channel mute" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_rooms(channel.id, bob.id)
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      %{channel: channel, general: general}
+    end
+
+    test "list_channels aggregates room unread into the rail badge", %{
+      alice: alice,
+      bob: bob,
+      channel: channel,
+      general: general
+    } do
+      # alice has no unread yet.
+      assert [%{unread_count: 0, muted: false}] = Channels.list_channels(scope(alice))
+
+      backdate_last_read(general.id, alice.id)
+      {:ok, _} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "hi"})
+      {:ok, _} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "again"})
+
+      assert [%{unread_count: 2}] = Channels.list_channels(scope(alice))
+      # The sender sees no unread from their own messages.
+      assert [%{unread_count: 0}] = Channels.list_channels(scope(bob))
+    end
+
+    test "a directly-muted room drops out of the rail aggregate", %{
+      alice: alice,
+      bob: bob,
+      channel: channel,
+      general: general
+    } do
+      {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      backdate_last_read(general.id, alice.id)
+      backdate_last_read(ops.id, alice.id)
+
+      {:ok, _} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "g"})
+      {:ok, _} = Eden.Chat.create_message(scope(bob), ops.id, %{"body" => "o"})
+      assert [%{unread_count: 2}] = Channels.list_channels(scope(alice))
+
+      # Mute the ops room directly — it stops counting toward the rail badge.
+      {:ok, :muted} = Eden.Chat.toggle_conversation_mute(scope(alice), ops.id)
+      assert [%{unread_count: 1}] = Channels.list_channels(scope(alice))
+    end
+
+    test "toggle_channel_mute flips the flag and pings the rail", %{
+      alice: alice,
+      channel: channel
+    } do
+      Channels.subscribe_user(scope(alice))
+
+      assert {:ok, true} = Channels.toggle_channel_mute(scope(alice), channel.id)
+      assert_receive :channels_changed
+      assert [%{muted: true}] = Channels.list_channels(scope(alice))
+
+      assert {:ok, false} = Channels.toggle_channel_mute(scope(alice), channel.id)
+      assert [%{muted: false}] = Channels.list_channels(scope(alice))
+    end
+
+    test "non-member / garbage channel can't be muted", %{channel: channel} do
+      carol = user_fixture(%{username: "carolmute"})
+      assert {:error, :not_found} = Channels.toggle_channel_mute(scope(carol), channel.id)
+      assert {:error, :not_found} = Channels.toggle_channel_mute(scope(carol), "abc")
+    end
+
+    test "channel unread excludes thread replies", %{
+      alice: alice,
+      bob: bob,
+      general: general
+    } do
+      backdate_last_read(general.id, alice.id)
+      {:ok, root} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "root"})
+      {:ok, _} = Eden.Chat.create_reply(scope(bob), root.id, %{"body" => "reply"})
+
+      # Only the root counts; the reply lives in the thread.
+      assert [%{unread_count: 1}] = Channels.list_channels(scope(alice))
+    end
+  end
+
   defp backdate_last_read(conversation_id, user_id) do
     past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
 

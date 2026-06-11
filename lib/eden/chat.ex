@@ -154,6 +154,34 @@ defmodule Eden.Chat do
   defp apply_preview(conversation, preview),
     do: %{conversation | last_message_body: preview.body, last_message_kind: preview.kind}
 
+  @doc """
+  Aggregate unread per channel for the rail badge: `%{channel_id => count}`
+  summing the scoped user's joined-room unreads. Directly-muted rooms
+  (`memberships.muted_at`) drop out — same rule as folder badges; channel-level
+  mute is applied by the caller (`Eden.Channels.list_channels/1`). Replies and
+  tombstones never count (mirrors `unread_counts/2`).
+  """
+  def channel_unread_counts(%Scope{user: user}) do
+    from(m in Message,
+      join: mem in Membership,
+      on:
+        mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
+          is_nil(mem.left_at) and is_nil(mem.muted_at),
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where:
+        not is_nil(c.channel_id) and m.sender_id != ^user.id and
+          is_nil(m.deleted_at) and is_nil(d.id) and is_nil(m.root_id) and
+          (is_nil(mem.last_read_at) or m.inserted_at > mem.last_read_at),
+      group_by: c.channel_id,
+      select: {c.channel_id, count(m.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   defp unread_counts(_user, []), do: %{}
 
   defp unread_counts(user, ids) do

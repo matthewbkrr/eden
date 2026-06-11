@@ -13,6 +13,8 @@ defmodule Eden.Channels.Membership do
 
   schema "channel_memberships" do
     field :role, :string, default: "member"
+    # Per-user channel mute (badge-only); see the migration.
+    field :muted_at, :utc_datetime
 
     belongs_to :channel, Eden.Channels.Channel
     belongs_to :user, Eden.Accounts.User
