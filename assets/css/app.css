@@ -1062,18 +1062,19 @@
   .ed-folders::-webkit-scrollbar {
     display: none;
   }
-  /* The sliding oval behind the active tab (positioned by the .FolderTabs
-     hook). Sits at the leading inset; width/transform animate between tabs. */
+  /* The sliding oval behind the active tab. The .FolderTabs hook overlays it
+     exactly on the active tab's box (translate offsetLeft/offsetTop + its
+     width/height), so it needs no fixed inset of its own. */
   .ed-folder-indicator {
     position: absolute;
-    left: 0.5rem;
-    top: 0.5rem;
-    height: calc(100% - 1rem);
+    left: 0;
+    top: 0;
     width: 0;
+    height: 0;
     border-radius: 999px;
     background: var(--ed-surface-2);
     opacity: 0;
-    transform: translateX(0);
+    transform: translate(0, 0);
     transition: transform 0.18s var(--ed-ease), width 0.18s var(--ed-ease);
     pointer-events: none;
     z-index: 0;

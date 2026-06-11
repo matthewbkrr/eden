@@ -1839,11 +1839,14 @@ defmodule EdenWeb.ChatLive do
           place(animate) {
             const active = this.el.querySelector(".ed-folder-tab--active")
             if (!active || !this.indicator) return
-            // offsetLeft is relative to the scroll content, so it stays correct
-            // regardless of horizontal scroll (the indicator scrolls with it).
+            // Overlay the active tab's exact box. offset* are relative to the
+            // shared offsetParent (.ed-folders), so this stays correct under
+            // horizontal scroll (the indicator scrolls with the content).
             this.indicator.style.transition = animate ? "" : "none"
             this.indicator.style.width = `${active.offsetWidth}px`
-            this.indicator.style.transform = `translateX(${active.offsetLeft}px)`
+            this.indicator.style.height = `${active.offsetHeight}px`
+            this.indicator.style.transform =
+              `translate(${active.offsetLeft}px, ${active.offsetTop}px)`
             this.indicator.style.opacity = "1"
             if (!animate) {
               // Flush so the first real selection animates from the right spot.
