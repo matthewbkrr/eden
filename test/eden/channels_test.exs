@@ -319,6 +319,172 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "members" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      carol = user_fixture(%{username: "carol", display_name: "Carol"})
+      %{channel: channel, carol: carol, bob: bob}
+    end
+
+    test "add_members materializes rooms in the same step; idempotent", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      channel: channel
+    } do
+      assert {:ok, added} = Channels.add_members(scope(alice), channel.id, [bob.id, carol.id])
+      assert Enum.sort(added) == Enum.sort([bob.id, carol.id])
+
+      # Materialized: bob can use general right away.
+      {:ok, [general]} = Channels.list_rooms(scope(bob), channel.id)
+      assert {:ok, _} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "hi"})
+
+      # Re-adding is a no-op.
+      assert {:ok, []} = Channels.add_members(scope(alice), channel.id, [bob.id])
+
+      assert {:ok, members} = Channels.list_members(scope(alice), channel.id)
+      assert [%{role: "owner"}, %{role: "member"}, %{role: "member"}] = members
+    end
+
+    test "member cannot add; added users' rails are pinged", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      channel: channel
+    } do
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id])
+      assert {:error, :forbidden} = Channels.add_members(scope(bob), channel.id, [carol.id])
+
+      Channels.subscribe_user(scope(carol))
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [carol.id])
+      assert_receive :channels_changed
+    end
+
+    test "removal matrix: owner > admin > member; rooms cleaned; target notified", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      channel: channel
+    } do
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id, carol.id])
+      :ok = Channels.set_member_role(scope(alice), channel.id, bob.id, "admin")
+
+      # Admin can't remove an admin/owner; can remove a member.
+      assert {:error, :forbidden} = Channels.remove_member(scope(bob), channel.id, alice.id)
+      Channels.subscribe_user(scope(carol))
+      assert :ok = Channels.remove_member(scope(bob), channel.id, carol.id)
+      assert_receive {:removed_from_channel, _}
+      assert [] == Eden.Chat.list_rooms(scope(carol), channel.id)
+
+      # Nobody removes themselves through remove_member.
+      assert {:error, :self} = Channels.remove_member(scope(alice), channel.id, alice.id)
+    end
+
+    test "leave: members may, the owner must transfer or delete", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id])
+
+      assert {:error, :owner} = Channels.leave_channel(scope(alice), channel.id)
+
+      assert :ok = Channels.leave_channel(scope(bob), channel.id)
+      assert [] == Channels.list_channels(scope(bob))
+      assert [] == Eden.Chat.list_rooms(scope(bob), channel.id)
+    end
+
+    test "role changes are owner-only; ownership transfer unblocks leaving", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      channel: channel
+    } do
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id, carol.id])
+
+      assert {:error, :forbidden} =
+               Channels.set_member_role(scope(bob), channel.id, carol.id, "admin")
+
+      :ok = Channels.set_member_role(scope(alice), channel.id, bob.id, "admin")
+      assert Channels.admin?(scope(bob), channel.id)
+
+      # The owner row is untouchable via set_member_role (self-demotion blocked).
+      assert {:error, :self} =
+               Channels.set_member_role(scope(alice), channel.id, alice.id, "member")
+
+      :ok = Channels.transfer_ownership(scope(alice), channel.id, bob.id)
+      assert Channels.owner?(scope(bob), channel.id)
+      assert Channels.member_role(scope(alice), channel.id) == "admin"
+      assert :ok = Channels.leave_channel(scope(alice), channel.id)
+    end
+  end
+
+  describe "invite links" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Linked"})
+      %{channel: channel, bob: bob}
+    end
+
+    test "create returns the raw token once; only the hash is stored", %{
+      alice: alice,
+      channel: channel
+    } do
+      assert {:ok, invite, raw} = Channels.create_invite(scope(alice), channel.id)
+      assert invite.hashed_token == Eden.Accounts.hash_token(raw)
+      refute invite.hashed_token == raw
+      assert {:ok, [_]} = Channels.list_invites(scope(alice), channel.id)
+    end
+
+    test "joining adds membership + rooms; idempotent; counts uses", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      {:ok, invite, raw} = Channels.create_invite(scope(alice), channel.id)
+
+      assert {:ok, joined} = Channels.join_by_token(scope(bob), raw)
+      assert joined.id == channel.id
+      assert joined.role == "member"
+      {:ok, [_general]} = Channels.list_rooms(scope(bob), channel.id)
+
+      # Already a member: ok again, but no extra use consumed.
+      assert {:ok, _} = Channels.join_by_token(scope(bob), raw)
+      assert Repo.get(Eden.Channels.Invite, invite.id).used_count == 1
+    end
+
+    test "revoked / expired / exhausted / garbage tokens are rejected", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      carol = user_fixture(%{username: "caroli"})
+
+      {:ok, invite, raw} = Channels.create_invite(scope(alice), channel.id)
+      :ok = Channels.revoke_invite(scope(alice), invite.id)
+      assert {:error, :revoked} = Channels.join_by_token(scope(bob), raw)
+
+      past = DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.truncate(:second)
+      {:ok, _, raw2} = Channels.create_invite(scope(alice), channel.id, expires_at: past)
+      assert {:error, :expired} = Channels.join_by_token(scope(bob), raw2)
+
+      {:ok, _, raw3} = Channels.create_invite(scope(alice), channel.id, max_uses: 1)
+      assert {:ok, _} = Channels.join_by_token(scope(bob), raw3)
+      assert {:error, :exhausted} = Channels.join_by_token(scope(carol), raw3)
+
+      assert {:error, :invalid} = Channels.join_by_token(scope(bob), "garbage-token")
+    end
+
+    test "members can't manage invites", %{alice: alice, bob: bob, channel: channel} do
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id])
+
+      assert {:error, :forbidden} = Channels.create_invite(scope(bob), channel.id)
+      assert {:error, :forbidden} = Channels.list_invites(scope(bob), channel.id)
+
+      {:ok, invite, _raw} = Channels.create_invite(scope(alice), channel.id)
+      assert {:error, :forbidden} = Channels.revoke_invite(scope(bob), invite.id)
+    end
+  end
+
   defp backdate_last_read(conversation_id, user_id) do
     past = DateTime.utc_now() |> DateTime.add(-60) |> DateTime.truncate(:second)
 
