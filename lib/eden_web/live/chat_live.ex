@@ -11,7 +11,7 @@ defmodule EdenWeb.ChatLive do
 
   import EdenWeb.ShellComponents
 
-  alias Eden.{Accounts, Chat}
+  alias Eden.{Accounts, Channels, Chat}
 
   @page 50
   # Bare http/https URLs in message text, turned into links (see linkify/1).
@@ -51,7 +51,16 @@ defmodule EdenWeb.ChatLive do
         folder_chat_id: nil,
         folder_checked: MapSet.new(),
         search: "",
-        search_results: nil
+        search_results: nil,
+        # Channel mode (corporate layer): non-nil @channel switches the sidebar
+        # to the channel's rooms; the message pane is shared as-is.
+        channel: nil,
+        channel_topic_id: nil,
+        rooms: [],
+        show_channel_edit: false,
+        channel_form: nil,
+        room_modal: nil,
+        room_form: nil
       )
       |> refresh_folders()
       |> stream(:conversations, Chat.list_conversations(scope))
@@ -69,13 +78,47 @@ defmodule EdenWeb.ChatLive do
   end
 
   @impl true
+  # Channel mode: /channels/:channel_id[/r/:id[/m/:message_id]]. These match
+  # first — their params carry "channel_id", which the /app routes never do.
+  def handle_params(%{"channel_id" => channel_id} = params, _uri, socket) do
+    case Channels.get_channel(socket.assigns.current_scope, channel_id) do
+      {:ok, channel} ->
+        socket = enter_channel(socket, channel)
+
+        case params do
+          %{"id" => room_id, "message_id" => message_id} ->
+            open_room(socket, channel, room_id, message_id)
+
+          %{"id" => room_id} ->
+            open_room(socket, channel, room_id, nil)
+
+          _ ->
+            # No auto-open: /channels/:cid is the room list (mobile "back"
+            # must land here, not bounce into the first room again).
+            {:noreply, socket |> unsubscribe() |> assign(selected: nil)}
+        end
+
+      {:error, :not_found} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("Channel not found."))
+         |> push_navigate(to: ~p"/app")}
+    end
+  end
+
   def handle_params(%{"id" => id, "message_id" => message_id}, _uri, socket) do
     case Chat.get_conversation(socket.assigns.current_scope, id) do
+      # A room reached via the DM permalink shape — bounce to its channel home.
+      {:ok, %{channel_id: cid} = conversation} when not is_nil(cid) ->
+        {:noreply,
+         push_navigate(socket, to: ~p"/channels/#{cid}/r/#{conversation.id}/m/#{message_id}")}
+
       {:ok, conversation} ->
         # The client scrolls to and highlights the message if it's on the page,
         # otherwise reports back so we can say it's unavailable (deleted/old).
         socket =
           socket
+          |> leave_channel_mode()
           |> select_conversation(conversation)
           |> push_event("focus_message", %{domId: "messages-#{message_id}"})
 
@@ -88,8 +131,11 @@ defmodule EdenWeb.ChatLive do
 
   def handle_params(%{"id" => id}, _uri, socket) do
     case Chat.get_conversation(socket.assigns.current_scope, id) do
+      {:ok, %{channel_id: cid} = conversation} when not is_nil(cid) ->
+        {:noreply, push_navigate(socket, to: ~p"/channels/#{cid}/r/#{conversation.id}")}
+
       {:ok, conversation} ->
-        {:noreply, select_conversation(socket, conversation)}
+        {:noreply, socket |> leave_channel_mode() |> select_conversation(conversation)}
 
       {:error, :not_found} ->
         {:noreply, conversation_gone(socket)}
@@ -97,7 +143,50 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_params(_params, _uri, socket) do
-    {:noreply, socket |> unsubscribe() |> assign(selected: nil) |> refresh_sidebar()}
+    {:noreply,
+     socket
+     |> leave_channel_mode()
+     |> unsubscribe()
+     |> assign(selected: nil)
+     |> refresh_sidebar()}
+  end
+
+  defp open_room(socket, channel, room_id, message_id) do
+    case Chat.get_conversation(socket.assigns.current_scope, room_id) do
+      {:ok, %{channel_id: cid} = room} when cid == channel.id ->
+        socket = select_conversation(socket, room)
+
+        socket =
+          if message_id,
+            do: push_event(socket, "focus_message", %{domId: "messages-#{message_id}"}),
+            else: socket
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("Conversation not found."))
+         |> push_navigate(to: ~p"/channels/#{channel.id}")}
+    end
+  end
+
+  defp enter_channel(socket, channel) do
+    old = socket.assigns.channel_topic_id
+    if old && old != channel.id, do: Channels.unsubscribe_channel(old)
+    if old != channel.id, do: Channels.subscribe_channel(channel.id)
+
+    assign(socket,
+      channel: channel,
+      channel_topic_id: channel.id,
+      rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id),
+      page_title: channel.name
+    )
+  end
+
+  defp leave_channel_mode(socket) do
+    if old = socket.assigns.channel_topic_id, do: Channels.unsubscribe_channel(old)
+    assign(socket, channel: nil, channel_topic_id: nil, rooms: [])
   end
 
   defp conversation_gone(socket) do
@@ -287,6 +376,113 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  ## Channel mode: channel edit/delete + room CRUD (context re-checks roles)
+
+  def handle_event("open_channel_edit", _params, socket) do
+    if socket.assigns.channel.role in ~w(owner admin) do
+      form = to_form(Channels.change_channel(socket.assigns.channel))
+      {:noreply, assign(socket, show_channel_edit: true, channel_form: form)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_channel_edit", _params, socket) do
+    {:noreply, assign(socket, show_channel_edit: false)}
+  end
+
+  def handle_event("save_channel", %{"channel" => params}, socket) do
+    case Channels.update_channel(socket.assigns.current_scope, socket.assigns.channel.id, params) do
+      {:ok, channel} ->
+        {:noreply,
+         assign(socket, channel: channel, show_channel_edit: false, page_title: channel.name)}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, channel_form: to_form(changeset))}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> assign(show_channel_edit: false)
+         |> put_flash(:error, gettext("Couldn't update that channel."))}
+    end
+  end
+
+  def handle_event("delete_channel", _params, socket) do
+    case Channels.delete_channel(socket.assigns.current_scope, socket.assigns.channel.id) do
+      :ok ->
+        {:noreply,
+         socket
+         |> put_flash(:info, gettext("Channel deleted."))
+         |> push_navigate(to: ~p"/app")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't delete that channel."))}
+    end
+  end
+
+  def handle_event("open_new_room", _params, socket) do
+    if socket.assigns.channel.role in ~w(owner admin) do
+      {:noreply,
+       assign(socket, room_modal: :new, room_form: to_form(Chat.change_room(), as: :room))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("open_room_rename", %{"id" => id}, socket) do
+    with true <- socket.assigns.channel.role in ~w(owner admin),
+         %{} = room <- Enum.find(socket.assigns.rooms, &(to_string(&1.id) == id)) do
+      form = to_form(Chat.change_room(room), as: :room)
+      {:noreply, assign(socket, room_modal: {:rename, room.id}, room_form: form)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_room_modal", _params, socket) do
+    {:noreply, assign(socket, room_modal: nil)}
+  end
+
+  def handle_event("save_room", %{"room" => params}, socket) do
+    result =
+      case socket.assigns.room_modal do
+        :new ->
+          Channels.create_room(socket.assigns.current_scope, socket.assigns.channel.id, params)
+
+        {:rename, room_id} ->
+          Channels.rename_room(socket.assigns.current_scope, room_id, params)
+
+        nil ->
+          {:error, :not_found}
+      end
+
+    case result do
+      {:ok, _room} ->
+        # The room list refreshes via the channel-topic broadcast.
+        {:noreply, assign(socket, room_modal: nil)}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, room_form: to_form(changeset, as: :room))}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> assign(room_modal: nil)
+         |> put_flash(:error, gettext("Couldn't save that room."))}
+    end
+  end
+
+  def handle_event("delete_room", %{"id" => id}, socket) do
+    case Channels.delete_room(socket.assigns.current_scope, id) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't delete that room."))}
+    end
+  end
+
   def handle_event("forward_prompt", %{"id" => id}, socket) do
     targets = Chat.list_conversations(socket.assigns.current_scope)
     {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
@@ -456,8 +652,12 @@ defmodule EdenWeb.ChatLive do
   # leave the thread if it was the one open here.
   def handle_info({:conversation_left, conversation_id}, socket) do
     socket =
-      socket
-      |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")
+      if socket.assigns.channel do
+        # No DM stream rendered in channel mode; badges refresh on return.
+        socket
+      else
+        stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+      end
       |> refresh_folders()
 
     if open?(socket, conversation_id) do
@@ -477,10 +677,63 @@ defmodule EdenWeb.ChatLive do
      |> refresh_folders()}
   end
 
-  # Folder set / membership / order changed in one of the user's sessions: refresh
-  # the tab bar and re-apply the active filter to the conversation list.
+  # Folder set / membership / order / mute changed in one of the user's
+  # sessions: refresh the tab bar, re-apply the active filter, and refresh room
+  # badges (room mute lives on the same memberships).
   def handle_info(:folders_changed, socket) do
-    {:noreply, socket |> refresh_folders() |> stream_conversations(reset: true)}
+    {:noreply,
+     socket |> refresh_folders() |> refresh_rooms() |> stream_conversations(reset: true)}
+  end
+
+  ## Channel mode: events on the channel topic (subscribed while inside one)
+
+  def handle_info({:channel_renamed, renamed}, socket) do
+    case socket.assigns.channel do
+      %{id: id, role: role} when id == renamed.id ->
+        # The broadcast carries the actor's role — keep this session's own.
+        {:noreply, assign(socket, channel: %{renamed | role: role}, page_title: renamed.name)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_info({:channel_deleted, id}, socket) do
+    if match?(%{id: ^id}, socket.assigns.channel) do
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("This channel was deleted."))
+       |> push_navigate(to: ~p"/app")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:room_created, _room}, socket), do: {:noreply, refresh_rooms(socket)}
+  def handle_info(:rooms_reordered, socket), do: {:noreply, refresh_rooms(socket)}
+
+  def handle_info({:room_renamed, room}, socket) do
+    socket = refresh_rooms(socket)
+
+    if open?(socket, room.id) do
+      {:noreply, assign(socket, selected: %{socket.assigns.selected | name: room.name})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:room_deleted, room_id}, socket) do
+    socket = refresh_rooms(socket)
+
+    if open?(socket, room_id) do
+      {:noreply,
+       socket
+       |> unsubscribe()
+       |> assign(selected: nil)
+       |> push_patch(to: ~p"/channels/#{socket.assigns.channel.id}", replace: true)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
@@ -524,9 +777,121 @@ defmodule EdenWeb.ChatLive do
 
       <%!-- Discord-style shell: the messenger is the rail's top-left item. On
             mobile the rail hides with the sidebar while a chat is open. --%>
-      <.rail channels={@channels} active={:messenger} class={@selected && "hidden md:flex"} />
+      <.rail
+        channels={@channels}
+        active={(@channel && @channel.id) || :messenger}
+        class={@selected && "hidden md:flex"}
+      />
 
       <aside
+        :if={@channel}
+        class={[
+          "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
+          @selected && "hidden md:flex"
+        ]}
+        style="border-color: var(--ed-border);"
+      >
+        <header
+          class="flex items-center justify-between gap-2 px-4 h-14 border-b"
+          style="border-color: var(--ed-border);"
+        >
+          <div class="min-w-0">
+            <div class="font-semibold truncate">{@channel.name}</div>
+            <div
+              :if={@channel.about}
+              class="truncate"
+              style="font-size:0.6875rem; color: var(--ed-muted);"
+            >
+              {@channel.about}
+            </div>
+          </div>
+          <%!-- click-away on the wrapper (the opening click is inside it);
+                inline display, not [hidden] — Tailwind preflight makes the
+                latter !important and JS.toggle couldn't override it. --%>
+          <div
+            class="relative shrink-0"
+            phx-click-away={JS.hide(to: "#channel-menu")}
+            phx-window-keydown={JS.hide(to: "#channel-menu")}
+            phx-key="escape"
+          >
+            <button
+              type="button"
+              class="ed-btn--icon"
+              phx-click={JS.toggle(to: "#channel-menu")}
+              aria-haspopup="menu"
+              aria-label={gettext("Channel menu")}
+            >
+              <.icon name="hero-ellipsis-horizontal-mini" class="size-5" />
+            </button>
+            <div
+              id="channel-menu"
+              class="ed-menu ed-menu--anchored"
+              role="menu"
+              style="display: none;"
+            >
+              <button
+                :if={@channel.role in ~w(owner admin)}
+                type="button"
+                class="ed-menu__item"
+                role="menuitem"
+                phx-click={JS.hide(to: "#channel-menu") |> JS.push("open_channel_edit")}
+              >
+                <.icon name="hero-pencil-micro" class="size-4" /> {gettext("Edit channel")}
+              </button>
+              <button
+                :if={@channel.role in ~w(owner admin)}
+                type="button"
+                class="ed-menu__item"
+                role="menuitem"
+                phx-click={JS.hide(to: "#channel-menu") |> JS.push("open_new_room")}
+              >
+                <.icon name="hero-plus-micro" class="size-4" /> {gettext("New room")}
+              </button>
+              <div :if={@channel.role == "owner"} class="ed-menu__sep"></div>
+              <button
+                :if={@channel.role == "owner"}
+                type="button"
+                class="ed-menu__item ed-menu__item--danger"
+                role="menuitem"
+                phx-click="delete_channel"
+                data-confirm={gettext("Delete this channel for everyone? This cannot be undone.")}
+              >
+                <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete channel")}
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto p-2 space-y-0.5">
+          <.room_item
+            :for={room <- @rooms}
+            id={"room-#{room.id}"}
+            room={room}
+            channel={@channel}
+            active={@selected && @selected.id == room.id}
+            admin={@channel.role in ~w(owner admin)}
+          />
+          <button
+            :if={@channel.role in ~w(owner admin)}
+            type="button"
+            class="ed-convo ed-room ed-room--new"
+            phx-click="open_new_room"
+          >
+            <span class="ed-room__hash"><.icon name="hero-plus-micro" class="size-4" /></span>
+            <span class="ed-convo__name">{gettext("New room")}</span>
+          </button>
+          <p
+            :if={@rooms == [] and @channel.role not in ~w(owner admin)}
+            class="text-center py-8"
+            style="color: var(--ed-muted); font-size:0.875rem;"
+          >
+            {gettext("No rooms yet.")}
+          </p>
+        </div>
+      </aside>
+
+      <aside
+        :if={is_nil(@channel)}
         class={[
           "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
           @selected && "hidden md:flex"
@@ -710,10 +1075,27 @@ defmodule EdenWeb.ChatLive do
             class="flex items-center gap-3 px-4 h-14 border-b shrink-0"
             style="border-color: var(--ed-border);"
           >
-            <.link navigate={~p"/app"} class="ed-btn--icon md:hidden" aria-label={gettext("Back")}>
+            <.link
+              navigate={if @channel, do: ~p"/channels/#{@channel.id}", else: ~p"/app"}
+              class="ed-btn--icon md:hidden"
+              aria-label={gettext("Back")}
+            >
               <.icon name="hero-arrow-left-mini" class="size-5" />
             </.link>
+            <%!-- A room header: name + channel, no profile/peer affordances. --%>
+            <div :if={@selected.channel_id} class="flex items-center gap-2 min-w-0 flex-1">
+              <span class="ed-room__hash" style="font-size:1.125rem;">#</span>
+              <div class="min-w-0">
+                <div class="font-semibold truncate" style="font-size:0.9375rem;">
+                  {@selected.name}
+                </div>
+                <div :if={@channel} style="font-size:0.6875rem; color: var(--ed-muted);">
+                  {@channel.name}
+                </div>
+              </div>
+            </div>
             <button
+              :if={is_nil(@selected.channel_id)}
               type="button"
               class="flex items-center gap-3 min-w-0 flex-1 text-left -ml-1.5 px-1.5 py-1 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface)]"
               phx-click={if @selected.is_group, do: "show_members", else: "show_profile"}
@@ -846,7 +1228,16 @@ defmodule EdenWeb.ChatLive do
           </.form>
         <% else %>
           <div class="flex-1 grid place-items-center text-center p-8">
-            <div class="space-y-2">
+            <div :if={@channel} class="space-y-2 max-w-sm">
+              <p style="font-weight:600;">{@channel.name}</p>
+              <p :if={@channel.about} style="color: var(--ed-muted); font-size:0.875rem;">
+                {@channel.about}
+              </p>
+              <p style="color: var(--ed-muted); font-size:0.875rem;">
+                {gettext("Pick a room to start reading.")}
+              </p>
+            </div>
+            <div :if={is_nil(@channel)} class="space-y-2">
               <p style="font-weight:600;">{gettext("No conversation selected")}</p>
               <p style="color: var(--ed-muted); font-size:0.875rem;">
                 {gettext("Pick a chat or start a new one.")}
@@ -886,6 +1277,21 @@ defmodule EdenWeb.ChatLive do
         submit="rail_create_channel"
         close="rail_close_new_channel"
         submit_label={gettext("Create channel")}
+      />
+      <.channel_form_modal
+        :if={@show_channel_edit}
+        id="edit-channel"
+        title={gettext("Edit channel")}
+        form={@channel_form}
+        submit="save_channel"
+        close="close_channel_edit"
+        submit_label={gettext("Save")}
+      />
+      <.room_form_modal
+        :if={@room_modal}
+        title={if @room_modal == :new, do: gettext("New room"), else: gettext("Rename room")}
+        form={@room_form}
+        submit_label={if @room_modal == :new, do: gettext("Create room"), else: gettext("Save")}
       />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SearchBox">
@@ -1418,6 +1824,124 @@ defmodule EdenWeb.ChatLive do
     start = max(String.length(before) - 24, 0)
     prefix = if start > 0, do: "…", else: ""
     prefix <> String.slice(body, start, 110)
+  end
+
+  attr :id, :string, required: true
+  attr :room, :map, required: true
+  attr :channel, :map, required: true
+  attr :active, :boolean, default: false
+  attr :admin, :boolean, default: false
+
+  # A room row in the channel sidebar. Same context-menu affordance as chats
+  # (right-click / long-press, the shared .ContextMenu hook): Mute for everyone,
+  # Rename/Delete for admins.
+  defp room_item(assigns) do
+    ~H"""
+    <div id={@id} class="ed-convo-wrap" phx-hook=".ContextMenu">
+      <.link
+        patch={~p"/channels/#{@channel.id}/r/#{@room.id}"}
+        class={["ed-convo ed-room", @active && "ed-convo--active"]}
+        aria-haspopup="menu"
+      >
+        <span class="ed-room__hash">#</span>
+        <span class="ed-convo__name flex-1 truncate">
+          {@room.name}
+          <span :if={@room.muted} class="ed-convo__muted">
+            <.icon name="hero-bell-slash-micro" class="size-3.5" />
+            <span class="sr-only">{gettext("Muted")}</span>
+          </span>
+        </span>
+        <span :if={@room.unread_count > 0} class={["ed-badge", @room.muted && "ed-badge--muted"]}>
+          {@room.unread_count}
+        </span>
+      </.link>
+      <div class="ed-menu" id={"room-menu-#{@room.id}"} data-menu role="menu" hidden>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="toggle_mute"
+          phx-value-id={@room.id}
+        >
+          <.icon
+            name={if @room.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
+            class="size-4"
+          />
+          {if @room.muted, do: gettext("Unmute"), else: gettext("Mute")}
+        </button>
+        <button
+          :if={@admin}
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="open_room_rename"
+          phx-value-id={@room.id}
+        >
+          <.icon name="hero-pencil-micro" class="size-4" /> {gettext("Rename room")}
+        </button>
+        <div :if={@admin} class="ed-menu__sep"></div>
+        <button
+          :if={@admin}
+          type="button"
+          class="ed-menu__item ed-menu__item--danger"
+          role="menuitem"
+          phx-click="delete_room"
+          phx-value-id={@room.id}
+          data-confirm={gettext("Delete this room and all its messages? This cannot be undone.")}
+        >
+          <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete room")}
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  attr :title, :string, required: true
+  attr :form, :any, required: true
+  attr :submit_label, :string, required: true
+
+  # Create/rename room modal — one name field.
+  defp room_form_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30" id="room-modal">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_room_modal"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_room_modal"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{@title}</h2>
+            <button class="ed-btn--icon" phx-click="close_room_modal" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <.form for={@form} id="room-form" phx-submit="save_room" class="space-y-4">
+            <.ed_field
+              field={@form[:name]}
+              label={gettext("Room name")}
+              maxlength={Chat.Conversation.max_room_name()}
+            />
+            <div class="flex justify-end">
+              <button type="submit" class="ed-btn ed-btn--primary">{@submit_label}</button>
+            </div>
+          </.form>
+        </div>
+      </div>
+    </div>
+    """
   end
 
   # Sidebar preview line. An attachment shows "<emoji> <caption|kind>" so the row
@@ -2040,9 +2564,15 @@ defmodule EdenWeb.ChatLive do
   defp refresh_sidebar(socket), do: stream_conversations(socket, reset: true)
 
   # Re-stream the conversation list honoring the active folder filter.
+  # No-op in channel mode: the DM stream's container isn't rendered there, so
+  # stream operations would target a missing element.
   defp stream_conversations(socket, opts) do
-    convos = Chat.list_conversations(socket.assigns.current_scope, socket.assigns.folder_id)
-    stream(socket, :conversations, convos, opts)
+    if socket.assigns.channel do
+      socket
+    else
+      convos = Chat.list_conversations(socket.assigns.current_scope, socket.assigns.folder_id)
+      stream(socket, :conversations, convos, opts)
+    end
   end
 
   defp refresh_folders(socket) do
@@ -2059,18 +2589,50 @@ defmodule EdenWeb.ChatLive do
   end
 
   # Insert/refresh one conversation in the sidebar, honoring the active folder:
-  # drop it from the view if it isn't in the selected folder.
+  # drop it from the view if it isn't in the selected folder. Room activity
+  # never touches the DM stream — it refreshes the channel sidebar instead.
   defp put_sidebar_conversation(socket, conversation_id, insert_opts \\ []) do
     scope = socket.assigns.current_scope
-    fid = socket.assigns.folder_id
 
-    if is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id) do
-      case Chat.get_conversation_summary(scope, conversation_id) do
-        {:ok, summary} -> stream_insert(socket, :conversations, summary, insert_opts)
-        {:error, _} -> socket
-      end
+    case Chat.get_conversation_summary(scope, conversation_id) do
+      # DM activity only touches the stream when its container is rendered.
+      {:ok, %{channel_id: nil}} when not is_nil(socket.assigns.channel) ->
+        socket
+
+      {:ok, %{channel_id: nil} = summary} ->
+        fid = socket.assigns.folder_id
+
+        if is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id) do
+          stream_insert(socket, :conversations, summary, insert_opts)
+        else
+          stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+        end
+
+      {:ok, _room} ->
+        # Badge refresh if we're looking at this room's channel; cross-channel
+        # rail badges arrive with #32.
+        refresh_rooms_if_current(socket, conversation_id)
+
+      {:error, _} ->
+        socket
+    end
+  end
+
+  defp refresh_rooms_if_current(socket, conversation_id) do
+    if socket.assigns.channel && Enum.any?(socket.assigns.rooms, &(&1.id == conversation_id)) do
+      refresh_rooms(socket)
     else
-      stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+      socket
+    end
+  end
+
+  defp refresh_rooms(socket) do
+    case socket.assigns.channel do
+      nil ->
+        socket
+
+      channel ->
+        assign(socket, rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id))
     end
   end
 

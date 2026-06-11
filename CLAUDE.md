@@ -101,8 +101,16 @@ design — built incrementally as features land.)
   lacking the required role get `:forbidden`. Channel-scoped events broadcast
   on `channel:<id>` (subscribe only after `get_channel/2`); rail-level changes
   ping each member's `user:<id>:channels` topic with `:channels_changed`.
-  Rooms (conversations bound to a channel), invites, and threads land with
-  #29–#31.
+  **Rooms** (thematic chats) are `Conversation` rows with a `channel_id` — the
+  whole message machinery applies unchanged; memberships are **materialized**
+  on channel join/room creation (`Chat.join_rooms/leave_rooms`, Mattermost's
+  ChannelMembers shape), so every existing query stays correct by construction.
+  Rooms stay out of the DM sidebar/folders/search (until #32) and per-user
+  delete; room CRUD is admin-only via `Eden.Channels` (each channel is born
+  with a "general" room); channel deletion reclaims room attachment blobs
+  forward-safely. The web layer is ChatLive's channel mode (`/channels/...`
+  routes) — one message pane for DMs and rooms. Invites and threads land with
+  #30–#31.
 - **Storage** — file/photo persistence behind an **adapter behaviour**
   (`Eden.Storage.Adapter`). Local disk in dev, object storage (S3-compatible) in
   prod, swappable without touching callers. Callers store only the file **key +

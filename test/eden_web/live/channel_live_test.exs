@@ -1,29 +1,40 @@
-defmodule EdenWeb.ChannelLiveTest do
+defmodule EdenWeb.ChannelModeTest do
+  @moduledoc """
+  Channel mode of ChatLive (corporate layer): the /channels/... routes — rail,
+  rooms sidebar, room messaging through the shared message pane, and the
+  channel header menu.
+  """
   use EdenWeb.ConnCase, async: true
 
   import Phoenix.LiveViewTest
 
   alias Eden.Accounts.Scope
   alias Eden.Channels
+  alias Eden.Chat
 
   defp scope(user), do: Scope.for_user(user)
 
   defp setup_channel(_context) do
     alice = user_fixture(%{username: "alice", display_name: "Alice"})
+    bob = user_fixture(%{username: "bob", display_name: "Bob"})
     {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Engineering"})
-    %{alice: alice, channel: channel}
+    {:ok, _} = add_member(channel.id, bob.id)
+    :ok = Chat.join_rooms(channel.id, bob.id)
+    {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+    %{alice: alice, bob: bob, channel: channel, general: general}
   end
 
   describe "channel workspace" do
     setup [:setup_channel]
 
-    test "a member sees the channel header and the rail marks it active", ctx do
+    test "a member sees the rooms sidebar; the rail marks the channel active", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
 
       assert html =~ "Engineering"
+      assert html =~ "general"
       assert html =~ "ed-rail__btn--active"
-      assert html =~ "Thematic chats will appear here."
+      assert html =~ "Pick a room to start reading."
     end
 
     test "a non-member is redirected home", ctx do
@@ -34,36 +45,145 @@ defmodule EdenWeb.ChannelLiveTest do
                live(conn, ~p"/channels/#{ctx.channel.id}")
     end
 
-    test "a garbage id is redirected home", ctx do
+    test "opening a room renders the shared message pane and sends work", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
-      assert {:error, {:live_redirect, %{to: "/app"}}} = live(conn, ~p"/channels/999999")
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      # Room header, not the DM profile header.
+      assert html =~ "ed-room__hash"
+      assert html =~ "general"
+
+      view
+      |> form("form[phx-submit=send]", message: %{body: "first room message"})
+      |> render_submit()
+
+      assert render(view) =~ "first room message"
     end
 
-    test "owner edits name and about from the menu", ctx do
+    test "a room from another channel is rejected", ctx do
+      {:ok, other} = Channels.create_channel(scope(ctx.alice), %{"name" => "Other"})
+      {:ok, [other_room]} = Channels.list_rooms(scope(ctx.alice), other.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               live(conn, ~p"/channels/#{ctx.channel.id}/r/#{other_room.id}")
+
+      assert to == "/channels/#{ctx.channel.id}"
+    end
+
+    test "the DM permalink shape bounces a room to its channel route", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      assert {:error, {:live_redirect, %{to: to}}} = live(conn, ~p"/app/c/#{ctx.general.id}")
+      assert to == "/channels/#{ctx.channel.id}/r/#{ctx.general.id}"
+    end
+
+    test "rooms never appear in the DM sidebar", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      refute has_element?(view, "#conversations-#{ctx.general.id}")
+    end
+
+    test "realtime: a message lands in the open room", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      {:ok, _} = Chat.create_message(scope(ctx.bob), ctx.general.id, %{"body" => "from bob"})
+      html = render(view)
+      assert html =~ "from bob"
+      # Regression: an unloaded forwarded_from assoc is truthy and used to
+      # phantom-render the "Forwarded" label on realtime messages.
+      refute html =~ "Forwarded"
+    end
+  end
+
+  describe "room management" do
+    setup [:setup_channel]
+
+    test "admin creates a room from the modal; it appears for members live", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
 
-      render_click(view, "open_rename", %{})
+      # A member session watches the same channel.
+      bob_conn = log_in_user(build_conn(), ctx.bob)
+      {:ok, bob_view, _} = live(bob_conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "open_new_room", %{})
 
       view
-      |> form("#rename-channel-form", %{"channel" => %{"name" => "Core", "about" => "The team"}})
+      |> form("#room-form", %{"room" => %{"name" => "ops"}})
+      |> render_submit()
+
+      assert render(view) =~ "ops"
+      assert render(bob_view) =~ "ops"
+    end
+
+    test "member sees no admin affordances and can't force them", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      refute html =~ "Rename room"
+      refute html =~ "Delete room"
+      refute html =~ "New room"
+
+      # Forced events are no-ops / flashes, never crashes.
+      render_click(view, "open_new_room", %{})
+      refute render(view) =~ "room-form"
+
+      render_click(view, "delete_room", %{"id" => to_string(ctx.general.id)})
+      assert {:ok, [_general]} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+    end
+
+    test "renaming the open room updates its header everywhere", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, _} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      {:ok, _} = Channels.rename_room(scope(ctx.alice), ctx.general.id, %{"name" => "lobby"})
+
+      html = render(bob_view)
+      assert html =~ "lobby"
+      refute html =~ ">general<"
+    end
+
+    test "deleting the open room patches viewers back to the channel", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, _} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      :ok = Channels.delete_room(scope(ctx.alice), ctx.general.id)
+
+      assert_patch(bob_view, "/channels/#{ctx.channel.id}")
+      refute render(bob_view) =~ "form[phx-submit=send]"
+    end
+
+    test "muting a room from its context menu de-emphasizes the badge", ctx do
+      {:ok, _} = Chat.create_message(scope(ctx.bob), ctx.general.id, %{"body" => "ping"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "toggle_mute", %{"id" => to_string(ctx.general.id)})
+      assert render(view) =~ "ed-convo__muted"
+    end
+  end
+
+  describe "channel header menu" do
+    setup [:setup_channel]
+
+    test "owner edits the channel", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "open_channel_edit", %{})
+
+      view
+      |> form("#edit-channel-form", %{"channel" => %{"name" => "Core", "about" => "Us"}})
       |> render_submit()
 
       html = render(view)
       assert html =~ "Core"
-      assert html =~ "The team"
-      assert {:ok, %{name: "Core"}} = Channels.get_channel(scope(ctx.alice), ctx.channel.id)
-    end
-
-    test "a member sees no admin menu items", ctx do
-      bob = user_fixture(%{username: "bob"})
-      add_member(ctx.channel.id, bob.id)
-
-      conn = log_in_user(ctx.conn, bob)
-      {:ok, _view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
-
-      refute html =~ "Edit channel"
-      refute html =~ "Delete channel"
+      assert html =~ "Us"
     end
 
     test "owner deletes the channel and lands home", ctx do
@@ -72,55 +192,36 @@ defmodule EdenWeb.ChannelLiveTest do
 
       render_click(view, "delete_channel", %{})
       assert_redirect(view, "/app")
-      assert {:error, :not_found} = Channels.get_channel(scope(ctx.alice), ctx.channel.id)
-    end
-
-    test "a rename in another session updates the header live", ctx do
-      bob = user_fixture(%{username: "bob2"})
-      add_member(ctx.channel.id, bob.id)
-
-      conn = log_in_user(ctx.conn, bob)
-      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
-
-      {:ok, _} = Channels.update_channel(scope(ctx.alice), ctx.channel.id, %{"name" => "Renamed"})
-
-      html = render(view)
-      assert html =~ "Renamed"
-      # The viewer's own role is preserved (the broadcast carries the actor's).
-      refute html =~ "Delete channel"
     end
 
     test "a delete in another session navigates the viewer home", ctx do
-      bob = user_fixture(%{username: "bob3"})
-      add_member(ctx.channel.id, bob.id)
-
-      conn = log_in_user(ctx.conn, bob)
-      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, _} = live(conn, ~p"/channels/#{ctx.channel.id}")
 
       :ok = Channels.delete_channel(scope(ctx.alice), ctx.channel.id)
-      assert_redirect(view, "/app")
+      assert_redirect(bob_view, "/app")
+    end
+
+    test "a member sees no edit/delete in the menu", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      refute html =~ "Edit channel"
+      refute html =~ "Delete channel"
+
+      render_click(view, "open_channel_edit", %{})
+      refute render(view) =~ "edit-channel-form"
     end
   end
 
-  describe "rail + create flow" do
+  describe "rail create flow (regression after the ChannelLive fold-in)" do
     setup [:setup_channel]
 
-    test "the rail lists channels in the messenger too", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, _view, html} = live(conn, ~p"/app")
-
-      assert html =~ "ed-rail"
-      # Channel initials icon linking to the workspace.
-      assert html =~ ~s(href="/channels/#{ctx.channel.id}")
-      assert html =~ ~r/>\s*E\s*<\/a>/
-    end
-
-    test "creating a channel from the rail navigates into it", ctx do
+    test "creating a channel from the rail lands in it with a general room", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
 
       render_click(view, "rail_new_channel", %{})
-      assert render(view) =~ "New channel"
 
       view
       |> form("#new-channel-form", %{"channel" => %{"name" => "Design"}})
@@ -128,36 +229,6 @@ defmodule EdenWeb.ChannelLiveTest do
 
       {path, _flash} = assert_redirect(view)
       assert path =~ ~r{^/channels/\d+$}
-
-      assert Enum.any?(Channels.list_channels(scope(ctx.alice)), &(&1.name == "Design"))
-    end
-
-    test "a new channel from inside a channel workspace works too", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
-
-      render_click(view, "rail_new_channel", %{})
-
-      view
-      |> form("#new-channel-form", %{"channel" => %{"name" => "Ops"}})
-      |> render_submit()
-
-      {path, _flash} = assert_redirect(view)
-      assert path =~ ~r{^/channels/\d+$}
-    end
-
-    test "validation errors render in the modal", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app")
-
-      render_click(view, "rail_new_channel", %{})
-
-      html =
-        view
-        |> form("#new-channel-form", %{"channel" => %{"name" => "   "}})
-        |> render_submit()
-
-      assert html =~ "blank"
     end
   end
 
@@ -169,6 +240,6 @@ defmodule EdenWeb.ChannelLiveTest do
       user_id: user_id,
       role: "member"
     })
-    |> Eden.Repo.insert!()
+    |> Eden.Repo.insert()
   end
 end

@@ -315,6 +315,10 @@ defmodule Eden.Chat do
     end)
   end
 
+  @doc "A changeset for room forms (create / rename)."
+  def change_room(room \\ %Conversation{}, attrs \\ %{}),
+    do: Conversation.room_changeset(room, attrs)
+
   @doc "Fetches a room (a conversation with a channel) by id — trusted callers only."
   def get_room(room_id) do
     case Ids.normalize(room_id) do
@@ -1355,7 +1359,9 @@ defmodule Eden.Chat do
   defp deliver(conversation_id, message) do
     touch_conversation(conversation_id, message.inserted_at)
     resurface_direct(conversation_id)
-    message = Repo.preload(message, [:sender, :attachment])
+    # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
+    # bubble would phantom-render its "Forwarded" label on realtime messages.
+    message = Repo.preload(message, [:sender, :attachment, forwarded_from: :sender])
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
     message
@@ -1504,7 +1510,7 @@ defmodule Eden.Chat do
         :ok
 
       message ->
-        message = Repo.preload(message, [:sender, :attachment])
+        message = Repo.preload(message, [:sender, :attachment, forwarded_from: :sender])
         broadcast(message.conversation_id, {:thumbnail_ready, message})
     end
   end
