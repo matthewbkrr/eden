@@ -12,6 +12,11 @@ defmodule Eden.Chat.Conversation do
     field :title, :string
     field :is_group, :boolean, default: false
     field :last_message_at, :utc_datetime
+    # Rooms (corporate layer): a conversation bound to a channel. Referenced by
+    # id, not an assoc — channels live in the Channels context.
+    field :channel_id, :id
+    field :name, :string
+    field :position, :integer, default: 0
 
     # Computed for the conversation list (set by Chat.list_conversations/1).
     field :unread_count, :integer, virtual: true, default: 0
@@ -35,4 +40,19 @@ defmodule Eden.Chat.Conversation do
     |> cast(attrs, [:title, :is_group])
     |> validate_length(:title, max: 100)
   end
+
+  @max_room_name 60
+
+  @doc "Changeset for channel rooms (name is the room's identity)."
+  def room_changeset(conversation, attrs) do
+    conversation
+    |> cast(attrs, [:name, :position])
+    # Whitespace-only params become a nil change (Ecto's empty_values) — the
+    # trim must tolerate nil so validate_required reports the blank.
+    |> update_change(:name, &(&1 && String.trim(&1)))
+    |> validate_required([:name])
+    |> validate_length(:name, max: @max_room_name)
+  end
+
+  def max_room_name, do: @max_room_name
 end
