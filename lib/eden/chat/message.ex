@@ -29,6 +29,15 @@ defmodule Eden.Chat.Message do
     belongs_to :forwarded_from, Eden.Chat.Message
     has_one :attachment, Eden.Chat.Attachment
 
+    # Threads (flat, Mattermost-style): a reply points at its root; the root
+    # carries denormalized counters maintained by the context.
+    belongs_to :root, Eden.Chat.Message
+    field :reply_count, :integer, default: 0
+    field :last_reply_at, :utc_datetime
+    # Set when building room lists: collapse the avatar/name header for
+    # consecutive same-author messages (flat layout). Never persisted.
+    field :compact, :boolean, virtual: true, default: false
+
     timestamps(type: :utc_datetime)
   end
 
