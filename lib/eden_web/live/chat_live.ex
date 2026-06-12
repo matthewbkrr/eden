@@ -2125,8 +2125,15 @@ defmodule EdenWeb.ChatLive do
               e.preventDefault()
               if (!this.dragging) return
               const after = this.afterElement(e.clientY)
-              if (after == null) this.el.appendChild(this.dragging)
-              else this.el.insertBefore(this.dragging, after)
+              if (after == null) {
+                // Below the last row: land right after it — never appendChild,
+                // which would park the row below "+ New room".
+                const rows = this.el.querySelectorAll(".ed-room-wrap[draggable=true]:not(.ed-dragging)")
+                const last = rows[rows.length - 1]
+                if (last) last.after(this.dragging)
+              } else {
+                this.el.insertBefore(this.dragging, after)
+              }
             })
           },
           afterElement(y) {
@@ -2850,7 +2857,10 @@ defmodule EdenWeb.ChatLive do
         patch={~p"/channels/#{@channel.id}/r/#{@room.id}"}
         class={["ed-convo ed-room", @active && "ed-convo--active"]}
         aria-haspopup="menu"
+        draggable="false"
       >
+        <%!-- draggable=false: links are natively draggable, which would fight
+              the row's reorder drag (the wrap is the drag source). --%>
         <span class="ed-room__hash">{if @room.visibility == "private", do: "🔒", else: "#"}</span>
         <span class="ed-convo__name flex-1 truncate">
           {@room.name}
