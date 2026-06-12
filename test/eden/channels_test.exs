@@ -862,6 +862,71 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "search_rooms/3 (#43)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, other} = Channels.create_channel(scope(alice), %{"name" => "Other"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      {:ok, [other_general]} = Channels.list_rooms(scope(alice), other.id)
+      %{channel: channel, other: other, general: general, other_general: other_general}
+    end
+
+    test "channel scope finds messages only in that channel's joined rooms", ctx do
+      %{alice: alice, bob: bob, channel: channel, general: general, other_general: og} = ctx
+
+      {:ok, _} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "needle here"})
+      {:ok, _} = Eden.Chat.create_message(scope(alice), og.id, %{"body" => "needle elsewhere"})
+
+      # A private room bob is NOT in.
+      {:ok, priv} =
+        Channels.create_room(scope(alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      {:ok, _} = Eden.Chat.create_message(scope(alice), priv.id, %{"body" => "needle secret"})
+
+      results = Eden.Chat.search_rooms(scope(bob), {:channel, channel.id}, "needle")
+      assert ["needle here"] == Enum.map(results, & &1.body)
+
+      # alice (a member of priv) sees both within the channel — never the other channel.
+      results = Eden.Chat.search_rooms(scope(alice), {:channel, channel.id}, "needle")
+      assert Enum.sort(Enum.map(results, & &1.body)) == ["needle here", "needle secret"]
+    end
+
+    test "room scope is limited to one room; replies are included", ctx do
+      %{alice: alice, channel: channel, general: general} = ctx
+      {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+
+      {:ok, root} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "pin base"})
+      {:ok, _} = Eden.Chat.create_reply(scope(alice), root.id, %{"body" => "pin reply"})
+      {:ok, _} = Eden.Chat.create_message(scope(alice), ops.id, %{"body" => "pin other room"})
+
+      results = Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "pin")
+      assert Enum.sort(Enum.map(results, & &1.body)) == ["pin base", "pin reply"]
+    end
+
+    test "tombstoned and hidden messages never match; min length applies", ctx do
+      %{alice: alice, bob: bob, general: general} = ctx
+
+      {:ok, gone} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "ghost gone"})
+      {:ok, hid} = Eden.Chat.create_message(scope(bob), general.id, %{"body" => "ghost hidden"})
+      :ok = Eden.Chat.delete_message_for_both(scope(bob), gone.id)
+      :ok = Eden.Chat.delete_message_for_me(scope(alice), hid.id)
+
+      assert [] == Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "ghost")
+      assert [] == Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "g")
+    end
+
+    test "garbage scope ids return nothing (no crash)", ctx do
+      %{alice: alice} = ctx
+      assert [] == Eden.Chat.search_rooms(scope(alice), {:channel, "abc"}, "needle")
+      assert [] == Eden.Chat.search_rooms(scope(alice), {:room, "abc"}, "needle")
+    end
+  end
+
   describe "cross-layer (#32)" do
     setup %{alice: alice, bob: bob} do
       {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
