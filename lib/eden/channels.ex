@@ -328,7 +328,8 @@ defmodule Eden.Channels do
   already-accepted request. `{:error, :not_found | :forbidden}`.
   """
   def approve_room_join(%Scope{} = scope, message_id) do
-    with %{meta: %{"requester_id" => req_id} = meta} = msg <- Chat.get_system_message(message_id),
+    with %{meta: %{"action" => "join_request", "requester_id" => req_id} = meta} = msg <-
+           Chat.get_system_message(message_id),
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
@@ -341,8 +342,11 @@ defmodule Eden.Channels do
 
       :ok
     else
-      nil -> {:error, :not_found}
-      error -> error
+      # {:error, reason} from get_channel/ensure_role passes through; anything
+      # else (nil, a non-join_request system message) is :not_found — never a
+      # bare struct that the caller's {:ok | {:error, _}} contract can't handle.
+      {:error, _} = error -> error
+      _ -> {:error, :not_found}
     end
   end
 

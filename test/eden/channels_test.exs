@@ -634,6 +634,16 @@ defmodule Eden.ChannelsTest do
       assert :ok = Channels.approve_room_join(scope(alice), msg.id)
       assert Eden.Chat.room_member?(priv.id, carol.id)
     end
+
+    test "approve tolerates a garbage / non-join-request message id", ctx do
+      %{alice: alice, priv: priv} = ctx
+      assert {:error, :not_found} = Channels.approve_room_join(scope(alice), "garbage")
+      assert {:error, :not_found} = Channels.approve_room_join(scope(alice), 999_999)
+
+      # A system message that isn't a join request → :not_found, never a crash.
+      {:ok, other} = Eden.Chat.create_system_message(priv.id, %{"action" => "noticeboard"})
+      assert {:error, :not_found} = Channels.approve_room_join(scope(alice), other.id)
+    end
   end
 
   describe "cross-layer (#32)" do
