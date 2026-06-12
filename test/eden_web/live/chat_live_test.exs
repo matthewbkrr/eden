@@ -285,7 +285,7 @@ defmodule EdenWeb.ChatLiveTest do
         })
         |> Eden.Repo.insert()
 
-      :ok = Chat.join_rooms(channel.id, ctx.bob.id)
+      :ok = Chat.join_general(channel.id, ctx.bob.id)
       {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
       {:ok, _} = Chat.create_message(Scope.for_user(ctx.bob), room.id, %{"body" => "hi from bob"})
 

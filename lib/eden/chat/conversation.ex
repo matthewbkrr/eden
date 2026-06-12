@@ -21,6 +21,9 @@ defmodule Eden.Chat.Conversation do
     # invite / knock). Only consulted for channel rooms; DMs/groups carry the
     # default "open" as dead data (never read). `general` is always "open".
     field :visibility, :string, default: "open"
+    # The channel's Town Square: always open, undeletable, auto-joined on
+    # channel entry. One source of truth for the join/undeletable/open guards.
+    field :is_general, :boolean, default: false
 
     # Computed for the conversation list (set by Chat.list_conversations/1).
     field :unread_count, :integer, virtual: true, default: 0
