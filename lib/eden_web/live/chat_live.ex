@@ -741,6 +741,21 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, thread_root: nil)}
   end
 
+  # Jump to the thread's root in the main stream: close the panel (on mobile it
+  # covers the stream) and focus-highlight the root, reusing the permalink path.
+  def handle_event("jump_to_root", _params, socket) do
+    case socket.assigns.thread_root do
+      %{id: id} ->
+        {:noreply,
+         socket
+         |> assign(thread_root: nil)
+         |> push_event("focus_message", %{domId: "messages-#{id}"})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("reply_changed", %{"reply" => %{"body" => body}}, socket) do
     {:noreply, assign(socket, reply_composer: to_form(%{"body" => body}, as: "reply"))}
   end
@@ -1250,27 +1265,14 @@ defmodule EdenWeb.ChatLive do
           class="flex items-center justify-between gap-2 px-4 h-14 border-b"
           style="border-color: var(--ed-border);"
         >
-          <span class="font-semibold tracking-tight">eden</span>
-          <div class="flex items-center gap-1">
-            <button
-              class="ed-btn--icon"
-              phx-click="toggle_new"
-              aria-label={gettext("New conversation")}
-            >
-              <.icon name="hero-pencil-square-mini" class="size-5" />
-            </button>
-            <.link navigate={~p"/settings"} class="ed-btn--icon" aria-label={gettext("Settings")}>
-              <.icon name="hero-cog-6-tooth-mini" class="size-5" />
-            </.link>
-            <.link
-              href={~p"/users/log_out"}
-              method="delete"
-              class="ed-btn--icon"
-              aria-label={gettext("Log out")}
-            >
-              <.icon name="hero-arrow-right-start-on-rectangle-mini" class="size-5" />
-            </.link>
-          </div>
+          <span class="font-semibold tracking-tight">{gettext("Chats")}</span>
+          <button
+            class="ed-btn--icon"
+            phx-click="toggle_new"
+            aria-label={gettext("New conversation")}
+          >
+            <.icon name="hero-pencil-square-mini" class="size-5" />
+          </button>
         </header>
 
         <form
@@ -1305,9 +1307,14 @@ defmodule EdenWeb.ChatLive do
 
         <nav
           :if={@folders != [] and @search == ""}
+          id="folder-tabs"
           class="ed-folders"
           aria-label={gettext("Chat folders")}
+          phx-hook=".FolderTabs"
         >
+          <%!-- The selected-tab oval; the .FolderTabs hook slides it under the
+                active tab so switching folders glides instead of teleporting. --%>
+          <span class="ed-folder-indicator" data-indicator aria-hidden="true"></span>
           <%= for tab <- @folder_tabs do %>
             <button
               :if={tab == :all}
@@ -1638,6 +1645,17 @@ defmodule EdenWeb.ChatLive do
                 title(@selected, @current_scope.user)}
             </div>
           </div>
+          <%!-- Jump to the root in the main stream (closes the panel — on mobile
+                it's a full-screen overlay covering the message). --%>
+          <button
+            type="button"
+            class="ed-btn--icon"
+            phx-click="jump_to_root"
+            title={gettext("Go to message")}
+            aria-label={gettext("Go to message")}
+          >
+            <.icon name="hero-arrow-up-right-mini" class="size-5" />
+          </button>
           <button
             type="button"
             class="ed-btn--icon hidden md:inline-flex"
@@ -1804,6 +1822,40 @@ defmodule EdenWeb.ChatLive do
           }
         }
       </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".FolderTabs">
+        // Slides the selected-tab oval under the active folder tab. The folder
+        // list persists across selection (phx-click, no navigation), so the
+        // indicator can transition between positions instead of teleporting.
+        export default {
+          mounted() {
+            this.indicator = this.el.querySelector("[data-indicator]")
+            this.place(false)
+            // Re-measure after fonts/layout settle and on container resize.
+            this.ro = new ResizeObserver(() => this.place(false))
+            this.ro.observe(this.el)
+          },
+          updated() { this.place(true) },
+          destroyed() { this.ro && this.ro.disconnect() },
+          place(animate) {
+            const active = this.el.querySelector(".ed-folder-tab--active")
+            if (!active || !this.indicator) return
+            // Overlay the active tab's exact box. offset* are relative to the
+            // shared offsetParent (.ed-folders), so this stays correct under
+            // horizontal scroll (the indicator scrolls with the content).
+            this.indicator.style.transition = animate ? "" : "none"
+            this.indicator.style.width = `${active.offsetWidth}px`
+            this.indicator.style.height = `${active.offsetHeight}px`
+            this.indicator.style.transform =
+              `translate(${active.offsetLeft}px, ${active.offsetTop}px)`
+            this.indicator.style.opacity = "1"
+            if (!animate) {
+              // Flush so the first real selection animates from the right spot.
+              void this.indicator.offsetWidth
+              this.indicator.style.transition = ""
+            }
+          }
+        }
+      </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
           mounted() {
@@ -1816,11 +1868,29 @@ defmodule EdenWeb.ChatLive do
               el.classList.add("ed-msg--focus")
               setTimeout(() => el.classList.remove("ed-msg--focus"), 2200)
             })
+            // Rise-in for messages added AFTER mount only — the initial list is
+            // already in the DOM when the observer starts, so it never animates
+            // (no page-load choreography). Optimistic pending nodes (data-client-id)
+            // appear instantly; their real replacement animates once, no double.
+            this.riser = new MutationObserver((muts) => {
+              for (const mut of muts) {
+                for (const node of mut.addedNodes) {
+                  if (node.nodeType !== 1) continue
+                  const row = node.matches?.(".ed-msg, .ed-flat") ? node
+                    : node.querySelector?.(".ed-msg, .ed-flat")
+                  if (!row || row.dataset.clientId) continue
+                  row.classList.add("ed-msg--enter")
+                  setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
+                }
+              }
+            })
+            this.riser.observe(this.el, { childList: true, subtree: true })
           },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
           },
           updated() { if (this.pinned) this.toBottom() },
+          destroyed() { this.riser && this.riser.disconnect() },
           toBottom() { this.el.scrollTop = this.el.scrollHeight }
         }
       </script>
