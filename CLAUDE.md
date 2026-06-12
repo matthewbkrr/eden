@@ -50,19 +50,25 @@ design — built incrementally as features land.)
   - `Membership` — join between a `Conversation` and a user (role, joined_at,
     last_read, `left_at` for per-user chat deletion, etc.). A conversation has
     many memberships.
-  - `Message` — belongs to a conversation and a sender; carries text and/or one
-    `Attachment` (referenced by storage key, see Storage). Lifecycle: **delete for
-    me** hides it for one user (`message_deletions` join, filtered out of
-    `list_messages/3`); **delete for both** (sender only) soft-deletes via
-    `deleted_at`, removing the message for everyone, and cleans up blobs; **forward**
-    copies it into another conversation (re-referencing the same blob,
-    `forwarded_from_id` for attribution). A `/app/c/:id/m/:message_id` permalink
-    deep-links to a message.
-  - `Attachment` — one per message, classified by **magic bytes** into a `kind`
-    (`image | video | file | audio`), never the client content-type. Images and
-    video render inline (image lightbox; in-app `<video>` with a poster + Range
-    seeking); anything else is a downloadable file with a sanitized original name.
-    The `:media` Oban worker fills the preview asynchronously (image thumbnail, or
+  - `Message` — belongs to a conversation and a sender; carries text and/or an
+    ordered **album** of `Attachment`s (referenced by storage key, see Storage).
+    Lifecycle: **delete for me** hides it for one user (`message_deletions` join,
+    filtered out of `list_messages/3`); **delete for both** (sender only)
+    soft-deletes via `deleted_at`, removing the message for everyone, and cleans up
+    every attachment's unshared blobs; **forward** copies it into another
+    conversation (re-referencing the same blobs in order, `forwarded_from_id` for
+    attribution). A `/app/c/:id/m/:message_id` permalink deep-links to a message.
+  - `Attachment` — **a message has many** (`#58`; ordered by `position`, lone
+    sends are just an album of one), each classified by **magic bytes** into a
+    `kind` (`image | video | file | audio`), never the client content-type.
+    `create_album_message/4` stores up to 10 sources atomically (rolling back every
+    blob if any fails) and enqueues media processing per image/video. Images and
+    video render inline (image lightbox — paging across the album's photos; in-app
+    `<video>` with a poster + Range seeking); anything else is a downloadable file
+    with a sanitized original name. Multiple attachments render as a media grid
+    (`album_view`) with files stacked below; the composer stages them in a
+    thumbnail tray (multi-select + clipboard paste) with the input as the caption.
+    The `:media` Oban worker fills each preview asynchronously (image thumbnail, or
     video poster + duration/dimensions via ffmpeg). Per-kind upload caps and a
     decompression-bomb guard are enforced server-side.
   - `Folder` / `FolderMembership` — **per-user, Telegram-style chat folders**: a
