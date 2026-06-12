@@ -288,6 +288,64 @@ defmodule Eden.Channels do
     end
   end
 
+  @doc """
+  Requests to join a private room (#41 knock). The requester must be a channel
+  member (auto-joined the channel) but not a room member, and the room must be
+  private. Posts a join-request system message into the room (deduped: one
+  pending request per requester). `{:ok, :requested | :already}` or
+  `{:error, :not_found | :not_private | :member}`.
+  """
+  def request_room_join(%Scope{user: user} = scope, room_id) do
+    with %{visibility: "private"} = room <- Chat.get_room(room_id),
+         {:ok, _channel} <- get_channel(scope, room.channel_id),
+         false <- Chat.room_member?(room.id, user.id) do
+      case Chat.pending_join_request(room.id, user.id) do
+        nil ->
+          {:ok, _} =
+            Chat.create_system_message(room.id, %{
+              "action" => "join_request",
+              "requester_id" => user.id,
+              "requester_name" => user.display_name,
+              "status" => "pending"
+            })
+
+          {:ok, :requested}
+
+        _existing ->
+          {:ok, :already}
+      end
+    else
+      nil -> {:error, :not_found}
+      %{} -> {:error, :not_private}
+      true -> {:error, :member}
+      error -> error
+    end
+  end
+
+  @doc """
+  Approves a pending join request (admin+ of the room's channel): adds the
+  requester to the room and flips the request to accepted. Idempotent on an
+  already-accepted request. `{:error, :not_found | :forbidden}`.
+  """
+  def approve_room_join(%Scope{} = scope, message_id) do
+    with %{meta: %{"requester_id" => req_id} = meta} = msg <- Chat.get_system_message(message_id),
+         %{} = room <- Chat.get_room(msg.conversation_id),
+         {:ok, channel} <- get_channel(scope, room.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      if meta["status"] == "pending" do
+        :ok = Chat.join_room(room.id, req_id)
+        {:ok, _} = Chat.resolve_join_request(msg, "accepted")
+        broadcast_user(req_id, :channels_changed)
+        broadcast_channel(channel.id, {:members_changed, channel.id})
+      end
+
+      :ok
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
   @doc "Reorders a channel's rooms (admin+)."
   def reorder_rooms(%Scope{} = scope, channel_id, ordered_ids) do
     with {:ok, channel} <- get_channel(scope, channel_id),

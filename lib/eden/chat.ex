@@ -492,6 +492,65 @@ defmodule Eden.Chat do
     )
   end
 
+  @doc """
+  Inserts a system message (no human sender; payload in `meta`) into a
+  conversation and broadcasts it like any message. System messages don't touch
+  the sort key, don't resurface 1:1s, and never count as unread (sender_id nil).
+  Trusted caller (e.g. `Eden.Channels` after authorizing).
+  """
+  def create_system_message(conversation_id, meta) when is_map(meta) do
+    %Message{conversation_id: conversation_id, kind: "system", body: "", meta: meta}
+    |> Repo.insert()
+    |> case do
+      {:ok, message} ->
+        broadcast(conversation_id, {:new_message, message})
+        {:ok, message}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  The pending join-request system message for `(room, requester)`, or nil — the
+  dedup source for the knock flow (one outstanding request per pair).
+  """
+  def pending_join_request(room_id, requester_id) do
+    Repo.one(
+      from m in Message,
+        where:
+          m.conversation_id == ^room_id and m.kind == "system" and
+            fragment("? ->> 'action'", m.meta) == "join_request" and
+            fragment("? ->> 'status'", m.meta) == "pending" and
+            fragment("(? ->> 'requester_id')::bigint", m.meta) == ^requester_id,
+        limit: 1
+    )
+  end
+
+  @doc "Marks a join-request system message resolved (e.g. \"accepted\") and rebroadcasts it."
+  def resolve_join_request(%Message{} = message, status) do
+    meta = Map.put(message.meta, "status", status)
+
+    {:ok, updated} =
+      message
+      |> Ecto.Changeset.change(meta: meta)
+      |> Repo.update()
+
+    broadcast(updated.conversation_id, {:new_message, updated})
+    {:ok, updated}
+  end
+
+  @doc "Fetches a system message by id (trusted caller; authorize via its conversation)."
+  def get_system_message(message_id) do
+    case Ids.normalize(message_id) do
+      id when is_integer(id) ->
+        Repo.one(from m in Message, where: m.id == ^id and m.kind == "system")
+
+      _ ->
+        nil
+    end
+  end
+
   defp general_room_id(channel_id) do
     Repo.one(
       from c in Conversation,

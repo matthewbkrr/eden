@@ -501,7 +501,6 @@ defmodule Eden.ChannelsTest do
     test "list_channels aggregates room unread into the rail badge", %{
       alice: alice,
       bob: bob,
-      channel: channel,
       general: general
     } do
       # alice has no unread yet.
@@ -568,6 +567,72 @@ defmodule Eden.ChannelsTest do
 
       # Only the root counts; the reply lives in the thread.
       assert [%{unread_count: 1}] = Channels.list_channels(scope(alice))
+    end
+  end
+
+  describe "knock to join a private room (#41)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
+
+      {:ok, priv} =
+        Channels.create_room(scope(alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      %{channel: channel, priv: priv}
+    end
+
+    test "request → admin approve adds the member and flips the message", ctx do
+      %{alice: alice, bob: bob, priv: priv} = ctx
+
+      assert {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+      refute Eden.Chat.room_member?(priv.id, bob.id)
+
+      # Deduped: a second request doesn't post another message.
+      assert {:ok, :already} = Channels.request_room_join(scope(bob), priv.id)
+
+      # The pending request is visible to admins in the room.
+      msg = Eden.Chat.pending_join_request(priv.id, bob.id)
+      assert msg && msg.meta["status"] == "pending"
+      assert msg.meta["requester_name"] == bob.display_name
+
+      assert :ok = Channels.approve_room_join(scope(alice), msg.id)
+      assert Eden.Chat.room_member?(priv.id, bob.id)
+
+      # The request flipped to accepted; no longer pending.
+      assert is_nil(Eden.Chat.pending_join_request(priv.id, bob.id))
+    end
+
+    test "an open room can't be knocked", %{alice: alice, bob: bob, channel: channel} do
+      {:ok, open} = Channels.create_room(scope(alice), channel.id, %{"name" => "lounge"})
+      assert {:error, :not_private} = Channels.request_room_join(scope(bob), open.id)
+    end
+
+    test "a non-channel-member can't request; an existing room member can't either", ctx do
+      %{bob: bob, priv: priv} = ctx
+      carol = user_fixture(%{username: "carolk"})
+      assert {:error, :not_found} = Channels.request_room_join(scope(carol), priv.id)
+
+      :ok = Eden.Chat.join_room(priv.id, bob.id)
+      assert {:error, :member} = Channels.request_room_join(scope(bob), priv.id)
+    end
+
+    test "only an admin approves; a plain member can't", ctx do
+      %{alice: alice, bob: bob, channel: channel, priv: priv} = ctx
+      carol = user_fixture(%{username: "carolk2"})
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [carol.id])
+
+      {:ok, :requested} = Channels.request_room_join(scope(carol), priv.id)
+      msg = Eden.Chat.pending_join_request(priv.id, carol.id)
+
+      assert {:error, :forbidden} = Channels.approve_room_join(scope(bob), msg.id)
+      refute Eden.Chat.room_member?(priv.id, carol.id)
+
+      assert :ok = Channels.approve_room_join(scope(alice), msg.id)
+      assert Eden.Chat.room_member?(priv.id, carol.id)
     end
   end
 
