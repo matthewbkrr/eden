@@ -789,6 +789,30 @@
     }
   }
 
+  /* System message (join request etc.) — a centered notice, not a flat row. */
+  .ed-sysmsg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    margin: 0.5rem auto;
+    padding: 0.375rem 0.75rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface);
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+    width: fit-content;
+    max-width: 100%;
+  }
+  .ed-sysmsg__done {
+    color: var(--ed-online);
+    font-weight: 600;
+  }
+  .ed-btn--sm {
+    padding: 0.1875rem 0.625rem;
+    font-size: 0.75rem;
+  }
+
   /* Thread footer on a root (facepile + count + last reply time). */
   .ed-thread-footer {
     display: inline-flex;

@@ -122,7 +122,8 @@ defmodule EdenWeb.ChannelModeTest do
       assert Chat.room_member?(open.id, ctx.bob.id)
     end
 
-    test "a private-room link lands a non-member in the channel with a notice", ctx do
+    test "a private-room link shows the knock window; request → admin approve lands the user",
+         ctx do
       {:ok, priv} =
         Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
           "name" => "secret",
@@ -130,19 +131,53 @@ defmodule EdenWeb.ChannelModeTest do
         })
 
       conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{priv.id}")
 
-      # Cold-load of a private-room link → redirected to the channel home with
-      # a notice (PR-B interim; the knock window lands with PR-C).
-      assert {:error, {:live_redirect, %{to: to, flash: flash}}} =
-               live(conn, ~p"/channels/#{ctx.channel.id}/r/#{priv.id}")
+      # Knock window, not the room; the private room isn't revealed in the sidebar.
+      assert html =~ "This room is private"
+      assert has_element?(bob_view, ~s(button[phx-click="request_join"]))
+      refute has_element?(bob_view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{priv.id}"]))
 
-      assert to == "/channels/#{ctx.channel.id}"
-      assert flash["error"] =~ "private"
+      # Request → pending state; not yet a member.
+      render_click(bob_view, "request_join", %{})
+      assert render(bob_view) =~ "Request sent."
       refute Chat.room_member?(priv.id, ctx.bob.id)
 
-      # The channel home doesn't reveal the private room in the sidebar.
-      {:ok, view, _html} = live(conn, to)
-      refute has_element?(view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{priv.id}"]))
+      # An admin viewing the room sees the request and approves it.
+      :ok = Chat.join_room(priv.id, ctx.alice.id)
+      alice_conn = log_in_user(build_conn(), ctx.alice)
+      {:ok, alice_view, _} = live(alice_conn, ~p"/channels/#{ctx.channel.id}/r/#{priv.id}")
+      assert render(alice_view) =~ "requested to join"
+
+      msg = Chat.pending_join_request(priv.id, ctx.bob.id)
+      render_click(alice_view, "approve_join", %{"id" => to_string(msg.id)})
+
+      assert Chat.room_member?(priv.id, ctx.bob.id)
+      # bob's open session clears the knock window live (now a member).
+      refute render(bob_view) =~ "This room is private"
+    end
+
+    test "a member can't approve a join request", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      {:ok, :requested} = Channels.request_room_join(scope(ctx.bob), priv.id)
+      msg = Chat.pending_join_request(priv.id, ctx.bob.id)
+
+      # carol is a plain member who somehow got into the room; she can't approve.
+      carol = user_fixture(%{username: "carolA"})
+      {:ok, _} = add_member(ctx.channel.id, carol.id)
+      :ok = Chat.join_room(priv.id, carol.id)
+
+      conn = log_in_user(ctx.conn, carol)
+      {:ok, view, _} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{priv.id}")
+      # No Add button for a non-admin.
+      refute has_element?(view, ~s(button[phx-click="approve_join"]))
+      render_click(view, "approve_join", %{"id" => to_string(msg.id)})
+      refute Chat.room_member?(priv.id, ctx.bob.id)
     end
 
     test "an existing member just opens the room (no re-join side effects)", ctx do

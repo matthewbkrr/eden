@@ -38,8 +38,18 @@ defmodule Eden.Chat.Message do
     # consecutive same-author messages (flat layout). Never persisted.
     field :compact, :boolean, virtual: true, default: false
 
+    # "user" | "system". A system message (no human sender) carries its payload
+    # in `meta` (e.g. %{"action" => "join_request", "requester_id" => id,
+    # "requester_name" => name, "status" => "pending"}). #41 knock flow.
+    field :kind, :string, default: "user"
+    field :meta, :map, default: %{}
+
     timestamps(type: :utc_datetime)
   end
+
+  @doc "Whether this is a system message (no human sender; renders from `meta`)."
+  def system?(%__MODULE__{kind: "system"}), do: true
+  def system?(%__MODULE__{}), do: false
 
   @doc "Whether the message has been deleted for everyone (tombstoned)."
   def deleted?(%__MODULE__{deleted_at: nil}), do: false

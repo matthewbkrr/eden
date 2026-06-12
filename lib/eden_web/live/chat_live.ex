@@ -75,7 +75,10 @@ defmodule EdenWeb.ChatLive do
         thread_root: nil,
         reply_composer: to_form(%{"body" => ""}, as: "reply"),
         thread_participants: %{},
-        last_flat: nil
+        last_flat: nil,
+        # Knock window (#41): a private room you're not in, reached by link.
+        knock_room: nil,
+        knock_pending: false
       )
       |> stream(:thread, [])
       |> refresh_folders()
@@ -202,15 +205,15 @@ defmodule EdenWeb.ChatLive do
     finish_open_room(socket, room, message_id)
   end
 
-  defp open_room_verdict(socket, channel, _room, _message_id, :knock) do
-    # PR-B interim: land in the channel with a notice. The full knock window
-    # (request → admin approve) lands with PR-C.
+  defp open_room_verdict(socket, _channel, room, _message_id, :knock) do
+    # Land in the channel (no room selected) and show the knock window for this
+    # private room — request access, or wait for an admin to add you.
+    pending = Chat.pending_join_request(room.id, socket.assigns.current_scope.user.id) != nil
+
     {:noreply,
      socket
      |> unsubscribe()
-     |> assign(selected: nil)
-     |> put_flash(:error, gettext("This room is private — ask an admin to add you."))
-     |> push_patch(to: ~p"/channels/#{channel.id}", replace: true)}
+     |> assign(selected: nil, knock_room: room, knock_pending: pending)}
   end
 
   defp finish_open_room(socket, room, message_id) do
@@ -241,7 +244,10 @@ defmodule EdenWeb.ChatLive do
       channel: channel,
       channel_topic_id: channel.id,
       rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id),
-      page_title: channel.name
+      page_title: channel.name,
+      # Cleared on every channel entry; the :knock verdict re-sets it after.
+      knock_room: nil,
+      knock_pending: false
     )
   end
 
@@ -553,6 +559,32 @@ defmodule EdenWeb.ChatLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't delete that room."))}
+    end
+  end
+
+  ## Knock to join a private room (#41)
+
+  def handle_event("request_join", _params, socket) do
+    case socket.assigns.knock_room do
+      %{id: room_id} ->
+        case Channels.request_room_join(socket.assigns.current_scope, room_id) do
+          {:ok, _} ->
+            {:noreply, assign(socket, knock_pending: true)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, gettext("Couldn't send the request."))}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Admin approves a join request from the room's system message.
+  def handle_event("approve_join", %{"id" => id}, socket) do
+    case Channels.approve_room_join(socket.assigns.current_scope, id) do
+      :ok -> {:noreply, socket}
+      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't add that member."))}
     end
   end
 
@@ -1072,7 +1104,11 @@ defmodule EdenWeb.ChatLive do
   # have moved too, so re-fetch the channel; refresh the members modal if open.
   def handle_info({:members_changed, channel_id}, socket) do
     if match?(%{id: ^channel_id}, socket.assigns.channel) do
-      {:noreply, refresh_channel_access(socket, channel_id)}
+      {:noreply,
+       socket
+       |> refresh_channel_access(channel_id)
+       |> refresh_rooms()
+       |> maybe_clear_knock()}
     else
       {:noreply, socket}
     end
@@ -1557,6 +1593,7 @@ defmodule EdenWeb.ChatLive do
                     conversation_id={@selected.id}
                     mine={message.sender_id == @current_scope.user.id}
                     participants={Map.get(@thread_participants, message.id, [])}
+                    admin={@channel && @channel.role in ~w(owner admin)}
                   />
                 <% else %>
                   <.message_bubble
@@ -1654,7 +1691,25 @@ defmodule EdenWeb.ChatLive do
           </.form>
         <% else %>
           <div class="flex-1 grid place-items-center text-center p-8">
-            <div :if={@channel} class="space-y-2 max-w-sm">
+            <%!-- Knock window: a private room reached by link that you're not in. --%>
+            <div :if={@knock_room} class="space-y-3 max-w-sm">
+              <span class="ed-room__hash" style="font-size:1.75rem;">🔒</span>
+              <p style="font-weight:600;">{@knock_room.name}</p>
+              <p style="color: var(--ed-muted); font-size:0.875rem;">
+                {gettext("This room is private. Request access, or wait for an admin to add you.")}
+              </p>
+              <button
+                :if={!@knock_pending}
+                class="ed-btn ed-btn--primary"
+                phx-click="request_join"
+              >
+                <.icon name="hero-hand-raised-micro" class="size-4" /> {gettext("Request to join")}
+              </button>
+              <p :if={@knock_pending} style="color: var(--ed-muted); font-size:0.875rem;">
+                {gettext("Request sent.")}
+              </p>
+            </div>
+            <div :if={@channel && is_nil(@knock_room)} class="space-y-2 max-w-sm">
               <p style="font-weight:600;">{@channel.name}</p>
               <p :if={@channel.about} style="color: var(--ed-muted); font-size:0.875rem;">
                 {@channel.about}
@@ -3007,6 +3062,31 @@ defmodule EdenWeb.ChatLive do
   attr :participants, :list, default: []
   attr :in_thread, :boolean, default: false
   attr :menu, :boolean, default: true
+  attr :admin, :boolean, default: false
+
+  # A system message (no human sender) — a centered notice rendered from `meta`.
+  # The join-request carries an inline «Add» for channel admins while pending.
+  defp flat_message(%{message: %{kind: "system"}} = assigns) do
+    ~H"""
+    <div id={@id} class="ed-sysmsg">
+      <span>
+        {gettext("%{name} requested to join", name: @message.meta["requester_name"])}
+      </span>
+      <button
+        :if={@admin and @message.meta["status"] == "pending"}
+        type="button"
+        class="ed-btn ed-btn--primary ed-btn--sm"
+        phx-click="approve_join"
+        phx-value-id={@message.id}
+      >
+        {gettext("Add")}
+      </button>
+      <span :if={@message.meta["status"] == "accepted"} class="ed-sysmsg__done">
+        {gettext("Added")}
+      </span>
+    </div>
+    """
+  end
 
   # A Mattermost-style flat row (channel rooms + the thread panel): avatar ·
   # name · time on one line, content below, left-aligned for everyone.
@@ -3824,6 +3904,18 @@ defmodule EdenWeb.ChatLive do
         assign(socket, rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id))
     end
   end
+
+  # A pending knock was approved while its window is open: the room now appears
+  # in the sidebar — clear the knock window so the user can open it.
+  defp maybe_clear_knock(%{assigns: %{knock_room: %{id: id}}} = socket) do
+    if Chat.room_member?(id, socket.assigns.current_scope.user.id) do
+      assign(socket, knock_room: nil, knock_pending: false)
+    else
+      socket
+    end
+  end
+
+  defp maybe_clear_knock(socket), do: socket
 
   # Recompute the rail's per-channel unread badges (the channel list carries
   # the aggregate). Called when room activity arrives or a room is read.
