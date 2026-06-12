@@ -190,6 +190,133 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "room menu (#42)" do
+    setup [:setup_channel]
+
+    test "mark-as-read clears the room badge and the rail aggregate", ctx do
+      backdate_last_read(ctx.general.id, ctx.alice.id)
+      {:ok, _} = Chat.create_message(scope(ctx.bob), ctx.general.id, %{"body" => "unread"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+      assert has_element?(view, "#room-#{ctx.general.id} .ed-badge", "1")
+
+      render_click(view, "mark_as_read", %{"id" => to_string(ctx.general.id)})
+      refute has_element?(view, "#room-#{ctx.general.id} .ed-badge")
+      refute has_element?(view, ".ed-rail__badge")
+    end
+
+    test "favorite floats the room into the Favorites block live", ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+      refute html =~ "Favorites"
+
+      render_click(view, "toggle_room_favorite", %{"id" => to_string(ops.id)})
+      html = render(view)
+      # Two group headers appear, Favorites first.
+      groups =
+        ~r/ed-rooms__group">\s*([^<\s][^<]*?)\s*</
+        |> Regex.scan(html)
+        |> Enum.map(fn [_, name] -> name end)
+
+      assert groups == ["Favorites", "Rooms"]
+    end
+
+    test "the general delete item is hidden and the context refuses anyway", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      # No delete item inside general's menu (admin sees it on other rooms).
+      refute has_element?(
+               view,
+               ~s(#room-menu-#{ctx.general.id} button[phx-click="delete_room"])
+             )
+
+      # Forced event still bounces off the context guard.
+      render_click(view, "delete_room", %{"id" => to_string(ctx.general.id)})
+      assert {:ok, [_general]} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+    end
+
+    test "admin reorders rooms by drag (displayed sequence becomes canonical)", ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+      {:ok, zoo} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "zoo"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      ids = [to_string(zoo.id), to_string(ops.id), to_string(ctx.general.id)]
+      render_click(view, "reorder_rooms", %{"ids" => ids})
+
+      {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+      assert ["zoo", "ops", "general"] == Enum.map(rooms, & &1.name)
+    end
+
+    test "a member can't reorder (event is a no-op)", ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+      :ok = Chat.join_room(ops.id, ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "reorder_rooms", %{
+        "ids" => [to_string(ops.id), to_string(ctx.general.id)]
+      })
+
+      {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+      assert ["general", "ops"] == Enum.map(rooms, & &1.name)
+    end
+
+    test "room add modal: picker adds a platform user; private rooms offer an invite link",
+         ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      carol = user_fixture(%{username: "carolrm2", display_name: "Carol"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_click(view, "open_room_add", %{"id" => to_string(priv.id)})
+      assert html =~ "Add to secret"
+      assert html =~ "Carol"
+      assert has_element?(view, ~s(button[phx-click="create_room_invite"]))
+
+      # Invite link is shown once.
+      html = render_click(view, "create_room_invite", %{})
+      assert html =~ "/channels/join/"
+
+      # Picker adds carol: room + channel general (the #41 matrix).
+      render_click(view, "toggle_room_add_user", %{"id" => to_string(carol.id)})
+      render_click(view, "confirm_room_add", %{})
+      assert Chat.room_member?(priv.id, carol.id)
+      assert {:ok, _} = Channels.list_rooms(Scope.for_user(carol), ctx.channel.id)
+    end
+
+    test "an admin can decline a knock from the system message", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      {:ok, :requested} = Channels.request_room_join(scope(ctx.bob), priv.id)
+      msg = Chat.pending_join_request(priv.id, ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{priv.id}")
+      assert has_element?(view, ~s(button[phx-click="decline_join"]))
+
+      render_click(view, "decline_join", %{"id" => to_string(msg.id)})
+      assert render(view) =~ "Declined"
+      refute Chat.room_member?(priv.id, ctx.bob.id)
+    end
+  end
+
   describe "room management" do
     setup [:setup_channel]
 
@@ -242,10 +369,14 @@ defmodule EdenWeb.ChannelModeTest do
     end
 
     test "deleting the open room patches viewers back to the channel", ctx do
-      conn = log_in_user(ctx.conn, ctx.bob)
-      {:ok, bob_view, _} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+      # general is undeletable (#42) — use an ordinary room bob is in.
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+      :ok = Chat.join_room(ops.id, ctx.bob.id)
 
-      :ok = Channels.delete_room(scope(ctx.alice), ctx.general.id)
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, bob_view, _} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ops.id}")
+
+      :ok = Channels.delete_room(scope(ctx.alice), ops.id)
 
       assert_patch(bob_view, "/channels/#{ctx.channel.id}")
       refute has_element?(bob_view, "form[phx-submit=send]")

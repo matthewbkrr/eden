@@ -78,7 +78,12 @@ defmodule EdenWeb.ChatLive do
         last_flat: nil,
         # Knock window (#41): a private room you're not in, reached by link.
         knock_room: nil,
-        knock_pending: false
+        knock_pending: false,
+        # Room add-members modal (#42).
+        room_add: nil,
+        room_addable: [],
+        room_add_selected: MapSet.new(),
+        room_invite_url: nil
       )
       |> stream(:thread, [])
       |> refresh_folders()
@@ -263,7 +268,9 @@ defmodule EdenWeb.ChatLive do
       members_open: false,
       add_open: false,
       invites_open: false,
-      new_invite_url: nil
+      new_invite_url: nil,
+      room_add: nil,
+      room_invite_url: nil
     )
   end
 
@@ -438,6 +445,25 @@ defmodule EdenWeb.ChatLive do
 
   # Sidebar/tab refreshes are driven by the :folders_changed broadcast both
   # toggles emit on the user topic, so every session stays in sync.
+  # Mark a chat/room read from its row menu (#42). mark_read is a 0-row no-op
+  # for non-members; normalize first (a garbage id would CastError in the query).
+  def handle_event("mark_as_read", %{"id" => id}, socket) do
+    case Eden.Ids.normalize(id) do
+      n when is_integer(n) ->
+        Chat.mark_read(socket.assigns.current_scope, n)
+
+        {:noreply,
+         socket
+         |> put_sidebar_conversation(n)
+         |> refresh_folders()
+         |> refresh_rooms()
+         |> refresh_rail()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("toggle_mute", %{"id" => id}, socket) do
     case Chat.toggle_conversation_mute(socket.assigns.current_scope, id) do
       {:ok, _} -> {:noreply, socket}
@@ -559,6 +585,115 @@ defmodule EdenWeb.ChatLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't delete that room."))}
+    end
+  end
+
+  ## Room menu (#42): favorites, reorder, add-members
+
+  def handle_event("toggle_room_favorite", %{"id" => id}, socket) do
+    # The :folders_changed broadcast refreshes the rooms list in all sessions.
+    Chat.toggle_room_favorite(socket.assigns.current_scope, id)
+    {:noreply, socket}
+  end
+
+  def handle_event("reorder_rooms", %{"ids" => ids}, socket) when is_list(ids) do
+    case socket.assigns.channel do
+      %{id: channel_id, role: role} when role in ["owner", "admin"] ->
+        # The displayed sequence becomes the canonical order; the context
+        # filters foreign ids and broadcasts :rooms_reordered.
+        Channels.reorder_rooms(socket.assigns.current_scope, channel_id, ids)
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("open_room_add", %{"id" => id}, socket) do
+    with true <- socket.assigns.channel.role in ~w(owner admin),
+         %{} = room <- Enum.find(socket.assigns.rooms, &(to_string(&1.id) == id)) do
+      member_ids = MapSet.new(Chat.room_member_ids(room.id))
+
+      addable =
+        socket.assigns.current_scope
+        |> Accounts.list_other_users()
+        |> Enum.reject(&MapSet.member?(member_ids, &1.id))
+
+      {:noreply,
+       assign(socket,
+         room_add: room,
+         room_addable: addable,
+         room_add_selected: MapSet.new(),
+         room_invite_url: nil
+       )}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_room_add", _params, socket) do
+    {:noreply, assign(socket, room_add: nil, room_invite_url: nil)}
+  end
+
+  def handle_event("toggle_room_add_user", %{"id" => id}, socket) do
+    case Integer.parse(id) do
+      {user_id, ""} ->
+        selected = socket.assigns.room_add_selected
+
+        selected =
+          if MapSet.member?(selected, user_id),
+            do: MapSet.delete(selected, user_id),
+            else: MapSet.put(selected, user_id)
+
+        {:noreply, assign(socket, room_add_selected: selected)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("confirm_room_add", _params, socket) do
+    case socket.assigns.room_add do
+      %{id: room_id} ->
+        ids = MapSet.to_list(socket.assigns.room_add_selected)
+
+        case Channels.add_room_members(socket.assigns.current_scope, room_id, ids) do
+          {:ok, _added} ->
+            {:noreply, socket |> assign(room_add: nil) |> refresh_rooms()}
+
+          {:error, _} ->
+            {:noreply,
+             socket
+             |> assign(room_add: nil)
+             |> put_flash(:error, gettext("Couldn't add those members."))}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("create_room_invite", _params, socket) do
+    case socket.assigns.room_add do
+      %{id: room_id} ->
+        case Channels.create_room_invite(socket.assigns.current_scope, room_id) do
+          {:ok, _invite, raw} ->
+            {:noreply, assign(socket, room_invite_url: url(~p"/channels/join/#{raw}"))}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, gettext("Couldn't create an invite link."))}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Admin declines a join request from the room's system message (#42/E5).
+  def handle_event("decline_join", %{"id" => id}, socket) do
+    case Channels.decline_room_join(socket.assigns.current_scope, id) do
+      :ok -> {:noreply, socket}
+      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't decline."))}
     end
   end
 
@@ -1313,9 +1448,30 @@ defmodule EdenWeb.ChatLive do
           </div>
         </header>
 
-        <div class="flex-1 overflow-y-auto p-2 space-y-0.5">
+        <div
+          id="rooms-list"
+          class="flex-1 overflow-y-auto p-2 space-y-0.5"
+          phx-hook=".RoomSortable"
+          data-admin={to_string(@channel.role in ~w(owner admin))}
+        >
+          <%!-- Favorites float on top (per-user); the header appears only when
+                any exist. list_rooms already orders favorites-first. --%>
+          <p :if={Enum.any?(@rooms, & &1.favorite)} class="ed-rooms__group">
+            {gettext("Favorites")}
+          </p>
           <.room_item
-            :for={room <- @rooms}
+            :for={room <- Enum.filter(@rooms, & &1.favorite)}
+            id={"room-#{room.id}"}
+            room={room}
+            channel={@channel}
+            active={@selected && @selected.id == room.id}
+            admin={@channel.role in ~w(owner admin)}
+          />
+          <p :if={Enum.any?(@rooms, & &1.favorite)} class="ed-rooms__group">
+            {gettext("Rooms")}
+          </p>
+          <.room_item
+            :for={room <- Enum.reject(@rooms, & &1.favorite)}
             id={"room-#{room.id}"}
             room={room}
             channel={@channel}
@@ -1870,6 +2026,14 @@ defmodule EdenWeb.ChatLive do
         form={@room_form}
         submit_label={if @room_modal == :new, do: gettext("Create room"), else: gettext("Save")}
       />
+      <.room_add_modal
+        :if={@room_add}
+        room={@room_add}
+        addable={@room_addable}
+        selected={@room_add_selected}
+        invite_url={@room_invite_url}
+        online_ids={@online_ids}
+      />
       <.channel_members_modal
         :if={@members_open && @channel}
         members={@members}
@@ -1928,6 +2092,57 @@ defmodule EdenWeb.ChatLive do
             this.input.addEventListener("search", () => {
               if (this.input.value === "") this.pushEvent("clear_search", {})
             })
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".RoomSortable">
+        // Admin drag-and-drop room ordering in the channel sidebar (the folder
+        // settings .Sortable pattern). Rows are draggable only for admins
+        // (draggable attr is server-rendered). The displayed sequence becomes
+        // the canonical position order on drop.
+        export default {
+          mounted() { this.bind() },
+          updated() { this.bind() },
+          bind() {
+            if (this.el.dataset.admin !== "true") return
+            this.el.querySelectorAll(".ed-room-wrap[draggable=true]").forEach((item) => {
+              if (item._dnd) return
+              item._dnd = true
+              item.addEventListener("dragstart", (e) => {
+                this.dragging = item
+                this.startOrder = this.order().join()
+                item.classList.add("ed-dragging")
+                e.dataTransfer.effectAllowed = "move"
+              })
+              item.addEventListener("dragend", () => {
+                item.classList.remove("ed-dragging")
+                this.commit()
+              })
+            })
+            if (this._listBound) return
+            this._listBound = true
+            this.el.addEventListener("dragover", (e) => {
+              e.preventDefault()
+              if (!this.dragging) return
+              const after = this.afterElement(e.clientY)
+              if (after == null) this.el.appendChild(this.dragging)
+              else this.el.insertBefore(this.dragging, after)
+            })
+          },
+          afterElement(y) {
+            const items = [...this.el.querySelectorAll(".ed-room-wrap[draggable=true]:not(.ed-dragging)")]
+            return items.find((item) => {
+              const box = item.getBoundingClientRect()
+              return y < box.top + box.height / 2
+            }) || null
+          },
+          commit() {
+            this.dragging = null
+            const ids = this.order()
+            if (ids.join() !== this.startOrder) this.pushEvent("reorder_rooms", { ids })
+          },
+          order() {
+            return [...this.el.querySelectorAll(".ed-room-wrap[draggable=true]")].map((i) => i.dataset.id)
           }
         }
       </script>
@@ -2451,6 +2666,15 @@ defmodule EdenWeb.ChatLive do
           type="button"
           class="ed-menu__item"
           role="menuitem"
+          phx-click="mark_as_read"
+          phx-value-id={@conversation.id}
+        >
+          <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Mark as read")}
+        </button>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
           phx-click="toggle_mute"
           phx-value-id={@conversation.id}
         >
@@ -2615,15 +2839,25 @@ defmodule EdenWeb.ChatLive do
   # Rename/Delete for admins.
   defp room_item(assigns) do
     ~H"""
-    <div id={@id} class="ed-convo-wrap" phx-hook=".ContextMenu">
+    <div
+      id={@id}
+      class="ed-convo-wrap ed-room-wrap"
+      data-id={@room.id}
+      draggable={to_string(@admin)}
+      phx-hook=".ContextMenu"
+    >
       <.link
         patch={~p"/channels/#{@channel.id}/r/#{@room.id}"}
         class={["ed-convo ed-room", @active && "ed-convo--active"]}
         aria-haspopup="menu"
       >
-        <span class="ed-room__hash">#</span>
+        <span class="ed-room__hash">{if @room.visibility == "private", do: "🔒", else: "#"}</span>
         <span class="ed-convo__name flex-1 truncate">
           {@room.name}
+          <span :if={@room.favorite} class="ed-convo__muted" title={gettext("Favorite")}>
+            <.icon name="hero-star-micro" class="size-3.5" />
+            <span class="sr-only">{gettext("Favorite")}</span>
+          </span>
           <span :if={@room.muted} class="ed-convo__muted">
             <.icon name="hero-bell-slash-micro" class="size-3.5" />
             <span class="sr-only">{gettext("Muted")}</span>
@@ -2633,7 +2867,36 @@ defmodule EdenWeb.ChatLive do
           {@room.unread_count}
         </span>
       </.link>
+      <%!-- Visible ⋯ (hover): opens the same context menu as right-click. --%>
+      <button
+        type="button"
+        class="ed-room__more"
+        data-menu-trigger
+        title={gettext("More actions")}
+        aria-label={gettext("More actions")}
+      >
+        <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
+      </button>
       <div class="ed-menu" id={"room-menu-#{@room.id}"} data-menu role="menu" hidden>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="mark_as_read"
+          phx-value-id={@room.id}
+        >
+          <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Mark as read")}
+        </button>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="toggle_room_favorite"
+          phx-value-id={@room.id}
+        >
+          <.icon name="hero-star-micro" class="size-4" />
+          {if @room.favorite, do: gettext("Unfavorite"), else: gettext("Favorite")}
+        </button>
         <button
           type="button"
           class="ed-menu__item"
@@ -2648,6 +2911,26 @@ defmodule EdenWeb.ChatLive do
           {if @room.muted, do: gettext("Unmute"), else: gettext("Mute")}
         </button>
         <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          data-copy-link
+          data-link={url(~p"/channels/#{@channel.id}/r/#{@room.id}")}
+        >
+          <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
+        </button>
+        <div :if={@admin} class="ed-menu__sep"></div>
+        <button
+          :if={@admin}
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="open_room_add"
+          phx-value-id={@room.id}
+        >
+          <.icon name="hero-user-plus-micro" class="size-4" /> {gettext("Add members")}
+        </button>
+        <button
           :if={@admin}
           type="button"
           class="ed-menu__item"
@@ -2657,9 +2940,9 @@ defmodule EdenWeb.ChatLive do
         >
           <.icon name="hero-pencil-micro" class="size-4" /> {gettext("Rename room")}
         </button>
-        <div :if={@admin} class="ed-menu__sep"></div>
+        <div :if={@admin and not @room.is_general} class="ed-menu__sep"></div>
         <button
-          :if={@admin}
+          :if={@admin and not @room.is_general}
           type="button"
           class="ed-menu__item ed-menu__item--danger"
           role="menuitem"
@@ -2817,6 +3100,117 @@ defmodule EdenWeb.ChatLive do
   defp member_actions?("owner", target_role, _t, _m), do: target_role != "owner"
   defp member_actions?("admin", "member", _t, _m), do: true
   defp member_actions?(_my_role, _target_role, _t, _m), do: false
+
+  attr :room, :map, required: true
+  attr :addable, :list, required: true
+  attr :selected, :any, required: true
+  attr :invite_url, :any, required: true
+  attr :online_ids, :any, required: true
+
+  # Add members to a ROOM (#42): a platform-wide picker (non-channel users get
+  # general + the room per the #41 matrix); private rooms also offer a
+  # one-shot invite link.
+  defp room_add_modal(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: oklch(0 0 0 / 0.55);"
+        phx-click="close_room_add"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_room_add"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">
+              {gettext("Add to %{room}", room: @room.name)}
+            </h2>
+            <button class="ed-btn--icon" phx-click="close_room_add" aria-label={gettext("Close")}>
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <%!-- Private rooms: a one-shot invite link (channel + room). --%>
+          <div :if={@room.visibility == "private"} class="space-y-2">
+            <div :if={@invite_url} class="flex items-center gap-2">
+              <input type="text" readonly value={@invite_url} class="ed-input flex-1" />
+              <button
+                type="button"
+                id="copy-room-invite-url"
+                class="ed-btn ed-btn--primary"
+                phx-hook=".CopyUrl"
+                data-url={@invite_url}
+                data-copied={gettext("Copied!")}
+              >
+                {gettext("Copy")}
+              </button>
+            </div>
+            <button
+              :if={is_nil(@invite_url)}
+              type="button"
+              class="ed-btn ed-btn--ghost w-full justify-center"
+              phx-click="create_room_invite"
+            >
+              <.icon name="hero-link-micro" class="size-4" /> {gettext("Create invite link")}
+            </button>
+          </div>
+
+          <p :if={@addable == []} style="color: var(--ed-muted); font-size:0.875rem;">
+            {gettext("Everyone is already here.")}
+          </p>
+
+          <div class="max-h-72 overflow-y-auto space-y-0.5">
+            <button
+              :for={user <- @addable}
+              type="button"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              phx-click="toggle_room_add_user"
+              phx-value-id={user.id}
+              aria-pressed={to_string(MapSet.member?(@selected, user.id))}
+            >
+              <span class={["ed-check", MapSet.member?(@selected, user.id) && "ed-check--on"]}>
+                <.icon
+                  :if={MapSet.member?(@selected, user.id)}
+                  name="hero-check-mini"
+                  class="size-4"
+                />
+              </span>
+              <.avatar
+                name={user.display_name}
+                src={avatar_src(user)}
+                online={MapSet.member?(@online_ids, user.id)}
+                size={:sm}
+              />
+              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
+                {user.display_name}
+              </span>
+            </button>
+          </div>
+
+          <div class="flex justify-end">
+            <button
+              type="button"
+              class="ed-btn ed-btn--primary"
+              phx-click="confirm_room_add"
+              disabled={MapSet.size(@selected) == 0}
+            >
+              {gettext("Add")} ({MapSet.size(@selected)})
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
 
   attr :addable, :list, required: true
   attr :selected, :any, required: true
@@ -3081,8 +3475,20 @@ defmodule EdenWeb.ChatLive do
       >
         {gettext("Add")}
       </button>
+      <button
+        :if={@admin and @message.meta["status"] == "pending"}
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm"
+        phx-click="decline_join"
+        phx-value-id={@message.id}
+      >
+        {gettext("Decline")}
+      </button>
       <span :if={@message.meta["status"] == "accepted"} class="ed-sysmsg__done">
         {gettext("Added")}
+      </span>
+      <span :if={@message.meta["status"] == "declined"} class="ed-sysmsg__muted">
+        {gettext("Declined")}
       </span>
     </div>
     """

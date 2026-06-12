@@ -524,6 +524,11 @@ defmodule Eden.Chat do
     )
   end
 
+  @doc "Member user ids of a room (trusted caller — e.g. the admin add-picker)."
+  def room_member_ids(room_id) do
+    Repo.all(from m in Membership, where: m.conversation_id == ^room_id, select: m.user_id)
+  end
+
   @doc """
   Inserts a system message (no human sender; payload in `meta`) into a
   conversation and broadcasts it like any message. System messages don't touch

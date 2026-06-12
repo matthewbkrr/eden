@@ -924,6 +924,48 @@
   .ed-room--new:hover {
     color: var(--ed-ink);
   }
+  /* Visible ⋯ on a room row (hover/focus; touch keeps long-press). */
+  .ed-room-wrap {
+    position: relative;
+  }
+  .ed-room__more {
+    position: absolute;
+    top: 50%;
+    right: 0.375rem;
+    transform: translateY(-50%);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: var(--ed-radius-sm);
+    color: var(--ed-muted);
+    background: var(--ed-surface-2);
+  }
+  @media (hover: hover) {
+    .ed-room-wrap:hover .ed-room__more,
+    .ed-room-wrap:focus-within .ed-room__more {
+      display: inline-flex;
+    }
+  }
+  .ed-room__more:hover {
+    color: var(--ed-ink);
+  }
+  /* Sidebar group headers (Favorites / Rooms). */
+  .ed-rooms__group {
+    padding: 0.5rem 0.5rem 0.125rem;
+    color: var(--ed-muted);
+    font: 600 0.6875rem/1 var(--ed-font);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .ed-room-wrap.ed-dragging {
+    opacity: 0.5;
+  }
+  .ed-sysmsg__muted {
+    color: var(--ed-muted);
+    font-weight: 600;
+  }
 
   /* Sidebar empty state — revealed by CSS only when the stream has no rows. */
   .ed-convo-empty {
