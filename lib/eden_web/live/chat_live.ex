@@ -252,7 +252,12 @@ defmodule EdenWeb.ChatLive do
       page_title: channel.name,
       # Cleared on every channel entry; the :knock verdict re-sets it after.
       knock_room: nil,
-      knock_pending: false
+      knock_pending: false,
+      # The room-add modal can't legitimately survive a channel patch (the
+      # scrim blocks room switches) — but a {:room_deleted} patch could leave
+      # it referencing a dead room; reset defensively.
+      room_add: nil,
+      room_invite_url: nil
     )
   end
 
