@@ -37,6 +37,10 @@ defmodule Eden.Chat do
   @max_file_bytes 25 * 1024 * 1024
   @max_audio_bytes 25 * 1024 * 1024
 
+  # Albums (#58): most attachments a single message may carry (Telegram caps at
+  # 10 per media group; we mirror it). Each still obeys its own per-kind cap.
+  @max_album_entries 10
+
   # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
   @thumbnail_max 800
   @thumbnail_quality 80
@@ -51,6 +55,9 @@ defmodule Eden.Chat do
 
   @doc "Largest accepted upload size in bytes — the client-side ceiling (the server enforces the per-kind cap)."
   def max_attachment_bytes, do: @max_video_bytes
+
+  @doc "Most attachments a single message (album) may carry."
+  def max_album_entries, do: @max_album_entries
 
   @doc "Accepted upload size in bytes for a given attachment kind."
   def max_attachment_bytes("image"), do: @max_image_bytes
@@ -133,7 +140,10 @@ defmodule Eden.Chat do
 
   defp last_message_previews(user, ids) do
     from(m in Message,
-      left_join: a in assoc(m, :attachment),
+      # Album preview keys off the first attachment (position 0) — its kind picks
+      # the icon/label; the count drives "N photos" pluralization in the web layer.
+      left_join: a in assoc(m, :attachments),
+      on: a.message_id == m.id and a.position == 0,
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
       # Thread replies never become the sidebar preview (they live in threads).
@@ -142,7 +152,14 @@ defmodule Eden.Chat do
           is_nil(m.root_id),
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
-      select: {m.conversation_id, %{body: m.body, kind: a.kind}}
+      select:
+        {m.conversation_id,
+         %{
+           body: m.body,
+           kind: a.kind,
+           attachment_count:
+             fragment("(SELECT count(*) FROM attachments WHERE message_id = ?)", m.id)
+         }}
     )
     |> Repo.all()
     |> Map.new()
@@ -152,7 +169,12 @@ defmodule Eden.Chat do
     do: %{conversation | last_message_body: nil, last_message_kind: nil}
 
   defp apply_preview(conversation, preview),
-    do: %{conversation | last_message_body: preview.body, last_message_kind: preview.kind}
+    do: %{
+      conversation
+      | last_message_body: preview.body,
+        last_message_kind: preview.kind,
+        last_message_attachment_count: preview.attachment_count
+    }
 
   @doc """
   Aggregate unread per channel for the rail badge: `%{channel_id => count}`
@@ -1116,7 +1138,7 @@ defmodule Eden.Chat do
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload([:sender, :attachment, forwarded_from: :sender])
+        |> preload([:sender, :attachments, forwarded_from: :sender])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -1146,54 +1168,109 @@ defmodule Eden.Chat do
   end
 
   @doc """
-  Posts a message with an attachment. The file's `kind` (image | video | file)
-  is decided by its magic bytes — never the client content-type — and arbitrary
-  files are accepted as `file` with a safe inferred type and sanitized name. The
-  blob is stored via the storage adapter and the message + attachment inserted
-  atomically. `source` is a map with `:path` (a local temp file) and optional
-  `:filename`, `:body` caption and `:client_id`.
-
-  Returns `{:ok, message}` (attachment preloaded) or `{:error, reason}` where
-  reason is `:not_found | :too_large` or a changeset.
+  Posts a message carrying one attachment — a thin wrapper over
+  `create_album_message/4` for a single source (kept for callers/tests that send
+  one file). `source` is a map with `:path` and optional `:filename`, `:body`,
+  `:client_id`.
   """
-  def create_attachment_message(%Scope{user: user} = scope, conversation_id, source) do
+  def create_attachment_message(%Scope{} = scope, conversation_id, source) do
+    create_album_message(scope, conversation_id, [Map.delete(source, :body)], %{
+      body: Map.get(source, :body, ""),
+      client_id: source[:client_id]
+    })
+  end
+
+  @doc """
+  Posts a message with an ordered **album** of attachments (#58). Each source's
+  `kind` (image | video | file | audio) is decided by its magic bytes — never the
+  client content-type; arbitrary files become `file` with a safe inferred type
+  and sanitized name. Every blob is stored via the storage adapter and the
+  message + all attachment rows are inserted atomically.
+
+  `sources` is a non-empty list of maps with `:path` (a local temp file) and
+  optional `:filename` (capped at #{@max_album_entries}). `opts` carries the
+  shared `:body` caption and `:client_id`. If any source fails to classify, is
+  too large, or fails to store, nothing is persisted and every blob stored so
+  far is rolled back.
+
+  Returns `{:ok, message}` (attachments preloaded, ordered) or `{:error, reason}`
+  where reason is `:not_found | :empty | :too_large | :too_many | a changeset`.
+  """
+  def create_album_message(%Scope{user: user} = scope, conversation_id, sources, opts \\ %{})
+      when is_list(sources) do
     with true <- member?(scope, conversation_id),
-         {:ok, kind, content_type, ext} <- classify(source.path, source[:filename]),
-         {:ok, byte_size} <- check_size(source.path, kind),
-         key = Storage.build_key("attachments", ext),
-         :ok <- Storage.put(key, source.path) do
-      {width, height} = media_dimensions(kind, source.path)
-
-      attrs = %{
-        kind: kind,
-        storage_key: key,
-        content_type: content_type,
-        byte_size: byte_size,
-        filename: source[:filename],
-        width: width,
-        height: height
-      }
-
-      persist_attachment(user, conversation_id, source, attrs)
+         :ok <- ensure_album_size(sources),
+         {:ok, prepared} <- prepare_album(sources) do
+      persist_album(user, conversation_id, prepared, opts)
     else
       false -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
     end
   end
 
-  defp persist_attachment(user, conversation_id, source, %{kind: kind, storage_key: key} = attrs) do
-    message_attrs = %{"body" => Map.get(source, :body, ""), "client_id" => source[:client_id]}
+  defp ensure_album_size([]), do: {:error, :empty}
+  defp ensure_album_size(sources) when length(sources) > @max_album_entries, do: {:error, :too_many}
+  defp ensure_album_size(_sources), do: :ok
 
-    case insert_attachment_message(user, conversation_id, message_attrs, attrs) do
+  # Classify + size-check + store every source, tagging each with its album
+  # position. On the first failure, roll back the blobs stored so far so a
+  # partial album never leaks orphaned blobs.
+  defp prepare_album(sources) do
+    sources
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {source, idx}, {:ok, done} ->
+      case prepare_attachment(source, idx) do
+        {:ok, attrs} ->
+          {:cont, {:ok, [attrs | done]}}
+
+        {:error, reason} ->
+          Enum.each(done, &Storage.delete(&1.storage_key))
+          {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, done} -> {:ok, Enum.reverse(done)}
+      error -> error
+    end
+  end
+
+  defp prepare_attachment(source, position) do
+    with {:ok, kind, content_type, ext} <- classify(source.path, source[:filename]),
+         {:ok, byte_size} <- check_size(source.path, kind),
+         key = Storage.build_key("attachments", ext),
+         :ok <- Storage.put(key, source.path) do
+      {width, height} = media_dimensions(kind, source.path)
+
+      {:ok,
+       %{
+         kind: kind,
+         storage_key: key,
+         content_type: content_type,
+         byte_size: byte_size,
+         filename: source[:filename],
+         width: width,
+         height: height,
+         position: position
+       }}
+    end
+  end
+
+  defp persist_album(user, conversation_id, prepared, opts) do
+    message_attrs = %{"body" => Map.get(opts, :body, ""), "client_id" => opts[:client_id]}
+
+    case insert_album_message(user, conversation_id, message_attrs, prepared) do
       {:ok, message} ->
         message = deliver(conversation_id, message)
-        if needs_media_processing?(kind), do: enqueue_thumbnail(message.attachment)
+
+        for attachment <- message.attachments, needs_media_processing?(attachment.kind),
+            do: enqueue_thumbnail(attachment)
+
         {:ok, message}
 
       {:error, changeset} ->
-        # The blob we just stored is unneeded whether this is a hard error or a
-        # duplicate resend (the original already has its own attachment).
-        Storage.delete(key)
+        # The blobs we just stored are unneeded whether this is a hard error or a
+        # duplicate resend (the original already owns its own attachments).
+        Enum.each(prepared, &Storage.delete(&1.storage_key))
         resolve_duplicate(changeset, user.id)
     end
   end
@@ -1323,10 +1400,10 @@ defmodule Eden.Chat do
         |> where([_m, d], is_nil(d.id))
         |> order_by([m], asc: m.id)
         |> limit(@thread_cap)
-        |> preload([:sender, :attachment, forwarded_from: :sender])
+        |> preload([:sender, :attachments, forwarded_from: :sender])
         |> Repo.all()
 
-      {:ok, Repo.preload(root, [:sender, :attachment, forwarded_from: :sender]), replies}
+      {:ok, Repo.preload(root, [:sender, :attachments, forwarded_from: :sender]), replies}
     end
   end
 
@@ -1395,7 +1472,7 @@ defmodule Eden.Chat do
         set: [last_reply_at: reply.inserted_at]
       )
 
-    reply = Repo.preload(reply, [:sender, :attachment, forwarded_from: :sender])
+    reply = Repo.preload(reply, [:sender, :attachments, forwarded_from: :sender])
 
     with 1 <- bumped,
          %Message{} = fresh_root <- preloaded_message(root.id) do
@@ -1409,7 +1486,7 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.id == ^id,
-        preload: [:sender, :attachment, forwarded_from: :sender]
+        preload: [:sender, :attachments, forwarded_from: :sender]
     )
   end
 
@@ -1425,7 +1502,7 @@ defmodule Eden.Chat do
          :ok <- ensure_not_deleted(source),
          target_id when is_integer(target_id) <- safe_id(target_conversation_id),
          :ok <- ensure_member(scope, target_id) do
-      do_forward(user, target_id, Repo.preload(source, :attachment))
+      do_forward(user, target_id, Repo.preload(source, :attachments))
     else
       :error -> {:error, :not_found}
       error -> error
@@ -1442,7 +1519,7 @@ defmodule Eden.Chat do
   defp insert_forward_tx(user, target_conversation_id, source) do
     Repo.transact(fn ->
       with {:ok, message} <- insert_forward(user, target_conversation_id, source),
-           :ok <- copy_attachment(message.id, source.attachment) do
+           :ok <- copy_attachments(message.id, source.attachments) do
         {:ok, message}
       end
     end)
@@ -1477,32 +1554,37 @@ defmodule Eden.Chat do
   # returning the blob keys safe to delete afterwards (no side effects in the txn).
   defp soft_delete(message) do
     Repo.transact(fn ->
-      message = Repo.preload(message, :attachment)
-      orphan_keys = unshared_blob_keys(message.attachment)
-      if message.attachment, do: Repo.delete(message.attachment)
+      message = Repo.preload(message, :attachments)
+      orphan_keys = unshared_blob_keys(message.attachments)
+      Enum.each(message.attachments, &Repo.delete/1)
 
       with {:ok, tombstone} <-
              message
              |> Ecto.Changeset.change(deleted_at: now(), body: "")
              |> Repo.update() do
-        {:ok, {Repo.preload(tombstone, [:sender, :attachment], force: true), orphan_keys}}
+        {:ok, {Repo.preload(tombstone, [:sender, :attachments], force: true), orphan_keys}}
       end
     end)
   end
 
-  # Blob keys that no OTHER attachment references — safe to delete once this
-  # attachment's row is gone. (Forwards re-reference the same storage_key.)
-  defp unshared_blob_keys(nil), do: []
+  # Blob keys none of these attachments' siblings (or any other attachment)
+  # reference — safe to delete once their rows are gone. (Forwards re-reference
+  # the same storage_key.) The album's own ids are excluded together so two
+  # photos sharing nothing each still get cleaned.
+  defp unshared_blob_keys(attachments) do
+    ids = Enum.map(attachments, & &1.id)
 
-  defp unshared_blob_keys(%Attachment{} = attachment) do
-    [attachment.storage_key, attachment.thumbnail_key]
-    |> Enum.reject(fn key -> is_nil(key) or blob_shared?(key, attachment.id) end)
+    attachments
+    |> Enum.flat_map(&[&1.storage_key, &1.thumbnail_key])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.reject(&blob_shared_outside?(&1, ids))
   end
 
-  defp blob_shared?(key, exclude_id) do
+  defp blob_shared_outside?(key, exclude_ids) do
     Repo.exists?(
       from a in Attachment,
-        where: a.id != ^exclude_id and (a.storage_key == ^key or a.thumbnail_key == ^key)
+        where: a.id not in ^exclude_ids and (a.storage_key == ^key or a.thumbnail_key == ^key)
     )
   end
 
@@ -1543,11 +1625,25 @@ defmodule Eden.Chat do
     |> Repo.insert()
   end
 
-  defp copy_attachment(_message_id, nil), do: :ok
+  # Re-reference each source attachment into the forwarded message, preserving
+  # order. The same storage_key/thumbnail_key are shared (delete spares blobs a
+  # forward still references); processing is re-enqueued only for a copy whose
+  # source had no preview yet.
+  defp copy_attachments(message_id, sources) do
+    sources
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {source, idx}, :ok ->
+      case copy_attachment(message_id, source, idx) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
 
-  defp copy_attachment(message_id, %Attachment{} = source) do
+  defp copy_attachment(message_id, %Attachment{} = source, position) do
     attrs =
-      Map.take(source, [
+      source
+      |> Map.take([
         :kind,
         :storage_key,
         :content_type,
@@ -1558,6 +1654,7 @@ defmodule Eden.Chat do
         :duration,
         :thumbnail_key
       ])
+      |> Map.put(:position, position)
 
     %Attachment{message_id: message_id}
     |> Attachment.changeset(attrs)
@@ -1773,7 +1870,7 @@ defmodule Eden.Chat do
     resurface_direct(conversation_id)
     # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
     # bubble would phantom-render its "Forwarded" label on realtime messages.
-    message = Repo.preload(message, [:sender, :attachment, forwarded_from: :sender])
+    message = Repo.preload(message, [:sender, :attachments, forwarded_from: :sender])
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
     message
@@ -1794,17 +1891,26 @@ defmodule Eden.Chat do
     )
   end
 
-  defp insert_attachment_message(user, conversation_id, message_attrs, attachment_attrs) do
+  defp insert_album_message(user, conversation_id, message_attrs, prepared) do
     Repo.transact(fn ->
       with {:ok, message} <-
              %Message{conversation_id: conversation_id, sender_id: user.id}
              |> Message.photo_changeset(message_attrs)
              |> Repo.insert(),
-           {:ok, _attachment} <-
-             %Attachment{message_id: message.id}
-             |> Attachment.changeset(attachment_attrs)
-             |> Repo.insert() do
-        {:ok, message}
+           :ok <- insert_attachments(message.id, prepared) do
+        {:ok, Repo.preload(message, :attachments)}
+      end
+    end)
+  end
+
+  defp insert_attachments(message_id, prepared) do
+    Enum.reduce_while(prepared, :ok, fn attrs, :ok ->
+      %Attachment{message_id: message_id}
+      |> Attachment.changeset(attrs)
+      |> Repo.insert()
+      |> case do
+        {:ok, _attachment} -> {:cont, :ok}
+        {:error, changeset} -> {:halt, {:error, changeset}}
       end
     end)
   end
@@ -1833,7 +1939,7 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.sender_id == ^sender_id and m.client_id == ^client_id,
-        preload: [:sender, :attachment]
+        preload: [:sender, :attachments]
     )
   end
 
@@ -1922,7 +2028,7 @@ defmodule Eden.Chat do
         :ok
 
       message ->
-        message = Repo.preload(message, [:sender, :attachment, forwarded_from: :sender])
+        message = Repo.preload(message, [:sender, :attachments, forwarded_from: :sender])
         broadcast(message.conversation_id, {:thumbnail_ready, message})
     end
   end

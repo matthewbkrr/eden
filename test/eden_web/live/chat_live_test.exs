@@ -141,8 +141,8 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert html =~ ~s(src="/files/#{message.attachment.id}")
-      assert html =~ ~s(href="/files/#{message.attachment.id}")
+      assert html =~ ~s(src="/files/#{hd(message.attachments).id}")
+      assert html =~ ~s(href="/files/#{hd(message.attachments).id}")
     end
 
     test "renders a generic file as a download card with its name", ctx do
@@ -157,10 +157,10 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert message.attachment.kind == "file"
+      assert hd(message.attachments).kind == "file"
       assert html =~ "ed-file"
       assert html =~ "notes.txt"
-      assert html =~ ~s(href="/files/#{message.attachment.id}")
+      assert html =~ ~s(href="/files/#{hd(message.attachments).id}")
     end
 
     test "renders a video as an in-app player", ctx do
@@ -175,9 +175,9 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert message.attachment.kind == "video"
+      assert hd(message.attachments).kind == "video"
       assert html =~ "<video"
-      assert html =~ ~s(<source src="/files/#{message.attachment.id}")
+      assert html =~ ~s(<source src="/files/#{hd(message.attachments).id}")
       assert html =~ "video/mp4"
     end
 
@@ -190,12 +190,12 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      refute render(view) =~ "/files/#{message.attachment.id}/thumb"
+      refute render(view) =~ "/files/#{hd(message.attachments).id}/thumb"
 
       # Generating the thumbnail broadcasts on the conversation topic the view
       # is subscribed to, so the image source updates in place.
-      :ok = Chat.generate_thumbnail(message.attachment)
-      assert render(view) =~ "/files/#{message.attachment.id}/thumb"
+      :ok = Chat.generate_thumbnail(hd(message.attachments))
+      assert render(view) =~ "/files/#{hd(message.attachments).id}/thumb"
     end
   end
 

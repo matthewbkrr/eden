@@ -27,7 +27,10 @@ defmodule Eden.Chat.Message do
     belongs_to :sender, Eden.Accounts.User
     # Self-reference: the original this message was forwarded from (if any).
     belongs_to :forwarded_from, Eden.Chat.Message
-    has_one :attachment, Eden.Chat.Attachment
+    # Albums (#58): a message carries an ordered list of attachments (one for a
+    # plain photo/file send, several for an album). Always preload/render via
+    # this list — ordered by `position` so the grid is deterministic.
+    has_many :attachments, Eden.Chat.Attachment, preload_order: [asc: :position]
 
     # Threads (flat, Mattermost-style): a reply points at its root; the root
     # carries denormalized counters maintained by the context.

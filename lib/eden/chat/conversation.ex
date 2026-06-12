@@ -28,9 +28,12 @@ defmodule Eden.Chat.Conversation do
     # Computed for the conversation list (set by Chat.list_conversations/1).
     field :unread_count, :integer, virtual: true, default: 0
     field :last_message_body, :string, virtual: true
-    # The last message's attachment kind (image|video|file) or nil, for the
+    # The last message's first-attachment kind (image|video|file) or nil, for the
     # sidebar preview line.
     field :last_message_kind, :string, virtual: true
+    # How many attachments that message carries (#58) — drives "N photos" in the
+    # preview; 0/1 render as a single item.
+    field :last_message_attachment_count, :integer, virtual: true, default: 0
     # Whether the scoped user muted this chat — directly or via a muted folder.
     field :muted, :boolean, virtual: true, default: false
     # Whether the scoped user favorited this room (#42) — set by list_rooms.

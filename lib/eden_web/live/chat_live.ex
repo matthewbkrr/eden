@@ -100,7 +100,7 @@ defmodule EdenWeb.ChatLive do
       # special rendering, everything else becomes a downloadable file.
       |> allow_upload(:attachment,
         accept: :any,
-        max_entries: 1,
+        max_entries: Chat.max_album_entries(),
         max_file_size: Chat.max_attachment_bytes()
       )
 
@@ -3844,7 +3844,7 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
           {forwarded_label(@message.forwarded_from)}
         </span>
-        <.attachment_view :if={@message.attachment} attachment={@message.attachment} />
+        <.album_view :if={@message.attachments != []} attachments={@message.attachments} message_id={@message.id} />
         <div :if={@message.body != ""} class="break-words ed-flat__body">
           <.body_part :for={part <- linkify(@message.body)} part={part} />
         </div>
@@ -3931,7 +3931,7 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
           {forwarded_label(@message.forwarded_from)}
         </span>
-        <.attachment_view :if={@message.attachment} attachment={@message.attachment} />
+        <.album_view :if={@message.attachments != []} attachments={@message.attachments} message_id={@message.id} />
         <span :if={@message.body != ""} class="break-words">
           <.body_part
             :for={part <- linkify(@message.body)}
@@ -4042,7 +4042,58 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :attachments, :list, required: true
+  attr :message_id, :any, required: true
+
+  # A message's attachments (#58). One renders exactly as before; several render
+  # as a media grid (images as lightbox tiles, sharing a gallery so the lightbox
+  # can page through them) followed by any videos/files stacked as full items.
+  defp album_view(%{attachments: [single]} = assigns) do
+    assigns = assign(assigns, :attachment, single)
+
+    ~H"""
+    <.attachment_view attachment={@attachment} />
+    """
+  end
+
+  defp album_view(assigns) do
+    images = Enum.filter(assigns.attachments, &(&1.kind == "image"))
+
+    assigns =
+      assigns
+      |> assign(:images, images)
+      |> assign(:rest, assigns.attachments -- images)
+      |> assign(:gallery, "album-#{assigns.message_id}")
+
+    ~H"""
+    <div class={["ed-album mb-1", "ed-album--#{album_cols(length(@images))}"]} :if={@images != []}>
+      <a
+        :for={image <- @images}
+        id={"att-#{image.id}"}
+        phx-hook=".Lightbox"
+        data-full={~p"/files/#{image.id}"}
+        data-gallery={@gallery}
+        href={~p"/files/#{image.id}"}
+        target="_blank"
+        rel="noopener"
+        class="ed-album__tile cursor-zoom-in"
+      >
+        <img src={thumb_src(image)} loading="lazy" alt={image.filename || gettext("Photo")} />
+      </a>
+    </div>
+    <.attachment_view :for={attachment <- @rest} attachment={attachment} />
+    """
+  end
+
+  # Album grid columns by image count: a pair stays 2-up, a trio 3-up, a quad is
+  # a 2x2, larger sets settle on a 3-column grid (rows fill left to right).
+  defp album_cols(2), do: 2
+  defp album_cols(3), do: 3
+  defp album_cols(4), do: 2
+  defp album_cols(_n), do: 3
+
   attr :attachment, :map, required: true
+  attr :gallery, :string, default: nil
 
   # Renders an attachment by kind: a lightbox-able image, an in-app video player,
   # or a download card for a generic file.
@@ -4052,6 +4103,7 @@ defmodule EdenWeb.ChatLive do
       id={"att-#{@attachment.id}"}
       phx-hook=".Lightbox"
       data-full={~p"/files/#{@attachment.id}"}
+      data-gallery={@gallery}
       href={~p"/files/#{@attachment.id}"}
       target="_blank"
       rel="noopener"
@@ -4898,40 +4950,45 @@ defmodule EdenWeb.ChatLive do
   defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
   defp send_attachment(socket, scope, conversation, body) do
-    # Store + persist inside the consume callback, while the temp file exists.
-    results =
+    # consume_uploaded_entries cleans up each temp file as its callback returns,
+    # so to build ONE album from several entries we copy each to a stable temp,
+    # then persist them together (atomic) and remove the temps.
+    sources =
       consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
-        {:ok,
-         Chat.create_attachment_message(scope, conversation.id, %{
-           path: path,
-           body: body,
-           filename: entry.client_name
-         })}
+        stable = Path.join(System.tmp_dir!(), "eden-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
       end)
 
-    case results do
-      [{:ok, _message}] ->
-        {:noreply, assign(socket, composer: empty_composer())}
-
-      [{:error, reason}] ->
-        {:noreply, put_flash(socket, :error, attachment_error(reason))}
-
-      # No entry was consumed (the file is still uploading or failed client-side
-      # validation). Don't drop a caption the user already typed.
+    case sources do
+      # No entry was consumed (still uploading or failed client-side validation).
+      # Don't drop a caption the user already typed.
       [] ->
         if String.trim(body) == "",
           do: {:noreply, socket},
           else: send_text(socket, scope, conversation, body)
+
+      sources ->
+        result = Chat.create_album_message(scope, conversation.id, sources, %{body: body})
+        Enum.each(sources, &File.rm(&1.path))
+
+        case result do
+          {:ok, _message} -> {:noreply, assign(socket, composer: empty_composer())}
+          {:error, reason} -> {:noreply, put_flash(socket, :error, attachment_error(reason))}
+        end
     end
   end
 
   defp attachment_error(:too_large), do: gettext("That file is too large.")
   defp attachment_error(:empty), do: gettext("That file is empty.")
+  defp attachment_error(:too_many), do: gettext("Too many files (up to %{n}).", n: Chat.max_album_entries())
   defp attachment_error(_other), do: gettext("Couldn't send that file.")
 
   # Client-side upload validation errors surfaced by `allow_upload/3`.
   defp upload_error_text(:too_large), do: gettext("File too large")
-  defp upload_error_text(:too_many_files), do: gettext("One file at a time")
+  defp upload_error_text(:too_many_files),
+    do: gettext("Up to %{n} files", n: Chat.max_album_entries())
+
   defp upload_error_text(_other), do: gettext("Invalid file")
 
   # Prefer the lighter thumbnail once it exists; fall back to the original while
