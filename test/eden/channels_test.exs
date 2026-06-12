@@ -762,6 +762,106 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "room menu actions (#42)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      %{channel: channel, general: general}
+    end
+
+    test "general is undeletable; ordinary rooms still delete", ctx do
+      %{alice: alice, channel: channel, general: general} = ctx
+
+      assert {:error, :general} = Channels.delete_room(scope(alice), general.id)
+      assert {:ok, _} = Channels.list_rooms(scope(alice), channel.id)
+
+      {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      assert :ok = Channels.delete_room(scope(alice), ops.id)
+    end
+
+    test "favorites float to the top per user and survive renames", ctx do
+      %{alice: alice, bob: bob, channel: channel, general: general} = ctx
+      {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      {:ok, zoo} = Channels.create_room(scope(alice), channel.id, %{"name" => "zoo"})
+      :ok = Eden.Chat.join_room(ops.id, bob.id)
+      :ok = Eden.Chat.join_room(zoo.id, bob.id)
+
+      # alice favorites zoo — it floats to her top, bob's order is untouched.
+      assert {:ok, :favorited} = Eden.Chat.toggle_room_favorite(scope(alice), zoo.id)
+      {:ok, alice_rooms} = Channels.list_rooms(scope(alice), channel.id)
+      assert ["zoo", "general", "ops"] == Enum.map(alice_rooms, & &1.name)
+      assert [%{favorite: true} | _] = alice_rooms
+
+      {:ok, bob_rooms} = Channels.list_rooms(scope(bob), channel.id)
+      assert ["general", "ops", "zoo"] == Enum.map(bob_rooms, & &1.name)
+
+      # Survives a rename; unfavorite restores canonical order.
+      {:ok, _} = Channels.rename_room(scope(alice), zoo.id, %{"name" => "zoo2"})
+      {:ok, alice_rooms} = Channels.list_rooms(scope(alice), channel.id)
+      assert [%{name: "zoo2", favorite: true} | _] = alice_rooms
+
+      assert {:ok, :unfavorited} = Eden.Chat.toggle_room_favorite(scope(alice), zoo.id)
+      {:ok, alice_rooms} = Channels.list_rooms(scope(alice), channel.id)
+      assert ["general", "ops", "zoo2"] == Enum.map(alice_rooms, & &1.name)
+    end
+
+    test "favoriting a room you're not in is :not_found", ctx do
+      %{alice: alice, channel: channel} = ctx
+      carol = user_fixture(%{username: "carolfav"})
+
+      {:ok, priv} =
+        Channels.create_room(scope(alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      assert {:error, :not_found} = Eden.Chat.toggle_room_favorite(scope(carol), priv.id)
+    end
+
+    test "decline flips the request and allows a re-knock", ctx do
+      %{alice: alice, bob: bob, channel: channel} = ctx
+
+      {:ok, priv} =
+        Channels.create_room(scope(alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+      msg = Eden.Chat.pending_join_request(priv.id, bob.id)
+
+      # A plain member can't decline.
+      assert {:error, :forbidden} = Channels.decline_room_join(scope(bob), msg.id)
+
+      assert :ok = Channels.decline_room_join(scope(alice), msg.id)
+      refute Eden.Chat.room_member?(priv.id, bob.id)
+      assert is_nil(Eden.Chat.pending_join_request(priv.id, bob.id))
+
+      # Only "pending" blocks a re-request — bob may knock again.
+      assert {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+    end
+
+    test "list_invites labels room invites with their room", ctx do
+      %{alice: alice, channel: channel} = ctx
+
+      {:ok, priv} =
+        Channels.create_room(scope(alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      {:ok, _, _} = Channels.create_invite(scope(alice), channel.id)
+      {:ok, _, _} = Channels.create_room_invite(scope(alice), priv.id)
+
+      {:ok, invites} = Channels.list_invites(scope(alice), channel.id)
+      rooms = Enum.map(invites, &(&1.room && &1.room.name))
+      assert "secret" in rooms
+      assert nil in rooms
+    end
+  end
+
   describe "cross-layer (#32)" do
     setup %{alice: alice, bob: bob} do
       {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
