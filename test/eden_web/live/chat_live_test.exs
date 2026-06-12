@@ -663,7 +663,7 @@ defmodule EdenWeb.ChatLiveTest do
 
     test "no folder tabs until the user has a folder", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, html} = live(conn, ~p"/app")
+      {:ok, _view, html} = live(conn, ~p"/app")
       refute html =~ "All Chats"
 
       {:ok, _} = Chat.create_folder(Scope.for_user(ctx.alice), %{"name" => "Work"})

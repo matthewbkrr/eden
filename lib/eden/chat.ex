@@ -904,6 +904,67 @@ defmodule Eden.Chat do
     end
   end
 
+  @doc """
+  Searches message bodies in the corporate layer (#43), scoped to
+  `{:channel, channel_id}` (across that channel's rooms the user is a member
+  of) or `{:room, room_id}` (one room). Same guards as `search/2` (min
+  #{@search_min_chars} chars, escaped ILIKE, capped at #{@search_limit});
+  tombstoned/per-user-hidden messages never match. Replies ARE included —
+  their permalinks open the thread panel. Results preload sender +
+  conversation (for the room-name breadcrumb).
+  """
+  def search_rooms(%Scope{user: user}, search_scope, query) do
+    term = query |> to_string() |> String.trim()
+
+    if String.length(term) < @search_min_chars do
+      []
+    else
+      pattern = "%" <> escape_like(term) <> "%"
+
+      room_search_base(user, pattern)
+      |> room_search_scope(search_scope)
+      |> Repo.all()
+    end
+  end
+
+  defp room_search_base(user, pattern) do
+    from(m in Message,
+      join: mem in Membership,
+      # Room memberships are delete-based today (leave_rooms hard-deletes), so
+      # left_at is always nil here — the filter keeps parity with
+      # search_messages/2 and stays correct should rooms ever go soft-leave.
+      on:
+        mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
+          is_nil(mem.left_at),
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: not is_nil(c.channel_id),
+      # Only real messages — join-request system rows (kind "system") carry an
+      # empty body and a meta payload, never something a user means to find.
+      where: m.kind == "user",
+      where: ilike(m.body, ^pattern) and is_nil(m.deleted_at) and is_nil(d.id),
+      order_by: [desc: m.id],
+      limit: @search_limit,
+      preload: [:sender, :conversation]
+    )
+  end
+
+  defp room_search_scope(query, {:channel, channel_id}) do
+    case Ids.normalize(channel_id) do
+      id when is_integer(id) -> where(query, [m, mem, c], c.channel_id == ^id)
+      _ -> where(query, [m], false)
+    end
+  end
+
+  defp room_search_scope(query, {:room, room_id}) do
+    case Ids.normalize(room_id) do
+      id when is_integer(id) -> where(query, [m], m.conversation_id == ^id)
+      _ -> where(query, [m], false)
+    end
+  end
+
   # %, _ and \ are LIKE metacharacters; escape them so they match literally.
   defp escape_like(term), do: String.replace(term, ~r/[\\%_]/, fn ch -> "\\" <> ch end)
 

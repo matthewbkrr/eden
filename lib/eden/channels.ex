@@ -256,7 +256,11 @@ defmodule Eden.Channels do
     end
   end
 
-  @doc "Renames a room (admin+ of its channel)."
+  @doc """
+  Saves room settings (admin+ of its channel): name and, since #43, visibility.
+  Kept under its historical name — the `:room_renamed` broadcast likewise covers
+  any settings change (subscribers re-read the room list either way).
+  """
   def rename_room(%Scope{} = scope, room_id, attrs) do
     with %{} = room <- Chat.get_room(room_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),

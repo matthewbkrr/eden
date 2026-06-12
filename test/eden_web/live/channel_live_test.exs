@@ -190,6 +190,167 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "corporate search (#43)" do
+    setup [:setup_channel]
+
+    test "channel search groups room-name and message matches; click deep-links", ctx do
+      {:ok, lounge} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "lounge"})
+
+      {:ok, _} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "lounge talk"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_change(view, "channel_search", %{"q" => "lounge"})
+      # Room-name match links to the room; message match carries the breadcrumb.
+      # NB: the highlight splits the matched term out into <mark>, so assert
+      # the pieces — the literal "lounge talk" substring never exists in HTML.
+      assert has_element?(view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{lounge.id}"]))
+      assert html =~ "ed-mark"
+      assert html =~ "talk"
+
+      assert has_element?(
+               view,
+               ~s(a[href^="/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/"])
+             )
+
+      # Clearing restores the rooms list.
+      render_click(view, "clear_channel_search", %{})
+      assert has_element?(view, "#rooms-list")
+    end
+
+    test "a whitespace-only query never hijacks the rooms list", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_change(view, "channel_search", %{"q" => " "})
+      assert has_element?(view, "#rooms-list")
+      refute html =~ "ed-search__group"
+    end
+
+    test "a message-result breadcrumb carries the room's glyph, not a bare #", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "vault",
+          "visibility" => "private"
+        })
+
+      {:ok, _} = Chat.create_message(scope(ctx.alice), priv.id, %{"body" => "needle plans"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_change(view, "channel_search", %{"q" => "needle"})
+
+      assert has_element?(
+               view,
+               ~s(a[href^="/channels/#{ctx.channel.id}/r/#{priv.id}/m/"] .hero-lock-closed-micro)
+             )
+    end
+
+    test "channel search never sees rooms the user isn't in", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "warroom",
+          "visibility" => "private"
+        })
+
+      {:ok, _} = Chat.create_message(scope(ctx.alice), priv.id, %{"body" => "warroom plans"})
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_change(view, "channel_search", %{"q" => "warroom"})
+      refute html =~ "warroom plans"
+      refute html =~ ">warroom<"
+    end
+
+    test "in-room search finds messages and replies; a reply result opens the thread", ctx do
+      {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "agenda"})
+      {:ok, reply} = Chat.create_reply(scope(ctx.bob), root.id, %{"body" => "agenda follow-up"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      render_click(view, "toggle_room_search", %{})
+      html = render_change(view, "room_search", %{"q" => "agenda"})
+      # The match is wrapped in <mark>, so assert the unmatched tail.
+      assert html =~ "follow-up"
+      assert html =~ "ed-room-search__panel"
+
+      # Following the reply permalink opens the thread panel.
+      {:ok, view, _html} =
+        live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/#{reply.id}")
+
+      assert has_element?(view, ".ed-thread")
+    end
+  end
+
+  describe "room visibility picker" do
+    setup [:setup_channel]
+
+    test "the create modal offers Open/Private and creates a private room", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_click(view, "open_new_room", %{})
+      assert html =~ "Open"
+      assert html =~ "Private"
+
+      view
+      |> form("#room-form", %{"room" => %{"name" => "secret", "visibility" => "private"}})
+      |> render_submit()
+
+      {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+      assert %{visibility: "private"} = Enum.find(rooms, &(&1.name == "secret"))
+      # The row shows the lock glyph (general keeps #, open rooms the globe).
+      assert render(view) =~ "hero-lock-closed-micro"
+    end
+
+    test "room glyphs: general is always #, open rooms get the globe, private the lock", ctx do
+      {:ok, _open} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "lounge"})
+
+      {:ok, _priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      assert html =~ "hero-globe-alt-micro"
+      assert html =~ "hero-lock-closed-micro"
+      # general renders the literal hash, not an icon.
+      assert has_element?(view, "#room-#{ctx.general.id} .ed-room__hash span", "#")
+      refute has_element?(view, "#room-#{ctx.general.id} .hero-globe-alt-micro")
+    end
+
+    test "the rename modal hides the picker for general but offers it elsewhere", ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      # general: no Access fieldset.
+      html = render_click(view, "open_room_rename", %{"id" => to_string(ctx.general.id)})
+      refute html =~ "Access"
+      render_click(view, "close_room_modal", %{})
+
+      # ordinary room: the picker is there, and flipping to private works.
+      html = render_click(view, "open_room_rename", %{"id" => to_string(ops.id)})
+      assert html =~ "Access"
+
+      view
+      |> form("#room-form", %{"room" => %{"name" => "ops", "visibility" => "private"}})
+      |> render_submit()
+
+      {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+      assert %{visibility: "private"} = Enum.find(rooms, &(&1.name == "ops"))
+    end
+  end
+
   describe "room menu (#42)" do
     setup [:setup_channel]
 
