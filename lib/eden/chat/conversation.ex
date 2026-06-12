@@ -17,6 +17,10 @@ defmodule Eden.Chat.Conversation do
     field :channel_id, :id
     field :name, :string
     field :position, :integer, default: 0
+    # Room access (#41): "open" (any link auto-joins) | "private" (admin add /
+    # invite / knock). Only consulted for channel rooms; DMs/groups carry the
+    # default "open" as dead data (never read). `general` is always "open".
+    field :visibility, :string, default: "open"
 
     # Computed for the conversation list (set by Chat.list_conversations/1).
     field :unread_count, :integer, virtual: true, default: 0
@@ -42,17 +46,20 @@ defmodule Eden.Chat.Conversation do
   end
 
   @max_room_name 60
+  @visibilities ~w(open private)
 
   @doc "Changeset for channel rooms (name is the room's identity)."
   def room_changeset(conversation, attrs) do
     conversation
-    |> cast(attrs, [:name, :position])
+    |> cast(attrs, [:name, :position, :visibility])
     # Whitespace-only params become a nil change (Ecto's empty_values) — the
     # trim must tolerate nil so validate_required reports the blank.
     |> update_change(:name, &(&1 && String.trim(&1)))
     |> validate_required([:name])
     |> validate_length(:name, max: @max_room_name)
+    |> validate_inclusion(:visibility, @visibilities)
   end
 
   def max_room_name, do: @max_room_name
+  def visibilities, do: @visibilities
 end
