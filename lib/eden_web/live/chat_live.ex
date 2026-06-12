@@ -331,6 +331,15 @@ defmodule EdenWeb.ChatLive do
     {:noreply, cancel_upload(socket, :attachment, ref)}
   end
 
+  def handle_event("cancel_all_uploads", _params, socket) do
+    socket =
+      Enum.reduce(socket.assigns.uploads.attachment.entries, socket, fn entry, acc ->
+        cancel_upload(acc, :attachment, entry.ref)
+      end)
+
+    {:noreply, socket}
+  end
+
   def handle_event("load_more", _params, socket) do
     %{current_scope: scope, selected: conversation, oldest_id: oldest_id} = socket.assigns
 
@@ -1933,45 +1942,101 @@ defmodule EdenWeb.ChatLive do
             class="flex flex-col gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
+            <%!-- Attachment tray (#58): media thumbnails grid + a file list,
+                  scaling with the selection; the composer input is the caption. --%>
             <div
-              :for={entry <- @uploads.attachment.entries}
+              :if={@uploads.attachment.entries != []}
               data-upload-preview
-              class="flex items-center gap-3"
+              class="ed-attach-tray"
+              role="group"
+              aria-label={
+                ngettext(
+                  "%{count} attachment",
+                  "%{count} attachments",
+                  length(@uploads.attachment.entries)
+                )
+              }
             >
-              <.live_img_preview
-                :if={image_entry?(entry)}
-                entry={entry}
-                class="rounded-[var(--ed-radius)] object-cover shrink-0"
-                style="width:3rem; height:3rem;"
-              />
-              <span
-                :if={!image_entry?(entry)}
-                class="ed-file-chip shrink-0"
-                aria-hidden="true"
-              >
-                <.icon name={entry_icon(entry)} class="size-5" />
-              </span>
-              <span class="flex-1 min-w-0">
-                <span class="block truncate" style="font-size:0.8125rem;">{entry.client_name}</span>
-                <span class="block" style="font-size:0.75rem; color: var(--ed-muted);">
-                  {human_size(entry.client_size)}
+              <div class="ed-attach-tray__head">
+                <span class="ed-attach-tray__title">
+                  {ngettext(
+                    "%{count} attachment",
+                    "%{count} attachments",
+                    length(@uploads.attachment.entries)
+                  )}
                 </span>
-              </span>
-              <span
-                :for={err <- upload_errors(@uploads.attachment, entry)}
-                style="font-size:0.75rem; color: var(--ed-danger);"
+                <button
+                  type="button"
+                  class="ed-attach-tray__clear"
+                  phx-click="cancel_all_uploads"
+                >
+                  {gettext("Clear all")}
+                </button>
+              </div>
+
+              <div
+                :if={Enum.any?(@uploads.attachment.entries, &image_entry?/1)}
+                class="ed-attach-media"
               >
-                {upload_error_text(err)}
-              </span>
-              <button
-                type="button"
-                class="ed-btn--icon"
-                phx-click="cancel_upload"
-                phx-value-ref={entry.ref}
-                aria-label={gettext("Remove")}
+                <div
+                  :for={entry <- Enum.filter(@uploads.attachment.entries, &image_entry?/1)}
+                  class="ed-attach-thumb"
+                >
+                  <.live_img_preview entry={entry} class="ed-attach-thumb__img" />
+                  <button
+                    type="button"
+                    class="ed-attach-thumb__remove"
+                    phx-click="cancel_upload"
+                    phx-value-ref={entry.ref}
+                    aria-label={gettext("Remove %{name}", name: entry.client_name)}
+                  >
+                    <.icon name="hero-x-mark-micro" class="size-3.5" />
+                  </button>
+                  <progress
+                    :if={entry.progress > 0 and entry.progress < 100}
+                    value={entry.progress}
+                    max="100"
+                    class="ed-attach-thumb__bar"
+                  />
+                </div>
+              </div>
+
+              <div
+                :for={entry <- Enum.reject(@uploads.attachment.entries, &image_entry?/1)}
+                class="ed-attach-file"
               >
-                <.icon name="hero-x-mark-mini" class="size-5" />
-              </button>
+                <span class="ed-file-chip shrink-0" aria-hidden="true">
+                  <.icon name={entry_icon(entry)} class="size-5" />
+                </span>
+                <span class="flex-1 min-w-0">
+                  <span class="block truncate" style="font-size:0.8125rem;">{entry.client_name}</span>
+                  <span class="block" style="font-size:0.75rem; color: var(--ed-muted);">
+                    {human_size(entry.client_size)}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  class="ed-btn--icon shrink-0"
+                  phx-click="cancel_upload"
+                  phx-value-ref={entry.ref}
+                  aria-label={gettext("Remove %{name}", name: entry.client_name)}
+                >
+                  <.icon name="hero-x-mark-mini" class="size-5" />
+                </button>
+              </div>
+
+              <p
+                :for={
+                  {entry, err} <-
+                    Enum.flat_map(
+                      @uploads.attachment.entries,
+                      fn e -> Enum.map(upload_errors(@uploads.attachment, e), &{e, &1}) end
+                    )
+                }
+                class="ed-attach-err"
+              >
+                {entry.client_name}: {upload_error_text(err)}
+              </p>
             </div>
 
             <div class="flex items-center gap-2">
@@ -1982,11 +2047,13 @@ defmodule EdenWeb.ChatLive do
               </label>
               <input
                 type="text"
+                id="composer-body"
                 name="message[body]"
                 value={@composer[:body].value}
                 class="ed-input"
                 placeholder={gettext("Message")}
                 autocomplete="off"
+                phx-hook=".PasteUpload"
               />
               <button
                 class="ed-btn ed-btn--primary shrink-0"
@@ -2722,38 +2789,93 @@ defmodule EdenWeb.ChatLive do
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".Lightbox">
         // In-app image viewer: click a photo to open it full-screen in a single
-        // shared overlay (close on backdrop click or Esc). Cmd/Ctrl/Shift/middle
-        // click fall through to the normal "open original in a new tab".
+        // shared overlay (close on backdrop click or Esc). When the tile belongs
+        // to an album (data-gallery), the overlay pages through that album's
+        // photos with on-screen arrows and ←/→. Cmd/Ctrl/Shift/middle click fall
+        // through to the normal "open original in a new tab".
         export default {
           mounted() {
             this.el.addEventListener("click", (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
               e.preventDefault()
-              this.openLightbox(this.el.dataset.full)
+              this.openLightbox()
             })
           },
-          openLightbox(src) {
-            let box = document.getElementById("ed-lightbox")
-            if (!box) {
-              box = document.createElement("div")
-              box.id = "ed-lightbox"
-              box.className = "ed-lightbox"
-              const img = document.createElement("img")
-              img.alt = ""
-              box.appendChild(img)
-              const close = () => {
-                box.classList.remove("ed-lightbox--open")
-                document.body.style.overflow = ""
-                document.removeEventListener("keydown", box.__onKey)
-              }
-              box.__onKey = (e) => { if (e.key === "Escape") close() }
-              box.addEventListener("click", close)
-              document.body.appendChild(box)
+          openLightbox() {
+            const gallery = this.el.dataset.gallery
+            const tiles = gallery
+              ? [...document.querySelectorAll(`[data-gallery="${gallery}"]`)]
+              : [this.el]
+            let i = Math.max(0, tiles.indexOf(this.el))
+
+            const box = this.box()
+            const img = box.querySelector(".ed-lightbox__img")
+            const show = (n) => {
+              i = (n + tiles.length) % tiles.length
+              img.src = tiles[i].dataset.full
             }
-            box.querySelector("img").src = src
+            box.__show = show
+            box.__step = (d) => show(i + d)
+            box.classList.toggle("ed-lightbox--gallery", tiles.length > 1)
+            show(i)
+
             box.classList.add("ed-lightbox--open")
             document.body.style.overflow = "hidden"
             document.addEventListener("keydown", box.__onKey)
+          },
+          box() {
+            let box = document.getElementById("ed-lightbox")
+            if (box) return box
+
+            box = document.createElement("div")
+            box.id = "ed-lightbox"
+            box.className = "ed-lightbox"
+            box.innerHTML =
+              '<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="Previous">‹</button>' +
+              '<img class="ed-lightbox__img" alt="">' +
+              '<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="Next">›</button>'
+
+            const close = () => {
+              box.classList.remove("ed-lightbox--open")
+              document.body.style.overflow = ""
+              document.removeEventListener("keydown", box.__onKey)
+            }
+            box.__onKey = (e) => {
+              if (e.key === "Escape") close()
+              else if (e.key === "ArrowLeft") box.__step(-1)
+              else if (e.key === "ArrowRight") box.__step(1)
+            }
+            box.addEventListener("click", (e) => {
+              const nav = e.target.closest(".ed-lightbox__nav")
+              if (nav) {
+                e.stopPropagation()
+                box.__step(nav.classList.contains("ed-lightbox__nav--next") ? 1 : -1)
+              } else if (!e.target.closest(".ed-lightbox__img")) {
+                close()
+              }
+            })
+            document.body.appendChild(box)
+            return box
+          },
+        }
+      </script>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".PasteUpload">
+        // Paste files/images from the clipboard straight into the composer's
+        // upload (#58): screenshots and copied files land in the attachment tray.
+        export default {
+          mounted() {
+            this.el.addEventListener("paste", (e) => {
+              const files = [...(e.clipboardData?.files || [])]
+              if (!files.length) return
+              const input = this.el.closest("form")?.querySelector('input[type="file"]')
+              if (!input) return
+              e.preventDefault()
+              const dt = new DataTransfer()
+              files.forEach((f) => dt.items.add(f))
+              input.files = dt.files
+              input.dispatchEvent(new Event("input", { bubbles: true }))
+            })
           },
         }
       </script>
@@ -3732,13 +3854,20 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
-  # Sidebar preview line. An attachment shows "<emoji> <caption|kind>" so the row
-  # is never blank (keeps item height + the time position consistent).
+  # Sidebar preview line. An attachment shows "<emoji> <caption|label>" so the row
+  # is never blank (keeps item height + the time position consistent). An album
+  # (count > 1) shows a counted label ("3 photos") in place of the single label.
   defp convo_preview(%{last_message_kind: kind} = conversation)
        when kind in ~w(image video file) do
-    {emoji, label} = attachment_label(kind)
+    {emoji, _} = attachment_label(kind)
     caption = conversation.last_message_body
-    emoji <> " " <> if(is_binary(caption) and caption != "", do: caption, else: label)
+
+    body =
+      if is_binary(caption) and caption != "",
+        do: caption,
+        else: album_label(kind, conversation.last_message_attachment_count || 1)
+
+    emoji <> " " <> body
   end
 
   defp convo_preview(%{last_message_body: body}) when is_binary(body) and body != "", do: body
@@ -3747,6 +3876,13 @@ defmodule EdenWeb.ChatLive do
   defp attachment_label("image"), do: {"📷", gettext("Photo")}
   defp attachment_label("video"), do: {"🎬", gettext("Video")}
   defp attachment_label("file"), do: {"📎", gettext("File")}
+
+  # A single attachment keeps its plain label; an album is counted by its first
+  # attachment's kind ("3 photos") — the common pure-media case reads naturally.
+  defp album_label(kind, count) when count <= 1, do: elem(attachment_label(kind), 1)
+  defp album_label("image", n), do: ngettext("%{count} photo", "%{count} photos", n)
+  defp album_label("video", n), do: ngettext("%{count} video", "%{count} videos", n)
+  defp album_label(_file, n), do: ngettext("%{count} file", "%{count} files", n)
 
   attr :id, :string, required: true
   attr :message, :map, required: true
@@ -3844,7 +3980,11 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
           {forwarded_label(@message.forwarded_from)}
         </span>
-        <.album_view :if={@message.attachments != []} attachments={@message.attachments} message_id={@message.id} />
+        <.album_view
+          :if={@message.attachments != []}
+          attachments={@message.attachments}
+          message_id={@message.id}
+        />
         <div :if={@message.body != ""} class="break-words ed-flat__body">
           <.body_part :for={part <- linkify(@message.body)} part={part} />
         </div>
@@ -3931,7 +4071,11 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
           {forwarded_label(@message.forwarded_from)}
         </span>
-        <.album_view :if={@message.attachments != []} attachments={@message.attachments} message_id={@message.id} />
+        <.album_view
+          :if={@message.attachments != []}
+          attachments={@message.attachments}
+          message_id={@message.id}
+        />
         <span :if={@message.body != ""} class="break-words">
           <.body_part
             :for={part <- linkify(@message.body)}
@@ -4066,7 +4210,7 @@ defmodule EdenWeb.ChatLive do
       |> assign(:gallery, "album-#{assigns.message_id}")
 
     ~H"""
-    <div class={["ed-album mb-1", "ed-album--#{album_cols(length(@images))}"]} :if={@images != []}>
+    <div :if={@images != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@images))}"]}>
       <a
         :for={image <- @images}
         id={"att-#{image.id}"}
@@ -4949,6 +5093,10 @@ defmodule EdenWeb.ChatLive do
   defp nack(socket, nil), do: {:noreply, socket}
   defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
+  # Both paths are framework/app-generated, never user input: `path` is the
+  # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
+  # uuid. So the File.cp!/File.rm traversal warnings are false positives.
+  # sobelow_skip ["Traversal.FileModule"]
   defp send_attachment(socket, scope, conversation, body) do
     # consume_uploaded_entries cleans up each temp file as its callback returns,
     # so to build ONE album from several entries we copy each to a stable temp,
@@ -4981,11 +5129,15 @@ defmodule EdenWeb.ChatLive do
 
   defp attachment_error(:too_large), do: gettext("That file is too large.")
   defp attachment_error(:empty), do: gettext("That file is empty.")
-  defp attachment_error(:too_many), do: gettext("Too many files (up to %{n}).", n: Chat.max_album_entries())
+
+  defp attachment_error(:too_many),
+    do: gettext("Too many files (up to %{n}).", n: Chat.max_album_entries())
+
   defp attachment_error(_other), do: gettext("Couldn't send that file.")
 
   # Client-side upload validation errors surfaced by `allow_upload/3`.
   defp upload_error_text(:too_large), do: gettext("File too large")
+
   defp upload_error_text(:too_many_files),
     do: gettext("Up to %{n} files", n: Chat.max_album_entries())
 

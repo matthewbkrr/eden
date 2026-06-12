@@ -917,6 +917,102 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "create_album_message/4 (#58)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "stores several attachments in order on one message", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("plain text"), filename: "notes.txt"},
+        %{path: image_path(@png_signature <> "c"), filename: "3.png"}
+      ]
+
+      assert {:ok, message} =
+               Chat.create_album_message(scope(alice), conv.id, sources, %{body: "trip"})
+
+      assert message.body == "trip"
+      kinds = Enum.map(message.attachments, & &1.kind)
+      assert kinds == ["image", "file", "image"]
+      assert Enum.map(message.attachments, & &1.position) == [0, 1, 2]
+      assert Enum.all?(message.attachments, &Eden.Storage.exists?(&1.storage_key))
+    end
+
+    test "enqueues media processing per image/video, not for files", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("plain text"), filename: "notes.txt"}
+      ]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      [img, file] = message.attachments
+      assert_enqueued(worker: ThumbnailWorker, args: %{attachment_id: img.id})
+      refute_enqueued(worker: ThumbnailWorker, args: %{attachment_id: file.id})
+    end
+
+    test "rejects an empty list and an over-cap album", %{alice: alice, conv: conv} do
+      assert {:error, :empty} = Chat.create_album_message(scope(alice), conv.id, [], %{})
+
+      too_many =
+        for i <- 1..11, do: %{path: image_path(@png_signature <> "#{i}"), filename: "#{i}.png"}
+
+      assert {:error, :too_many} = Chat.create_album_message(scope(alice), conv.id, too_many, %{})
+    end
+
+    test "rolls back every stored blob when one source is too large", %{alice: alice, conv: conv} do
+      big = @png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1)
+
+      sources = [
+        %{path: image_path(@png_signature <> "ok"), filename: "ok.png"},
+        %{path: image_path(big), filename: "huge.png"}
+      ]
+
+      assert {:error, :too_large} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      # The first blob, stored before the failure, must not leak.
+      assert Repo.aggregate(Attachment, :count) == 0
+    end
+
+    test "forwarding an album copies every attachment, sharing blobs", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      {:ok, other} = Chat.create_conversation(scope(alice), [bob.id])
+
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      {:ok, original} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, other.id)
+      forwarded = Repo.preload(forwarded, :attachments)
+
+      assert length(forwarded.attachments) == 2
+      assert Enum.map(forwarded.attachments, & &1.position) == [0, 1]
+
+      assert Enum.map(forwarded.attachments, & &1.storage_key) ==
+               Enum.map(original.attachments, & &1.storage_key)
+    end
+
+    test "delete-for-both removes every unshared blob of the album", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      keys = Enum.map(message.attachments, & &1.storage_key)
+      assert Enum.all?(keys, &Eden.Storage.exists?/1)
+
+      :ok = Chat.delete_message_for_both(scope(alice), message.id)
+      refute Enum.any?(keys, &Eden.Storage.exists?/1)
+      assert Repo.aggregate(Attachment, :count) == 0
+    end
+  end
+
   describe "generate_thumbnail/1" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

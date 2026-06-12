@@ -197,6 +197,49 @@ defmodule EdenWeb.ChatLiveTest do
       :ok = Chat.generate_thumbnail(hd(message.attachments))
       assert render(view) =~ "/files/#{hd(message.attachments).id}/thumb"
     end
+
+    test "renders a multi-photo album as a media grid (#58)", ctx do
+      sources = [
+        %{path: real_png_path(), filename: "1.png"},
+        %{path: real_png_path(), filename: "2.png"},
+        %{path: real_png_path(), filename: "3.png"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ "ed-album"
+      # Each photo is a gallery tile pointing at its own file, sharing one gallery.
+      for attachment <- message.attachments do
+        assert has_element?(
+                 view,
+                 ~s([data-gallery="album-#{message.id}"][data-full="/files/#{attachment.id}"])
+               )
+      end
+    end
+
+    test "renders an album of files as stacked download cards (#58)", ctx do
+      sources = [
+        %{path: write_tmp("plain one"), filename: "a.txt"},
+        %{path: write_tmp("plain two"), filename: "b.txt"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      for attachment <- message.attachments do
+        assert html =~ ~s(href="/files/#{attachment.id}")
+      end
+
+      assert html =~ "a.txt"
+      assert html =~ "b.txt"
+    end
   end
 
   describe "viewing a profile" do

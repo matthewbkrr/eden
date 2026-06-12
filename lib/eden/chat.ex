@@ -1209,7 +1209,10 @@ defmodule Eden.Chat do
   end
 
   defp ensure_album_size([]), do: {:error, :empty}
-  defp ensure_album_size(sources) when length(sources) > @max_album_entries, do: {:error, :too_many}
+
+  defp ensure_album_size(sources) when length(sources) > @max_album_entries,
+    do: {:error, :too_many}
+
   defp ensure_album_size(_sources), do: :ok
 
   # Classify + size-check + store every source, tagging each with its album
@@ -1262,7 +1265,8 @@ defmodule Eden.Chat do
       {:ok, message} ->
         message = deliver(conversation_id, message)
 
-        for attachment <- message.attachments, needs_media_processing?(attachment.kind),
+        for attachment <- message.attachments,
+            needs_media_processing?(attachment.kind),
             do: enqueue_thumbnail(attachment)
 
         {:ok, message}
