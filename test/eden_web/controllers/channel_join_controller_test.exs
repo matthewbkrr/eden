@@ -23,6 +23,21 @@ defmodule EdenWeb.ChannelJoinControllerTest do
     assert {:ok, [_general]} = Channels.list_rooms(scope(ctx.bob), ctx.channel.id)
   end
 
+  test "a private-room invite lands the user in the room (#41 PR-C2)", %{conn: conn} = ctx do
+    {:ok, priv} =
+      Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+        "name" => "secret",
+        "visibility" => "private"
+      })
+
+    {:ok, _invite, room_raw} = Channels.create_room_invite(scope(ctx.alice), priv.id)
+
+    conn = conn |> log_in_user(ctx.bob) |> get(~p"/channels/join/#{room_raw}")
+
+    assert redirected_to(conn) == "/channels/#{ctx.channel.id}/r/#{priv.id}"
+    assert Eden.Chat.room_member?(priv.id, ctx.bob.id)
+  end
+
   test "a signed-out visitor is sent to login and the join survives it", %{conn: conn} = ctx do
     conn = get(conn, ~p"/channels/join/#{ctx.raw}")
     assert redirected_to(conn) == "/login"

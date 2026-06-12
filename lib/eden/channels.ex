@@ -334,6 +334,10 @@ defmodule Eden.Channels do
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       if meta["status"] == "pending" do
+        # The requester may have left the channel since knocking — re-ensure
+        # channel membership (idempotent) so a room membership never exists
+        # without its channel membership.
+        join_channel_tx(channel.id, req_id)
         :ok = Chat.join_room(room.id, req_id)
         {:ok, _} = Chat.resolve_join_request(msg, "accepted")
         broadcast_user(req_id, :channels_changed)
@@ -347,6 +351,47 @@ defmodule Eden.Channels do
       # bare struct that the caller's {:ok | {:error, _}} contract can't handle.
       {:error, _} = error -> error
       _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Adds existing eden users to a room directly (admin+ of its channel — the #41
+  internal-add). Non-channel users are materialized into the channel (general)
+  too, all in one transaction. Returns `{:ok, newly_added_ids}` (idempotent for
+  users already in the room); added users' rails refresh.
+  """
+  def add_room_members(%Scope{} = scope, room_id, user_ids) do
+    with %{} = room <- Chat.get_room(room_id),
+         {:ok, channel} <- get_channel(scope, room.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      ids = user_ids |> Enum.map(&Ids.normalize/1) |> Enum.filter(&is_integer/1)
+      # Intersect with real users — a phantom id would raise an FK violation.
+      ids = Repo.all(from u in User, where: u.id in ^ids, select: u.id)
+
+      {:ok, added} =
+        Repo.transact(fn ->
+          {:ok, Enum.filter(ids, &add_one_to_room(channel.id, room.id, &1))}
+        end)
+
+      Enum.each(added, &broadcast_user(&1, :channels_changed))
+      if added != [], do: broadcast_channel(channel.id, {:members_changed, channel.id})
+      {:ok, added}
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  # Channel (general) + room, inside the caller's transaction. Returns whether
+  # the user was newly added to the room.
+  defp add_one_to_room(channel_id, room_id, user_id) do
+    join_channel_tx(channel_id, user_id)
+
+    if Chat.room_member?(room_id, user_id) do
+      false
+    else
+      :ok = Chat.join_room(room_id, user_id)
+      true
     end
   end
 
@@ -596,24 +641,48 @@ defmodule Eden.Channels do
   def create_invite(%Scope{user: user} = scope, channel_id, opts \\ []) do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      raw = Accounts.build_token()
+      insert_invite(channel.id, nil, user.id, opts)
+    end
+  end
 
-      expires_at =
-        Keyword.get_lazy(opts, :expires_at, fn ->
-          DateTime.utc_now() |> DateTime.add(@invite_ttl_days, :day) |> DateTime.truncate(:second)
-        end)
+  @doc """
+  Creates a shareable invite link into a **private room** (admin+ of the room's
+  channel). Redemption joins the channel (`general`) AND the room in one
+  transaction — the no-knock fast path. Open rooms get no tokens (their plain
+  link is the invite). `{:ok, invite, raw_token}` or
+  `{:error, :not_found | :not_private | :forbidden}`.
+  """
+  def create_room_invite(%Scope{user: user} = scope, room_id, opts \\ []) do
+    with %{visibility: "private"} = room <- Chat.get_room(room_id),
+         {:ok, channel} <- get_channel(scope, room.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      insert_invite(channel.id, room.id, user.id, opts)
+    else
+      nil -> {:error, :not_found}
+      %{} -> {:error, :not_private}
+      error -> error
+    end
+  end
 
-      %Invite{
-        channel_id: channel.id,
-        created_by_id: user.id,
-        hashed_token: Accounts.hash_token(raw)
-      }
-      |> Invite.create_changeset(%{expires_at: expires_at, max_uses: opts[:max_uses]})
-      |> Repo.insert()
-      |> case do
-        {:ok, invite} -> {:ok, invite, raw}
-        error -> error
-      end
+  defp insert_invite(channel_id, room_id, created_by_id, opts) do
+    raw = Accounts.build_token()
+
+    expires_at =
+      Keyword.get_lazy(opts, :expires_at, fn ->
+        DateTime.utc_now() |> DateTime.add(@invite_ttl_days, :day) |> DateTime.truncate(:second)
+      end)
+
+    %Invite{
+      channel_id: channel_id,
+      room_id: room_id,
+      created_by_id: created_by_id,
+      hashed_token: Accounts.hash_token(raw)
+    }
+    |> Invite.create_changeset(%{expires_at: expires_at, max_uses: opts[:max_uses]})
+    |> Repo.insert()
+    |> case do
+      {:ok, invite} -> {:ok, invite, raw}
+      error -> error
     end
   end
 
@@ -668,7 +737,7 @@ defmodule Eden.Channels do
         end
       end)
 
-    with {:ok, {channel_id, status}} <- result do
+    with {:ok, {channel_id, room_id, status}} <- result do
       if status == :joined do
         broadcast_user(user.id, :channels_changed)
         broadcast_channel(channel_id, {:members_changed, channel_id})
@@ -677,20 +746,32 @@ defmodule Eden.Channels do
       case Repo.get(Channel, channel_id) do
         # The channel vanished between commit and read — treat as a dead link.
         nil -> {:error, :invalid}
-        channel -> {:ok, %{channel | role: role_of(channel_id, user.id) || "member"}}
+        channel -> {:ok, %{channel | role: role_of(channel_id, user.id) || "member"}, room_id}
       end
     end
   end
 
-  # Inside the locking transaction: validate, join (idempotent), count the use.
+  # Inside the locking transaction: validate, join the channel (general) and,
+  # for a room invite, the room — both idempotent. A use is consumed only when
+  # the redemption joined something new (channel or room).
   defp redeem_invite(invite, user_id) do
     with :ok <- validate_invite(invite) do
-      if join_channel_tx(invite.channel_id, user_id) do
-        bump_used_count(invite)
-        {:ok, {invite.channel_id, :joined}}
-      else
-        {:ok, {invite.channel_id, :already}}
-      end
+      channel_new = join_channel_tx(invite.channel_id, user_id)
+      room_new = redeem_room(invite.room_id, user_id)
+      newly = channel_new or room_new
+      if newly, do: bump_used_count(invite)
+      {:ok, {invite.channel_id, invite.room_id, if(newly, do: :joined, else: :already)}}
+    end
+  end
+
+  defp redeem_room(nil, _user_id), do: false
+
+  defp redeem_room(room_id, user_id) do
+    if Chat.room_member?(room_id, user_id) do
+      false
+    else
+      :ok = Chat.join_room(room_id, user_id)
+      true
     end
   end
 

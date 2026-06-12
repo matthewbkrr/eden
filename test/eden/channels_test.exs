@@ -446,13 +446,13 @@ defmodule Eden.ChannelsTest do
     } do
       {:ok, invite, raw} = Channels.create_invite(scope(alice), channel.id)
 
-      assert {:ok, joined} = Channels.join_by_token(scope(bob), raw)
+      assert {:ok, joined, nil} = Channels.join_by_token(scope(bob), raw)
       assert joined.id == channel.id
       assert joined.role == "member"
       {:ok, [_general]} = Channels.list_rooms(scope(bob), channel.id)
 
       # Already a member: ok again, but no extra use consumed.
-      assert {:ok, _} = Channels.join_by_token(scope(bob), raw)
+      assert {:ok, _, _} = Channels.join_by_token(scope(bob), raw)
       assert Repo.get(Eden.Channels.Invite, invite.id).used_count == 1
     end
 
@@ -472,7 +472,7 @@ defmodule Eden.ChannelsTest do
       assert {:error, :expired} = Channels.join_by_token(scope(bob), raw2)
 
       {:ok, _, raw3} = Channels.create_invite(scope(alice), channel.id, max_uses: 1)
-      assert {:ok, _} = Channels.join_by_token(scope(bob), raw3)
+      assert {:ok, _, _} = Channels.join_by_token(scope(bob), raw3)
       assert {:error, :exhausted} = Channels.join_by_token(scope(carol), raw3)
 
       assert {:error, :invalid} = Channels.join_by_token(scope(bob), "garbage-token")
@@ -643,6 +643,122 @@ defmodule Eden.ChannelsTest do
       # A system message that isn't a join request → :not_found, never a crash.
       {:ok, other} = Eden.Chat.create_system_message(priv.id, %{"action" => "noticeboard"})
       assert {:error, :not_found} = Channels.approve_room_join(scope(alice), other.id)
+    end
+
+    test "approving a requester who left the channel re-joins them to the channel too", ctx do
+      %{alice: alice, bob: bob, channel: channel, priv: priv} = ctx
+
+      {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+      msg = Eden.Chat.pending_join_request(priv.id, bob.id)
+
+      # bob leaves the channel while his knock is pending.
+      :ok = Channels.leave_channel(scope(bob), channel.id)
+      assert [] == Channels.list_channels(scope(bob))
+
+      # Approval heals both memberships — never a room without its channel.
+      assert :ok = Channels.approve_room_join(scope(alice), msg.id)
+      assert Eden.Chat.room_member?(priv.id, bob.id)
+      assert Channels.member_role(scope(bob), channel.id) == "member"
+    end
+
+    test "general can never be flipped to private (#41 invariant)", %{alice: alice} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Inv"})
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      assert general.is_general
+
+      # A crafted rename payload carrying visibility must be rejected...
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Channels.rename_room(scope(alice), general.id, %{
+                 "name" => "general",
+                 "visibility" => "private"
+               })
+
+      assert "general is always open" in errors_on(cs).visibility
+
+      # ...while a plain rename still works, and non-general rooms may flip.
+      assert {:ok, _} = Channels.rename_room(scope(alice), general.id, %{"name" => "townsq"})
+
+      {:ok, other} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+
+      assert {:ok, %{visibility: "private"}} =
+               Channels.rename_room(scope(alice), other.id, %{
+                 "name" => "ops",
+                 "visibility" => "private"
+               })
+    end
+  end
+
+  describe "room invites + internal-add (#41 PR-C2)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+
+      {:ok, priv} =
+        Channels.create_room(scope(alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      %{channel: channel, priv: priv, bob: bob}
+    end
+
+    test "a private-room invite grants channel + room in one redemption", ctx do
+      %{alice: alice, bob: bob, channel: channel, priv: priv} = ctx
+      assert {:ok, _invite, raw} = Channels.create_room_invite(scope(alice), priv.id)
+
+      # bob isn't even a channel member yet.
+      assert [] == Channels.list_channels(scope(bob))
+
+      assert {:ok, joined, room_id} = Channels.join_by_token(scope(bob), raw)
+      assert joined.id == channel.id
+      assert room_id == priv.id
+      assert Eden.Chat.room_member?(priv.id, bob.id)
+      # And the channel general too.
+      assert {:ok, rooms} = Channels.list_rooms(scope(bob), channel.id)
+      assert Enum.any?(rooms, & &1.is_general)
+    end
+
+    test "an open room can't get an invite token (its plain link is the invite)", ctx do
+      %{alice: alice, channel: channel} = ctx
+      {:ok, open} = Channels.create_room(scope(alice), channel.id, %{"name" => "lounge"})
+      assert {:error, :not_private} = Channels.create_room_invite(scope(alice), open.id)
+    end
+
+    test "only an admin creates a room invite", ctx do
+      %{alice: alice, bob: bob, channel: channel, priv: priv} = ctx
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id])
+      assert {:error, :forbidden} = Channels.create_room_invite(scope(bob), priv.id)
+    end
+
+    test "a room-invite redemption is idempotent (no double use)", ctx do
+      %{alice: alice, bob: bob, priv: priv} = ctx
+      {:ok, invite, raw} = Channels.create_room_invite(scope(alice), priv.id)
+
+      assert {:ok, _, _} = Channels.join_by_token(scope(bob), raw)
+      assert {:ok, _, _} = Channels.join_by_token(scope(bob), raw)
+      assert Repo.get(Eden.Channels.Invite, invite.id).used_count == 1
+    end
+
+    test "add_room_members (admin) materializes channel + room for non-channel users", ctx do
+      %{alice: alice, priv: priv, channel: channel} = ctx
+      carol = user_fixture(%{username: "caroladd"})
+      refute Eden.Chat.room_member?(priv.id, carol.id)
+
+      assert {:ok, [added]} = Channels.add_room_members(scope(alice), priv.id, [carol.id])
+      assert added == carol.id
+      assert Eden.Chat.room_member?(priv.id, carol.id)
+      # carol is now a channel member (general) too.
+      assert {:ok, rooms} = Channels.list_rooms(scope(carol), channel.id)
+      assert Enum.any?(rooms, & &1.is_general)
+
+      # Idempotent.
+      assert {:ok, []} = Channels.add_room_members(scope(alice), priv.id, [carol.id])
+    end
+
+    test "a non-admin can't add room members", ctx do
+      %{alice: alice, bob: bob, channel: channel, priv: priv} = ctx
+      {:ok, _} = Channels.add_members(scope(alice), channel.id, [bob.id])
+      carol = user_fixture(%{username: "caroladd2"})
+      assert {:error, :forbidden} = Channels.add_room_members(scope(bob), priv.id, [carol.id])
     end
   end
 

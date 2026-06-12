@@ -108,13 +108,22 @@ design — built incrementally as features land.)
   on `channel:<id>` (subscribe only after `get_channel/2`); rail-level changes
   ping each member's `user:<id>:channels` topic with `:channels_changed`.
   **Rooms** (thematic chats) are `Conversation` rows with a `channel_id` — the
-  whole message machinery applies unchanged; memberships are **materialized**
-  on channel join/room creation (`Chat.join_rooms/leave_rooms`, Mattermost's
-  ChannelMembers shape), so every existing query stays correct by construction.
-  Rooms stay out of the DM sidebar/folders/search (until #32) and per-user
-  delete; room CRUD is admin-only via `Eden.Channels` (each channel is born
-  with a "general" room); channel deletion reclaims room attachment blobs
-  forward-safely. The web layer is ChatLive's channel mode (`/channels/...`
+  whole message machinery applies unchanged. Rooms stay out of the DM
+  sidebar/folders/search and per-user delete; room CRUD is admin-only via
+  `Eden.Channels` (each channel is born with an `is_general` "general" room —
+  always open, undeletable, auto-joined); channel deletion reclaims room
+  attachment blobs forward-safely. **Room access (#41)**: a channel join
+  materializes `general` only (`Chat.join_general`); other rooms are earned per
+  room, and the sidebar lists only rooms you're in (link-discovered, never
+  browsed). `conversations.visibility` is `open` (any link auto-joins via
+  `resolve_room_access` → `join_room`) or `private` (🔒 — a link shows a
+  **knock** window: `Channels.request_room_join` posts a deduped join-request
+  **system message** — `messages.kind="system"` + `meta` jsonb, no sender —
+  that admins approve with `approve_room_join`, or an admin adds directly with
+  `add_room_members`, or shares a **room invite token** that grants
+  `general` + the room in one redemption). Channels themselves are never
+  closed: any authenticated user auto-joins by visiting a channel link
+  (`Channels.ensure_member`). The web layer is ChatLive's channel mode (`/channels/...`
   routes) — one message pane for DMs and rooms. **Access**: members are added internally (admin+ picks
   eden users; membership + room materialization commit in one transaction) or
   via **invite links** mirroring registration invites (hash-only tokens,

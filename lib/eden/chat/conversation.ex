@@ -61,7 +61,19 @@ defmodule Eden.Chat.Conversation do
     |> validate_required([:name])
     |> validate_length(:name, max: @max_room_name)
     |> validate_inclusion(:visibility, @visibilities)
+    |> validate_general_stays_open(conversation)
   end
+
+  # The epic's core invariant (#41): general is always open — auto-joined on
+  # channel entry, so it must never become private (a crafted rename payload
+  # could otherwise flip it; the UI doesn't offer it, this is the backstop).
+  defp validate_general_stays_open(changeset, %__MODULE__{is_general: true}) do
+    validate_change(changeset, :visibility, fn :visibility, value ->
+      if value == "open", do: [], else: [visibility: "general is always open"]
+    end)
+  end
+
+  defp validate_general_stays_open(changeset, _conversation), do: changeset
 
   def max_room_name, do: @max_room_name
   def visibilities, do: @visibilities

@@ -10,10 +10,16 @@ defmodule EdenWeb.ChannelJoinController do
 
   def join(conn, %{"token" => token}) do
     case Channels.join_by_token(conn.assigns.current_scope, token) do
-      {:ok, channel} ->
+      {:ok, channel, room_id} ->
+        # A room invite lands you in the room; a channel invite, in the channel.
+        to =
+          if room_id,
+            do: ~p"/channels/#{channel.id}/r/#{room_id}",
+            else: ~p"/channels/#{channel.id}"
+
         conn
         |> put_flash(:info, gettext("Welcome to %{name}!", name: channel.name))
-        |> redirect(to: ~p"/channels/#{channel.id}")
+        |> redirect(to: to)
 
       {:error, reason} ->
         conn

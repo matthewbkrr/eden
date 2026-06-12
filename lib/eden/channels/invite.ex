@@ -17,6 +17,9 @@ defmodule Eden.Channels.Invite do
 
     belongs_to :channel, Eden.Channels.Channel
     belongs_to :created_by, Eden.Accounts.User
+    # Set for a private-room invite (#41): redemption joins the channel + this
+    # room. Nil for a plain channel invite.
+    belongs_to :room, Eden.Chat.Conversation
 
     timestamps(type: :utc_datetime)
   end
