@@ -221,22 +221,23 @@ defmodule EdenWeb.ChatLiveTest do
       end
     end
 
-    test "renders an album of files as stacked download cards (#58)", ctx do
+    test "files send as separate messages, never inside an album (#58)", ctx do
       sources = [
         %{path: write_tmp("plain one"), filename: "a.txt"},
         %{path: write_tmp("plain two"), filename: "b.txt"}
       ]
 
-      {:ok, message} =
-        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+      {:ok, messages} =
+        Chat.create_attachments(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      # Two files -> two standalone single-attachment messages, no album grid.
+      assert length(messages) == 2
+      assert Enum.all?(messages, fn m -> length(m.attachments) == 1 end)
 
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      for attachment <- message.attachments do
-        assert html =~ ~s(href="/files/#{attachment.id}")
-      end
-
+      refute html =~ "ed-album"
       assert html =~ "a.txt"
       assert html =~ "b.txt"
     end

@@ -1013,6 +1013,67 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "create_attachments/4 — media album + separate files (#58)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "photos group into one album; each file is its own message", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("plain doc one"), filename: "a.txt"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"},
+        %{path: image_path("plain doc two"), filename: "b.txt"}
+      ]
+
+      assert {:ok, messages} =
+               Chat.create_attachments(scope(alice), conv.id, sources, %{body: "trip"})
+
+      # 1 album (2 photos) + 2 file messages = 3 messages.
+      assert length(messages) == 3
+      [album | files] = messages
+
+      # The album holds only the photos, in order, with the caption.
+      assert album.body == "trip"
+      assert Enum.map(album.attachments, & &1.kind) == ["image", "image"]
+
+      # Each file is a standalone single-attachment message; no file in the album.
+      assert Enum.all?(files, fn m ->
+               [a] = m.attachments
+               a.kind == "file"
+             end)
+
+      refute Enum.any?(album.attachments, &(&1.kind == "file"))
+    end
+
+    test "files only: caption rides the first file, the rest are plain", %{
+      alice: alice,
+      conv: conv
+    } do
+      sources = [
+        %{path: image_path("doc one"), filename: "a.txt"},
+        %{path: image_path("doc two"), filename: "b.txt"}
+      ]
+
+      assert {:ok, [first, second]} =
+               Chat.create_attachments(scope(alice), conv.id, sources, %{body: "here"})
+
+      assert first.body == "here"
+      assert second.body == ""
+    end
+
+    test "media only: a single album message", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      assert {:ok, [album]} = Chat.create_attachments(scope(alice), conv.id, sources, %{})
+      assert length(album.attachments) == 2
+    end
+  end
+
   describe "generate_thumbnail/1" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

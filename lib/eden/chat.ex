@@ -1181,6 +1181,53 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Sends a composer selection (#58): photos/videos group into ONE **album**
+  message; every non-media file becomes **its own** message (a file never joins
+  an album — #58 rule). The caption (`opts.body`) rides the album, or — when the
+  selection is files only — the first file. Returns `{:ok, [message]}` (send
+  order) or `{:error, reason}` at the first failure. `sources` are maps with
+  `:path` and optional `:filename`.
+  """
+  def create_attachments(%Scope{} = scope, conversation_id, sources, opts \\ %{}) do
+    {media, files} = Enum.split_with(sources, &media_source?/1)
+    body = Map.get(opts, :body, "")
+    send_attachment_steps(scope, conversation_id, attachment_steps(media, files, body))
+  end
+
+  # Plan the messages: one album for media (caption attached), one message per
+  # file. With files only, the caption rides the first file; the rest are plain.
+  defp attachment_steps([], [], _body), do: []
+
+  defp attachment_steps([], [first | rest], body),
+    do: [{[first], body} | Enum.map(rest, &{[&1], ""})]
+
+  defp attachment_steps(media, files, body),
+    do: [{media, body} | Enum.map(files, &{[&1], ""})]
+
+  defp send_attachment_steps(scope, conversation_id, steps) do
+    steps
+    |> Enum.reduce_while({:ok, []}, fn {srcs, body}, {:ok, acc} ->
+      case create_album_message(scope, conversation_id, srcs, %{body: body}) do
+        {:ok, message} -> {:cont, {:ok, [message | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, messages} -> {:ok, Enum.reverse(messages)}
+      error -> error
+    end
+  end
+
+  # Media (image/video) groups into an album; everything else sends standalone.
+  # Server-side magic-byte classification — the client content-type is advisory.
+  defp media_source?(source) do
+    case classify(source.path, source[:filename]) do
+      {:ok, kind, _type, _ext} -> kind in ~w(image video)
+      _ -> false
+    end
+  end
+
+  @doc """
   Posts a message with an ordered **album** of attachments (#58). Each source's
   `kind` (image | video | file | audio) is decided by its magic bytes — never the
   client content-type; arbitrary files become `file` with a safe inferred type

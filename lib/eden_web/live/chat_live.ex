@@ -1939,131 +1939,45 @@ defmodule EdenWeb.ChatLive do
             data-sender-name={@current_scope.user.display_name}
             phx-submit="send"
             phx-change="composer_changed"
-            class="flex flex-col gap-2 p-3 border-t shrink-0"
+            class={[
+              "flex flex-col shrink-0",
+              @uploads.attachment.entries == [] && "gap-2 p-3 border-t"
+            ]}
             style="border-color: var(--ed-border);"
           >
-            <%!-- Attachment tray (#58): media thumbnails grid + a file list,
-                  scaling with the selection; the composer input is the caption. --%>
-            <div
-              :if={@uploads.attachment.entries != []}
-              data-upload-preview
-              class="ed-attach-tray"
-              role="group"
-              aria-label={
-                ngettext(
-                  "%{count} attachment",
-                  "%{count} attachments",
-                  length(@uploads.attachment.entries)
-                )
-              }
-            >
-              <div class="ed-attach-tray__head">
-                <span class="ed-attach-tray__title">
-                  {ngettext(
-                    "%{count} attachment",
-                    "%{count} attachments",
-                    length(@uploads.attachment.entries)
-                  )}
-                </span>
+            <%= if @uploads.attachment.entries == [] do %>
+              <%!-- Normal composer bar: attach + caption + send. --%>
+              <div class="flex items-center gap-2">
+                <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Attach a file")}>
+                  <.icon name="hero-paper-clip-micro" class="size-5" />
+                  <%!-- sr-only (not hidden) keeps the input focusable / keyboard-reachable. --%>
+                  <.live_file_input upload={@uploads.attachment} class="sr-only" />
+                </label>
+                <input
+                  type="text"
+                  id="composer-body"
+                  name="message[body]"
+                  value={@composer[:body].value}
+                  class="ed-input"
+                  placeholder={gettext("Message")}
+                  autocomplete="off"
+                  phx-hook=".PasteUpload"
+                />
                 <button
-                  type="button"
-                  class="ed-attach-tray__clear"
-                  phx-click="cancel_all_uploads"
+                  class="ed-btn ed-btn--primary shrink-0"
+                  style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+                  type="submit"
+                  aria-label={gettext("Send")}
                 >
-                  {gettext("Clear all")}
+                  <.icon name="hero-paper-airplane-micro" class="size-4" />
                 </button>
               </div>
-
-              <div
-                :if={Enum.any?(@uploads.attachment.entries, &image_entry?/1)}
-                class="ed-attach-media"
-              >
-                <div
-                  :for={entry <- Enum.filter(@uploads.attachment.entries, &image_entry?/1)}
-                  class="ed-attach-thumb"
-                >
-                  <.live_img_preview entry={entry} class="ed-attach-thumb__img" />
-                  <button
-                    type="button"
-                    class="ed-attach-thumb__remove"
-                    phx-click="cancel_upload"
-                    phx-value-ref={entry.ref}
-                    aria-label={gettext("Remove %{name}", name: entry.client_name)}
-                  >
-                    <.icon name="hero-x-mark-micro" class="size-3.5" />
-                  </button>
-                  <progress
-                    :if={entry.progress > 0 and entry.progress < 100}
-                    value={entry.progress}
-                    max="100"
-                    class="ed-attach-thumb__bar"
-                  />
-                </div>
-              </div>
-
-              <div
-                :for={entry <- Enum.reject(@uploads.attachment.entries, &image_entry?/1)}
-                class="ed-attach-file"
-              >
-                <span class="ed-file-chip shrink-0" aria-hidden="true">
-                  <.icon name={entry_icon(entry)} class="size-5" />
-                </span>
-                <span class="flex-1 min-w-0">
-                  <span class="block truncate" style="font-size:0.8125rem;">{entry.client_name}</span>
-                  <span class="block" style="font-size:0.75rem; color: var(--ed-muted);">
-                    {human_size(entry.client_size)}
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  class="ed-btn--icon shrink-0"
-                  phx-click="cancel_upload"
-                  phx-value-ref={entry.ref}
-                  aria-label={gettext("Remove %{name}", name: entry.client_name)}
-                >
-                  <.icon name="hero-x-mark-mini" class="size-5" />
-                </button>
-              </div>
-
-              <p
-                :for={
-                  {entry, err} <-
-                    Enum.flat_map(
-                      @uploads.attachment.entries,
-                      fn e -> Enum.map(upload_errors(@uploads.attachment, e), &{e, &1}) end
-                    )
-                }
-                class="ed-attach-err"
-              >
-                {entry.client_name}: {upload_error_text(err)}
-              </p>
-            </div>
-
-            <div class="flex items-center gap-2">
-              <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Attach a file")}>
-                <.icon name="hero-paper-clip-micro" class="size-5" />
-                <%!-- sr-only (not hidden) keeps the input focusable so the control is keyboard-reachable. --%>
-                <.live_file_input upload={@uploads.attachment} class="sr-only" />
-              </label>
-              <input
-                type="text"
-                id="composer-body"
-                name="message[body]"
-                value={@composer[:body].value}
-                class="ed-input"
-                placeholder={gettext("Message")}
-                autocomplete="off"
-                phx-hook=".PasteUpload"
-              />
-              <button
-                class="ed-btn ed-btn--primary shrink-0"
-                style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
-                type="submit"
-                aria-label={gettext("Send")}
-              >
-                <.icon name="hero-paper-airplane-micro" class="size-4" />
-              </button>
-            </div>
+            <% else %>
+              <%!-- Attachment preview modal (#58): a Telegram-style overlay with a
+                    media grid, the caption + send inside it. data-upload-preview
+                    tells the SendQueue hook to defer to the normal phx-submit. --%>
+              <.compose_overlay upload={@uploads.attachment} form={@composer} />
+            <% end %>
           </.form>
         <% else %>
           <div class="flex-1 grid place-items-center text-center p-8">
@@ -2812,6 +2726,10 @@ defmodule EdenWeb.ChatLive do
             const img = box.querySelector(".ed-lightbox__img")
             const show = (n) => {
               i = (n + tiles.length) % tiles.length
+              // Hide the frame until the new source decodes so paging into a
+              // different photo (or album) never flashes the previous image.
+              img.style.visibility = "hidden"
+              img.onload = () => { img.style.visibility = "visible" }
               img.src = tiles[i].dataset.full
             }
             box.__show = show
@@ -2830,10 +2748,16 @@ defmodule EdenWeb.ChatLive do
             box = document.createElement("div")
             box.id = "ed-lightbox"
             box.className = "ed-lightbox"
+            // Heroicon chevrons (mini) sit dead-center in the round buttons —
+            // the text ‹/› glyphs rendered off-center.
+            const chevron = (d) =>
+              `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="${d}" clip-rule="evenodd"/></svg>`
+            const left = "M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
+            const right = "M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
             box.innerHTML =
-              '<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="Previous">‹</button>' +
+              `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="Previous">${chevron(left)}</button>` +
               '<img class="ed-lightbox__img" alt="">' +
-              '<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="Next">›</button>'
+              `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="Next">${chevron(right)}</button>`
 
             const close = () => {
               box.classList.remove("ed-lightbox--open")
@@ -4186,6 +4110,154 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :upload, :any, required: true
+  attr :form, :any, required: true
+
+  # Telegram-style attachment compose modal (#58): a lightbox overlay that opens
+  # the moment files are staged — a media grid (photos/videos) plus, separately,
+  # any non-media files (they send as their own messages, never inside the
+  # album). The caption + send live in the modal footer.
+  defp compose_overlay(assigns) do
+    entries = assigns.upload.entries
+    media = Enum.filter(entries, &media_entry?/1)
+    files = Enum.reject(entries, &media_entry?/1)
+
+    assigns =
+      assigns
+      |> assign(:media, media)
+      |> assign(:files, files)
+      |> assign(:errs, compose_errors(assigns.upload))
+
+    ~H"""
+    <div
+      class="ed-compose"
+      data-upload-preview
+      role="dialog"
+      aria-modal="true"
+      aria-label={gettext("Attachment preview")}
+      phx-window-keydown="cancel_all_uploads"
+      phx-key="Escape"
+    >
+      <div class="ed-compose__scrim" phx-click="cancel_all_uploads" aria-hidden="true"></div>
+      <div class="ed-compose__panel">
+        <header class="ed-compose__head">
+          <button
+            type="button"
+            class="ed-btn--icon"
+            phx-click="cancel_all_uploads"
+            aria-label={gettext("Cancel")}
+          >
+            <.icon name="hero-x-mark-mini" class="size-5" />
+          </button>
+          <span class="ed-compose__title">{compose_title(@media, @files)}</span>
+          <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Add more")}>
+            <.icon name="hero-plus-mini" class="size-5" />
+            <.live_file_input upload={@upload} class="sr-only" />
+          </label>
+        </header>
+
+        <div class="ed-compose__body">
+          <div
+            :if={@media != []}
+            class={["ed-compose__grid", "ed-album--#{album_cols(length(@media))}"]}
+          >
+            <div :for={entry <- @media} class="ed-compose__tile">
+              <.live_img_preview :if={image_entry?(entry)} entry={entry} class="ed-compose__img" />
+              <span :if={video_entry?(entry)} class="ed-compose__video" aria-hidden="true">
+                <.icon name="hero-film" class="size-7" />
+              </span>
+              <button
+                type="button"
+                class="ed-compose__remove"
+                phx-click="cancel_upload"
+                phx-value-ref={entry.ref}
+                aria-label={gettext("Remove %{name}", name: entry.client_name)}
+              >
+                <.icon name="hero-x-mark-micro" class="size-3.5" />
+              </button>
+              <progress
+                :if={entry.progress > 0 and entry.progress < 100}
+                value={entry.progress}
+                max="100"
+                class="ed-compose__bar"
+              />
+            </div>
+          </div>
+
+          <div :if={@files != []} class="ed-compose__files">
+            <p class="ed-compose__files-note">
+              {gettext("Files send as separate messages.")}
+            </p>
+            <div :for={entry <- @files} class="ed-attach-file">
+              <span class="ed-file-chip shrink-0" aria-hidden="true">
+                <.icon name={entry_icon(entry)} class="size-5" />
+              </span>
+              <span class="flex-1 min-w-0">
+                <span class="block truncate" style="font-size:0.8125rem;">{entry.client_name}</span>
+                <span class="block" style="font-size:0.75rem; color: var(--ed-muted);">
+                  {human_size(entry.client_size)}
+                </span>
+              </span>
+              <button
+                type="button"
+                class="ed-btn--icon shrink-0"
+                phx-click="cancel_upload"
+                phx-value-ref={entry.ref}
+                aria-label={gettext("Remove %{name}", name: entry.client_name)}
+              >
+                <.icon name="hero-x-mark-mini" class="size-5" />
+              </button>
+            </div>
+          </div>
+
+          <p :for={{name, err} <- @errs} class="ed-attach-err">
+            {name}: {upload_error_text(err)}
+          </p>
+        </div>
+
+        <footer class="ed-compose__foot">
+          <input
+            type="text"
+            id="composer-body"
+            name="message[body]"
+            value={@form[:body].value}
+            class="ed-input"
+            placeholder={gettext("Add a caption…")}
+            autocomplete="off"
+            phx-hook=".PasteUpload"
+            phx-mounted={JS.focus()}
+          />
+          <button
+            class="ed-btn ed-btn--primary shrink-0"
+            style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+            type="submit"
+            aria-label={gettext("Send")}
+          >
+            <.icon name="hero-paper-airplane-micro" class="size-4" />
+          </button>
+        </footer>
+      </div>
+    </div>
+    """
+  end
+
+  # Upload errors flattened to {entry_name, error} pairs for the modal footer.
+  defp compose_errors(upload) do
+    Enum.flat_map(upload.entries, fn entry ->
+      Enum.map(upload_errors(upload, entry), &{entry.client_name, &1})
+    end)
+  end
+
+  # Modal title: counts the media (the album) when present, else the files.
+  defp compose_title(media, []) when media != [],
+    do: ngettext("%{count} photo", "%{count} photos", length(media))
+
+  defp compose_title([], files),
+    do: ngettext("%{count} file", "%{count} files", length(files))
+
+  defp compose_title(media, files),
+    do: ngettext("%{count} attachment", "%{count} attachments", length(media) + length(files))
+
   attr :attachments, :list, required: true
   attr :message_id, :any, required: true
 
@@ -4231,6 +4303,7 @@ defmodule EdenWeb.ChatLive do
 
   # Album grid columns by image count: a pair stays 2-up, a trio 3-up, a quad is
   # a 2x2, larger sets settle on a 3-column grid (rows fill left to right).
+  defp album_cols(1), do: 1
   defp album_cols(2), do: 2
   defp album_cols(3), do: 3
   defp album_cols(4), do: 2
@@ -5117,11 +5190,11 @@ defmodule EdenWeb.ChatLive do
           else: send_text(socket, scope, conversation, body)
 
       sources ->
-        result = Chat.create_album_message(scope, conversation.id, sources, %{body: body})
+        result = Chat.create_attachments(scope, conversation.id, sources, %{body: body})
         Enum.each(sources, &File.rm(&1.path))
 
         case result do
-          {:ok, _message} -> {:noreply, assign(socket, composer: empty_composer())}
+          {:ok, _messages} -> {:noreply, assign(socket, composer: empty_composer())}
           {:error, reason} -> {:noreply, put_flash(socket, :error, attachment_error(reason))}
         end
     end
@@ -5148,9 +5221,15 @@ defmodule EdenWeb.ChatLive do
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
   defp thumb_src(%{id: id}), do: ~p"/files/#{id}"
 
-  # Composer upload entry helpers (client-side; for preview only, not trusted).
+  # Composer upload entry helpers (client-side; for preview only, not trusted —
+  # the server re-classifies by magic bytes and decides the actual album split).
   defp image_entry?(%{client_type: "image/" <> _}), do: true
   defp image_entry?(_entry), do: false
+
+  defp video_entry?(%{client_type: "video/" <> _}), do: true
+  defp video_entry?(_entry), do: false
+
+  defp media_entry?(entry), do: image_entry?(entry) or video_entry?(entry)
 
   defp entry_icon(%{client_type: "video/" <> _}), do: "hero-film-micro"
   defp entry_icon(%{client_type: "audio/" <> _}), do: "hero-musical-note-micro"
