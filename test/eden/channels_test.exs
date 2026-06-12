@@ -644,6 +644,48 @@ defmodule Eden.ChannelsTest do
       {:ok, other} = Eden.Chat.create_system_message(priv.id, %{"action" => "noticeboard"})
       assert {:error, :not_found} = Channels.approve_room_join(scope(alice), other.id)
     end
+
+    test "approving a requester who left the channel re-joins them to the channel too", ctx do
+      %{alice: alice, bob: bob, channel: channel, priv: priv} = ctx
+
+      {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+      msg = Eden.Chat.pending_join_request(priv.id, bob.id)
+
+      # bob leaves the channel while his knock is pending.
+      :ok = Channels.leave_channel(scope(bob), channel.id)
+      assert [] == Channels.list_channels(scope(bob))
+
+      # Approval heals both memberships — never a room without its channel.
+      assert :ok = Channels.approve_room_join(scope(alice), msg.id)
+      assert Eden.Chat.room_member?(priv.id, bob.id)
+      assert Channels.member_role(scope(bob), channel.id) == "member"
+    end
+
+    test "general can never be flipped to private (#41 invariant)", %{alice: alice} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Inv"})
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      assert general.is_general
+
+      # A crafted rename payload carrying visibility must be rejected...
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Channels.rename_room(scope(alice), general.id, %{
+                 "name" => "general",
+                 "visibility" => "private"
+               })
+
+      assert "general is always open" in errors_on(cs).visibility
+
+      # ...while a plain rename still works, and non-general rooms may flip.
+      assert {:ok, _} = Channels.rename_room(scope(alice), general.id, %{"name" => "townsq"})
+
+      {:ok, other} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+
+      assert {:ok, %{visibility: "private"}} =
+               Channels.rename_room(scope(alice), other.id, %{
+                 "name" => "ops",
+                 "visibility" => "private"
+               })
+    end
   end
 
   describe "room invites + internal-add (#41 PR-C2)" do

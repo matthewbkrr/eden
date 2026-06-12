@@ -334,6 +334,10 @@ defmodule Eden.Channels do
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       if meta["status"] == "pending" do
+        # The requester may have left the channel since knocking — re-ensure
+        # channel membership (idempotent) so a room membership never exists
+        # without its channel membership.
+        join_channel_tx(channel.id, req_id)
         :ok = Chat.join_room(room.id, req_id)
         {:ok, _} = Chat.resolve_join_request(msg, "accepted")
         broadcast_user(req_id, :channels_changed)
