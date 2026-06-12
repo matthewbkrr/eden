@@ -715,11 +715,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("channel_search", %{"q" => q}, socket) do
     case socket.assigns.channel do
       %{id: channel_id} ->
-        results =
-          if String.trim(q) == "",
-            do: nil,
-            else: Chat.search_rooms(socket.assigns.current_scope, {:channel, channel_id}, q)
-
+        results = run_room_search(socket, {:channel, channel_id}, q)
         {:noreply, assign(socket, channel_search: q, channel_results: results)}
 
       _ ->
@@ -739,11 +735,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("room_search", %{"q" => q}, socket) do
     case socket.assigns.selected do
       %{channel_id: cid, id: room_id} when not is_nil(cid) ->
-        results =
-          if String.trim(q) == "",
-            do: nil,
-            else: Chat.search_rooms(socket.assigns.current_scope, {:room, room_id}, q)
-
+        results = run_room_search(socket, {:room, room_id}, q)
         {:noreply, assign(socket, room_search: q, room_results: results)}
 
       _ ->
@@ -1527,7 +1519,9 @@ defmodule EdenWeb.ChatLive do
           </button>
         </form>
 
-        <div :if={@channel_search != ""} class="flex-1 overflow-y-auto p-2">
+        <%!-- Gate on the TRIMMED query (matching the handler's "blank means
+              not searching") — a lone space must not hijack the rooms list. --%>
+        <div :if={String.trim(@channel_search) != ""} class="flex-1 overflow-y-auto p-2">
           <.channel_search_results
             results={@channel_results || []}
             rooms={@rooms}
@@ -1537,7 +1531,7 @@ defmodule EdenWeb.ChatLive do
         </div>
 
         <div
-          :if={@channel_search == ""}
+          :if={String.trim(@channel_search) == ""}
           id="rooms-list"
           class="flex-1 overflow-y-auto p-2 space-y-0.5"
           phx-hook=".RoomSortable"
@@ -1859,7 +1853,7 @@ defmodule EdenWeb.ChatLive do
                 <.icon name="hero-x-mark-micro" class="size-4" />
               </button>
             </form>
-            <div :if={@room_search != ""} class="ed-room-search__panel">
+            <div :if={String.trim(@room_search) != ""} class="ed-room-search__panel">
               <p
                 :if={(@room_results || []) == []}
                 class="text-center py-6"
@@ -2955,16 +2949,13 @@ defmodule EdenWeb.ChatLive do
   # Channel-wide search results (#43): rooms by name (from the already-loaded
   # joined-rooms list — no query) + message bodies with a room breadcrumb.
   defp channel_search_results(assigns) do
+    needle = assigns.query |> String.trim() |> String.downcase()
+
     assigns =
       assign(
         assigns,
         :room_matches,
-        Enum.filter(assigns.rooms, fn room ->
-          String.contains?(
-            String.downcase(room.name),
-            String.downcase(String.trim(assigns.query))
-          )
-        end)
+        Enum.filter(assigns.rooms, &String.contains?(String.downcase(&1.name), needle))
       )
 
     ~H"""
@@ -3000,7 +2991,9 @@ defmodule EdenWeb.ChatLive do
         >
           <span class="ed-convo__body">
             <span class="ed-convo__top">
-              <span class="ed-convo__name"># {message.conversation.name}</span>
+              <span class="ed-convo__name flex items-center gap-1">
+                <.room_glyph room={message.conversation} /> {message.conversation.name}
+              </span>
               <.local_time at={message.inserted_at} class="ed-convo__time" />
             </span>
             <span class="ed-convo__preview">
@@ -4630,6 +4623,16 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp room_modal_visibility?(_modal, _rooms), do: true
+
+  # nil (not []) for a blank query: the templates gate the search views on the
+  # trimmed query, and nil keeps "not searching" distinct from "no matches".
+  defp run_room_search(socket, search_scope, q) do
+    if String.trim(q) == "" do
+      nil
+    else
+      Chat.search_rooms(socket.assigns.current_scope, search_scope, q)
+    end
+  end
 
   # A pending knock was approved while its window is open: the room now appears
   # in the sidebar — clear the knock window so the user can open it.

@@ -925,6 +925,16 @@ defmodule Eden.ChannelsTest do
       assert [] == Eden.Chat.search_rooms(scope(alice), {:channel, "abc"}, "needle")
       assert [] == Eden.Chat.search_rooms(scope(alice), {:room, "abc"}, "needle")
     end
+
+    test "LIKE metacharacters match literally", ctx do
+      %{alice: alice, general: general} = ctx
+
+      {:ok, _} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "100% done"})
+      {:ok, _} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "100 done"})
+
+      results = Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "0% d")
+      assert ["100% done"] == Enum.map(results, & &1.body)
+    end
   end
 
   describe "cross-layer (#32)" do

@@ -930,7 +930,12 @@ defmodule Eden.Chat do
   defp room_search_base(user, pattern) do
     from(m in Message,
       join: mem in Membership,
-      on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      # Room memberships are delete-based today (leave_rooms hard-deletes), so
+      # left_at is always nil here — the filter keeps parity with
+      # search_messages/2 and stays correct should rooms ever go soft-leave.
+      on:
+        mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
+          is_nil(mem.left_at),
       join: c in Conversation,
       on: c.id == m.conversation_id,
       left_join: d in MessageDeletion,

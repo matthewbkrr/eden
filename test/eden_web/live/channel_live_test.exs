@@ -220,6 +220,35 @@ defmodule EdenWeb.ChannelModeTest do
       assert has_element?(view, "#rooms-list")
     end
 
+    test "a whitespace-only query never hijacks the rooms list", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_change(view, "channel_search", %{"q" => " "})
+      assert has_element?(view, "#rooms-list")
+      refute html =~ "ed-search__group"
+    end
+
+    test "a message-result breadcrumb carries the room's glyph, not a bare #", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "vault",
+          "visibility" => "private"
+        })
+
+      {:ok, _} = Chat.create_message(scope(ctx.alice), priv.id, %{"body" => "needle plans"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_change(view, "channel_search", %{"q" => "needle"})
+
+      assert has_element?(
+               view,
+               ~s(a[href^="/channels/#{ctx.channel.id}/r/#{priv.id}/m/"] .hero-lock-closed-micro)
+             )
+    end
+
     test "channel search never sees rooms the user isn't in", ctx do
       {:ok, priv} =
         Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
