@@ -3702,8 +3702,8 @@ defmodule EdenWeb.ChatLive do
                   checked={(@form[:visibility].value || "open") == "open"}
                 />
                 <span class="min-w-0">
-                  <span class="block" style="font-weight:550; font-size:0.875rem;">
-                    # {gettext("Open")}
+                  <span class="flex items-center gap-1.5" style="font-weight:550; font-size:0.875rem;">
+                    <.icon name="hero-globe-alt-micro" class="size-3.5" /> {gettext("Open")}
                   </span>
                   <span class="block" style="color: var(--ed-muted); font-size:0.75rem;">
                     {gettext("Anyone with the link joins instantly.")}
@@ -3718,8 +3718,8 @@ defmodule EdenWeb.ChatLive do
                   checked={@form[:visibility].value == "private"}
                 />
                 <span class="min-w-0">
-                  <span class="block" style="font-weight:550; font-size:0.875rem;">
-                    🔒 {gettext("Private")}
+                  <span class="flex items-center gap-1.5" style="font-weight:550; font-size:0.875rem;">
+                    <.icon name="hero-lock-closed-micro" class="size-3.5" /> {gettext("Private")}
                   </span>
                   <span class="block" style="color: var(--ed-muted); font-size:0.75rem;">
                     {gettext("Hidden from the sidebar; entry by invite, admin add, or request.")}
