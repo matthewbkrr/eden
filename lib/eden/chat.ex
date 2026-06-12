@@ -353,6 +353,25 @@ defmodule Eden.Chat do
   def change_room(room \\ %Conversation{}, attrs \\ %{}),
     do: Conversation.room_changeset(room, attrs)
 
+  @doc """
+  Resolves what following a link into a room should do (#41 access matrix),
+  given the facts `%{room_member?: boolean, visibility: "open" | "private"}`:
+
+    * `:member`    — already in the room → just open it;
+    * `:open_join` — open room, not a member → auto-join, then open;
+    * `:knock`     — private room, not a member → show the knock window.
+
+  Pure and room-only. **Channel membership is orthogonal**: the caller (PR-B's
+  web layer) first ensures channel membership (an idempotent join to
+  `general` — channels are never closed), then acts on this room verdict. So a
+  non-channel-member following an open-room link joins the channel AND the room
+  (`:open_join`), and following a private-room link joins the channel then
+  knocks (`:knock`).
+  """
+  def resolve_room_access(%{room_member?: true}), do: :member
+  def resolve_room_access(%{room_member?: false, visibility: "open"}), do: :open_join
+  def resolve_room_access(%{room_member?: false, visibility: "private"}), do: :knock
+
   @doc "Fetches a room (a conversation with a channel) by id — trusted callers only."
   def get_room(room_id) do
     case Ids.normalize(room_id) do

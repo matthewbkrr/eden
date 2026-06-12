@@ -422,6 +422,45 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "resolve_room_access/1 (#41 matrix)" do
+    test "a room member just opens it, regardless of visibility" do
+      assert :member = Chat.resolve_room_access(%{room_member?: true, visibility: "open"})
+      assert :member = Chat.resolve_room_access(%{room_member?: true, visibility: "private"})
+    end
+
+    test "a non-member auto-joins an open room and knocks on a private one" do
+      assert :open_join = Chat.resolve_room_access(%{room_member?: false, visibility: "open"})
+      assert :knock = Chat.resolve_room_access(%{room_member?: false, visibility: "private"})
+    end
+  end
+
+  describe "room visibility" do
+    setup %{alice: alice} do
+      {:ok, channel} = Eden.Channels.create_channel(scope(alice), %{"name" => "Vis"})
+      %{channel: channel}
+    end
+
+    test "create_room defaults to open and accepts private", %{alice: alice, channel: channel} do
+      {:ok, [general]} = Eden.Channels.list_rooms(scope(alice), channel.id)
+      assert general.visibility == "open"
+
+      {:ok, open} = Chat.create_room(channel.id, %{"name" => "open-room"}, [alice.id])
+      assert open.visibility == "open"
+
+      {:ok, priv} =
+        Chat.create_room(channel.id, %{"name" => "secret", "visibility" => "private"}, [alice.id])
+
+      assert priv.visibility == "private"
+    end
+
+    test "an invalid visibility is rejected", %{channel: channel, alice: alice} do
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Chat.create_room(channel.id, %{"name" => "x", "visibility" => "secret"}, [alice.id])
+
+      assert "is invalid" in errors_on(cs).visibility
+    end
+  end
+
   describe "threads" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
