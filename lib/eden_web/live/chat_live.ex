@@ -215,11 +215,21 @@ defmodule EdenWeb.ChatLive do
 
   defp finish_open_room(socket, room, message_id) do
     # Reload through the scoped path now that membership is guaranteed (fills
-    # unread/preload consistently with the rest of the message pane).
-    {:ok, room} = Chat.get_conversation(socket.assigns.current_scope, room.id)
-    socket = socket |> refresh_rooms() |> select_conversation(room)
-    socket = if message_id, do: focus_message_target(socket, message_id), else: socket
-    {:noreply, socket}
+    # unread/preload consistently with the rest of the message pane). A race
+    # (admin deletes the room between the access check and here) bounces to the
+    # channel home rather than crashing on a hard match.
+    case Chat.get_conversation(socket.assigns.current_scope, room.id) do
+      {:ok, loaded} ->
+        socket = socket |> refresh_rooms() |> select_conversation(loaded)
+        socket = if message_id, do: focus_message_target(socket, message_id), else: socket
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("Conversation not found."))
+         |> push_navigate(to: ~p"/channels/#{room.channel_id}")}
+    end
   end
 
   defp enter_channel(socket, channel) do
