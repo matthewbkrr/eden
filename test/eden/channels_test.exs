@@ -194,7 +194,7 @@ defmodule Eden.ChannelsTest do
       {:ok, _} = insert_member(channel.id, bob.id, "member")
       # Bob joined after creation — materialize him into existing rooms (the
       # public join flow lands with #30).
-      :ok = Eden.Chat.join_rooms(channel.id, bob.id)
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
       %{channel: channel}
     end
 
@@ -215,7 +215,7 @@ defmodule Eden.ChannelsTest do
       assert {:ok, [%{unread_count: 1}]} = Channels.list_rooms(scope(alice), channel.id)
     end
 
-    test "create_room is admin-only and materializes all members", %{
+    test "create_room is admin-only and seeds only the creator (#41)", %{
       alice: alice,
       bob: bob,
       channel: channel
@@ -226,8 +226,12 @@ defmodule Eden.ChannelsTest do
       assert {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
       assert room.position == 1
 
-      # Bob got a membership without doing anything.
-      assert {:ok, _} = Eden.Chat.create_message(scope(bob), room.id, %{"body" => "in!"})
+      # Only the creator is materialized; bob (a channel member) is NOT
+      # auto-added — he'd join via the room link (open) or be added (private).
+      assert {:ok, _} = Eden.Chat.create_message(scope(alice), room.id, %{"body" => "first"})
+
+      assert {:error, :not_found} =
+               Eden.Chat.create_message(scope(bob), room.id, %{"body" => "no"})
     end
 
     test "rename and delete are admin-only; delete reclaims the room", %{
@@ -489,7 +493,7 @@ defmodule Eden.ChannelsTest do
     setup %{alice: alice, bob: bob} do
       {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
       {:ok, _} = insert_member(channel.id, bob.id, "member")
-      :ok = Eden.Chat.join_rooms(channel.id, bob.id)
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
       {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
       %{channel: channel, general: general}
     end
@@ -519,6 +523,8 @@ defmodule Eden.ChannelsTest do
       general: general
     } do
       {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      # bob joins the ops room (open) to be able to post (#41: no auto-fan-out).
+      :ok = Eden.Chat.join_room(ops.id, bob.id)
       backdate_last_read(general.id, alice.id)
       backdate_last_read(ops.id, alice.id)
 
@@ -569,7 +575,7 @@ defmodule Eden.ChannelsTest do
     setup %{alice: alice, bob: bob} do
       {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
       {:ok, _} = insert_member(channel.id, bob.id, "member")
-      :ok = Eden.Chat.join_rooms(channel.id, bob.id)
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
       {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
       {:ok, dm} = Eden.Chat.create_conversation(scope(alice), [bob.id])
       %{channel: channel, general: general, dm: dm}

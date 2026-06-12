@@ -97,7 +97,9 @@ defmodule EdenWeb.ChatLive do
   # Channel mode: /channels/:channel_id[/r/:id[/m/:message_id]]. These match
   # first — their params carry "channel_id", which the /app routes never do.
   def handle_params(%{"channel_id" => channel_id} = params, _uri, socket) do
-    case Channels.get_channel(socket.assigns.current_scope, channel_id) do
+    # #41: channels are never closed — following any link auto-joins (general).
+    # :not_found only when the channel truly doesn't exist.
+    case Channels.ensure_member(socket.assigns.current_scope, channel_id) do
       {:ok, channel} ->
         socket = enter_channel(socket, channel)
 
@@ -168,24 +170,56 @@ defmodule EdenWeb.ChatLive do
      |> refresh_sidebar()}
   end
 
+  # #41 access matrix: a room link auto-joins an open room, opens one you're in,
+  # or (private, not a member) lands you in the channel. get_room is trusted
+  # (no membership filter) — we resolve access explicitly, then materialize.
   defp open_room(socket, channel, room_id, message_id) do
-    case Chat.get_conversation(socket.assigns.current_scope, room_id) do
-      {:ok, %{channel_id: cid} = room} when cid == channel.id ->
-        socket = select_conversation(socket, room)
+    user_id = socket.assigns.current_scope.user.id
+    room = Chat.get_room(room_id)
 
-        socket =
-          if message_id,
-            do: focus_message_target(socket, message_id),
-            else: socket
+    if is_nil(room) or room.channel_id != channel.id do
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("Conversation not found."))
+       |> push_navigate(to: ~p"/channels/#{channel.id}")}
+    else
+      verdict =
+        Chat.resolve_room_access(%{
+          room_member?: Chat.room_member?(room.id, user_id),
+          visibility: room.visibility
+        })
 
-        {:noreply, socket}
-
-      _ ->
-        {:noreply,
-         socket
-         |> put_flash(:error, gettext("Conversation not found."))
-         |> push_navigate(to: ~p"/channels/#{channel.id}")}
+      open_room_verdict(socket, channel, room, message_id, verdict)
     end
+  end
+
+  defp open_room_verdict(socket, _channel, room, message_id, :open_join) do
+    :ok = Chat.join_room(room.id, socket.assigns.current_scope.user.id)
+    finish_open_room(socket, room, message_id)
+  end
+
+  defp open_room_verdict(socket, _channel, room, message_id, :member) do
+    finish_open_room(socket, room, message_id)
+  end
+
+  defp open_room_verdict(socket, channel, _room, _message_id, :knock) do
+    # PR-B interim: land in the channel with a notice. The full knock window
+    # (request → admin approve) lands with PR-C.
+    {:noreply,
+     socket
+     |> unsubscribe()
+     |> assign(selected: nil)
+     |> put_flash(:error, gettext("This room is private — ask an admin to add you."))
+     |> push_patch(to: ~p"/channels/#{channel.id}", replace: true)}
+  end
+
+  defp finish_open_room(socket, room, message_id) do
+    # Reload through the scoped path now that membership is guaranteed (fills
+    # unread/preload consistently with the rest of the message pane).
+    {:ok, room} = Chat.get_conversation(socket.assigns.current_scope, room.id)
+    socket = socket |> refresh_rooms() |> select_conversation(room)
+    socket = if message_id, do: focus_message_target(socket, message_id), else: socket
+    {:noreply, socket}
   end
 
   defp enter_channel(socket, channel) do

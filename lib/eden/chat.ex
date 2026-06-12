@@ -388,15 +388,18 @@ defmodule Eden.Chat do
 
   @doc """
   Creates a room in a channel and materializes memberships for the given user
-  ids (their `last_read_at` starts now — no unread storm). Trusted caller:
-  `Eden.Channels` authorizes the actor first.
+  ids (their `last_read_at` starts now — no unread storm). `opts[:is_general]`
+  marks the Town Square. Trusted caller: `Eden.Channels` authorizes the actor
+  first, and now seeds only the creator (others join open rooms via link or are
+  added to private ones — #41).
   """
-  def create_room(channel_id, attrs, member_ids) do
+  def create_room(channel_id, attrs, member_ids, opts \\ []) do
     Repo.transact(fn ->
       changeset =
         %Conversation{
           channel_id: channel_id,
           is_group: true,
+          is_general: Keyword.get(opts, :is_general, false),
           position: next_room_position(channel_id)
         }
         |> Conversation.room_changeset(attrs)
@@ -461,17 +464,40 @@ defmodule Eden.Chat do
     :ok
   end
 
-  @doc "Materializes the user's memberships in every room of the channel (idempotent)."
-  def join_rooms(channel_id, user_id) do
-    room_ids =
-      Repo.all(from c in Conversation, where: c.channel_id == ^channel_id, select: c.id)
+  @doc """
+  Materializes the user into the channel's `general` room only (#41: joining a
+  channel grants Town Square; other rooms are earned per room). Idempotent.
+  """
+  def join_general(channel_id, user_id) do
+    case general_room_id(channel_id) do
+      nil -> :ok
+      room_id -> join_room(room_id, user_id)
+    end
+  end
 
+  @doc "Materializes the user into a single room (idempotent). Trusted caller."
+  def join_room(room_id, user_id) do
     {_count, _} =
-      Repo.insert_all(Membership, room_membership_entries(room_ids, [user_id]),
+      Repo.insert_all(Membership, room_membership_entries([room_id], [user_id]),
         on_conflict: :nothing
       )
 
     :ok
+  end
+
+  @doc "Whether the user is a member of the room."
+  def room_member?(room_id, user_id) do
+    Repo.exists?(
+      from m in Membership, where: m.conversation_id == ^room_id and m.user_id == ^user_id
+    )
+  end
+
+  defp general_room_id(channel_id) do
+    Repo.one(
+      from c in Conversation,
+        where: c.channel_id == ^channel_id and c.is_general == true,
+        select: c.id
+    )
   end
 
   @doc "Removes the user's memberships from every room of the channel."

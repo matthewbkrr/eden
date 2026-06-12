@@ -63,8 +63,10 @@ defmodule Eden.Channels do
       with {:ok, channel} <-
              %Channel{creator_id: user.id} |> Channel.changeset(attrs) |> Repo.insert(),
            {:ok, _membership} <- insert_membership(channel.id, user.id, "owner"),
-           # Every channel starts usable: a default room (Mattermost's Town Square).
-           {:ok, _room} <- Chat.create_room(channel.id, %{"name" => "general"}, [user.id]) do
+           # Every channel starts usable: the general room (Town Square), marked
+           # is_general so the join/undeletable/open guards have one source.
+           {:ok, _room} <-
+             Chat.create_room(channel.id, %{"name" => "general"}, [user.id], is_general: true) do
         {:ok, channel}
       end
     end)
@@ -135,6 +137,37 @@ defmodule Eden.Channels do
     else
       _ -> {:error, :not_found}
     end
+  end
+
+  @doc """
+  Ensures the scoped user is a member of the channel and returns it (#41:
+  channels are never closed — following any link auto-joins, landing the user
+  in `general`). `{:error, :not_found}` only when the channel doesn't exist.
+  Idempotent: an existing member just gets the channel back.
+  """
+  def ensure_member(%Scope{} = scope, channel_id) do
+    case get_channel(scope, channel_id) do
+      {:ok, channel} -> {:ok, channel}
+      {:error, :not_found} -> auto_join(scope, channel_id)
+    end
+  end
+
+  # Join an existing channel the user isn't in yet (the #41 auto-join). A
+  # missing channel stays :not_found — existence isn't leaked.
+  defp auto_join(%Scope{user: user} = scope, channel_id) do
+    with id when is_integer(id) <- Ids.normalize(channel_id),
+         true <- Repo.exists?(from c in Channel, where: c.id == ^id) do
+      {:ok, joined} = Repo.transact(fn -> {:ok, join_channel_tx(id, user.id)} end)
+      if joined, do: announce_join(id, user.id)
+      get_channel(scope, id)
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp announce_join(channel_id, user_id) do
+    broadcast_user(user_id, :channels_changed)
+    broadcast_channel(channel_id, {:members_changed, channel_id})
   end
 
   @doc """
@@ -212,10 +245,12 @@ defmodule Eden.Channels do
   end
 
   @doc "Creates a room (admin+); all current members are materialized into it."
-  def create_room(%Scope{} = scope, channel_id, attrs) do
+  def create_room(%Scope{user: user} = scope, channel_id, attrs) do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)),
-         {:ok, room} <- Chat.create_room(channel.id, attrs, member_ids(channel.id)) do
+         # #41: seed only the creator. Others join open rooms via link or are
+         # added to private ones — no channel-wide fan-out anymore.
+         {:ok, room} <- Chat.create_room(channel.id, attrs, [user.id]) do
       broadcast_channel(channel.id, {:room_created, room})
       {:ok, room}
     end
@@ -336,7 +371,8 @@ defmodule Eden.Channels do
       )
 
     if count == 1 do
-      :ok = Chat.join_rooms(channel_id, user_id)
+      # #41: a channel join grants Town Square only; other rooms are earned.
+      :ok = Chat.join_general(channel_id, user_id)
       true
     else
       false

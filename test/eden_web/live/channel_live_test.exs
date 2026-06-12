@@ -19,7 +19,7 @@ defmodule EdenWeb.ChannelModeTest do
     bob = user_fixture(%{username: "bob", display_name: "Bob"})
     {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Engineering"})
     {:ok, _} = add_member(channel.id, bob.id)
-    :ok = Chat.join_rooms(channel.id, bob.id)
+    :ok = Chat.join_general(channel.id, bob.id)
     {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
     %{alice: alice, bob: bob, channel: channel, general: general}
   end
@@ -37,12 +37,21 @@ defmodule EdenWeb.ChannelModeTest do
       assert html =~ "Pick a room to start reading."
     end
 
-    test "a non-member is redirected home", ctx do
+    test "a non-member auto-joins the channel (general) — channels are never closed (#41)", ctx do
       dave = user_fixture(%{username: "dave"})
       conn = log_in_user(ctx.conn, dave)
 
+      {:ok, _view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+      # Landed in the channel with general materialized — not bounced home.
+      assert html =~ "Engineering"
+      assert {:ok, [%{name: "general"}]} = Channels.list_rooms(scope(dave), ctx.channel.id)
+    end
+
+    test "a truly missing channel still redirects home", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+
       assert {:error, {:live_redirect, %{to: "/app"}}} =
-               live(conn, ~p"/channels/#{ctx.channel.id}")
+               live(conn, ~p"/channels/#{2_000_000_000}")
     end
 
     test "opening a room renders the shared message pane and sends work", ctx do
@@ -99,14 +108,62 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "room access (#41 matrix)" do
+    setup [:setup_channel]
+
+    test "an open-room link auto-joins a non-member and opens it", ctx do
+      {:ok, open} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "lounge"})
+      refute Chat.room_member?(open.id, ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, _view, html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{open.id}")
+
+      assert html =~ "lounge"
+      assert Chat.room_member?(open.id, ctx.bob.id)
+    end
+
+    test "a private-room link lands a non-member in the channel with a notice", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+
+      # Cold-load of a private-room link → redirected to the channel home with
+      # a notice (PR-B interim; the knock window lands with PR-C).
+      assert {:error, {:live_redirect, %{to: to, flash: flash}}} =
+               live(conn, ~p"/channels/#{ctx.channel.id}/r/#{priv.id}")
+
+      assert to == "/channels/#{ctx.channel.id}"
+      assert flash["error"] =~ "private"
+      refute Chat.room_member?(priv.id, ctx.bob.id)
+
+      # The channel home doesn't reveal the private room in the sidebar.
+      {:ok, view, _html} = live(conn, to)
+      refute has_element?(view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{priv.id}"]))
+    end
+
+    test "an existing member just opens the room (no re-join side effects)", ctx do
+      {:ok, open} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "lounge"})
+      :ok = Chat.join_room(open.id, ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, _view, html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{open.id}")
+      assert html =~ "lounge"
+    end
+  end
+
   describe "room management" do
     setup [:setup_channel]
 
-    test "admin creates a room from the modal; it appears for members live", ctx do
+    test "admin creates a room (seeds the creator); others don't see it until they join (#41)",
+         ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
 
-      # A member session watches the same channel.
+      # Another member's session watches the same channel.
       bob_conn = log_in_user(build_conn(), ctx.bob)
       {:ok, bob_view, _} = live(bob_conn, ~p"/channels/#{ctx.channel.id}")
 
@@ -116,8 +173,10 @@ defmodule EdenWeb.ChannelModeTest do
       |> form("#room-form", %{"room" => %{"name" => "ops"}})
       |> render_submit()
 
+      # The creator sees it; bob doesn't — rooms are link-discovered, the
+      # sidebar lists only rooms you're in.
       assert render(view) =~ "ops"
-      assert render(bob_view) =~ "ops"
+      refute render(bob_view) =~ "ops"
     end
 
     test "member sees no admin affordances and can't force them", ctx do
