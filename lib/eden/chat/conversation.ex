@@ -33,6 +33,8 @@ defmodule Eden.Chat.Conversation do
     field :last_message_kind, :string, virtual: true
     # Whether the scoped user muted this chat — directly or via a muted folder.
     field :muted, :boolean, virtual: true, default: false
+    # Whether the scoped user favorited this room (#42) — set by list_rooms.
+    field :favorite, :boolean, virtual: true, default: false
 
     # Stable order so an unnamed group's title (built from member names) and the
     # member list don't reshuffle each time the list is re-preloaded.

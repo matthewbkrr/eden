@@ -14,6 +14,9 @@ defmodule Eden.Chat.Membership do
     field :left_at, :utc_datetime
     # Per-user chat mute: set = muted (unread no longer emphasized in badges).
     field :muted_at, :utc_datetime
+    # Per-user room favorite (#42): floats the room into the sidebar's
+    # Favorites block.
+    field :favorited_at, :utc_datetime
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :user, Eden.Accounts.User

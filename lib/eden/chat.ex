@@ -336,17 +336,49 @@ defmodule Eden.Chat do
         join: m in Membership,
         on: m.conversation_id == c.id and m.user_id == ^user.id,
         where: c.channel_id == ^channel_id,
-        order_by: [asc: c.position, asc: c.id]
+        # Favorites float to the top (a per-user view over the canonical
+        # position order, which still rules within each group).
+        order_by: [desc: not is_nil(m.favorited_at), asc: c.position, asc: c.id],
+        select: {c, not is_nil(m.favorited_at)}
       )
       |> Repo.all()
 
-    ids = Enum.map(rooms, & &1.id)
+    ids = Enum.map(rooms, fn {room, _favorite} -> room.id end)
     unread = unread_counts(user, ids)
     muted = muted_conversation_ids(user, ids)
 
-    Enum.map(rooms, fn room ->
-      %{room | unread_count: Map.get(unread, room.id, 0), muted: room.id in muted}
+    Enum.map(rooms, fn {room, favorite} ->
+      %{
+        room
+        | unread_count: Map.get(unread, room.id, 0),
+          muted: room.id in muted,
+          favorite: favorite
+      }
     end)
+  end
+
+  @doc """
+  Toggles the scoped user's favorite on a room (#42): favorited rooms float
+  into the sidebar's Favorites block. `{:ok, :favorited | :unfavorited}` or
+  `{:error, :not_found}`; the user's sessions refresh via `:folders_changed`.
+  """
+  def toggle_room_favorite(%Scope{user: user}, room_id) do
+    with id when is_integer(id) <- safe_id(room_id),
+         %Membership{} = membership <-
+           Repo.get_by(Membership, conversation_id: id, user_id: user.id) do
+      favorited_at = if membership.favorited_at, do: nil, else: now()
+
+      # update_all: a no-op (not a StaleEntryError) if the membership vanished
+      # concurrently (e.g. removed from the room mid-click).
+      Repo.update_all(from(m in Membership, where: m.id == ^membership.id),
+        set: [favorited_at: favorited_at]
+      )
+
+      broadcast_folders(user.id)
+      {:ok, if(favorited_at, do: :favorited, else: :unfavorited)}
+    else
+      _ -> {:error, :not_found}
+    end
   end
 
   @doc "A changeset for room forms (create / rename)."

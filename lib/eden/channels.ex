@@ -277,6 +277,8 @@ defmodule Eden.Channels do
   """
   def delete_room(%Scope{} = scope, room_id) do
     with %{} = room <- Chat.get_room(room_id),
+         # general is the channel's Town Square — undeletable (#42 guard).
+         false <- room.is_general,
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       :ok = Chat.hard_delete_conversation(room.id)
@@ -284,6 +286,7 @@ defmodule Eden.Channels do
       :ok
     else
       nil -> {:error, :not_found}
+      true -> {:error, :general}
       error -> error
     end
   end
@@ -349,6 +352,29 @@ defmodule Eden.Channels do
       # {:error, reason} from get_channel/ensure_role passes through; anything
       # else (nil, a non-join_request system message) is :not_found — never a
       # bare struct that the caller's {:ok | {:error, _}} contract can't handle.
+      {:error, _} = error -> error
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Declines a pending join request (admin+ of the room's channel): flips the
+  request message to "declined" without joining anyone. The requester may
+  knock again afterwards (only "pending" blocks a re-request).
+  `{:error, :not_found | :forbidden}`.
+  """
+  def decline_room_join(%Scope{} = scope, message_id) do
+    with %{meta: %{"action" => "join_request"} = meta} = msg <-
+           Chat.get_system_message(message_id),
+         %{} = room <- Chat.get_room(msg.conversation_id),
+         {:ok, channel} <- get_channel(scope, room.channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)) do
+      if meta["status"] == "pending" do
+        {:ok, _} = Chat.resolve_join_request(msg, "declined")
+      end
+
+      :ok
+    else
       {:error, _} = error -> error
       _ -> {:error, :not_found}
     end
@@ -696,7 +722,9 @@ defmodule Eden.Channels do
        Repo.all(
          from i in Invite,
            where: i.channel_id == ^channel.id and is_nil(i.revoked_at) and i.expires_at > ^now,
-           order_by: [desc: i.id]
+           order_by: [desc: i.id],
+           # Room invites carry their room so the UI can label them (#42).
+           preload: [:room]
        )}
     end
   end
