@@ -1838,7 +1838,13 @@ defmodule EdenWeb.ChatLive do
         // trigger, clamped to the viewport, flipping above if it would overflow.
         // On a narrow viewport the CSS makes it a bottom sheet — skip positioning.
         export default {
-          mounted() { this.place() },
+          mounted() {
+            this.place()
+            // Move focus into the dialog (role=dialog/aria-modal) so a screen
+            // reader announces it and Escape is reliable; focus returns to the
+            // trigger naturally when the popover closes and the DOM restores.
+            this.el.focus()
+          },
           // A presence diff can morph the card while it's open; re-place so it
           // never ends up hidden (place() always restores visibility).
           updated() { this.place() },
@@ -3541,6 +3547,7 @@ defmodule EdenWeb.ChatLive do
         role="dialog"
         aria-modal="true"
         aria-label={gettext("Profile")}
+        tabindex="-1"
       >
         <div class="flex flex-col items-center text-center">
           <.avatar name={@user.display_name} src={avatar_src(@user)} online={@online} size={:lg} />

@@ -607,6 +607,10 @@
     box-shadow: 0 12px 32px oklch(0 0 0 / 0.32);
     animation: ed-pop-in 0.14s var(--ed-ease);
   }
+  /* Focused programmatically (tabindex=-1) for AT — no ring around the card. */
+  .ed-popover:focus {
+    outline: none;
+  }
   @keyframes ed-pop-in {
     from {
       opacity: 0;
