@@ -190,6 +190,74 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "corporate search (#43)" do
+    setup [:setup_channel]
+
+    test "channel search groups room-name and message matches; click deep-links", ctx do
+      {:ok, lounge} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "lounge"})
+
+      {:ok, _} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "lounge talk"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_change(view, "channel_search", %{"q" => "lounge"})
+      # Room-name match links to the room; message match carries the breadcrumb.
+      # NB: the highlight splits the matched term out into <mark>, so assert
+      # the pieces — the literal "lounge talk" substring never exists in HTML.
+      assert has_element?(view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{lounge.id}"]))
+      assert html =~ "ed-mark"
+      assert html =~ "talk"
+
+      assert has_element?(
+               view,
+               ~s(a[href^="/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/"])
+             )
+
+      # Clearing restores the rooms list.
+      render_click(view, "clear_channel_search", %{})
+      assert has_element?(view, "#rooms-list")
+    end
+
+    test "channel search never sees rooms the user isn't in", ctx do
+      {:ok, priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "warroom",
+          "visibility" => "private"
+        })
+
+      {:ok, _} = Chat.create_message(scope(ctx.alice), priv.id, %{"body" => "warroom plans"})
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_change(view, "channel_search", %{"q" => "warroom"})
+      refute html =~ "warroom plans"
+      refute html =~ ">warroom<"
+    end
+
+    test "in-room search finds messages and replies; a reply result opens the thread", ctx do
+      {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "agenda"})
+      {:ok, reply} = Chat.create_reply(scope(ctx.bob), root.id, %{"body" => "agenda follow-up"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      render_click(view, "toggle_room_search", %{})
+      html = render_change(view, "room_search", %{"q" => "agenda"})
+      # The match is wrapped in <mark>, so assert the unmatched tail.
+      assert html =~ "follow-up"
+      assert html =~ "ed-room-search__panel"
+
+      # Following the reply permalink opens the thread panel.
+      {:ok, view, _html} =
+        live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/#{reply.id}")
+
+      assert has_element?(view, ".ed-thread")
+    end
+  end
+
   describe "room visibility picker" do
     setup [:setup_channel]
 
@@ -207,8 +275,27 @@ defmodule EdenWeb.ChannelModeTest do
 
       {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
       assert %{visibility: "private"} = Enum.find(rooms, &(&1.name == "secret"))
-      # The row shows the lock glyph.
-      assert render(view) =~ "🔒"
+      # The row shows the lock glyph (general keeps #, open rooms the globe).
+      assert render(view) =~ "hero-lock-closed-micro"
+    end
+
+    test "room glyphs: general is always #, open rooms get the globe, private the lock", ctx do
+      {:ok, _open} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "lounge"})
+
+      {:ok, _priv} =
+        Channels.create_room(scope(ctx.alice), ctx.channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      assert html =~ "hero-globe-alt-micro"
+      assert html =~ "hero-lock-closed-micro"
+      # general renders the literal hash, not an icon.
+      assert has_element?(view, "#room-#{ctx.general.id} .ed-room__hash span", "#")
+      refute has_element?(view, "#room-#{ctx.general.id} .hero-globe-alt-micro")
     end
 
     test "the rename modal hides the picker for general but offers it elsewhere", ctx do

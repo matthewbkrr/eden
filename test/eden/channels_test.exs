@@ -782,7 +782,7 @@ defmodule Eden.ChannelsTest do
     end
 
     test "favorites float to the top per user and survive renames", ctx do
-      %{alice: alice, bob: bob, channel: channel, general: general} = ctx
+      %{alice: alice, bob: bob, channel: channel} = ctx
       {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
       {:ok, zoo} = Channels.create_room(scope(alice), channel.id, %{"name" => "zoo"})
       :ok = Eden.Chat.join_room(ops.id, bob.id)

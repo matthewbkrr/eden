@@ -83,7 +83,13 @@ defmodule EdenWeb.ChatLive do
         room_add: nil,
         room_addable: [],
         room_add_selected: MapSet.new(),
-        room_invite_url: nil
+        room_invite_url: nil,
+        # Corporate search (#43): channel-wide (sidebar) and in-room (header).
+        channel_search: "",
+        channel_results: nil,
+        room_search_open: false,
+        room_search: "",
+        room_results: nil
       )
       |> stream(:thread, [])
       |> refresh_folders()
@@ -257,7 +263,9 @@ defmodule EdenWeb.ChatLive do
       # scrim blocks room switches) — but a {:room_deleted} patch could leave
       # it referencing a dead room; reset defensively.
       room_add: nil,
-      room_invite_url: nil
+      room_invite_url: nil,
+      channel_search: "",
+      channel_results: nil
     )
   end
 
@@ -699,6 +707,47 @@ defmodule EdenWeb.ChatLive do
     case Channels.decline_room_join(socket.assigns.current_scope, id) do
       :ok -> {:noreply, socket}
       {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't decline."))}
+    end
+  end
+
+  ## Corporate search (#43)
+
+  def handle_event("channel_search", %{"q" => q}, socket) do
+    case socket.assigns.channel do
+      %{id: channel_id} ->
+        results =
+          if String.trim(q) == "",
+            do: nil,
+            else: Chat.search_rooms(socket.assigns.current_scope, {:channel, channel_id}, q)
+
+        {:noreply, assign(socket, channel_search: q, channel_results: results)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("clear_channel_search", _params, socket) do
+    {:noreply, assign(socket, channel_search: "", channel_results: nil)}
+  end
+
+  def handle_event("toggle_room_search", _params, socket) do
+    open = !socket.assigns.room_search_open
+    {:noreply, assign(socket, room_search_open: open, room_search: "", room_results: nil)}
+  end
+
+  def handle_event("room_search", %{"q" => q}, socket) do
+    case socket.assigns.selected do
+      %{channel_id: cid, id: room_id} when not is_nil(cid) ->
+        results =
+          if String.trim(q) == "",
+            do: nil,
+            else: Chat.search_rooms(socket.assigns.current_scope, {:room, room_id}, q)
+
+        {:noreply, assign(socket, room_search: q, room_results: results)}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -1453,7 +1502,42 @@ defmodule EdenWeb.ChatLive do
           </div>
         </header>
 
+        <%!-- Channel-wide search (#43): rooms by name + message bodies across
+              the rooms you're in. Results replace the list while typing. --%>
+        <form class="ed-search" phx-change="channel_search" phx-submit="channel_search">
+          <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
+          <input
+            type="search"
+            name="q"
+            value={@channel_search}
+            placeholder={gettext("Search channel")}
+            autocomplete="off"
+            class="ed-search__input"
+            phx-debounce="200"
+            aria-label={gettext("Search this channel")}
+          />
+          <button
+            :if={@channel_search != ""}
+            type="button"
+            class="ed-btn--icon"
+            phx-click="clear_channel_search"
+            aria-label={gettext("Clear search")}
+          >
+            <.icon name="hero-x-mark-micro" class="size-4" />
+          </button>
+        </form>
+
+        <div :if={@channel_search != ""} class="flex-1 overflow-y-auto p-2">
+          <.channel_search_results
+            results={@channel_results || []}
+            rooms={@rooms}
+            query={@channel_search}
+            channel={@channel}
+          />
+        </div>
+
         <div
+          :if={@channel_search == ""}
           id="rooms-list"
           class="flex-1 overflow-y-auto p-2 space-y-0.5"
           phx-hook=".RoomSortable"
@@ -1688,7 +1772,7 @@ defmodule EdenWeb.ChatLive do
             </.link>
             <%!-- A room header: name + channel, no profile/peer affordances. --%>
             <div :if={@selected.channel_id} class="flex items-center gap-2 min-w-0 flex-1">
-              <span class="ed-room__hash" style="font-size:1.125rem;">#</span>
+              <.room_glyph room={@selected} class="ed-room__hash--lg" />
               <div class="min-w-0">
                 <div class="font-semibold truncate" style="font-size:0.9375rem;">
                   {@selected.name}
@@ -1698,6 +1782,17 @@ defmodule EdenWeb.ChatLive do
                 </div>
               </div>
             </div>
+            <button
+              :if={@selected.channel_id}
+              type="button"
+              class="ed-btn--icon shrink-0"
+              phx-click="toggle_room_search"
+              title={gettext("Search in room")}
+              aria-label={gettext("Search in room")}
+              aria-expanded={to_string(@room_search_open)}
+            >
+              <.icon name="hero-magnifying-glass-mini" class="size-5" />
+            </button>
             <button
               :if={is_nil(@selected.channel_id)}
               type="button"
@@ -1734,6 +1829,64 @@ defmodule EdenWeb.ChatLive do
               </div>
             </button>
           </header>
+
+          <%!-- In-room search (#43): a bar under the header; results overlay
+                the top of the message area, each result is a permalink. --%>
+          <div :if={@room_search_open and @selected.channel_id} class="relative shrink-0">
+            <form
+              class="ed-search"
+              style="margin-bottom: 0;"
+              phx-change="room_search"
+              phx-submit="room_search"
+            >
+              <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
+              <input
+                type="search"
+                name="q"
+                value={@room_search}
+                placeholder={gettext("Search in %{room}", room: @selected.name)}
+                autocomplete="off"
+                class="ed-search__input"
+                phx-debounce="200"
+                aria-label={gettext("Search in room")}
+              />
+              <button
+                type="button"
+                class="ed-btn--icon"
+                phx-click="toggle_room_search"
+                aria-label={gettext("Close search")}
+              >
+                <.icon name="hero-x-mark-micro" class="size-4" />
+              </button>
+            </form>
+            <div :if={@room_search != ""} class="ed-room-search__panel">
+              <p
+                :if={(@room_results || []) == []}
+                class="text-center py-6"
+                style="color: var(--ed-muted); font-size:0.875rem;"
+              >
+                {gettext("No results for “%{query}”", query: String.trim(@room_search))}
+              </p>
+              <.link
+                :for={message <- @room_results || []}
+                patch={~p"/channels/#{@selected.channel_id}/r/#{@selected.id}/m/#{message.id}"}
+                class="ed-convo"
+              >
+                <span class="ed-convo__body">
+                  <span class="ed-convo__top">
+                    <span class="ed-convo__name">
+                      {(message.sender && message.sender.display_name) ||
+                        gettext("Deleted account")}
+                    </span>
+                    <.local_time at={message.inserted_at} class="ed-convo__time" />
+                  </span>
+                  <span class="ed-convo__preview">
+                    <.highlighted text={snippet(message.body, @room_search)} query={@room_search} />
+                  </span>
+                </span>
+              </.link>
+            </div>
+          </div>
 
           <div class="flex-1 overflow-y-auto p-4" id="message-scroll" phx-hook=".ScrollBottom">
             <div :if={@has_more} class="text-center mb-3">
@@ -1854,7 +2007,9 @@ defmodule EdenWeb.ChatLive do
           <div class="flex-1 grid place-items-center text-center p-8">
             <%!-- Knock window: a private room reached by link that you're not in. --%>
             <div :if={@knock_room} class="space-y-3 max-w-sm">
-              <span class="ed-room__hash" style="font-size:1.75rem;">🔒</span>
+              <span class="ed-room__hash mx-auto" style="font-size:1.75rem;">
+                <.icon name="hero-lock-closed" class="size-8" />
+              </span>
               <p style="font-weight:600;">{@knock_room.name}</p>
               <p style="color: var(--ed-muted); font-size:0.875rem;">
                 {gettext("This room is private. Request access, or wait for an admin to add you.")}
@@ -2792,6 +2947,96 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :results, :list, required: true
+  attr :rooms, :list, required: true
+  attr :query, :string, required: true
+  attr :channel, :map, required: true
+
+  # Channel-wide search results (#43): rooms by name (from the already-loaded
+  # joined-rooms list — no query) + message bodies with a room breadcrumb.
+  defp channel_search_results(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :room_matches,
+        Enum.filter(assigns.rooms, fn room ->
+          String.contains?(
+            String.downcase(room.name),
+            String.downcase(String.trim(assigns.query))
+          )
+        end)
+      )
+
+    ~H"""
+    <div class="space-y-3">
+      <p
+        :if={@room_matches == [] and @results == []}
+        class="text-center py-8"
+        style="color: var(--ed-muted); font-size:0.875rem;"
+      >
+        {gettext("No results for “%{query}”", query: String.trim(@query))}
+      </p>
+
+      <section :if={@room_matches != []}>
+        <h3 class="ed-search__group">{gettext("Rooms")}</h3>
+        <.link
+          :for={room <- @room_matches}
+          patch={~p"/channels/#{@channel.id}/r/#{room.id}"}
+          class="ed-convo ed-room"
+        >
+          <.room_glyph room={room} />
+          <span class="ed-convo__name flex-1 truncate">
+            <.highlighted text={room.name} query={@query} />
+          </span>
+        </.link>
+      </section>
+
+      <section :if={@results != []}>
+        <h3 class="ed-search__group">{gettext("Messages")}</h3>
+        <.link
+          :for={message <- @results}
+          patch={~p"/channels/#{@channel.id}/r/#{message.conversation_id}/m/#{message.id}"}
+          class="ed-convo"
+        >
+          <span class="ed-convo__body">
+            <span class="ed-convo__top">
+              <span class="ed-convo__name"># {message.conversation.name}</span>
+              <.local_time at={message.inserted_at} class="ed-convo__time" />
+            </span>
+            <span class="ed-convo__preview">
+              <span :if={message.sender}>{message.sender.display_name}:</span>
+              <.highlighted text={snippet(message.body, @query)} query={@query} />
+            </span>
+          </span>
+        </.link>
+      </section>
+    </div>
+    """
+  end
+
+  attr :room, :map, required: true
+  attr :class, :string, default: nil
+
+  # The room's identity glyph: general is ALWAYS the hash (Town Square); open
+  # rooms get a globe (any link joins); private rooms a lock.
+  defp room_glyph(assigns) do
+    ~H"""
+    <span class={["ed-room__hash", @class]}>
+      <span :if={@room.is_general}>#</span>
+      <.icon
+        :if={!@room.is_general and @room.visibility == "private"}
+        name="hero-lock-closed-micro"
+        class="size-3.5"
+      />
+      <.icon
+        :if={!@room.is_general and @room.visibility != "private"}
+        name="hero-globe-alt-micro"
+        class="size-3.5"
+      />
+    </span>
+    """
+  end
+
   attr :text, :string, required: true
   attr :query, :string, required: true
 
@@ -2867,7 +3112,7 @@ defmodule EdenWeb.ChatLive do
       >
         <%!-- draggable=false: links are natively draggable, which would fight
               the row's reorder drag (the wrap is the drag source). --%>
-        <span class="ed-room__hash">{if @room.visibility == "private", do: "🔒", else: "#"}</span>
+        <.room_glyph room={@room} />
         <span class="ed-convo__name flex-1 truncate">
           {@room.name}
           <span :if={@room.favorite} class="ed-convo__muted" title={gettext("Favorite")}>
@@ -4282,7 +4527,11 @@ defmodule EdenWeb.ChatLive do
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       thread_root: nil,
       last_flat: last_flat,
-      thread_participants: facepiles(scope, conversation, messages)
+      thread_participants: facepiles(scope, conversation, messages),
+      # In-room search is per-room state — closed on every selection.
+      room_search_open: false,
+      room_search: "",
+      room_results: nil
     )
     |> stream(:thread, [], reset: true)
     |> stream(:messages, messages, reset: true)
