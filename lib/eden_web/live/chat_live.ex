@@ -290,17 +290,18 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, show_new: false)}
   end
 
-  # Open a co-member's profile. Your own profile is editable in Settings, so
-  # route there instead. Authorization (shared conversation) lives in the context.
+  # Open a profile popover. Your own card opens too (no Message button — an
+  # "Edit profile" link instead); others are authorized by a shared conversation
+  # in the context. The members modal (if open) stays open underneath.
   def handle_event("show_profile", %{"id" => id}, socket) do
     scope = socket.assigns.current_scope
 
     if id == to_string(scope.user.id) do
-      {:noreply, push_navigate(socket, to: ~p"/settings")}
+      {:noreply, assign(socket, profile: scope.user)}
     else
       case Chat.get_shared_user(scope, id) do
         {:ok, user} ->
-          {:noreply, assign(socket, profile: user, show_members: false)}
+          {:noreply, assign(socket, profile: user)}
 
         {:error, :not_found} ->
           {:noreply, put_flash(socket, :error, gettext("Profile unavailable."))}
@@ -794,11 +795,18 @@ defmodule EdenWeb.ChatLive do
 
     with {:ok, user} <- Chat.get_shared_user(scope, id),
          {:ok, conversation} <- Chat.create_conversation(scope, [user.id]) do
-      {:noreply,
-       socket
-       |> assign(profile: nil, show_members: false)
-       |> stream(:conversations, Chat.list_conversations(scope), reset: true)
-       |> push_patch(to: ~p"/app/c/#{conversation.id}")}
+      socket = assign(socket, profile: nil, show_members: false)
+
+      # From a channel/room the messenger is a different route — navigate (a
+      # full remount). Within the messenger, a lighter patch + sidebar refresh.
+      if socket.assigns.channel do
+        {:noreply, push_navigate(socket, to: ~p"/app/c/#{conversation.id}")}
+      else
+        {:noreply,
+         socket
+         |> stream(:conversations, Chat.list_conversations(scope), reset: true)
+         |> push_patch(to: ~p"/app/c/#{conversation.id}")}
+      end
     else
       _ -> {:noreply, put_flash(socket, :error, gettext("Couldn't start the conversation."))}
     end
@@ -1453,6 +1461,7 @@ defmodule EdenWeb.ChatLive do
               :if={is_nil(@selected.channel_id)}
               type="button"
               class="flex items-center gap-3 min-w-0 flex-1 text-left -ml-1.5 px-1.5 py-1 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface)]"
+              data-profile-trigger
               phx-click={if @selected.is_group, do: "show_members", else: "show_profile"}
               phx-value-id={peer_id(@selected, @current_scope.user)}
               aria-label={gettext("View profile")}
@@ -1725,10 +1734,11 @@ defmodule EdenWeb.ChatLive do
         user={@current_scope.user}
         online_ids={@online_ids}
       />
-      <.profile_modal
+      <.profile_popover
         :if={@profile}
         user={@profile}
         online={MapSet.member?(@online_ids, @profile.id)}
+        self={@profile.id == @current_scope.user.id}
       />
       <.forward_modal
         :if={@forward_id}
@@ -1819,6 +1829,26 @@ defmodule EdenWeb.ChatLive do
             this.input.addEventListener("search", () => {
               if (this.input.value === "") this.pushEvent("clear_search", {})
             })
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".Popover">
+        // Positions the profile card at the clicked avatar/name (window.__edAnchor,
+        // recorded in app.js before the round-trip). Below-and-left-aligned to the
+        // trigger, clamped to the viewport, flipping above if it would overflow.
+        // On a narrow viewport the CSS makes it a bottom sheet — skip positioning.
+        export default {
+          mounted() { this.place() },
+          place() {
+            const a = window.__edAnchor
+            if (!a || window.innerWidth < 768) return
+            const w = this.el.offsetWidth, h = this.el.offsetHeight, gap = 8
+            let left = Math.max(gap, Math.min(a.left, window.innerWidth - w - gap))
+            let top = a.bottom + gap
+            if (top + h > window.innerHeight - gap) top = Math.max(gap, a.top - h - gap)
+            this.el.style.left = `${left}px`
+            this.el.style.top = `${top}px`
+            this.el.style.visibility = "visible"
           }
         }
       </script>
@@ -2574,23 +2604,32 @@ defmodule EdenWeb.ChatLive do
               :for={%{user: user, role: role} <- @members}
               class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)]"
             >
-              <.avatar
-                name={user.display_name}
-                src={avatar_src(user)}
-                online={MapSet.member?(@online_ids, user.id)}
-                size={:sm}
-              />
-              <span class="flex-1 min-w-0">
-                <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
-                  {user.display_name}
-                  <span :if={user.id == @me.id} style="color: var(--ed-muted); font-weight:400;">
-                    · {gettext("you")}
+              <button
+                type="button"
+                class="flex items-center gap-3 flex-1 min-w-0 text-left rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-bg)]"
+                data-profile-trigger
+                phx-click="show_profile"
+                phx-value-id={user.id}
+                aria-label={gettext("View profile")}
+              >
+                <.avatar
+                  name={user.display_name}
+                  src={avatar_src(user)}
+                  online={MapSet.member?(@online_ids, user.id)}
+                  size={:sm}
+                />
+                <span class="flex-1 min-w-0">
+                  <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
+                    {user.display_name}
+                    <span :if={user.id == @me.id} style="color: var(--ed-muted); font-weight:400;">
+                      · {gettext("you")}
+                    </span>
+                  </span>
+                  <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
+                    @{user.username} · {role_label(role)}
                   </span>
                 </span>
-                <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
-                  @{user.username} · {role_label(role)}
-                </span>
-              </span>
+              </button>
 
               <%!-- Owner: manage admins / hand over / remove. Admin: remove members. --%>
               <span :if={member_actions?(@channel.role, role, user.id, @me.id)} class="flex gap-1">
@@ -2928,18 +2967,31 @@ defmodule EdenWeb.ChatLive do
       aria-haspopup={@menu && "menu"}
     >
       <div class="ed-flat__gutter">
-        <.avatar
-          :if={!@message.compact}
-          name={(@message.sender && @message.sender.display_name) || "?"}
-          src={@message.sender && avatar_src(@message.sender)}
-          size={:sm}
-        />
+        <button
+          :if={!@message.compact && @message.sender}
+          type="button"
+          class="ed-flat__avatar-btn"
+          data-profile-trigger
+          phx-click="show_profile"
+          phx-value-id={@message.sender_id}
+          aria-label={gettext("View profile")}
+        >
+          <.avatar name={@message.sender.display_name} src={avatar_src(@message.sender)} size={:sm} />
+        </button>
       </div>
       <div class="ed-flat__main">
         <div :if={!@message.compact} class="ed-flat__head">
-          <span class="ed-flat__name">
-            {(@message.sender && @message.sender.display_name) || gettext("Deleted account")}
-          </span>
+          <button
+            :if={@message.sender}
+            type="button"
+            class="ed-flat__name ed-flat__name-btn"
+            data-profile-trigger
+            phx-click="show_profile"
+            phx-value-id={@message.sender_id}
+          >
+            {@message.sender.display_name}
+          </button>
+          <span :if={!@message.sender} class="ed-flat__name">{gettext("Deleted account")}</span>
           <span class="ed-flat__time"><.local_time at={@message.inserted_at} /></span>
         </div>
         <span :if={@message.forwarded_from} class="ed-forwarded">
@@ -3454,69 +3506,66 @@ defmodule EdenWeb.ChatLive do
 
   attr :user, :map, required: true
   attr :online, :boolean, required: true
+  attr :self, :boolean, default: false
 
-  # Read-only profile of another participant, reached from the chat header (1:1)
-  # or the group member list. Editing your own profile happens in Settings.
-  defp profile_modal(assigns) do
+  # A light profile popover anchored at the clicked avatar/name (a bottom sheet
+  # on mobile). Opened from message rows, the chat header peer, and member
+  # lists. Own card shows an "Edit profile" link instead of "Message".
+  defp profile_popover(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div>
       <button
-        class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        class="ed-popover__scrim"
         phx-click="close_profile"
         aria-label={gettext("Close")}
         tabindex="-1"
       >
       </button>
-      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
-        <div
-          class="w-full max-w-xs rounded-[var(--ed-radius-lg)] border p-6 pointer-events-auto"
-          style="background: var(--ed-surface); border-color: var(--ed-border);"
-          phx-window-keydown="close_profile"
-          phx-key="Escape"
-          role="dialog"
-          aria-modal="true"
-          aria-label={gettext("Profile")}
-        >
-          <div class="flex justify-end -mt-2 -mr-2">
-            <button class="ed-btn--icon" phx-click="close_profile" aria-label={gettext("Close")}>
-              <.icon name="hero-x-mark-mini" class="size-5" />
-            </button>
-          </div>
-
-          <div class="flex flex-col items-center text-center">
-            <.avatar
-              name={@user.display_name}
-              src={avatar_src(@user)}
-              online={@online}
-              size={:lg}
-            />
-            <h2 class="mt-3 font-semibold" style="font-size:1.0625rem;">{@user.display_name}</h2>
-            <p style="color: var(--ed-muted); font-size:0.8125rem;">@{@user.username}</p>
-            <p
-              class="mt-0.5"
-              style={"font-size:0.75rem; color: var(#{if @online, do: "--ed-online", else: "--ed-muted"});"}
-            >
-              {if @online, do: gettext("online"), else: gettext("offline")}
-            </p>
-
-            <p
-              :if={@user.bio}
-              class="mt-4 whitespace-pre-line break-words text-left w-full"
-              style="font-size:0.875rem; color: var(--ed-ink);"
-            >
-              {@user.bio}
-            </p>
-          </div>
-
-          <button
-            class="ed-btn ed-btn--primary w-full mt-6"
-            phx-click="message_user"
-            phx-value-id={@user.id}
+      <div
+        id="profile-popover"
+        class="ed-popover"
+        phx-hook=".Popover"
+        phx-window-keydown="close_profile"
+        phx-key="Escape"
+        role="dialog"
+        aria-modal="true"
+        aria-label={gettext("Profile")}
+      >
+        <div class="flex flex-col items-center text-center">
+          <.avatar name={@user.display_name} src={avatar_src(@user)} online={@online} size={:lg} />
+          <h2 class="mt-3 font-semibold" style="font-size:1.0625rem;">{@user.display_name}</h2>
+          <p style="color: var(--ed-muted); font-size:0.8125rem;">@{@user.username}</p>
+          <p
+            class="mt-0.5"
+            style={"font-size:0.75rem; color: var(#{if @online, do: "--ed-online", else: "--ed-muted"});"}
           >
-            <.icon name="hero-chat-bubble-oval-left-micro" class="size-4" /> {gettext("Send message")}
-          </button>
+            {if @online, do: gettext("online"), else: gettext("offline")}
+          </p>
+
+          <p
+            :if={@user.bio}
+            class="mt-4 whitespace-pre-line break-words text-left w-full"
+            style="font-size:0.875rem; color: var(--ed-ink);"
+          >
+            {@user.bio}
+          </p>
         </div>
+
+        <.link
+          :if={@self}
+          navigate={~p"/settings"}
+          class="ed-btn ed-btn--ghost w-full mt-6 justify-center"
+        >
+          <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("Edit profile")}
+        </.link>
+        <button
+          :if={!@self}
+          class="ed-btn ed-btn--primary w-full mt-6"
+          phx-click="message_user"
+          phx-value-id={@user.id}
+        >
+          <.icon name="hero-chat-bubble-oval-left-micro" class="size-4" /> {gettext("Message")}
+        </button>
       </div>
     </div>
     """
@@ -3560,6 +3609,7 @@ defmodule EdenWeb.ChatLive do
               :for={m <- @conversation.memberships}
               type="button"
               class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              data-profile-trigger
               phx-click="show_profile"
               phx-value-id={m.user.id}
             >

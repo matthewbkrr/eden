@@ -586,6 +586,68 @@
     }
   }
 
+  /* Profile popover (anchored card on desktop, bottom sheet on mobile) --- */
+  .ed-popover__scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: transparent;
+  }
+  .ed-popover {
+    position: fixed;
+    z-index: 61;
+    /* Hidden until the .Popover hook positions it (desktop); on mobile the
+       media query below forces it visible as a sheet. */
+    visibility: hidden;
+    width: 17rem;
+    padding: 1.25rem;
+    border-radius: var(--ed-radius-lg);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    box-shadow: 0 12px 32px oklch(0 0 0 / 0.32);
+    animation: ed-pop-in 0.14s var(--ed-ease);
+  }
+  @keyframes ed-pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @media (max-width: 767px) {
+    .ed-popover__scrim {
+      background: oklch(0 0 0 / 0.5);
+    }
+    .ed-popover {
+      visibility: visible;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      top: auto;
+      width: auto;
+      border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
+      border-bottom: none;
+      padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
+      animation: ed-sheet-in 0.18s var(--ed-ease);
+    }
+  }
+  @keyframes ed-sheet-in {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-popover {
+      animation: none;
+    }
+  }
+
   /* In-app image lightbox (toggled by the .Lightbox hook) -------------- */
   .ed-lightbox {
     position: fixed;
@@ -675,6 +737,25 @@
   .ed-flat__name {
     font-weight: 600;
     font-size: 0.875rem;
+  }
+  /* Avatar/name are profile triggers — clickable, with a subtle hover hint. */
+  .ed-flat__avatar-btn {
+    display: inline-flex;
+    border-radius: var(--ed-radius-full);
+  }
+  .ed-flat__name-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+  }
+  .ed-flat__name-btn:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .ed-flat__avatar-btn:hover {
+    filter: brightness(0.94);
   }
   .ed-flat__time {
     font-size: 0.6875rem;

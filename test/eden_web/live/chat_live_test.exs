@@ -216,17 +216,21 @@ defmodule EdenWeb.ChatLiveTest do
 
       assert html =~ "@bob"
       assert html =~ "Likes tea."
-      assert html =~ "Send message"
+      # The popover offers a Message button (the DM bridge), not the old modal.
+      assert has_element?(view, ".ed-popover")
+      assert has_element?(view, ~s(.ed-popover button[phx-click="message_user"]))
     end
 
-    test "clicking your own entry routes to Settings instead", ctx do
+    test "your own card shows Edit profile, not a Message button", ctx do
       carol = user_fixture(%{username: "carol", display_name: "Carol"})
       {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{group.id}")
 
       render_click(view, "show_profile", %{"id" => to_string(ctx.alice.id)})
-      assert_redirect(view, ~p"/settings")
+      assert has_element?(view, ".ed-popover")
+      assert has_element?(view, ~s(.ed-popover a[href="/settings"]))
+      refute has_element?(view, ~s(.ed-popover button[phx-click="message_user"]))
     end
 
     test "a profile you don't share a conversation with is unavailable", ctx do
@@ -255,10 +259,10 @@ defmodule EdenWeb.ChatLiveTest do
         |> render_click()
 
       assert profile =~ "@carol"
-      assert profile =~ "Send message"
+      assert profile =~ "Message"
     end
 
-    test "Send message from a profile opens a 1:1", ctx do
+    test "Message from a profile opens a 1:1", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
@@ -267,6 +271,36 @@ defmodule EdenWeb.ChatLiveTest do
 
       # Alice and Bob already share a 1:1, so it is reused.
       assert_patch(view, ~p"/app/c/#{ctx.conversation.id}")
+    end
+
+    test "the profile popover opens from a room message and Message bridges to a DM", ctx do
+      {:ok, channel} = Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Org"})
+
+      {:ok, _} =
+        %Eden.Channels.Membership{}
+        |> Eden.Channels.Membership.changeset(%{
+          channel_id: channel.id,
+          user_id: ctx.bob.id,
+          role: "member"
+        })
+        |> Eden.Repo.insert()
+
+      :ok = Chat.join_rooms(channel.id, ctx.bob.id)
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, _} = Chat.create_message(Scope.for_user(ctx.bob), room.id, %{"body" => "hi from bob"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # Avatar/name are profile triggers in the flat row.
+      assert has_element?(view, ~s(.ed-flat__avatar-btn[phx-value-id="#{ctx.bob.id}"]))
+      render_click(view, "show_profile", %{"id" => to_string(ctx.bob.id)})
+      assert has_element?(view, ".ed-popover")
+
+      # Message bridges out of the channel into a DM (a full navigate, not patch).
+      render_click(view, "message_user", %{"id" => to_string(ctx.bob.id)})
+      {path, _flash} = assert_redirect(view)
+      assert path =~ ~r{^/app/c/\d+$}
     end
 
     test "a member's name change updates the open conversation without reload", ctx do
