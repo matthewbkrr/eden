@@ -43,6 +43,22 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks},
 })
 
+// Record where a profile trigger (avatar / name / member row) was clicked, so
+// the server-rendered profile popover — which mounts a round-trip later — can
+// anchor itself there. Capture phase, before the phx-click reaches LiveView.
+window.__edAnchor = null
+document.addEventListener(
+  "click",
+  (e) => {
+    const trigger = e.target.closest && e.target.closest("[data-profile-trigger]")
+    if (trigger) {
+      const r = trigger.getBoundingClientRect()
+      window.__edAnchor = {left: r.left, right: r.right, top: r.top, bottom: r.bottom}
+    }
+  },
+  true
+)
+
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
