@@ -1839,13 +1839,24 @@ defmodule EdenWeb.ChatLive do
         // On a narrow viewport the CSS makes it a bottom sheet — skip positioning.
         export default {
           mounted() { this.place() },
+          // A presence diff can morph the card while it's open; re-place so it
+          // never ends up hidden (place() always restores visibility).
+          updated() { this.place() },
           place() {
-            const a = window.__edAnchor
-            if (!a || window.innerWidth < 768) return
+            if (window.innerWidth < 768) return  // CSS bottom sheet
             const w = this.el.offsetWidth, h = this.el.offsetHeight, gap = 8
-            let left = Math.max(gap, Math.min(a.left, window.innerWidth - w - gap))
-            let top = a.bottom + gap
-            if (top + h > window.innerHeight - gap) top = Math.max(gap, a.top - h - gap)
+            const a = window.__edAnchor
+            let left, top
+            if (a) {
+              left = Math.max(gap, Math.min(a.left, window.innerWidth - w - gap))
+              top = a.bottom + gap
+              if (top + h > window.innerHeight - gap) top = Math.max(gap, a.top - h - gap)
+            } else {
+              // No recorded anchor (e.g. a trigger missing data-profile-trigger):
+              // center it rather than leave the card invisible.
+              left = Math.max(gap, (window.innerWidth - w) / 2)
+              top = Math.max(gap, (window.innerHeight - h) / 2)
+            }
             this.el.style.left = `${left}px`
             this.el.style.top = `${top}px`
             this.el.style.visibility = "visible"
