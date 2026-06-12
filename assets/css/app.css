@@ -951,6 +951,25 @@
   .ed-room__more:hover {
     color: var(--ed-ink);
   }
+  /* Radio rows (room visibility picker). */
+  .ed-radio-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--ed-border);
+    border-radius: var(--ed-radius);
+    cursor: pointer;
+  }
+  .ed-radio-row:has(input:checked) {
+    border-color: var(--ed-primary);
+    background: color-mix(in oklab, var(--ed-primary) 6%, transparent);
+  }
+  .ed-radio-row input[type="radio"] {
+    margin-top: 0.1875rem;
+    accent-color: var(--ed-primary);
+  }
+
   /* Sidebar group headers (Favorites / Rooms). */
   .ed-rooms__group {
     padding: 0.5rem 0.5rem 0.125rem;

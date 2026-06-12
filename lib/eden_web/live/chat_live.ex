@@ -2027,9 +2027,10 @@ defmodule EdenWeb.ChatLive do
       />
       <.room_form_modal
         :if={@room_modal}
-        title={if @room_modal == :new, do: gettext("New room"), else: gettext("Rename room")}
+        title={if @room_modal == :new, do: gettext("New room"), else: gettext("Room settings")}
         form={@room_form}
         submit_label={if @room_modal == :new, do: gettext("Create room"), else: gettext("Save")}
+        show_visibility={room_modal_visibility?(@room_modal, @rooms)}
       />
       <.room_add_modal
         :if={@room_add}
@@ -3403,8 +3404,10 @@ defmodule EdenWeb.ChatLive do
   attr :title, :string, required: true
   attr :form, :any, required: true
   attr :submit_label, :string, required: true
+  attr :show_visibility, :boolean, default: true
 
-  # Create/rename room modal — one name field.
+  # Create/rename room modal: name + visibility (the picker hides for general —
+  # the Town Square is always open; the changeset guard enforces it anyway).
   defp room_form_modal(assigns) do
     ~H"""
     <div class="fixed inset-0 z-30" id="room-modal">
@@ -3438,6 +3441,48 @@ defmodule EdenWeb.ChatLive do
               label={gettext("Room name")}
               maxlength={Chat.Conversation.max_room_name()}
             />
+
+            <fieldset :if={@show_visibility} class="space-y-2">
+              <legend
+                style="font-size:0.8125rem; font-weight:600; color: var(--ed-muted);"
+                class="mb-1"
+              >
+                {gettext("Access")}
+              </legend>
+              <label class="ed-radio-row">
+                <input
+                  type="radio"
+                  name={@form[:visibility].name}
+                  value="open"
+                  checked={(@form[:visibility].value || "open") == "open"}
+                />
+                <span class="min-w-0">
+                  <span class="block" style="font-weight:550; font-size:0.875rem;">
+                    # {gettext("Open")}
+                  </span>
+                  <span class="block" style="color: var(--ed-muted); font-size:0.75rem;">
+                    {gettext("Anyone with the link joins instantly.")}
+                  </span>
+                </span>
+              </label>
+              <label class="ed-radio-row">
+                <input
+                  type="radio"
+                  name={@form[:visibility].name}
+                  value="private"
+                  checked={@form[:visibility].value == "private"}
+                />
+                <span class="min-w-0">
+                  <span class="block" style="font-weight:550; font-size:0.875rem;">
+                    🔒 {gettext("Private")}
+                  </span>
+                  <span class="block" style="color: var(--ed-muted); font-size:0.75rem;">
+                    {gettext("Hidden from the sidebar; entry by invite, admin add, or request.")}
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+
             <div class="flex justify-end">
               <button type="submit" class="ed-btn ed-btn--primary">{@submit_label}</button>
             </div>
@@ -4325,6 +4370,17 @@ defmodule EdenWeb.ChatLive do
         assign(socket, rooms: Chat.list_rooms(socket.assigns.current_scope, channel.id))
     end
   end
+
+  # The visibility picker hides when renaming general — the Town Square is
+  # always open (the changeset guard enforces it server-side too).
+  defp room_modal_visibility?({:rename, room_id}, rooms) do
+    case Enum.find(rooms, &(&1.id == room_id)) do
+      %{is_general: true} -> false
+      _ -> true
+    end
+  end
+
+  defp room_modal_visibility?(_modal, _rooms), do: true
 
   # A pending knock was approved while its window is open: the room now appears
   # in the sidebar — clear the knock window so the user can open it.

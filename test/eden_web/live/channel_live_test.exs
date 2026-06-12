@@ -190,6 +190,51 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "room visibility picker" do
+    setup [:setup_channel]
+
+    test "the create modal offers Open/Private and creates a private room", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      html = render_click(view, "open_new_room", %{})
+      assert html =~ "Open"
+      assert html =~ "Private"
+
+      view
+      |> form("#room-form", %{"room" => %{"name" => "secret", "visibility" => "private"}})
+      |> render_submit()
+
+      {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+      assert %{visibility: "private"} = Enum.find(rooms, &(&1.name == "secret"))
+      # The row shows the lock glyph.
+      assert render(view) =~ "🔒"
+    end
+
+    test "the rename modal hides the picker for general but offers it elsewhere", ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      # general: no Access fieldset.
+      html = render_click(view, "open_room_rename", %{"id" => to_string(ctx.general.id)})
+      refute html =~ "Access"
+      render_click(view, "close_room_modal", %{})
+
+      # ordinary room: the picker is there, and flipping to private works.
+      html = render_click(view, "open_room_rename", %{"id" => to_string(ops.id)})
+      assert html =~ "Access"
+
+      view
+      |> form("#room-form", %{"room" => %{"name" => "ops", "visibility" => "private"}})
+      |> render_submit()
+
+      {:ok, rooms} = Channels.list_rooms(scope(ctx.alice), ctx.channel.id)
+      assert %{visibility: "private"} = Enum.find(rooms, &(&1.name == "ops"))
+    end
+  end
+
   describe "room menu (#42)" do
     setup [:setup_channel]
 
