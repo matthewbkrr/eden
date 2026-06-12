@@ -18,7 +18,8 @@ defmodule Eden.Chat.Conversation do
     field :name, :string
     field :position, :integer, default: 0
     # Room access (#41): "open" (any link auto-joins) | "private" (admin add /
-    # invite / knock). Nil for DMs/groups. `general` is always "open".
+    # invite / knock). Only consulted for channel rooms; DMs/groups carry the
+    # default "open" as dead data (never read). `general` is always "open".
     field :visibility, :string, default: "open"
 
     # Computed for the conversation list (set by Chat.list_conversations/1).

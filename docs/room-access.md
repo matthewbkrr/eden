@@ -22,8 +22,9 @@ Shipped in **3 phases** (decided 2026-06-12):
 
 ## Data model
 
-`conversations.visibility :: "open" | "private"` (nil for DMs/groups; default
-`"open"`). `general` is always `"open"` and undeletable.
+`conversations.visibility :: "open" | "private"` (default `"open"`). Only
+consulted for channel rooms; DMs/groups carry the default as dead data.
+`general` is always `"open"` and undeletable.
 
 - **open** (`#`): a plain link to the room or any of its messages **auto-joins**
   (channel first if needed) and lands you there. No invite tokens — the plain

@@ -432,6 +432,11 @@ defmodule Eden.ChatTest do
       assert :open_join = Chat.resolve_room_access(%{room_member?: false, visibility: "open"})
       assert :knock = Chat.resolve_room_access(%{room_member?: false, visibility: "private"})
     end
+
+    test "an unexpected/nil visibility denies by default (no crash)" do
+      assert :knock = Chat.resolve_room_access(%{room_member?: false, visibility: nil})
+      assert :knock = Chat.resolve_room_access(%{room_member?: false, visibility: "bogus"})
+    end
   end
 
   describe "room visibility" do

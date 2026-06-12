@@ -371,6 +371,9 @@ defmodule Eden.Chat do
   def resolve_room_access(%{room_member?: true}), do: :member
   def resolve_room_access(%{room_member?: false, visibility: "open"}), do: :open_join
   def resolve_room_access(%{room_member?: false, visibility: "private"}), do: :knock
+  # Deny-by-default: an unexpected/nil visibility (data corruption) must not
+  # crash the access path nor silently grant entry — treat it as private.
+  def resolve_room_access(%{room_member?: false}), do: :knock
 
   @doc "Fetches a room (a conversation with a channel) by id — trusted callers only."
   def get_room(room_id) do
