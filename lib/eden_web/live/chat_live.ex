@@ -1842,6 +1842,7 @@ defmodule EdenWeb.ChatLive do
                 autocomplete="off"
                 class="ed-search__input"
                 phx-debounce="200"
+                phx-mounted={JS.focus()}
                 aria-label={gettext("Search in room")}
               />
               <button

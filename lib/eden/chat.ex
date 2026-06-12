@@ -941,6 +941,9 @@ defmodule Eden.Chat do
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
       where: not is_nil(c.channel_id),
+      # Only real messages — join-request system rows (kind "system") carry an
+      # empty body and a meta payload, never something a user means to find.
+      where: m.kind == "user",
       where: ilike(m.body, ^pattern) and is_nil(m.deleted_at) and is_nil(d.id),
       order_by: [desc: m.id],
       limit: @search_limit,

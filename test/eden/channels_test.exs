@@ -908,6 +908,24 @@ defmodule Eden.ChannelsTest do
       assert Enum.sort(Enum.map(results, & &1.body)) == ["pin base", "pin reply"]
     end
 
+    test "system messages never surface, even with a matchable body", ctx do
+      %{alice: alice, general: general} = ctx
+
+      {:ok, _} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "needle user"})
+
+      # A system row with a body that WOULD match — proves the kind filter
+      # does the work, not the (incidental) empty body of real system messages.
+      Repo.insert!(%Eden.Chat.Message{
+        conversation_id: general.id,
+        kind: "system",
+        body: "needle system",
+        meta: %{"action" => "join_request"}
+      })
+
+      results = Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "needle")
+      assert ["needle user"] == Enum.map(results, & &1.body)
+    end
+
     test "tombstoned and hidden messages never match; min length applies", ctx do
       %{alice: alice, bob: bob, general: general} = ctx
 
