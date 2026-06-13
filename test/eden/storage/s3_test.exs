@@ -21,6 +21,28 @@ defmodule Eden.Storage.S3Test do
     assert headers["x-amz-date"] =~ ~r/^\d{8}T\d{6}Z$/
   end
 
+  test "put/2 reads the file and PUTs its bytes" do
+    test_pid = self()
+
+    Req.Test.stub(S3, fn conn ->
+      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:put, conn.method, conn.request_path, body})
+      Plug.Conn.resp(conn, 200, "")
+    end)
+
+    path = Path.join(System.tmp_dir!(), "s3-#{System.unique_integer([:positive])}.bin")
+    File.write!(path, "filebytes")
+    on_exit(fn -> File.rm(path) end)
+
+    assert :ok = S3.put("files/x.bin", path)
+    assert_received {:put, "PUT", "/test-bucket/files/x.bin", "filebytes"}
+  end
+
+  test "surfaces a transport error as {:error, _}" do
+    Req.Test.stub(S3, fn conn -> Req.Test.transport_error(conn, :econnrefused) end)
+    assert {:error, _} = S3.read("avatars/x.jpg")
+  end
+
   test "read returns the bytes on 200" do
     Req.Test.stub(S3, fn conn -> Plug.Conn.resp(conn, 200, "PNGDATA") end)
     assert {:ok, "PNGDATA"} = S3.read("avatars/x.jpg")

@@ -62,10 +62,19 @@ defmodule Eden.Storage.SigV4 do
 
   defp canonical_query(q) when q in [nil, ""], do: ""
 
+  # The query is taken as ALREADY encoded (AWS's rule) and only split + sorted —
+  # never decoded-then-re-encoded, which would corrupt a literal `+`/`%2B`. (No
+  # object op here carries a query; this keeps the signer correct if it's ever
+  # reused for presigned URLs / list-objects.)
   defp canonical_query(query) do
     query
-    |> URI.query_decoder()
-    |> Enum.map(fn {k, v} -> {uri_encode(k), uri_encode(v)} end)
+    |> String.split("&")
+    |> Enum.map(fn pair ->
+      case String.split(pair, "=", parts: 2) do
+        [k, v] -> {k, v}
+        [k] -> {k, ""}
+      end
+    end)
     |> Enum.sort()
     |> Enum.map_join("&", fn {k, v} -> "#{k}=#{v}" end)
   end

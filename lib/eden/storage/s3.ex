@@ -11,8 +11,9 @@ defmodule Eden.Storage.S3 do
       config :eden, Eden.Storage, adapter: Eden.Storage.S3
       config :eden, Eden.Storage.S3,
         bucket: "...",
-        region: "auto",
-        endpoint: "https://<account>.r2.cloudflarestorage.com",
+        # The bucket's real region for AWS (e.g. "eu-central-1"); "auto" for R2/MinIO.
+        region: "eu-central-1",
+        endpoint: "https://s3.eu-central-1.amazonaws.com",
         access_key_id: "...",
         secret_access_key: "..."
 
@@ -26,7 +27,10 @@ defmodule Eden.Storage.S3 do
   @service "s3"
 
   @impl true
-  # The source is a server-assigned upload temp, not a user-supplied path.
+  # The source is a server-assigned upload temp, not a user-supplied path. Reads
+  # the whole object into memory (bounded by the upload caps — ≤50 MB) because
+  # SigV4 hashes the full payload for x-amz-content-sha256; a streaming
+  # UNSIGNED-PAYLOAD path is a future optimization, not needed at this scale.
   # sobelow_skip ["Traversal.FileModule"]
   def put(key, source_path) do
     case File.read(source_path) do
@@ -103,7 +107,8 @@ defmodule Eden.Storage.S3 do
           {"x-amz-content-sha256", payload}
         ],
         body: body,
-        decode_body: false
+        # raw: pin the response to the exact stored bytes (no decode/decompress).
+        raw: true
       ] ++ cfg.req_options
     )
   end
@@ -118,7 +123,9 @@ defmodule Eden.Storage.S3 do
 
     %{
       bucket: Keyword.fetch!(cfg, :bucket),
-      region: Keyword.get(cfg, :region, "us-east-1"),
+      # Required — no silent default: a wrong region is a SignatureDoesNotMatch
+      # 403 on AWS, so the operator must set it consciously (R2/MinIO use "auto").
+      region: Keyword.fetch!(cfg, :region),
       endpoint: cfg |> Keyword.fetch!(:endpoint) |> String.trim_trailing("/"),
       access_key_id: Keyword.fetch!(cfg, :access_key_id),
       secret_access_key: Keyword.fetch!(cfg, :secret_access_key),

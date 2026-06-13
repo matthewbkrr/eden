@@ -29,7 +29,9 @@ config :eden, Eden.Storage.S3,
   endpoint: "https://s3.test.local",
   access_key_id: "test",
   secret_access_key: "test",
-  req_options: [plug: {Req.Test, Eden.Storage.S3}]
+  # retry: false keeps the transport-error test fast/quiet (prod uses Req's
+  # default idempotent-transient retry).
+  req_options: [plug: {Req.Test, Eden.Storage.S3}, retry: false]
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
