@@ -242,9 +242,13 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
 
 ## Security follow-ups (tracked)
 
-- **Content-Security-Policy** — there is no CSP yet; `Config.CSP` is temporarily
-  ignored in `.sobelow-conf`. When the LiveView UI lands, add a nonce-based CSP to
-  the `:browser` pipeline and **remove that ignore entry**.
+- ~~**Content-Security-Policy**~~ — **resolved** (#54): `EdenWeb.CSP` sets a
+  per-request nonce-based policy on the `:browser` pipeline (scripts nonce-locked;
+  `style-src` allows inline for the pervasive `style=""` attributes; `img-src`
+  allows `data:`/`blob:`). The `Config.CSP` sobelow ignore is **kept but
+  re-justified as a false positive** — sobelow only recognizes CSP set via
+  `put_secure_browser_headers`, not a custom per-request nonce plug; presence is
+  covered by `EdenWeb.CSPTest`.
 - **S3-compatible storage adapter** — only `Eden.Storage.Local` exists. Prod uses
   it against `EDEN_UPLOADS_ROOT` (a persistent volume, set in `config/runtime.exs`).
   Build an S3 adapter to satisfy Phase 3's "storage swaps by one config line"; it

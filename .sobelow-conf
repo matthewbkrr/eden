@@ -26,9 +26,11 @@
 
   # Finding ids to ignore. Each MUST be justified here.
   #
-  # Config.CSP — no Content-Security-Policy yet. Deferred to frontend work:
-  # a proper nonce-based CSP will be added with the LiveView UI, then this
-  # entry removed. Tracked as a Phase-1 security follow-up (see CLAUDE.md).
+  # Config.CSP — FALSE POSITIVE (#54). The :browser pipeline DOES set a full
+  # nonce-based Content-Security-Policy, via the custom `EdenWeb.CSP` plug
+  # (per-request nonce — not expressible through `put_secure_browser_headers`,
+  # the only mechanism sobelow's static check recognizes). CSP presence is
+  # covered by EdenWeb.CSPTest. This is no longer a deferral.
   ignore: ["Config.CSP"],
 
   # Files to exclude from scanning. Keep empty.
