@@ -1936,6 +1936,7 @@ defmodule EdenWeb.ChatLive do
             data-layout={if @selected.channel_id, do: "flat", else: "bubble"}
             data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
+            data-max-body={Chat.Message.max_body()}
             phx-submit="send"
             phx-change="composer_changed"
             class={[
@@ -2655,11 +2656,41 @@ defmodule EdenWeb.ChatLive do
             e.stopPropagation()
             const body = (this.input.value || "").trim()
             if (!body) return
-            const clientId = crypto.randomUUID()
             this.input.value = ""
-            this.addOptimistic(clientId, body)
-            this.queue.push({ clientId, body, sent: false })
+            // Oversized bodies (> the server's codepoint cap) are split into
+            // ordered parts and sent as separate messages — Telegram-style —
+            // instead of failing the whole send (#68). Each part is a normal
+            // queued item (own client_id, optimistic node, dedup, resend).
+            for (const part of this.split(body)) {
+              const clientId = crypto.randomUUID()
+              this.addOptimistic(clientId, part)
+              this.queue.push({ clientId, body: part, sent: false })
+            }
             this.flush()
+          },
+          // Break a body into <=max-codepoint chunks, preferring the last space
+          // before the limit so words aren't cut; a single unbroken run is hard
+          // cut. Counts codepoints (spread handles surrogate pairs) to match the
+          // server's `count: :codepoints` and never split a multi-byte char.
+          split(body) {
+            const max = Number(this.el.dataset.maxBody) || 4000
+            const cp = [...body]
+            if (cp.length <= max) return [body]
+            const parts = []
+            let rest = cp
+            while (rest.length > max) {
+              let cut = max
+              const window = rest.slice(0, max).join("")
+              const space = window.lastIndexOf(" ")
+              if (space > 0) cut = [...window.slice(0, space)].length
+              parts.push(rest.slice(0, cut).join("").trim())
+              rest = rest.slice(cut)
+              // Drop a single boundary space so it isn't doubled across parts.
+              if (rest[0] === " ") rest = rest.slice(1)
+            }
+            const tail = rest.join("").trim()
+            if (tail) parts.push(tail)
+            return parts.filter((p) => p.length > 0)
           },
           flush() {
             if (!this.connected) return
@@ -2687,6 +2718,7 @@ defmodule EdenWeb.ChatLive do
             // interpolated into innerHTML — the template strings are static.
             const row = document.createElement("div")
             row.dataset.clientId = clientId
+            row.dataset.body = body
             if (this.el.dataset.layout === "flat") {
               // Mirror the server's compact rule (same author within 5 min):
               // a continuation row drops the avatar/name. Without this the
@@ -2770,6 +2802,27 @@ defmodule EdenWeb.ChatLive do
             node.style.opacity = "1"
             const target = node.querySelector(".ed-bubble") || node.querySelector(".ed-flat__body")
             if (target) target.style.border = "1px solid var(--ed-danger)"
+            // A failed node must not become a permanent ghost (#68): click it to
+            // retry the send (same client_id → idempotent), or ✕ to dismiss it.
+            node.classList.add("ed-msg-failed")
+            node.title = "Failed to send — click to retry"
+            node.addEventListener("click", (e) => {
+              if (e.target.closest("[data-dismiss]")) return
+              const body = node.dataset.body || ""
+              node.remove()
+              if (!body) return
+              this.addOptimistic(clientId, body)
+              this.queue.push({ clientId, body, sent: false })
+              this.flush()
+            }, { once: true })
+            const x = document.createElement("button")
+            x.type = "button"
+            x.dataset.dismiss = ""
+            x.className = "ed-msg-failed__x"
+            x.setAttribute("aria-label", "Dismiss")
+            x.textContent = "✕"
+            x.addEventListener("click", () => node.remove())
+            ;(target || node).appendChild(x)
           },
         }
       </script>
