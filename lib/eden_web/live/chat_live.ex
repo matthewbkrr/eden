@@ -2575,18 +2575,42 @@ defmodule EdenWeb.ChatLive do
               this.open(e.clientX || r.left + 8, e.clientY || r.top + 8)
             })
 
-            // Touch: long-press (cancel if the finger moves — that's a scroll/select).
-            let timer, sx, sy
+            // Touch: long-press opens the menu; a horizontal LEFT-swipe on a
+            // message row quote-replies (#71). A move cancels the long-press
+            // (it's a scroll/swipe/select).
+            let timer, sx, sy, dx, swiping
+            const SWIPE = 56
+            const reset = () => {
+              this.el.style.transition = "transform 0.18s var(--ed-ease)"
+              this.el.style.transform = ""
+              swiping = false
+            }
             this.el.addEventListener("touchstart", (e) => {
-              const t = e.touches[0]; sx = t.clientX; sy = t.clientY
+              const t = e.touches[0]; sx = t.clientX; sy = t.clientY; dx = 0; swiping = false
+              this.el.style.transition = ""
               timer = setTimeout(() => { this.open(sx, sy); this.longPressed = true }, 450)
             }, { passive: true })
             const cancel = () => clearTimeout(timer)
             this.el.addEventListener("touchmove", (e) => {
               const t = e.touches[0]
-              if (Math.abs(t.clientX - sx) > 10 || Math.abs(t.clientY - sy) > 10) cancel()
+              dx = t.clientX - sx
+              const dy = t.clientY - sy
+              if (Math.abs(dx) > 10 || Math.abs(dy) > 10) cancel()
+              // Drag a message row left with the finger (clamped); reply on release.
+              if (this.el.dataset.messageId && dx < -10 && Math.abs(dx) > Math.abs(dy)) {
+                swiping = true
+                this.el.style.transform = `translateX(${Math.max(dx, -80)}px)`
+              }
             }, { passive: true })
-            this.el.addEventListener("touchend", cancel)
+            this.el.addEventListener("touchend", () => {
+              cancel()
+              if (swiping && dx <= -SWIPE && this.el.dataset.messageId) {
+                this.pushEvent("reply", { id: this.el.dataset.messageId })
+                const input = document.getElementById("composer-body")
+                input && input.focus()
+              }
+              if (swiping) reset()
+            })
             // Swallow the click/navigation a long-press would otherwise fire
             // (a photo opening, or following a sidebar chat link).
             this.el.addEventListener("click", (e) => {
@@ -4299,6 +4323,7 @@ defmodule EdenWeb.ChatLive do
       data-sender-id={@message.sender_id}
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
       data-client-id={@mine && @message.client_id}
+      data-message-id={@menu && @message.id}
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
@@ -4379,6 +4404,18 @@ defmodule EdenWeb.ChatLive do
         >
           <.icon name="hero-chat-bubble-left-micro" class="size-4" />
         </button>
+        <%!-- Quote-reply (#71): quick arrow, left of the "⋯" (rooms). --%>
+        <button
+          type="button"
+          class="ed-btn--icon"
+          title={gettext("Reply")}
+          aria-label={gettext("Reply")}
+          phx-click={
+            JS.push("reply", value: %{"id" => @message.id}) |> JS.focus(to: "#composer-body")
+          }
+        >
+          <.icon name="hero-arrow-uturn-left-micro" class="size-4" />
+        </button>
         <button
           type="button"
           class="ed-btn--icon"
@@ -4425,6 +4462,7 @@ defmodule EdenWeb.ChatLive do
       <div
         class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
         id={"bubble-#{@message.id}"}
+        data-message-id={@message.id}
         phx-hook=".ContextMenu"
         aria-haspopup="menu"
       >
