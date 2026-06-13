@@ -219,6 +219,11 @@ defmodule EdenWeb.ChatLiveTest do
                  ~s([data-gallery="album-#{message.id}"][data-full="/files/#{attachment.id}"])
                )
       end
+
+      # The colocated hook name must be REWRITTEN to its full module form — a
+      # dynamic phx-hook value would ship ".Lightbox" raw ("unknown hook").
+      assert html =~ ~s(phx-hook="EdenWeb.ChatLive.Lightbox")
+      refute html =~ ~s(phx-hook=".Lightbox")
     end
 
     test "a video in an album tiles in the grid with a play badge (#58)", ctx do

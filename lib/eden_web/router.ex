@@ -12,6 +12,8 @@ defmodule EdenWeb.Router do
     plug :put_root_layout, html: {EdenWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    # Replace the minimal default CSP with a full nonce-based policy (#54).
+    plug EdenWeb.CSP
   end
 
   pipeline :api do
