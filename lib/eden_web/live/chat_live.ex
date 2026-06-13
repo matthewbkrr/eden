@@ -2640,8 +2640,13 @@ defmodule EdenWeb.ChatLive do
               item.sent = true
               this.pushEvent("send", { message: { body: item.body, client_id: item.clientId } }, (reply) => {
                 this.queue = this.queue.filter((q) => q.clientId !== item.clientId)
+                // On success DON'T remove the optimistic node here — the ack
+                // races the {:new_message} broadcast, and removing first leaves
+                // a frame where the message vanishes (the list dips, then the
+                // real row pops in: the "jerk"). The rise-in observer removes it
+                // atomically the instant the real row streams in. Only a nack
+                // (rejected) needs handling, since no real row will arrive.
                 if (reply && reply.nack) this.markFailed(item.clientId)
-                else this.remove(item.clientId)
               })
             }
           },
@@ -2682,7 +2687,10 @@ defmodule EdenWeb.ChatLive do
               }
               row.querySelector(".ed-flat__body").textContent = body
             } else {
-              row.className = "flex justify-end"
+              // Match the real row's classes exactly ("ed-msg flex justify-end"):
+              // .ed-msg carries the inter-message spacing, so the optimistic and
+              // real rows are the same height and the swap doesn't nudge layout.
+              row.className = "ed-msg flex justify-end"
               const bubble = document.createElement("div")
               bubble.className = "ed-bubble ed-bubble--me"
               bubble.style.opacity = "0.55"
@@ -2717,10 +2725,6 @@ defmodule EdenWeb.ChatLive do
             }
             const rows = document.querySelectorAll("#messages .ed-flat")
             return rows[rows.length - 1] || null
-          },
-          remove(clientId) {
-            const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
-            if (node) node.remove()
           },
           markFailed(clientId) {
             const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
