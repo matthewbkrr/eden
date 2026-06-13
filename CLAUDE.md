@@ -58,6 +58,10 @@ design — built incrementally as features land.)
     every attachment's unshared blobs; **forward** copies it into another
     conversation (re-referencing the same blobs in order, `forwarded_from_id` for
     attribution). A `/app/c/:id/m/:message_id` permalink deep-links to a message.
+    Bodies render a **safe markdown subset** (`EdenWeb.Markup` — #60): leading
+    `#`/`##`/`###` headings, inline `**bold**`/`*italic*`/`` `code` `` and bare-URL
+    links, emitted as escaped iodata (whitelist tags only, no HTML-injection path);
+    previews/snippets strip the markers. The composer has a built-in emoji picker.
   - `Attachment` — **a message has many** (`#58`; ordered by `position`, lone
     sends are just an album of one), each classified by **magic bytes** into a
     `kind` (`image | video | file | audio`), never the client content-type.

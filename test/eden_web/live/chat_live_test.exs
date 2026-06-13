@@ -81,6 +81,23 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ " now"
     end
 
+    test "renders the markdown subset (#60): headings, bold/italic, code", ctx do
+      {:ok, _m} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "## Plan with **bold**, *italic* and `code`"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ ~s(<span class="ed-md-h2">)
+      assert html =~ "<strong>bold</strong>"
+      assert html =~ "<em>italic</em>"
+      assert html =~ "<code>code</code>"
+      # The composer offers an emoji picker.
+      assert has_element?(view, ~s(#emoji-picker [data-emoji-toggle]))
+    end
+
     test "the active highlight follows the selected conversation", ctx do
       carol = user_fixture(%{username: "carol_hl", display_name: "Carol"})
       {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
