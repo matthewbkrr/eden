@@ -739,6 +739,80 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "quote-reply (#71)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, target} = Chat.create_message(scope(bob), conv.id, %{"body" => "original"})
+      %{conv: conv, target: target}
+    end
+
+    test "a reply quotes the target and preloads it with its sender", %{
+      alice: alice,
+      conv: conv,
+      target: target
+    } do
+      {:ok, reply} =
+        Chat.create_message(scope(alice), conv.id, %{
+          "body" => "answer",
+          "reply_to_id" => target.id
+        })
+
+      assert reply.reply_to_id == target.id
+      assert %{id: tid, sender: %{display_name: "Bob"}} = reply.reply_to
+      assert tid == target.id
+    end
+
+    test "a reply_to_id from another conversation is dropped", %{alice: alice, conv: conv} do
+      carol = user_fixture(%{username: "carol_qr"})
+      {:ok, other} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, foreign} = Chat.create_message(scope(alice), other.id, %{"body" => "elsewhere"})
+
+      {:ok, reply} =
+        Chat.create_message(scope(alice), conv.id, %{
+          "body" => "x",
+          "reply_to_id" => foreign.id
+        })
+
+      assert is_nil(reply.reply_to_id)
+    end
+
+    test "replying to a deleted-for-everyone message drops the quote", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      target: target
+    } do
+      :ok = Chat.delete_message_for_both(scope(bob), target.id)
+
+      {:ok, reply} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "x", "reply_to_id" => target.id})
+
+      assert is_nil(reply.reply_to_id)
+    end
+
+    test "replying to a message you hid for yourself drops the quote", %{
+      alice: alice,
+      conv: conv,
+      target: target
+    } do
+      :ok = Chat.delete_message_for_me(scope(alice), target.id)
+
+      {:ok, reply} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "x", "reply_to_id" => target.id})
+
+      assert is_nil(reply.reply_to_id)
+    end
+
+    test "an album message can quote a target", %{alice: alice, conv: conv, target: target} do
+      {:ok, [msg]} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png()}], %{
+          reply_to_id: target.id
+        })
+
+      assert msg.reply_to_id == target.id
+    end
+  end
+
   describe "forward_message/3" do
     setup %{alice: alice, bob: bob} do
       carol = user_fixture(%{username: "carol_fwd"})

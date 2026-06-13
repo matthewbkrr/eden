@@ -1139,7 +1139,13 @@ defmodule Eden.Chat do
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload([:sender, :attachments, :reactions, forwarded_from: :sender])
+        |> preload([
+          :sender,
+          :attachments,
+          :reactions,
+          reply_to: :sender,
+          forwarded_from: :sender
+        ])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -1156,7 +1162,10 @@ defmodule Eden.Chat do
   """
   def create_message(%Scope{user: user} = scope, conversation_id, attrs) do
     if member?(scope, conversation_id) do
-      %Message{conversation_id: conversation_id, sender_id: user.id}
+      reply_to_id =
+        valid_reply_to_id(attrs["reply_to_id"] || attrs[:reply_to_id], conversation_id, user.id)
+
+      %Message{conversation_id: conversation_id, sender_id: user.id, reply_to_id: reply_to_id}
       |> Message.changeset(attrs)
       |> Repo.insert()
       |> case do
@@ -1166,6 +1175,31 @@ defmodule Eden.Chat do
     else
       {:error, :not_found}
     end
+  end
+
+  # A quote-reply target (#71): keep `raw` only if it references a message that is
+  # in THIS conversation, not tombstoned, and not hidden-for-this-user — otherwise
+  # drop it (the quoted message may have been deleted between compose and send, or
+  # the id is forged / from another conversation). Set programmatically, so a
+  # forged reply_to_id never crosses a conversation boundary.
+  defp valid_reply_to_id(raw, conversation_id, user_id) do
+    with id when is_integer(id) <- safe_id(raw),
+         true <- reply_target_visible?(id, conversation_id, user_id) do
+      id
+    else
+      _ -> nil
+    end
+  end
+
+  defp reply_target_visible?(id, conversation_id, user_id) do
+    Repo.exists?(
+      from m in Message,
+        left_join: d in MessageDeletion,
+        on: d.message_id == m.id and d.user_id == ^user_id,
+        where:
+          m.id == ^id and m.conversation_id == ^conversation_id and is_nil(m.deleted_at) and
+            is_nil(d.id)
+    )
   end
 
   @doc """
@@ -1198,7 +1232,7 @@ defmodule Eden.Chat do
         Enum.split_with(classified, fn {_source, kind} -> kind in ~w(image video) end)
 
       steps = attachment_steps(sources_of(media), sources_of(files), Map.get(opts, :body, ""))
-      send_attachment_steps(scope, conversation_id, steps)
+      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id])
     else
       false -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -1239,10 +1273,15 @@ defmodule Eden.Chat do
   defp attachment_steps(media, files, body),
     do: [{media, body} | Enum.map(files, &{[&1], ""})]
 
-  defp send_attachment_steps(scope, conversation_id, steps) do
+  # A quote-reply with attachments rides only the FIRST sent message (the album,
+  # or the first file); the rest are plain.
+  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id) do
     steps
-    |> Enum.reduce_while({:ok, []}, fn {srcs, body}, {:ok, acc} ->
-      case create_album_message(scope, conversation_id, srcs, %{body: body}) do
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {{srcs, body}, i}, {:ok, acc} ->
+      reply = if i == 0, do: reply_to_id, else: nil
+
+      case create_album_message(scope, conversation_id, srcs, %{body: body, reply_to_id: reply}) do
         {:ok, message} -> {:cont, {:ok, [message | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
@@ -1333,8 +1372,9 @@ defmodule Eden.Chat do
 
   defp persist_album(user, conversation_id, prepared, opts) do
     message_attrs = %{"body" => Map.get(opts, :body, ""), "client_id" => opts[:client_id]}
+    reply_to_id = valid_reply_to_id(opts[:reply_to_id], conversation_id, user.id)
 
-    case insert_album_message(user, conversation_id, message_attrs, prepared) do
+    case insert_album_message(user, conversation_id, message_attrs, prepared, reply_to_id) do
       {:ok, message} ->
         message = deliver(conversation_id, message)
 
@@ -1479,11 +1519,23 @@ defmodule Eden.Chat do
         |> where([_m, d], is_nil(d.id))
         |> order_by([m], asc: m.id)
         |> limit(@thread_cap)
-        |> preload([:sender, :attachments, :reactions, forwarded_from: :sender])
+        |> preload([
+          :sender,
+          :attachments,
+          :reactions,
+          reply_to: :sender,
+          forwarded_from: :sender
+        ])
         |> Repo.all()
 
-      {:ok, Repo.preload(root, [:sender, :attachments, :reactions, forwarded_from: :sender]),
-       replies}
+      {:ok,
+       Repo.preload(root, [
+         :sender,
+         :attachments,
+         :reactions,
+         reply_to: :sender,
+         forwarded_from: :sender
+       ]), replies}
     end
   end
 
@@ -1559,7 +1611,14 @@ defmodule Eden.Chat do
         set: [last_reply_at: reply.inserted_at]
       )
 
-    reply = Repo.preload(reply, [:sender, :attachments, :reactions, forwarded_from: :sender])
+    reply =
+      Repo.preload(reply, [
+        :sender,
+        :attachments,
+        :reactions,
+        reply_to: :sender,
+        forwarded_from: :sender
+      ])
 
     with 1 <- bumped,
          %Message{} = fresh_root <- preloaded_message(root.id) do
@@ -1573,7 +1632,7 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.id == ^id,
-        preload: [:sender, :attachments, :reactions, forwarded_from: :sender]
+        preload: [:sender, :attachments, :reactions, reply_to: :sender, forwarded_from: :sender]
     )
   end
 
@@ -2071,7 +2130,15 @@ defmodule Eden.Chat do
     resurface_direct(conversation_id)
     # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
     # bubble would phantom-render its "Forwarded" label on realtime messages.
-    message = Repo.preload(message, [:sender, :attachments, :reactions, forwarded_from: :sender])
+    message =
+      Repo.preload(message, [
+        :sender,
+        :attachments,
+        :reactions,
+        reply_to: :sender,
+        forwarded_from: :sender
+      ])
+
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
     message
@@ -2092,10 +2159,14 @@ defmodule Eden.Chat do
     )
   end
 
-  defp insert_album_message(user, conversation_id, message_attrs, prepared) do
+  defp insert_album_message(user, conversation_id, message_attrs, prepared, reply_to_id) do
     Repo.transact(fn ->
       with {:ok, message} <-
-             %Message{conversation_id: conversation_id, sender_id: user.id}
+             %Message{
+               conversation_id: conversation_id,
+               sender_id: user.id,
+               reply_to_id: reply_to_id
+             }
              |> Message.photo_changeset(message_attrs)
              |> Repo.insert(),
            :ok <- insert_attachments(message.id, prepared) do
@@ -2230,7 +2301,13 @@ defmodule Eden.Chat do
 
       message ->
         message =
-          Repo.preload(message, [:sender, :attachments, :reactions, forwarded_from: :sender])
+          Repo.preload(message, [
+            :sender,
+            :attachments,
+            :reactions,
+            reply_to: :sender,
+            forwarded_from: :sender
+          ])
 
         broadcast(message.conversation_id, {:thumbnail_ready, message})
     end

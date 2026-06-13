@@ -27,6 +27,10 @@ defmodule Eden.Chat.Message do
     belongs_to :sender, Eden.Accounts.User
     # Self-reference: the original this message was forwarded from (if any).
     belongs_to :forwarded_from, Eden.Chat.Message
+    # Self-reference: the message this one quotes (quote-reply, #71). Set by the
+    # context after validation (same conversation, visible) — never cast from
+    # params. Distinct from `root_id` (threads).
+    belongs_to :reply_to, Eden.Chat.Message
     # Albums (#58): a message carries an ordered list of attachments (one for a
     # plain photo/file send, several for an album). Always preload/render via
     # this list — ordered by `position` so the grid is deterministic.
