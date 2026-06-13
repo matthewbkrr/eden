@@ -12,10 +12,9 @@ defmodule EdenWeb.ChatLive do
   import EdenWeb.ShellComponents
 
   alias Eden.{Accounts, Channels, Chat}
+  alias EdenWeb.Markup
 
   @page 50
-  # Bare http/https URLs in message text, turned into links (see linkify/1).
-  @url_regex ~r{https?://[^\s<]+}i
 
   @impl true
   def mount(_params, _session, socket) do
@@ -1963,6 +1962,28 @@ defmodule EdenWeb.ChatLive do
                   autocomplete="off"
                   phx-hook=".PasteUpload"
                 />
+                <div class="ed-emoji" id="emoji-picker" phx-hook=".EmojiPicker">
+                  <button
+                    type="button"
+                    class="ed-btn--icon"
+                    data-emoji-toggle
+                    aria-label={gettext("Emoji")}
+                    aria-expanded="false"
+                  >
+                    <.icon name="hero-face-smile-micro" class="size-5" />
+                  </button>
+                  <div class="ed-emoji__pop" data-emoji-pop hidden role="menu">
+                    <button
+                      :for={e <- emoji_set()}
+                      type="button"
+                      class="ed-emoji__item"
+                      data-emoji={e}
+                      aria-label={e}
+                    >
+                      {e}
+                    </button>
+                  </div>
+                </div>
                 <button
                   class="ed-btn ed-btn--primary shrink-0"
                   style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
@@ -2858,6 +2879,54 @@ defmodule EdenWeb.ChatLive do
           },
         }
       </script>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".EmojiPicker">
+        // Composer emoji picker (#60): toggle a small grid; clicking a glyph
+        // inserts it at the caret in the message input. Closes on outside click
+        // or Esc. Dispatches "input" so phx-change keeps the body assign in sync.
+        export default {
+          mounted() {
+            this.toggle = this.el.querySelector("[data-emoji-toggle]")
+            this.pop = this.el.querySelector("[data-emoji-pop]")
+            this.input = this.el.closest("form")?.querySelector('input[name="message[body]"]')
+            this.onDoc = (e) => { if (!this.el.contains(e.target)) this.setOpen(false) }
+            this.onKey = (e) => { if (e.key === "Escape") this.setOpen(false) }
+            this.toggle.addEventListener("click", (e) => {
+              e.preventDefault()
+              this.setOpen(this.pop.hidden)
+            })
+            this.pop.addEventListener("click", (e) => {
+              const btn = e.target.closest("[data-emoji]")
+              if (!btn) return
+              e.preventDefault()
+              this.insert(btn.dataset.emoji)
+              this.setOpen(false)
+            })
+          },
+          destroyed() {
+            document.removeEventListener("click", this.onDoc)
+            document.removeEventListener("keydown", this.onKey)
+          },
+          setOpen(open) {
+            this.pop.hidden = !open
+            this.toggle.setAttribute("aria-expanded", String(open))
+            const fn = open ? "addEventListener" : "removeEventListener"
+            document[fn]("click", this.onDoc)
+            document[fn]("keydown", this.onKey)
+          },
+          insert(emoji) {
+            const i = this.input
+            if (!i) return
+            const s = i.selectionStart ?? i.value.length
+            const e = i.selectionEnd ?? i.value.length
+            i.value = i.value.slice(0, s) + emoji + i.value.slice(e)
+            const pos = s + emoji.length
+            i.setSelectionRange(pos, pos)
+            i.dispatchEvent(new Event("input", { bubbles: true }))
+            i.focus()
+          },
+        }
+      </script>
     </div>
     """
   end
@@ -3173,6 +3242,9 @@ defmodule EdenWeb.ChatLive do
   # A short window of the message body around the first match, so long messages
   # show the relevant part. Grapheme-based (byte offsets would split UTF-8).
   defp snippet(body, query) do
+    # Strip markdown markers so a result preview reads as plain text, not raw
+    # `**`/`#`; the highlight then matches against the displayed text.
+    body = Markup.strip(body)
     q = String.downcase(String.trim(query))
     before = body |> String.downcase() |> String.split(q, parts: 2) |> hd()
 
@@ -3843,13 +3915,15 @@ defmodule EdenWeb.ChatLive do
 
     body =
       if is_binary(caption) and caption != "",
-        do: caption,
+        do: Markup.strip(caption),
         else: album_label(kind, conversation.last_message_attachment_count || 1)
 
     emoji <> " " <> body
   end
 
-  defp convo_preview(%{last_message_body: body}) when is_binary(body) and body != "", do: body
+  defp convo_preview(%{last_message_body: body}) when is_binary(body) and body != "",
+    do: Markup.strip(body)
+
   defp convo_preview(_conversation), do: gettext("No messages yet")
 
   defp attachment_label("image"), do: {"📷", gettext("Photo")}
@@ -3862,6 +3936,13 @@ defmodule EdenWeb.ChatLive do
   defp album_label("image", n), do: ngettext("%{count} photo", "%{count} photos", n)
   defp album_label("video", n), do: ngettext("%{count} video", "%{count} videos", n)
   defp album_label(_file, n), do: ngettext("%{count} file", "%{count} files", n)
+
+  # A small curated set for the composer emoji picker (#60) — common, cross-
+  # platform glyphs, no dependency. Native emoji also type/paste fine; this is
+  # just an insert affordance for desktop.
+  defp emoji_set do
+    ~w(😀 😅 😂 🙂 😉 😍 😎 🤔 😴 😢 😭 😡 👍 👎 👌 🙏 👏 🙌 💪 🔥 ✨ 🎉 ❤️ 🧡 💛 💚 💙 💜 ✅ ❌ ⚡ 💡 📌 📎 🚀 👀 🤝 🎶)
+  end
 
   attr :id, :string, required: true
   attr :message, :map, required: true
@@ -3966,7 +4047,7 @@ defmodule EdenWeb.ChatLive do
           message_id={@message.id}
         />
         <div :if={@message.body != ""} class="break-words ed-flat__body">
-          <.body_part :for={part <- linkify(@message.body)} part={part} />
+          {Markup.to_iodata(@message.body)}
         </div>
         <button
           :if={@message.reply_count > 0 and not @in_thread}
@@ -4065,10 +4146,7 @@ defmodule EdenWeb.ChatLive do
           message_id={@message.id}
         />
         <span :if={@message.body != ""} class="break-words">
-          <.body_part
-            :for={part <- linkify(@message.body)}
-            part={part}
-          />
+          {Markup.to_iodata(@message.body)}
         </span>
         <span class="ed-bubble__meta">
           <.local_time at={@message.inserted_at} />
@@ -4669,47 +4747,6 @@ defmodule EdenWeb.ChatLive do
     do: gettext("Forwarded from %{name}", name: name)
 
   defp forwarded_label(_forwarded_from), do: gettext("Forwarded")
-
-  attr :part, :any, required: true
-
-  # Renders one piece of a linkified message body: a link or escaped text.
-  defp body_part(%{part: {:link, url}} = assigns) do
-    assigns = assign(assigns, :url, url)
-
-    ~H"""
-    <a class="ed-link" href={@url} target="_blank" rel="noopener noreferrer">{@url}</a>
-    """
-  end
-
-  defp body_part(%{part: {:text, text}} = assigns) do
-    assigns = assign(assigns, :text, text)
-    ~H"{@text}"
-  end
-
-  # Split message text into `{:text, _}` / `{:link, url}` parts, turning bare
-  # http(s) URLs into links. Trailing sentence punctuation stays as text. The URL
-  # only ever feeds an `href`/text node that HEEx escapes, so there's no XSS path.
-  defp linkify(text) do
-    @url_regex
-    |> Regex.split(text, include_captures: true)
-    |> Enum.flat_map(&classify_body_part/1)
-  end
-
-  defp classify_body_part(""), do: []
-
-  defp classify_body_part(part) do
-    if String.starts_with?(part, ["http://", "https://"]) do
-      {url, trailing} = strip_trailing_punct(part)
-      [{:link, url} | if(trailing == "", do: [], else: [{:text, trailing}])]
-    else
-      [{:text, part}]
-    end
-  end
-
-  defp strip_trailing_punct(url) do
-    trimmed = Regex.replace(~r/[.,;:!?)\]}'"]+$/u, url, "")
-    {trimmed, String.replace_prefix(url, trimmed, "")}
-  end
 
   attr :user, :map, required: true
   attr :online, :boolean, required: true
