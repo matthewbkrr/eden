@@ -83,6 +83,9 @@ defmodule EdenWeb.ChatLive do
         # The viewer's personal quick-react row (#67), shown in every message menu;
         # set in Settings, read once here (a remount on navigation picks up changes).
         my_quick: Chat.quick_reactions(scope),
+        # Quote-reply (#71): the message currently being replied to (or nil). Shown
+        # in the composer tray; its id rides the next send.
+        reply_to: nil,
         # Knock window (#41): a private room you're not in, reached by link.
         knock_room: nil,
         knock_pending: false,
@@ -315,19 +318,20 @@ defmodule EdenWeb.ChatLive do
   def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
     client_id = msg["client_id"]
+    reply_to_id = msg["reply_to_id"]
 
     cond do
       is_nil(conversation) ->
         {:noreply, socket}
 
       socket.assigns.uploads.attachment.entries != [] ->
-        send_attachment(socket, scope, conversation, body)
+        send_attachment(socket, scope, conversation, body, reply_to_id)
 
       String.trim(body) == "" ->
         {:noreply, assign(socket, composer: empty_composer())}
 
       true ->
-        send_text(socket, scope, conversation, body, client_id)
+        send_text(socket, scope, conversation, body, client_id, reply_to_id)
     end
   end
 
@@ -1040,6 +1044,25 @@ defmodule EdenWeb.ChatLive do
   # A malformed/hostile payload (no emoji, or a non-string emoji) — ignore rather
   # than crash the LiveView on this client-reachable event.
   def handle_event("react", _params, socket), do: {:noreply, socket}
+
+  # Quote-reply (#71): stage the target in the composer tray. The menu/swipe/arrow
+  # also focus the composer client-side (JS.focus), so this just sets the assign.
+  def handle_event("reply", %{"id" => id}, socket) do
+    case Chat.get_message(socket.assigns.current_scope, id) do
+      nil -> {:noreply, socket}
+      message -> {:noreply, assign(socket, reply_to: message)}
+    end
+  end
+
+  def handle_event("reply", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_reply", _params, socket), do: {:noreply, assign(socket, reply_to: nil)}
+
+  # Tap a rendered quote → scroll to + highlight the original (reuses the permalink
+  # focus path; a no-op if it's paginated out of the stream).
+  def handle_event("focus_original", %{"id" => id}, socket) do
+    {:noreply, push_event(socket, "focus_message", %{domId: "messages-#{id}"})}
+  end
 
   # Jump to the thread's root in the main stream: close the panel (on mobile it
   # covers the stream) and focus-highlight the root, reusing the permalink path.
@@ -1998,6 +2021,25 @@ defmodule EdenWeb.ChatLive do
             ]}
             style="border-color: var(--ed-border);"
           >
+            <%!-- Quote-reply tray (#71): shows the message being replied to. The
+                  hidden input rides the send (form + hook paths); data-reply-active
+                  tells the SendQueue hook to defer to the server (no optimistic). --%>
+            <div :if={@reply_to} class="ed-reply-bar" data-reply-active>
+              <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+              <div class="ed-reply-bar__body">
+                <span class="ed-reply-bar__name">{reply_author(@reply_to)}</span>
+                <span class="ed-reply-bar__text">{reply_snippet(@reply_to)}</span>
+              </div>
+              <input type="hidden" name="message[reply_to_id]" value={@reply_to.id} />
+              <button
+                type="button"
+                class="ed-btn--icon shrink-0"
+                phx-click="cancel_reply"
+                aria-label={gettext("Cancel reply")}
+              >
+                <.icon name="hero-x-mark-micro" class="size-4" />
+              </button>
+            </div>
             <%= if @uploads.attachment.entries == [] do %>
               <%!-- Normal composer bar: attach + caption + send. --%>
               <div class="flex items-center gap-2">
@@ -2738,6 +2780,10 @@ defmodule EdenWeb.ChatLive do
           onSubmit(e) {
             // Photos go through the normal phx-submit (they carry an upload).
             if (this.el.querySelector("[data-upload-preview]")) return
+            // A quote-reply (#71) also defers to the server path so the reply_to_id
+            // rides along and the quote renders at the right height (no optimistic
+            // node that would pop taller when the real row streams in).
+            if (this.el.querySelector("[data-reply-active]")) return
             // Take over text sends: stop the event reaching LiveView's delegated
             // phx-submit so the message isn't also sent without a client_id.
             e.preventDefault()
@@ -4067,6 +4113,33 @@ defmodule EdenWeb.ChatLive do
 
   defp convo_preview(_conversation), do: gettext("No messages yet")
 
+  # Quote-reply (#71): author + one-line preview of the quoted message, for the
+  # composer tray and the rendered quote block.
+  defp reply_author(%{sender: %{display_name: name}}) when is_binary(name), do: name
+  defp reply_author(_message), do: gettext("Deleted account")
+
+  defp reply_snippet(%{deleted_at: at}) when not is_nil(at), do: gettext("Message deleted")
+
+  defp reply_snippet(%{body: body, attachments: atts}) do
+    cond do
+      is_binary(body) and String.trim(body) != "" ->
+        body |> Markup.strip() |> String.slice(0, 120)
+
+      is_list(atts) and atts != [] ->
+        media_label(hd(atts).kind)
+
+      true ->
+        ""
+    end
+  end
+
+  defp reply_snippet(_message), do: ""
+
+  defp media_label("image"), do: gettext("Photo")
+  defp media_label("video"), do: gettext("Video")
+  defp media_label("audio"), do: gettext("Audio")
+  defp media_label(_file), do: gettext("File")
+
   defp attachment_label("image"), do: {"📷", gettext("Photo")}
   defp attachment_label("video"), do: {"🎬", gettext("Video")}
   defp attachment_label("file"), do: {"📎", gettext("File")}
@@ -4097,6 +4170,26 @@ defmodule EdenWeb.ChatLive do
     do: for(r <- reactions, r.user_id == me, do: r.emoji)
 
   defp mine_emoji(_message, _me), do: []
+
+  attr :message, :map, required: true
+
+  # Quote-reply (#71): a tappable quote of the message this one replies to, shown
+  # above the body. Tapping scrolls to + highlights the original. Only renders for
+  # a loaded reply_to (a nilified / never-set ref shows nothing).
+  defp quoted_reply(assigns) do
+    ~H"""
+    <button
+      :if={match?(%Chat.Message{}, @message.reply_to)}
+      type="button"
+      class="ed-quote"
+      phx-click="focus_original"
+      phx-value-id={@message.reply_to.id}
+    >
+      <span class="ed-quote__name">{reply_author(@message.reply_to)}</span>
+      <span class="ed-quote__text">{reply_snippet(@message.reply_to)}</span>
+    </button>
+    """
+  end
 
   attr :message, :map, required: true
   attr :me, :any, required: true
@@ -4237,6 +4330,7 @@ defmodule EdenWeb.ChatLive do
           <span :if={!@message.sender} class="ed-flat__name">{gettext("Deleted account")}</span>
           <span class="ed-flat__time"><.local_time at={@message.inserted_at} /></span>
         </div>
+        <.quoted_reply message={@message} />
         <span :if={@message.forwarded_from} class="ed-forwarded">
           <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
           {forwarded_label(@message.forwarded_from)}
@@ -4341,6 +4435,7 @@ defmodule EdenWeb.ChatLive do
         >
           {@message.sender.display_name}
         </span>
+        <.quoted_reply message={@message} />
         <span :if={@message.forwarded_from} class="ed-forwarded">
           <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
           {forwarded_label(@message.forwarded_from)}
@@ -4435,6 +4530,16 @@ defmodule EdenWeb.ChatLive do
         </button>
       </div>
       <div class="ed-menu__sep"></div>
+      <%!-- Quote-reply (#71): in DMs and rooms; focuses the composer client-side.
+            Distinct from "Reply in thread" (rooms-only branch) below. --%>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click={JS.push("reply", value: %{"id" => @message.id}) |> JS.focus(to: "#composer-body")}
+      >
+        <.icon name="hero-arrow-uturn-left-micro" class="size-4" /> {gettext("Reply")}
+      </button>
       <button
         :if={@threads and not @in_thread and is_nil(@message.root_id)}
         type="button"
@@ -5551,13 +5656,17 @@ defmodule EdenWeb.ChatLive do
 
   defp empty_composer, do: to_form(%{}, as: "message")
 
-  defp send_text(socket, scope, conversation, body, client_id \\ nil) do
-    case Chat.create_message(scope, conversation.id, %{"body" => body, "client_id" => client_id}) do
+  defp send_text(socket, scope, conversation, body, client_id, reply_to_id) do
+    attrs = %{"body" => body, "client_id" => client_id, "reply_to_id" => reply_to_id}
+
+    case Chat.create_message(scope, conversation.id, attrs) do
       {:ok, _message} ->
         # The form path clears the input via the composer assign; the hook path
         # (client_id present) already cleared it client-side, so leave the assign
-        # alone to avoid clobbering text typed during a slow round-trip.
+        # alone to avoid clobbering text typed during a slow round-trip. A reply
+        # always clears the tray.
         socket = if client_id, do: socket, else: assign(socket, composer: empty_composer())
+        socket = if reply_to_id, do: assign(socket, reply_to: nil), else: socket
         ack(socket, client_id)
 
       {:error, _changeset} ->
@@ -5578,7 +5687,7 @@ defmodule EdenWeb.ChatLive do
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
-  defp send_attachment(socket, scope, conversation, body) do
+  defp send_attachment(socket, scope, conversation, body, reply_to_id) do
     # consume_uploaded_entries cleans up each temp file as its callback returns,
     # so to build ONE album from several entries we copy each to a stable temp,
     # then persist them together (atomic) and remove the temps.
@@ -5595,15 +5704,19 @@ defmodule EdenWeb.ChatLive do
       [] ->
         if String.trim(body) == "",
           do: {:noreply, socket},
-          else: send_text(socket, scope, conversation, body)
+          else: send_text(socket, scope, conversation, body, nil, reply_to_id)
 
       sources ->
-        result = Chat.create_attachments(scope, conversation.id, sources, %{body: body})
+        opts = %{body: body, reply_to_id: reply_to_id}
+        result = Chat.create_attachments(scope, conversation.id, sources, opts)
         Enum.each(sources, &File.rm(&1.path))
 
         case result do
-          {:ok, _messages} -> {:noreply, assign(socket, composer: empty_composer())}
-          {:error, reason} -> {:noreply, put_flash(socket, :error, attachment_error(reason))}
+          {:ok, _messages} ->
+            {:noreply, assign(socket, composer: empty_composer(), reply_to: nil)}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, attachment_error(reason))}
         end
     end
   end

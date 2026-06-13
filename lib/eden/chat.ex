@@ -1143,7 +1143,7 @@ defmodule Eden.Chat do
           :sender,
           :attachments,
           :reactions,
-          reply_to: :sender,
+          reply_to: [:sender, :attachments],
           forwarded_from: :sender
         ])
         |> Repo.all()
@@ -1200,6 +1200,18 @@ defmodule Eden.Chat do
           m.id == ^id and m.conversation_id == ^conversation_id and is_nil(m.deleted_at) and
             is_nil(d.id)
     )
+  end
+
+  @doc """
+  Loads a message the scoped user can address (a member of its conversation),
+  preloaded with its sender + attachments — for the quote-reply composer tray
+  (#71). Returns the message or `nil`.
+  """
+  def get_message(%Scope{} = scope, message_id) do
+    case fetch_message(scope, message_id) do
+      {:ok, message} -> Repo.preload(message, [:sender, :attachments])
+      {:error, _} -> nil
+    end
   end
 
   @doc """
@@ -1523,7 +1535,7 @@ defmodule Eden.Chat do
           :sender,
           :attachments,
           :reactions,
-          reply_to: :sender,
+          reply_to: [:sender, :attachments],
           forwarded_from: :sender
         ])
         |> Repo.all()
@@ -1533,7 +1545,7 @@ defmodule Eden.Chat do
          :sender,
          :attachments,
          :reactions,
-         reply_to: :sender,
+         reply_to: [:sender, :attachments],
          forwarded_from: :sender
        ]), replies}
     end
@@ -1616,7 +1628,7 @@ defmodule Eden.Chat do
         :sender,
         :attachments,
         :reactions,
-        reply_to: :sender,
+        reply_to: [:sender, :attachments],
         forwarded_from: :sender
       ])
 
@@ -1632,7 +1644,13 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.id == ^id,
-        preload: [:sender, :attachments, :reactions, reply_to: :sender, forwarded_from: :sender]
+        preload: [
+          :sender,
+          :attachments,
+          :reactions,
+          reply_to: [:sender, :attachments],
+          forwarded_from: :sender
+        ]
     )
   end
 
@@ -2135,7 +2153,7 @@ defmodule Eden.Chat do
         :sender,
         :attachments,
         :reactions,
-        reply_to: :sender,
+        reply_to: [:sender, :attachments],
         forwarded_from: :sender
       ])
 
@@ -2305,7 +2323,7 @@ defmodule Eden.Chat do
             :sender,
             :attachments,
             :reactions,
-            reply_to: :sender,
+            reply_to: [:sender, :attachments],
             forwarded_from: :sender
           ])
 
