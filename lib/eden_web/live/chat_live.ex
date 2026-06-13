@@ -2373,17 +2373,31 @@ defmodule EdenWeb.ChatLive do
               el.classList.add("ed-msg--focus")
               setTimeout(() => el.classList.remove("ed-msg--focus"), 2200)
             })
-            // Rise-in for messages added AFTER mount only — the initial list is
-            // already in the DOM when the observer starts, so it never animates
-            // (no page-load choreography). Optimistic pending nodes (data-client-id)
-            // appear instantly; their real replacement animates once, no double.
+            // Runs for nodes added AFTER mount only — the initial list is already
+            // in the DOM when the observer starts, so it never animates (no
+            // page-load choreography). Two jobs:
+            //   1. Atomic swap: when MY real message streams in (data-client-id,
+            //      in #messages), drop its optimistic twin from #pending in this
+            //      same microtask — before paint. The list never holds both, so
+            //      it can't grow-then-shrink by a row (the "whole line dips then
+            //      snaps up" jerk). The real one doesn't re-animate (the
+            //      optimistic already rose in).
+            //   2. Rise-in for everyone else's messages (no client_id of mine).
             this.riser = new MutationObserver((muts) => {
               for (const mut of muts) {
                 for (const node of mut.addedNodes) {
                   if (node.nodeType !== 1) continue
                   const row = node.matches?.(".ed-msg, .ed-flat") ? node
                     : node.querySelector?.(".ed-msg, .ed-flat")
-                  if (!row || row.dataset.clientId) continue
+                  if (!row) continue
+                  if (row.dataset.clientId) {
+                    if (!row.closest("#pending-messages")) {
+                      const twin = document.getElementById("pending-messages")
+                        ?.querySelector(`[data-client-id="${row.dataset.clientId}"]`)
+                      if (twin) twin.remove()
+                    }
+                    continue
+                  }
                   row.classList.add("ed-msg--enter")
                   setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
                 }
@@ -2672,10 +2686,26 @@ defmodule EdenWeb.ChatLive do
               const bubble = document.createElement("div")
               bubble.className = "ed-bubble ed-bubble--me"
               bubble.style.opacity = "0.55"
-              bubble.textContent = body
+              // Mirror the real bubble's body + meta structure so the optimistic
+              // node is the SAME height — without the meta line it was shorter,
+              // so the real (taller) replacement looked like it grew ("small to
+              // large"). A lone "sending" check stands in for the read receipt.
+              bubble.innerHTML =
+                '<span class="break-words"></span>' +
+                '<span class="ed-bubble__meta"><time></time>' +
+                '<span class="inline-flex items-center" style="margin-left:2px;">' +
+                '<span class="hero-check-micro size-3.5"></span></span></span>'
+              bubble.querySelector("span.break-words").textContent = body
+              bubble.querySelector("time").textContent =
+                new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
               row.appendChild(bubble)
             }
             this.pending.appendChild(row)
+            // Rise the optimistic node in — this IS the smooth send animation the
+            // user sees. The real replacement carries data-client-id, so the
+            // observer skips it and it swaps in silently (no second animation).
+            row.classList.add("ed-msg--enter")
+            setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
             if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight
           },
           // The last flat row to compare against for the compact rule: a queued
@@ -3873,6 +3903,7 @@ defmodule EdenWeb.ChatLive do
       class={["ed-flat", @message.compact && "ed-flat--compact"]}
       data-sender-id={@message.sender_id}
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
+      data-client-id={@mine && @message.client_id}
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
@@ -3982,7 +4013,14 @@ defmodule EdenWeb.ChatLive do
 
   defp message_bubble(assigns) do
     ~H"""
-    <div id={@id} class={["ed-msg flex", @mine && "justify-end"]}>
+    <%!-- data-client-id on MY own rows lets the rise-in observer skip them: the
+          optimistic node already animated, so the real replacement swaps in
+          silently (no double-animation / jerk). Others' messages still rise in. --%>
+    <div
+      id={@id}
+      class={["ed-msg flex", @mine && "justify-end"]}
+      data-client-id={@mine && @message.client_id}
+    >
       <div
         class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
         id={"bubble-#{@message.id}"}

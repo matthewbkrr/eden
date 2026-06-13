@@ -119,6 +119,11 @@ defmodule EdenWeb.ChatLiveTest do
       render_hook(view, "send", params)
       assert render(view) =~ "queued hi"
 
+      # My own message row carries data-client-id so the rise-in observer skips
+      # it — the optimistic node already animated; the real swap is silent (no
+      # "small to large" double-animation jerk).
+      assert has_element?(view, ~s([data-client-id="#{cid}"]))
+
       # A resend after a reconnect carries the same client_id — no duplicate row.
       render_hook(view, "send", params)
       assert Eden.Repo.aggregate(Eden.Chat.Message, :count) == 1
