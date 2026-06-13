@@ -137,14 +137,16 @@ design — built incrementally as features land.)
   `/channels/join/:token`; the login flow preserves the link via
   `user_return_to`). Removal matrix: owner > admin > member; the owner leaves
   only after `transfer_ownership/3` (or deletes the channel); removed users'
-  sessions get `{:removed_from_channel, id}` and navigate away. **Threads** (flat, Mattermost-style): a reply's
-  `root_id` points at a non-reply root carrying denormalized
-  `reply_count`/`last_reply_at`; replies stay out of the main stream, sidebar
-  previews, and unread badges (footer count instead); a root with replies
-  refuses delete-for-both; reply permalinks open the thread panel. **Room
-  message UI is Mattermost-flat** (avatar · name · time rows, consecutive
-  same-author runs collapse, hover quick-actions, facepile thread footer,
-  RHS panel / mobile full-screen) — DMs keep bubbles.
+  sessions get `{:removed_from_channel, id}` and navigate away. **Threads** are a
+  **rooms-only** feature (flat, Mattermost-style) — the personal messenger
+  (DMs/groups) has no thread UI, and `Chat.create_reply/3` / `list_thread/2`
+  reject a non-room root (`ensure_threaded/1`). A reply's `root_id` points at a
+  non-reply root carrying denormalized `reply_count`/`last_reply_at`; replies stay
+  out of the main stream, sidebar previews, and unread badges (footer count
+  instead); a root with replies refuses delete-for-both; reply permalinks open the
+  thread panel. **Room message UI is Mattermost-flat** (avatar · name · time rows,
+  consecutive same-author runs collapse, hover quick-actions, facepile thread
+  footer, RHS panel / mobile full-screen) — DMs keep bubbles.
 - **Storage** — file/photo persistence behind an **adapter behaviour**
   (`Eden.Storage.Adapter`). Local disk in dev, object storage (S3-compatible) in
   prod, swappable without touching callers. Callers store only the file **key +
