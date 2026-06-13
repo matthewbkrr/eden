@@ -278,11 +278,13 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   re-justified as a false positive** — sobelow only recognizes CSP set via
   `put_secure_browser_headers`, not a custom per-request nonce plug; presence is
   covered by `EdenWeb.CSPTest`.
-- **S3-compatible storage adapter** — only `Eden.Storage.Local` exists. Prod uses
-  it against `EDEN_UPLOADS_ROOT` (a persistent volume, set in `config/runtime.exs`).
-  Build an S3 adapter to satisfy Phase 3's "storage swaps by one config line"; it
-  needs `local_path/1` to return `:error` so file serving falls back to streaming
-  bytes.
+- ~~**S3-compatible storage adapter**~~ — **resolved** (#55): `Eden.Storage.S3`
+  speaks the S3 REST API over Req with hand-rolled AWS SigV4 (`Eden.Storage.SigV4`,
+  no SDK — verified against the AWS spec's example vector), path-style, working
+  against AWS S3 / R2 / MinIO / B2. It omits `local_path/1`, so the facade returns
+  `:error` and file serving streams the bytes. Swap is one config line, env-driven
+  in `config/runtime.exs` (`EDEN_S3_BUCKET` present → adapter becomes S3); the
+  default stays `Eden.Storage.Local` against `EDEN_UPLOADS_ROOT`.
 - ~~**Attachment blob cleanup on delete**~~ — **resolved** by message "delete for
   both": `delete_message_for_both/2` deletes the `storage_key` + `thumbnail_key`
   blobs (after the tombstone commits, and only if no forwarded copy still

@@ -22,6 +22,17 @@ config :bcrypt_elixir, :log_rounds, 1
 # Store uploads under a temp dir during tests.
 config :eden, Eden.Storage.Local, root: Path.join(System.tmp_dir!(), "eden_test_uploads")
 
+# The S3 adapter (#55) is unit-tested directly with a Req.Test stub — no network.
+config :eden, Eden.Storage.S3,
+  bucket: "test-bucket",
+  region: "us-east-1",
+  endpoint: "https://s3.test.local",
+  access_key_id: "test",
+  secret_access_key: "test",
+  # retry: false keeps the transport-error test fast/quiet (prod uses Req's
+  # default idempotent-transient retry).
+  req_options: [plug: {Req.Test, Eden.Storage.S3}, retry: false]
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :eden, EdenWeb.Endpoint,
