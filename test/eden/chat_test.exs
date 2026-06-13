@@ -811,6 +811,38 @@ defmodule Eden.ChatTest do
 
       assert msg.reply_to_id == target.id
     end
+
+    test "get_message stages a visible target but not a deleted/hidden one", %{
+      alice: alice,
+      bob: bob,
+      target: target
+    } do
+      assert %{id: tid} = Chat.get_message(scope(alice), target.id)
+      assert tid == target.id
+
+      # Hidden-for-the-requester → not stageable.
+      :ok = Chat.delete_message_for_me(scope(alice), target.id)
+      assert is_nil(Chat.get_message(scope(alice), target.id))
+
+      # Deleted-for-everyone → not stageable for anyone.
+      :ok = Chat.delete_message_for_both(scope(bob), target.id)
+      assert is_nil(Chat.get_message(scope(bob), target.id))
+    end
+
+    test "hard-deleting the quoted message nilifies the reply's reply_to_id", %{
+      alice: alice,
+      conv: conv,
+      target: target
+    } do
+      {:ok, reply} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "re", "reply_to_id" => target.id})
+
+      assert reply.reply_to_id == target.id
+
+      # A hard delete (as a conversation GC cascade would) nilifies, not orphans.
+      Repo.delete!(Repo.get(Message, target.id))
+      assert %{reply_to_id: nil} = Repo.get(Message, reply.id)
+    end
   end
 
   describe "forward_message/3" do
