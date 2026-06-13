@@ -1072,6 +1072,20 @@ defmodule Eden.ChatTest do
       assert {:ok, [album]} = Chat.create_attachments(scope(alice), conv.id, sources, %{})
       assert length(album.attachments) == 2
     end
+
+    test "one oversized file fails the whole batch — nothing is sent", %{alice: alice, conv: conv} do
+      big = @png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1)
+
+      sources = [
+        %{path: image_path(@png_signature <> "ok"), filename: "ok.png"},
+        %{path: image_path(big), filename: "huge.png"}
+      ]
+
+      assert {:error, :too_large} = Chat.create_attachments(scope(alice), conv.id, sources, %{})
+      # Preflight rejects before any message/blob is created (no partial album).
+      assert Repo.aggregate(Message, :count) == 0
+      assert Repo.aggregate(Attachment, :count) == 0
+    end
   end
 
   describe "generate_thumbnail/1" do

@@ -221,6 +221,30 @@ defmodule EdenWeb.ChatLiveTest do
       end
     end
 
+    test "a video in an album tiles in the grid with a play badge (#58)", ctx do
+      mp4 = <<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16)
+
+      sources = [
+        %{path: real_png_path(), filename: "1.png"},
+        %{path: write_tmp(mp4), filename: "clip.mp4"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Both photo and video are grid tiles (not a stacked <video> player).
+      assert html =~ "ed-album"
+      assert html =~ "ed-album__play"
+      refute html =~ "<video"
+
+      for attachment <- message.attachments do
+        assert has_element?(view, ~s(#att-#{attachment.id}))
+      end
+    end
+
     test "files send as separate messages, never inside an album (#58)", ctx do
       sources = [
         %{path: write_tmp("plain one"), filename: "a.txt"},

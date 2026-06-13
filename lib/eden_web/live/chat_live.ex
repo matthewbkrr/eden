@@ -2728,9 +2728,13 @@ defmodule EdenWeb.ChatLive do
               i = (n + tiles.length) % tiles.length
               // Hide the frame until the new source decodes so paging into a
               // different photo (or album) never flashes the previous image.
+              const reveal = () => { img.style.visibility = "visible" }
               img.style.visibility = "hidden"
-              img.onload = () => { img.style.visibility = "visible" }
+              img.onload = reveal
               img.src = tiles[i].dataset.full
+              // Reopening the same photo sets an unchanged src, which fires no
+              // load event in some browsers — reveal immediately when cached.
+              if (img.complete) reveal()
             }
             box.__show = show
             box.__step = (d) => show(i + d)
@@ -4248,9 +4252,15 @@ defmodule EdenWeb.ChatLive do
     end)
   end
 
-  # Modal title: counts the media (the album) when present, else the files.
-  defp compose_title(media, []) when media != [],
-    do: ngettext("%{count} photo", "%{count} photos", length(media))
+  # Modal title: counts the media (the album) when present, else the files. A
+  # media-only set reads by its kind — "N videos" when there are no photos.
+  defp compose_title(media, []) when media != [] do
+    n = length(media)
+
+    if Enum.any?(media, &image_entry?/1),
+      do: ngettext("%{count} photo", "%{count} photos", n),
+      else: ngettext("%{count} video", "%{count} videos", n)
+  end
 
   defp compose_title([], files),
     do: ngettext("%{count} file", "%{count} files", length(files))
@@ -4273,28 +4283,41 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp album_view(assigns) do
-    images = Enum.filter(assigns.attachments, &(&1.kind == "image"))
+    media = Enum.filter(assigns.attachments, &(&1.kind in ~w(image video)))
 
     assigns =
       assigns
-      |> assign(:images, images)
-      |> assign(:rest, assigns.attachments -- images)
+      |> assign(:media, media)
+      |> assign(:rest, assigns.attachments -- media)
       |> assign(:gallery, "album-#{assigns.message_id}")
 
     ~H"""
-    <div :if={@images != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@images))}"]}>
+    <div :if={@media != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@media))}"]}>
+      <%!-- Images are lightbox tiles sharing a gallery (paged together); videos
+            are poster tiles with a play badge that open the clip. --%>
       <a
-        :for={image <- @images}
-        id={"att-#{image.id}"}
-        phx-hook=".Lightbox"
-        data-full={~p"/files/#{image.id}"}
-        data-gallery={@gallery}
-        href={~p"/files/#{image.id}"}
+        :for={item <- @media}
+        id={"att-#{item.id}"}
+        phx-hook={item.kind == "image" && ".Lightbox"}
+        data-full={item.kind == "image" && ~p"/files/#{item.id}"}
+        data-gallery={item.kind == "image" && @gallery}
+        href={~p"/files/#{item.id}"}
         target="_blank"
         rel="noopener"
-        class="ed-album__tile cursor-zoom-in"
+        class={["ed-album__tile", item.kind == "image" && "cursor-zoom-in"]}
       >
-        <img src={thumb_src(image)} loading="lazy" alt={image.filename || gettext("Photo")} />
+        <img
+          :if={item.kind == "image" or item.thumbnail_key}
+          src={thumb_src(item)}
+          loading="lazy"
+          alt={item.filename || gettext("Photo")}
+        />
+        <%!-- A video with no poster yet (worker pending) gets a neutral tile,
+              never the raw video bytes piped into an <img>. --%>
+        <span :if={item.kind == "video" and is_nil(item.thumbnail_key)} class="ed-album__tile-fill" />
+        <span :if={item.kind == "video"} class="ed-album__play" aria-hidden="true">
+          <.icon name="hero-play-solid" class="size-6" />
+        </span>
       </a>
     </div>
     <.attachment_view :for={attachment <- @rest} attachment={attachment} />

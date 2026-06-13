@@ -1185,13 +1185,46 @@ defmodule Eden.Chat do
   message; every non-media file becomes **its own** message (a file never joins
   an album — #58 rule). The caption (`opts.body`) rides the album, or — when the
   selection is files only — the first file. Returns `{:ok, [message]}` (send
-  order) or `{:error, reason}` at the first failure. `sources` are maps with
-  `:path` and optional `:filename`.
+  order) or `{:error, reason}` — every source is classified and size-checked
+  **up front**, so a bad/oversized file fails the whole batch before anything is
+  stored or sent (no misleading partial send). `sources` are maps with `:path`
+  and optional `:filename`.
   """
   def create_attachments(%Scope{} = scope, conversation_id, sources, opts \\ %{}) do
-    {media, files} = Enum.split_with(sources, &media_source?/1)
-    body = Map.get(opts, :body, "")
-    send_attachment_steps(scope, conversation_id, attachment_steps(media, files, body))
+    with true <- member?(scope, conversation_id),
+         {:ok, classified} <- preflight(sources) do
+      {media, files} =
+        Enum.split_with(classified, fn {_source, kind} -> kind in ~w(image video) end)
+
+      steps = attachment_steps(sources_of(media), sources_of(files), Map.get(opts, :body, ""))
+      send_attachment_steps(scope, conversation_id, steps)
+    else
+      false -> {:error, :not_found}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp sources_of(classified), do: Enum.map(classified, &elem(&1, 0))
+
+  # Classify + size-check every source before any storage/DB write, so a bad
+  # file fails the batch atomically (the common failure modes — too-large, bad
+  # type — never produce a half-sent album). Server-side magic-byte
+  # classification; the client content-type is advisory. The kind is reused to
+  # split media (album) from files, so each source is classified once here.
+  defp preflight(sources) do
+    sources
+    |> Enum.reduce_while({:ok, []}, fn source, {:ok, acc} ->
+      with {:ok, kind, _type, _ext} <- classify(source.path, source[:filename]),
+           {:ok, _bytes} <- check_size(source.path, kind) do
+        {:cont, {:ok, [{source, kind} | acc]}}
+      else
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      error -> error
+    end
   end
 
   # Plan the messages: one album for media (caption attached), one message per
@@ -1215,15 +1248,6 @@ defmodule Eden.Chat do
     |> case do
       {:ok, messages} -> {:ok, Enum.reverse(messages)}
       error -> error
-    end
-  end
-
-  # Media (image/video) groups into an album; everything else sends standalone.
-  # Server-side magic-byte classification — the client content-type is advisory.
-  defp media_source?(source) do
-    case classify(source.path, source[:filename]) do
-      {:ok, kind, _type, _ext} -> kind in ~w(image video)
-      _ -> false
     end
   end
 

@@ -733,11 +733,28 @@
     aspect-ratio: 1;
     overflow: hidden;
   }
-  .ed-album__tile img {
+  .ed-album__tile {
+    position: relative;
+  }
+  .ed-album__tile img,
+  .ed-album__tile-fill {
     width: 100%;
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  .ed-album__tile-fill {
+    background: var(--ed-surface-2);
+  }
+  /* Play badge over a video tile in an album. */
+  .ed-album__play {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: oklch(0.99 0 0);
+    background: oklch(0 0 0 / 0.25);
+    text-shadow: 0 1px 3px oklch(0 0 0 / 0.6);
   }
 
   /* Attachment compose modal (#58): a Telegram-style overlay opened when files
