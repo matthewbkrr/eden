@@ -63,6 +63,20 @@ if config_env() == :prod do
   config :eden, Eden.Storage.Local,
     root: System.get_env("EDEN_UPLOADS_ROOT") || "/var/lib/eden/uploads"
 
+  # Object storage (#55): set EDEN_S3_BUCKET to swap the storage adapter to the
+  # S3-compatible one (AWS S3 / Cloudflare R2 / MinIO / B2). Without it, the Local
+  # adapter (above) keeps using EDEN_UPLOADS_ROOT. Callers never change.
+  if bucket = System.get_env("EDEN_S3_BUCKET") do
+    config :eden, Eden.Storage, adapter: Eden.Storage.S3
+
+    config :eden, Eden.Storage.S3,
+      bucket: bucket,
+      region: System.get_env("EDEN_S3_REGION") || "auto",
+      endpoint: System.fetch_env!("EDEN_S3_ENDPOINT"),
+      access_key_id: System.fetch_env!("EDEN_S3_ACCESS_KEY_ID"),
+      secret_access_key: System.fetch_env!("EDEN_S3_SECRET_ACCESS_KEY")
+  end
+
   config :eden, EdenWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
     http: [
