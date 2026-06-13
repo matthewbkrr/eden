@@ -1503,7 +1503,20 @@ defmodule Eden.Chat do
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
          :ok <- ensure_threaded(root.conversation_id) do
-      %Message{conversation_id: root.conversation_id, sender_id: user.id, root_id: root.id}
+      # A thread reply may quote another message in the same conversation (#71).
+      reply_to_id =
+        valid_reply_to_id(
+          attrs["reply_to_id"] || attrs[:reply_to_id],
+          root.conversation_id,
+          user.id
+        )
+
+      %Message{
+        conversation_id: root.conversation_id,
+        sender_id: user.id,
+        root_id: root.id,
+        reply_to_id: reply_to_id
+      }
       |> Message.changeset(attrs)
       |> Repo.insert()
       |> case do

@@ -84,8 +84,10 @@ defmodule EdenWeb.ChatLive do
         # set in Settings, read once here (a remount on navigation picks up changes).
         my_quick: Chat.quick_reactions(scope),
         # Quote-reply (#71): the message currently being replied to (or nil). Shown
-        # in the composer tray; its id rides the next send.
+        # in the composer tray; its id rides the next send. `thread_reply_to` is the
+        # same for the thread panel's own composer (a quote within the thread).
         reply_to: nil,
+        thread_reply_to: nil,
         # Knock window (#41): a private room you're not in, reached by link.
         knock_room: nil,
         knock_pending: false,
@@ -1058,6 +1060,20 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("cancel_reply", _params, socket), do: {:noreply, assign(socket, reply_to: nil)}
 
+  # Quote-reply from inside the thread panel: stages the target in the THREAD
+  # composer, so the reply posts into the thread (not the room).
+  def handle_event("reply_in_thread", %{"id" => id}, socket) do
+    case Chat.get_message(socket.assigns.current_scope, id) do
+      nil -> {:noreply, socket}
+      message -> {:noreply, assign(socket, thread_reply_to: message)}
+    end
+  end
+
+  def handle_event("reply_in_thread", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_thread_reply", _params, socket),
+    do: {:noreply, assign(socket, thread_reply_to: nil)}
+
   # Tap a rendered quote → scroll to + highlight the original (reuses the permalink
   # focus path; a no-op if it's paginated out of the stream).
   def handle_event("focus_original", %{"id" => id}, socket) do
@@ -1083,16 +1099,22 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, reply_composer: to_form(%{"body" => body}, as: "reply"))}
   end
 
-  def handle_event("send_reply", %{"reply" => %{"body" => body}}, socket) do
+  def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
     root = socket.assigns.thread_root
 
     if is_nil(root) or String.trim(body) == "" do
       {:noreply, socket}
     else
-      case Chat.create_reply(socket.assigns.current_scope, root.id, %{"body" => body}) do
+      attrs = %{"body" => body, "reply_to_id" => reply["reply_to_id"]}
+
+      case Chat.create_reply(socket.assigns.current_scope, root.id, attrs) do
         {:ok, _reply} ->
           # The reply itself arrives via the {:thread_reply} broadcast.
-          {:noreply, assign(socket, reply_composer: to_form(%{"body" => ""}, as: "reply"))}
+          {:noreply,
+           assign(socket,
+             reply_composer: to_form(%{"body" => ""}, as: "reply"),
+             thread_reply_to: nil
+           )}
 
         {:error, %Ecto.Changeset{}} ->
           {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
@@ -2217,12 +2239,30 @@ defmodule EdenWeb.ChatLive do
           id="reply-composer"
           phx-change="reply_changed"
           phx-submit="send_reply"
-          class="p-3 border-t shrink-0"
+          class="flex flex-col gap-2 p-3 border-t shrink-0"
           style="border-color: var(--ed-border);"
         >
+          <%!-- Quote-reply within the thread (#71). --%>
+          <div :if={@thread_reply_to} class="ed-reply-bar">
+            <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+            <div class="ed-reply-bar__body">
+              <span class="ed-reply-bar__name">{reply_author(@thread_reply_to)}</span>
+              <span class="ed-reply-bar__text">{reply_snippet(@thread_reply_to)}</span>
+            </div>
+            <input type="hidden" name="reply[reply_to_id]" value={@thread_reply_to.id} />
+            <button
+              type="button"
+              class="ed-btn--icon shrink-0"
+              phx-click="cancel_thread_reply"
+              aria-label={gettext("Cancel reply")}
+            >
+              <.icon name="hero-x-mark-micro" class="size-4" />
+            </button>
+          </div>
           <div class="flex items-center gap-2">
             <input
               type="text"
+              id="reply-body"
               name="reply[body]"
               value={@reply_composer[:body].value}
               class="ed-input flex-1"
@@ -2605,8 +2645,12 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("touchend", () => {
               cancel()
               if (swiping && dx <= -SWIPE && this.el.dataset.messageId) {
-                this.pushEvent("reply", { id: this.el.dataset.messageId })
-                const input = document.getElementById("composer-body")
+                // In the thread panel the row carries reply_in_thread, so a swipe
+                // there quote-replies INTO the thread, not the room.
+                const event = this.el.dataset.replyEvent || "reply"
+                this.pushEvent(event, { id: this.el.dataset.messageId })
+                const sel = event === "reply_in_thread" ? "#reply-body" : "#composer-body"
+                const input = document.querySelector(sel)
                 input && input.focus()
               }
               if (swiping) reset()
@@ -4137,6 +4181,14 @@ defmodule EdenWeb.ChatLive do
 
   defp convo_preview(_conversation), do: gettext("No messages yet")
 
+  # Quote-reply trigger (#71): inside the thread panel, target the thread composer
+  # (so the reply posts into the thread); elsewhere the room/DM composer.
+  defp reply_js(id, true),
+    do: JS.push("reply_in_thread", value: %{"id" => id}) |> JS.focus(to: "#reply-body")
+
+  defp reply_js(id, _not_in_thread),
+    do: JS.push("reply", value: %{"id" => id}) |> JS.focus(to: "#composer-body")
+
   # Quote-reply (#71): author + one-line preview of the quoted message, for the
   # composer tray and the rendered quote block.
   defp reply_author(%{sender: %{display_name: name}}) when is_binary(name), do: name
@@ -4324,6 +4376,7 @@ defmodule EdenWeb.ChatLive do
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
       data-client-id={@mine && @message.client_id}
       data-message-id={@menu && @message.id}
+      data-reply-event={(@in_thread && "reply_in_thread") || "reply"}
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
@@ -4404,15 +4457,14 @@ defmodule EdenWeb.ChatLive do
         >
           <.icon name="hero-chat-bubble-left-micro" class="size-4" />
         </button>
-        <%!-- Quote-reply (#71): quick arrow, left of the "⋯" (rooms). --%>
+        <%!-- Quote-reply (#71): quick arrow, left of the "⋯" (rooms); in-thread it
+              targets the thread composer. --%>
         <button
           type="button"
           class="ed-btn--icon"
           title={gettext("Reply")}
           aria-label={gettext("Reply")}
-          phx-click={
-            JS.push("reply", value: %{"id" => @message.id}) |> JS.focus(to: "#composer-body")
-          }
+          phx-click={reply_js(@message.id, @in_thread)}
         >
           <.icon name="hero-arrow-uturn-left-micro" class="size-4" />
         </button>
@@ -4569,12 +4621,13 @@ defmodule EdenWeb.ChatLive do
       </div>
       <div class="ed-menu__sep"></div>
       <%!-- Quote-reply (#71): in DMs and rooms; focuses the composer client-side.
-            Distinct from "Reply in thread" (rooms-only branch) below. --%>
+            Inside the thread panel it targets the thread composer, so the reply
+            stays in the thread. Distinct from "Reply in thread" (the branch). --%>
       <button
         type="button"
         class="ed-menu__item"
         role="menuitem"
-        phx-click={JS.push("reply", value: %{"id" => @message.id}) |> JS.focus(to: "#composer-body")}
+        phx-click={reply_js(@message.id, @in_thread)}
       >
         <.icon name="hero-arrow-uturn-left-micro" class="size-4" /> {gettext("Reply")}
       </button>
