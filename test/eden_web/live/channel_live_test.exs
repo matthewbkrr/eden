@@ -37,6 +37,18 @@ defmodule EdenWeb.ChannelModeTest do
       assert html =~ "Pick a room to start reading."
     end
 
+    test "a long channel description wraps instead of overflowing (#63)", ctx do
+      long = String.duplicate("флоыврлфыовфлор", 8)
+      {:ok, ch} = Channels.create_channel(scope(ctx.alice), %{"name" => "Wide", "about" => long})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/channels/#{ch.id}")
+
+      assert html =~ long
+      # The empty-state description column breaks long words (no h-overflow).
+      assert has_element?(view, ".max-w-sm.break-words")
+    end
+
     test "a non-member auto-joins the channel (general) — channels are never closed (#41)", ctx do
       dave = user_fixture(%{username: "dave"})
       conn = log_in_user(ctx.conn, dave)
