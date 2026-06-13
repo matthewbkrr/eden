@@ -299,6 +299,43 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "quote-reply inside a thread (#71)" do
+    setup [:setup_channel]
+
+    test "a quote-reply from the thread panel posts INTO the thread, not the room", ctx do
+      {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "root"})
+      {:ok, reply} = Chat.create_reply(scope(ctx.bob), root.id, %{"body" => "first reply"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      {:ok, view, _html} =
+        live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/#{reply.id}")
+
+      assert has_element?(view, "#thread-#{reply.id}")
+
+      # Quote-reply the thread reply → the THREAD composer's tray appears.
+      render_hook(view, "reply_in_thread", %{"id" => to_string(reply.id)})
+      assert has_element?(view, "#reply-composer .ed-reply-bar__name", "Bob")
+
+      # Send via the thread composer carrying the quote.
+      view
+      |> form("#reply-composer",
+        reply: %{body: "quoting in thread", reply_to_id: to_string(reply.id)}
+      )
+      |> render_submit()
+
+      {:ok, _root, replies} = Chat.list_thread(scope(ctx.alice), root.id)
+      new = Enum.find(replies, &(&1.body == "quoting in thread"))
+
+      assert new, "the reply landed in the thread"
+      assert new.root_id == root.id, "it's a thread reply, not a room message"
+      assert new.reply_to_id == reply.id, "it quotes the target"
+      # Rendered in the thread panel, never the main room stream.
+      assert has_element?(view, "#thread-#{new.id}")
+      refute has_element?(view, "#messages-#{new.id}")
+    end
+  end
+
   describe "reactions in rooms + threads (#67)" do
     setup [:setup_channel]
 

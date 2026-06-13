@@ -127,6 +127,42 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ~s(.ed-react[phx-value-emoji="👍"]))
     end
 
+    test "quote-reply: tray stages the target, send renders the quote (#71)", ctx do
+      {:ok, target} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "the original"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # The menu offers a Reply action.
+      assert has_element?(view, "#menu-#{target.id}", "Reply")
+
+      # Staging a reply shows the composer tray with the target's author + snippet.
+      render_hook(view, "reply", %{"id" => to_string(target.id)})
+      assert has_element?(view, ~s(.ed-reply-bar__name), "Bob")
+      assert render(view) =~ "the original"
+
+      # Cancel clears the tray.
+      render_hook(view, "cancel_reply", %{})
+      refute has_element?(view, ".ed-reply-bar")
+
+      # Re-stage and send → the new message renders a quote of the original.
+      render_hook(view, "reply", %{"id" => to_string(target.id)})
+
+      view
+      |> form("form[phx-submit=send]",
+        message: %{body: "my answer", reply_to_id: to_string(target.id)}
+      )
+      |> render_submit()
+
+      assert has_element?(view, ".ed-quote__name", "Bob")
+      assert render(view) =~ "my answer"
+      # Tray cleared after sending.
+      refute has_element?(view, ".ed-reply-bar")
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})

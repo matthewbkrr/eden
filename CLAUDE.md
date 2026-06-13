@@ -57,7 +57,15 @@ design — built incrementally as features land.)
     soft-deletes via `deleted_at`, removing the message for everyone, and cleans up
     every attachment's unshared blobs; **forward** copies it into another
     conversation (re-referencing the same blobs in order, `forwarded_from_id` for
-    attribution). A `/app/c/:id/m/:message_id` permalink deep-links to a message.
+    attribution); **quote-reply** (`#71`, `reply_to_id` self-ref — distinct from
+    threads' `root_id`) renders a tappable quote of the referenced message above
+    the body (DMs + rooms), composed via swipe-left, the room toolbar's reply
+    arrow, or the context-menu "Reply"; `reply_to_id` is set by the context only
+    after validating the target is in the same conversation and visible to the
+    sender (`valid_reply_to_id/3`), `nilify_all` on hard delete, "Message deleted"
+    on a tombstone; a reply defers from the optimistic `SendQueue` hook to the
+    server path so the quote rides the send. A `/app/c/:id/m/:message_id` permalink
+    deep-links to a message.
     Bodies render a **safe markdown subset** (`EdenWeb.Markup` — #60): leading
     `#`/`##`/`###` headings, inline `**bold**`/`*italic*`/`` `code` `` and bare-URL
     links, emitted as escaped iodata (whitelist tags only, no HTML-injection path);
