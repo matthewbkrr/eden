@@ -2408,9 +2408,18 @@ defmodule EdenWeb.ChatLive do
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
           },
-          updated() { if (this.pinned) this.toBottom() },
+          // A new message while pinned: glide the list up to make room so it
+          // eases in from the bottom instead of snapping (the "jerk"). Mount
+          // stays instant — no page-load scroll choreography.
+          updated() { if (this.pinned) this.toBottom(true) },
           destroyed() { this.riser && this.riser.disconnect() },
-          toBottom() { this.el.scrollTop = this.el.scrollHeight }
+          toBottom(smooth) {
+            const motion =
+              smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                ? "smooth"
+                : "auto"
+            this.el.scrollTo({ top: this.el.scrollHeight, behavior: motion })
+          }
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ContextMenu">
@@ -2714,7 +2723,15 @@ defmodule EdenWeb.ChatLive do
             // observer skips it and it swaps in silently (no second animation).
             row.classList.add("ed-msg--enter")
             setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
-            if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight
+            // Glide the list up to reveal the new row (it eases in from the
+            // bottom) instead of snapping — no jerk. Instant under reduced motion.
+            if (this.scroller) {
+              const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              this.scroller.scrollTo({
+                top: this.scroller.scrollHeight,
+                behavior: smooth ? "smooth" : "auto",
+              })
+            }
           },
           // The last flat row to compare against for the compact rule: a queued
           // optimistic node wins (rapid double-send), else the last streamed
