@@ -62,7 +62,15 @@ defmodule EdenWeb.ShellComponents do
             aria-label={rail_label(channel)}
             aria-haspopup="menu"
           >
-            {channel_initials(channel.name)}
+            <%!-- Channel avatar (#70) when set, initials fallback otherwise. The
+                  ?v= token cache-busts per avatar. --%>
+            <img
+              :if={channel.avatar_key}
+              src={channel_avatar_src(channel)}
+              alt=""
+              class="ed-rail__img"
+            />
+            <span :if={!channel.avatar_key}>{channel_initials(channel.name)}</span>
           </.link>
           <span
             :if={channel.unread_count > 0}
@@ -128,6 +136,12 @@ defmodule EdenWeb.ShellComponents do
   attr :submit, :string, required: true
   attr :close, :string, required: true
   attr :submit_label, :string, required: true
+  # Edit mode only (#70): the existing channel + its avatar upload + a phx-change
+  # event (live uploads need one to register the selected entry). nil on create
+  # (the channel doesn't exist yet, so there's nothing to attach an avatar to).
+  attr :channel, :map, default: nil
+  attr :upload, :any, default: nil
+  attr :change, :string, default: nil
 
   @doc "Shared channel form modal — used for both create (rail) and rename (channel menu)."
   def channel_form_modal(assigns) do
@@ -157,7 +171,41 @@ defmodule EdenWeb.ShellComponents do
             </button>
           </div>
 
-          <.form for={@form} id={"#{@id}-form"} phx-submit={@submit} class="space-y-4">
+          <.form
+            for={@form}
+            id={"#{@id}-form"}
+            phx-change={@change}
+            phx-submit={@submit}
+            class="space-y-4"
+          >
+            <%!-- Channel avatar (#70): edit mode only; the upload rides the save. --%>
+            <div :if={@channel} class="flex items-center gap-4">
+              <% entry = @upload && List.first(@upload.entries) %>
+              <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
+                <.live_img_preview :if={entry} entry={entry} />
+                <img
+                  :if={!entry && @channel.avatar_key}
+                  src={channel_avatar_src(@channel)}
+                  alt=""
+                />
+                <span :if={!entry && !@channel.avatar_key}>{channel_initials(@channel.name)}</span>
+              </span>
+              <div class="flex items-center gap-2">
+                <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
+                  {gettext("Upload photo")}
+                  <.live_file_input :if={@upload} upload={@upload} class="sr-only" />
+                </label>
+                <button
+                  :if={@channel.avatar_key && @upload && Enum.empty?(@upload.entries)}
+                  type="button"
+                  phx-click="remove_channel_avatar"
+                  class="ed-btn ed-btn--ghost text-sm"
+                  style="color: var(--ed-danger);"
+                >
+                  {gettext("Remove")}
+                </button>
+              </div>
+            </div>
             <.ed_field
               field={@form[:name]}
               label={gettext("Channel name")}
@@ -177,6 +225,12 @@ defmodule EdenWeb.ShellComponents do
     </div>
     """
   end
+
+  @doc "Cache-busted URL for a channel's avatar (#70); nil when it has none."
+  def channel_avatar_src(%{id: id, avatar_key: key}) when is_binary(key),
+    do: ~p"/channels/#{id}/avatar?v=#{:erlang.phash2(key)}"
+
+  def channel_avatar_src(_channel), do: nil
 
   @doc "Up to two initials for a channel's rail icon."
   def channel_initials(name) do
