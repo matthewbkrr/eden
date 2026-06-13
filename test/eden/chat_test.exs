@@ -5,6 +5,7 @@ defmodule Eden.ChatTest do
   import Eden.AccountsFixtures
 
   alias Eden.Accounts.Scope
+  alias Eden.Channels
   alias Eden.Chat
 
   alias Eden.Chat.{
@@ -467,10 +468,13 @@ defmodule Eden.ChatTest do
   end
 
   describe "threads" do
+    # Threads are a corporate-room feature (#26): the root lives in a room, not a DM.
     setup %{alice: alice, bob: bob} do
-      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
-      {:ok, root} = Chat.create_message(scope(alice), conv.id, %{"body" => "root post"})
-      %{conv: conv, root: root}
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "talk"})
+      :ok = Chat.join_room(room.id, bob.id)
+      {:ok, root} = Chat.create_message(scope(alice), room.id, %{"body" => "root post"})
+      %{conv: room, root: root}
     end
 
     test "create_reply bumps counters, broadcasts, and stays out of the main stream", %{
@@ -488,12 +492,11 @@ defmodule Eden.ChatTest do
       assert fresh_root.reply_count == 1
       assert fresh_root.last_reply_at == reply.inserted_at
 
-      # Main stream, previews, and unread badges ignore replies.
+      # Main stream and unread badges ignore replies.
       {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
       refute Enum.any?(messages, &(&1.id == reply.id))
-      [sidebar] = Chat.list_conversations(scope(alice))
-      assert sidebar.last_message_body == "root post"
-      assert sidebar.unread_count == 0
+      # alice authored the root; bob's reply is excluded from unread counts.
+      assert Chat.channel_unread_counts(scope(alice)) == %{}
     end
 
     test "flat rule: a reply can't root another thread; tombstoned roots reject replies", %{

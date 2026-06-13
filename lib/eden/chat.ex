@@ -1448,7 +1448,8 @@ defmodule Eden.Chat do
   def create_reply(%Scope{user: user} = scope, root_id, attrs) do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
-         :ok <- ensure_root(root) do
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id) do
       %Message{conversation_id: root.conversation_id, sender_id: user.id, root_id: root.id}
       |> Message.changeset(attrs)
       |> Repo.insert()
@@ -1466,7 +1467,8 @@ defmodule Eden.Chat do
   def list_thread(%Scope{user: user} = scope, root_id) do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
-         :ok <- ensure_root(root) do
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id) do
       replies =
         Message
         |> where([m], m.root_id == ^root.id and is_nil(m.deleted_at))
@@ -1536,6 +1538,13 @@ defmodule Eden.Chat do
 
   defp ensure_root(%Message{root_id: nil}), do: :ok
   defp ensure_root(_reply), do: {:error, :not_a_root}
+
+  # Threads live only in channel rooms (#26), never in DMs/groups — the personal
+  # messenger has no thread UI. A DM root is reported as not-found so a crafted
+  # reply/open can't create or surface a thread there.
+  defp ensure_threaded(conversation_id) do
+    if room?(conversation_id), do: :ok, else: {:error, :not_found}
+  end
 
   # Counter bump + fanout. The root is re-read fresh so every session renders
   # the same footer (count, last reply time). A 0-row bump means the root was

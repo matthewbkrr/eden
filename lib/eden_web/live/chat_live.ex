@@ -3967,6 +3967,7 @@ defmodule EdenWeb.ChatLive do
         conversation_id={@conversation_id}
         mine={@mine}
         in_thread={@in_thread}
+        threads
       />
     </div>
     """
@@ -4020,16 +4021,8 @@ defmodule EdenWeb.ChatLive do
             </span>
           </span>
         </span>
-        <button
-          :if={@message.reply_count > 0}
-          type="button"
-          class="ed-bubble__thread"
-          phx-click="open_thread"
-          phx-value-id={@message.id}
-        >
-          <.icon name="hero-chat-bubble-left-micro" class="size-3.5" />
-          {ngettext("%{count} reply", "%{count} replies", @message.reply_count)}
-        </button>
+        <%!-- No thread affordance in the personal messenger (#26): threads are
+              a corporate-room feature only. --%>
         <.message_menu
           message={@message}
           conversation_id={@conversation_id}
@@ -4044,6 +4037,8 @@ defmodule EdenWeb.ChatLive do
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
   attr :in_thread, :boolean, default: false
+  # Threads are a corporate-room feature only (#26) — off in the DM/group menu.
+  attr :threads, :boolean, default: false
 
   # The message context menu — opened by right-click / long-press on the bubble
   # (the `.ContextMenu` hook). Copy actions run client-side; forward/delete dispatch
@@ -4053,7 +4048,7 @@ defmodule EdenWeb.ChatLive do
     ~H"""
     <div class="ed-menu" id={"menu-#{@message.id}"} data-menu role="menu" hidden>
       <button
-        :if={not @in_thread and is_nil(@message.root_id)}
+        :if={@threads and not @in_thread and is_nil(@message.root_id)}
         type="button"
         class="ed-menu__item"
         role="menuitem"

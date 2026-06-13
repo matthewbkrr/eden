@@ -513,93 +513,23 @@ defmodule EdenWeb.ChatLiveTest do
   describe "threads" do
     setup [:setup_conversation]
 
-    setup %{alice: alice, conversation: conversation} do
+    test "the DM messenger has no thread affordance (#26 — rooms only)", ctx do
       {:ok, root} =
-        Chat.create_message(Scope.for_user(alice), conversation.id, %{"body" => "thread root"})
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "root"})
 
-      %{root: root}
-    end
-
-    test "opening a thread from the bubble pill and replying through the panel", ctx do
-      {:ok, _} =
-        Chat.create_reply(Scope.for_user(ctx.bob), ctx.root.id, %{"body" => "first reply"})
+      # Replies are refused server-side in a DM/group conversation.
+      assert {:error, :not_found} =
+               Chat.create_reply(Scope.for_user(ctx.bob), root.id, %{"body" => "nope"})
 
       conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      # DM bubbles get a reply pill; clicking opens the RHS panel.
-      assert has_element?(view, ".ed-bubble__thread")
-      view |> element(".ed-bubble__thread") |> render_click()
-      assert has_element?(view, ".ed-thread")
-      assert render(view) =~ "first reply"
-
-      view
-      |> form("#reply-composer", %{"reply" => %{"body" => "from the panel"}})
-      |> render_submit()
-
-      html = render(view)
-      assert html =~ "from the panel"
-      assert html =~ "2 replies"
-    end
-
-    test "a live reply lands in the open panel and updates the pill", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      render_click(view, "open_thread", %{"id" => to_string(ctx.root.id)})
-
-      {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), ctx.root.id, %{"body" => "live one"})
-
-      html = render(view)
-      assert html =~ "live one"
-      assert html =~ "1 reply"
-    end
-
-    test "a reply permalink opens the thread panel", ctx do
-      {:ok, reply} =
-        Chat.create_reply(Scope.for_user(ctx.bob), ctx.root.id, %{"body" => "deep linked"})
-
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}/m/#{reply.id}")
-
-      assert has_element?(view, ".ed-thread")
-      assert render(view) =~ "deep linked"
-    end
-
-    test "jump-to-message from the thread panel closes it and focuses the root", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      render_click(view, "open_thread", %{"id" => to_string(ctx.root.id)})
-      assert has_element?(view, ".ed-thread")
-
-      # The "Go to message" affordance is present and closes the panel.
-      assert has_element?(view, ~s(button[phx-click="jump_to_root"]))
-      render_click(view, "jump_to_root", %{})
+      refute html =~ "ed-bubble__thread"
+      refute html =~ "ed-thread-footer"
+      refute has_element?(view, ~s(button[phx-click="open_thread"]))
+      # Opening a thread on a DM root is rejected (no panel).
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
       refute has_element?(view, ".ed-thread")
-    end
-
-    test "a deleted (replyless) root closes its open panel in other sessions", ctx do
-      conn = log_in_user(ctx.conn, ctx.bob)
-      {:ok, bob_view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      # Bob opens an (empty) thread on alice's root; alice deletes the root.
-      render_click(bob_view, "open_thread", %{"id" => to_string(ctx.root.id)})
-      assert has_element?(bob_view, ".ed-thread")
-
-      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), ctx.root.id)
-
-      refute has_element?(bob_view, ".ed-thread")
-    end
-
-    test "deleting a root with replies is refused (the root survives)", ctx do
-      {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), ctx.root.id, %{"body" => "anchor"})
-
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      render_click(view, "delete_for_both", %{"id" => to_string(ctx.root.id)})
-      assert render(view) =~ "thread root"
     end
 
     test "rooms render the flat Mattermost layout with compact runs and a facepile", ctx do
