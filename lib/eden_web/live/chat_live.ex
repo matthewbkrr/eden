@@ -295,7 +295,10 @@ defmodule EdenWeb.ChatLive do
       invites_open: false,
       new_invite_url: nil,
       room_add: nil,
-      room_invite_url: nil
+      room_invite_url: nil,
+      # A staged quote-reply (#71) belonged to a room — drop it on the way out.
+      reply_to: nil,
+      thread_reply_to: nil
     )
   end
 
@@ -1024,7 +1027,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_thread", _params, socket) do
-    {:noreply, assign(socket, thread_root: nil)}
+    {:noreply, assign(socket, thread_root: nil, thread_reply_to: nil)}
   end
 
   def handle_event("react", %{"id" => id, "emoji" => emoji}, socket)
@@ -1074,10 +1077,11 @@ defmodule EdenWeb.ChatLive do
   def handle_event("cancel_thread_reply", _params, socket),
     do: {:noreply, assign(socket, thread_reply_to: nil)}
 
-  # Tap a rendered quote → scroll to + highlight the original (reuses the permalink
-  # focus path; a no-op if it's paginated out of the stream).
+  # Tap a rendered quote → scroll to + highlight the original. Reuses the permalink
+  # resolver so a quoted thread reply (dom id `thread-<id>`, not `messages-<id>`)
+  # is found and its thread opened, instead of flashing "message unavailable".
   def handle_event("focus_original", %{"id" => id}, socket) do
-    {:noreply, push_event(socket, "focus_message", %{domId: "messages-#{id}"})}
+    {:noreply, focus_message_target(socket, id)}
   end
 
   # Jump to the thread's root in the main stream: close the panel (on mobile it
@@ -5365,6 +5369,9 @@ defmodule EdenWeb.ChatLive do
       has_more: length(messages) == @page,
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       thread_root: nil,
+      # Drop any staged quote-reply (#71) — its target is the old conversation's.
+      reply_to: nil,
+      thread_reply_to: nil,
       last_flat: last_flat,
       compacts: Map.new(messages, &{&1.id, &1.compact}),
       thread_participants: facepiles(scope, conversation, messages),

@@ -334,6 +334,21 @@ defmodule EdenWeb.ChannelModeTest do
       assert has_element?(view, "#thread-#{new.id}")
       refute has_element?(view, "#messages-#{new.id}")
     end
+
+    test "tapping a quote that targets a thread reply opens the thread, not 'unavailable'", ctx do
+      {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "root"})
+      {:ok, reply} = Chat.create_reply(scope(ctx.bob), root.id, %{"body" => "a reply"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+      refute has_element?(view, ".ed-thread")
+
+      # focus_original resolves the thread reply's home and opens its thread
+      # (the old hard-coded messages-<id> path would flash "unavailable").
+      render_hook(view, "focus_original", %{"id" => to_string(reply.id)})
+      assert has_element?(view, ".ed-thread")
+      assert has_element?(view, "#thread-#{reply.id}")
+    end
   end
 
   describe "reactions in rooms + threads (#67)" do

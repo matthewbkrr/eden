@@ -1203,14 +1203,17 @@ defmodule Eden.Chat do
   end
 
   @doc """
-  Loads a message the scoped user can address (a member of its conversation),
-  preloaded with its sender + attachments — for the quote-reply composer tray
-  (#71). Returns the message or `nil`.
+  Loads a message the scoped user may quote — a member of its conversation, and
+  the message is visible to them (not tombstoned, not hidden-for-them, same as
+  the send-path `valid_reply_to_id/3`) — preloaded with its sender + attachments
+  for the quote-reply composer tray (#71). Returns the message or `nil`.
   """
-  def get_message(%Scope{} = scope, message_id) do
-    case fetch_message(scope, message_id) do
-      {:ok, message} -> Repo.preload(message, [:sender, :attachments])
-      {:error, _} -> nil
+  def get_message(%Scope{user: user} = scope, message_id) do
+    with {:ok, message} <- fetch_message(scope, message_id),
+         true <- reply_target_visible?(message.id, message.conversation_id, user.id) do
+      Repo.preload(message, [:sender, :attachments])
+    else
+      _ -> nil
     end
   end
 

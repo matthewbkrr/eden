@@ -163,6 +163,43 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-reply-bar")
     end
 
+    test "a quote whose target was deleted renders 'Message deleted' (#71)", ctx do
+      {:ok, target} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "doomed"})
+
+      {:ok, _reply} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "re",
+          "reply_to_id" => to_string(target.id)
+        })
+
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), target.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ "Message deleted"
+      assert html =~ ~s(class="ed-quote)
+    end
+
+    test "switching conversation clears a staged quote-reply (#71)", ctx do
+      {:ok, target} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
+
+      carol = user_fixture(%{username: "carol_sw", display_name: "Carol"})
+      {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "reply", %{"id" => to_string(target.id)})
+      assert has_element?(view, ".ed-reply-bar")
+
+      # Switch conversations → the staged reply (its target is the old chat) drops.
+      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+      refute has_element?(view, ".ed-reply-bar")
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
