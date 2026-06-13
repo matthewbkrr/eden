@@ -2001,7 +2001,7 @@ defmodule EdenWeb.ChatLive do
                 {gettext("Request sent.")}
               </p>
             </div>
-            <div :if={@channel && is_nil(@knock_room)} class="space-y-2 max-w-sm">
+            <div :if={@channel && is_nil(@knock_room)} class="space-y-2 max-w-sm break-words">
               <p style="font-weight:600;">{@channel.name}</p>
               <p :if={@channel.about} style="color: var(--ed-muted); font-size:0.875rem;">
                 {@channel.about}
