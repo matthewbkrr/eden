@@ -7,6 +7,8 @@ defmodule EdenWeb.ChatLive do
   """
   use EdenWeb, :live_view
 
+  require Logger
+
   on_mount EdenWeb.RailHook
 
   import EdenWeb.ShellComponents
@@ -75,6 +77,12 @@ defmodule EdenWeb.ChatLive do
         reply_composer: to_form(%{"body" => ""}, as: "reply"),
         thread_participants: %{},
         last_flat: nil,
+        # Per-id compact flag, so re-streaming a row (reaction / thumbnail) keeps
+        # the flat layout instead of re-showing the avatar/name (#67).
+        compacts: %{},
+        # The viewer's personal quick-react row (#67), shown in every message menu;
+        # set in Settings, read once here (a remount on navigation picks up changes).
+        my_quick: Chat.quick_reactions(scope),
         # Knock window (#41): a private room you're not in, reached by link.
         knock_room: nil,
         knock_pending: false,
@@ -348,7 +356,13 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          socket
          |> stream(:messages, older, at: 0)
-         |> assign(has_more: length(older) == @page, oldest_id: hd(older).id)}
+         |> assign(
+           has_more: length(older) == @page,
+           oldest_id: hd(older).id,
+           # Record their compact flag too, so a later reaction/thumbnail re-stream
+           # restores it instead of falling back to the broadcast struct's default.
+           compacts: Map.merge(socket.assigns.compacts, Map.new(older, &{&1.id, &1.compact}))
+         )}
 
       _ ->
         {:noreply, assign(socket, has_more: false)}
@@ -1007,6 +1021,26 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, thread_root: nil)}
   end
 
+  def handle_event("react", %{"id" => id, "emoji" => emoji}, socket)
+      when is_binary(emoji) do
+    # The toggle broadcasts {:reaction_changed, message}; our own session
+    # re-renders the chips from that, like everyone else's.
+    case Chat.toggle_reaction(socket.assigns.current_scope, id, emoji) do
+      {:ok, _message} ->
+        {:noreply, socket}
+
+      {:error, reason} ->
+        # A rejected toggle (gone/not a member/non-allowed emoji/add-add race) is a
+        # no-op for the UI; log for diagnosis rather than failing silently.
+        Logger.debug("react rejected: #{inspect(reason)} (message #{inspect(id)})")
+        {:noreply, socket}
+    end
+  end
+
+  # A malformed/hostile payload (no emoji, or a non-string emoji) — ignore rather
+  # than crash the LiveView on this client-reachable event.
+  def handle_event("react", _params, socket), do: {:noreply, socket}
+
   # Jump to the thread's root in the main stream: close the panel (on mobile it
   # covers the stream) and focus-highlight the root, reusing the permalink path.
   def handle_event("jump_to_root", _params, socket) do
@@ -1120,7 +1154,10 @@ defmodule EdenWeb.ChatLive do
           {message, socket}
       end
 
-    {:noreply, stream_insert(socket, :messages, message)}
+    {:noreply,
+     socket
+     |> assign(compacts: Map.put(socket.assigns.compacts, message.id, message.compact))
+     |> stream_insert(:messages, message)}
   end
 
   # A reply landed in a thread of the open conversation: refresh the root's
@@ -1200,7 +1237,19 @@ defmodule EdenWeb.ChatLive do
     selected = socket.assigns.selected
 
     if selected && selected.id == message.conversation_id do
-      {:noreply, stream_insert(socket, :messages, message)}
+      {:noreply, stream_insert(socket, :messages, restore_compact(socket, message))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # A reaction was toggled (anyone, this conversation): re-render the message's
+  # chips, restoring its compact flag so the flat row doesn't sprout an avatar.
+  def handle_info({:reaction_changed, message}, socket) do
+    selected = socket.assigns.selected
+
+    if selected && selected.id == message.conversation_id do
+      {:noreply, apply_reaction_change(socket, message, socket.assigns.thread_root)}
     else
       {:noreply, socket}
     end
@@ -1909,6 +1958,8 @@ defmodule EdenWeb.ChatLive do
                     message={message}
                     conversation_id={@selected.id}
                     mine={message.sender_id == @current_scope.user.id}
+                    me={@current_scope.user.id}
+                    quick={@my_quick}
                     participants={Map.get(@thread_participants, message.id, [])}
                     admin={@channel && @channel.role in ~w(owner admin)}
                   />
@@ -1918,6 +1969,8 @@ defmodule EdenWeb.ChatLive do
                     message={message}
                     conversation_id={@selected.id}
                     mine={message.sender_id == @current_scope.user.id}
+                    me={@current_scope.user.id}
+                    quick={@my_quick}
                     group={@selected.is_group}
                     read={read?(message, @other_read_at)}
                   />
@@ -2096,6 +2149,7 @@ defmodule EdenWeb.ChatLive do
             message={%{@thread_root | compact: false}}
             conversation_id={@selected.id}
             mine={@thread_root.sender_id == @current_scope.user.id}
+            me={@current_scope.user.id}
             menu={false}
             in_thread
           />
@@ -2109,6 +2163,8 @@ defmodule EdenWeb.ChatLive do
               message={reply}
               conversation_id={@selected.id}
               mine={reply.sender_id == @current_scope.user.id}
+              me={@current_scope.user.id}
+              quick={@my_quick}
               in_thread
             />
           </div>
@@ -2463,8 +2519,10 @@ defmodule EdenWeb.ChatLive do
           mounted() {
             this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }
             this.onKey = (e) => this.onKeydown(e)
-            // Capture phase so a scroll in ANY ancestor container closes the menu.
-            this.onScroll = () => this.close()
+            // Capture phase so a scroll in ANY ancestor container closes the menu —
+            // but NOT the menu's own scrollable emoji grid (#67), which would slam
+            // the menu shut the moment you tried to browse the full picker.
+            this.onScroll = (e) => { if (!(this.menu && this.menu.contains(e.target))) this.close() }
             this.wire()
 
             // Desktop: right-click the host. A keyboard context-menu (Shift+F10 /
@@ -2497,7 +2555,20 @@ defmodule EdenWeb.ChatLive do
           // and restore the open state the server render doesn't know about.
           updated() {
             this.wire()
-            if (active === this) { this.menu.hidden = false; this.position(this.x, this.y) }
+            if (active === this) {
+              this.menu.hidden = false
+              this.restoreGrid()
+              this.position(this.x, this.y)
+            }
+          },
+          // Re-apply the reaction grid's expanded state after a morph: a
+          // re-render (e.g. someone else reacts to this message) resets it to the
+          // server default (collapsed). No-ops on menus without a grid.
+          restoreGrid() {
+            const grid = this.menu.querySelector("[data-react-grid]")
+            const exp = this.menu.querySelector("[data-react-expand]")
+            if (grid) grid.hidden = !this.gridOpen
+            if (exp) exp.setAttribute("aria-expanded", String(!!this.gridOpen))
           },
           destroyed() { this.close() },
           // Bind the menu node + its delegated click handler. Idempotent: re-runs on
@@ -2530,11 +2601,26 @@ defmodule EdenWeb.ChatLive do
             }
           },
           onItem(e) {
+            // The reaction row's "more" chevron expands the full emoji grid in
+            // place (#67) — keep the menu open and re-clamp to the viewport.
+            const expand = e.target.closest("[data-react-expand]")
+            if (expand) {
+              e.preventDefault()
+              const grid = this.menu.querySelector("[data-react-grid]")
+              if (grid) {
+                this.gridOpen = grid.hidden
+                grid.hidden = !this.gridOpen
+                expand.setAttribute("aria-expanded", String(this.gridOpen))
+                this.position(this.x, this.y)
+              }
+              return
+            }
             const ct = e.target.closest("[data-copy-text]")
             const cl = e.target.closest("[data-copy-link]")
             if (ct) this.copy(ct.dataset.text, "text")
             else if (cl) this.copy(cl.dataset.link, "link")
-            // Forward/delete dispatch to the server; either way the menu closes.
+            // A reaction (phx-click="react") or forward/delete dispatches to the
+            // server; either way the menu closes.
             if (e.target.closest("button")) this.close()
           },
           onKeydown(e) {
@@ -2554,6 +2640,8 @@ defmodule EdenWeb.ChatLive do
             if (active && active !== this) active.close()
             active = this
             this.x = x; this.y = y
+            // Every open starts with the reaction grid collapsed (quick row only).
+            this.gridOpen = false
             // Remember a focused trigger (keyboard open) to restore focus on Escape.
             this.opener = this.el.contains(document.activeElement) ? document.activeElement : null
             this.menu.hidden = false
@@ -3997,10 +4085,69 @@ defmodule EdenWeb.ChatLive do
     ~w(😀 😅 😂 🙂 😉 😍 😎 🤔 😴 😢 😭 😡 👍 👎 👌 🙏 👏 🙌 💪 🔥 ✨ 🎉 ❤️ 🧡 💛 💚 💙 💜 ✅ ❌ ⚡ 💡 📌 📎 🚀 👀 🤝 🎶)
   end
 
+  # The full reaction set the "more" chevron expands to — from the context so the
+  # picker can never offer an emoji the changeset would reject. The quick row is
+  # the viewer's personal set, threaded in via the `quick` attr (see `@my_quick`).
+  defp reaction_set, do: Chat.allowed_reactions()
+
+  # The set of emoji the current viewer has reacted with on this message — used to
+  # mark the matching menu buttons active. Falls back to [] when reactions aren't
+  # loaded (defensive) or there's no viewer id.
+  defp mine_emoji(%{reactions: reactions}, me) when is_list(reactions) and not is_nil(me),
+    do: for(r <- reactions, r.user_id == me, do: r.emoji)
+
+  defp mine_emoji(_message, _me), do: []
+
+  attr :message, :map, required: true
+  attr :me, :any, required: true
+
+  # Reaction chips under a message: one per emoji with its count; the viewer's
+  # own reactions are highlighted (aria-pressed) and clicking toggles them.
+  # Aggregated here so each viewer computes "mine" from their own id.
+  defp reactions(assigns) do
+    rows = if is_list(assigns.message.reactions), do: assigns.message.reactions, else: []
+
+    chips =
+      rows
+      |> Enum.group_by(& &1.emoji)
+      |> Enum.map(fn {emoji, rs} ->
+        {emoji, length(rs), Enum.any?(rs, &(&1.user_id == assigns.me))}
+      end)
+      # Most-reacted first; emoji as a stable tiebreaker so order doesn't jitter.
+      |> Enum.sort_by(fn {emoji, count, _mine} -> {-count, emoji} end)
+
+    assigns = assign(assigns, :chips, chips)
+
+    ~H"""
+    <div :if={@chips != []} class="ed-reactions">
+      <button
+        :for={{emoji, count, mine} <- @chips}
+        type="button"
+        class={["ed-react", mine && "ed-react--mine"]}
+        phx-click="react"
+        phx-value-id={@message.id}
+        phx-value-emoji={emoji}
+        aria-pressed={to_string(mine)}
+        aria-label={
+          ngettext("%{emoji}: %{count} reaction", "%{emoji}: %{count} reactions", count,
+            emoji: emoji,
+            count: count
+          )
+        }
+      >
+        <span class="ed-react__emoji" aria-hidden="true">{emoji}</span>
+        <span class="ed-react__count" aria-hidden="true">{count}</span>
+      </button>
+    </div>
+    """
+  end
+
   attr :id, :string, required: true
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
+  attr :me, :any, default: nil
+  attr :quick, :list, default: []
   attr :participants, :list, default: []
   attr :in_thread, :boolean, default: false
   attr :menu, :boolean, default: true
@@ -4124,6 +4271,7 @@ defmodule EdenWeb.ChatLive do
             <.local_time at={@message.last_reply_at} />
           </span>
         </button>
+        <.reactions message={@message} me={@me} />
       </div>
       <div :if={@menu} class="ed-flat__actions">
         <button
@@ -4152,6 +4300,8 @@ defmodule EdenWeb.ChatLive do
         message={@message}
         conversation_id={@conversation_id}
         mine={@mine}
+        me={@me}
+        quick={@quick}
         in_thread={@in_thread}
         threads
       />
@@ -4163,6 +4313,8 @@ defmodule EdenWeb.ChatLive do
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
+  attr :me, :any, default: nil
+  attr :quick, :list, default: []
   attr :group, :boolean, required: true
   attr :read, :boolean, required: true
 
@@ -4211,12 +4363,15 @@ defmodule EdenWeb.ChatLive do
             </span>
           </span>
         </span>
+        <.reactions message={@message} me={@me} />
         <%!-- No thread affordance in the personal messenger (#26): threads are
               a corporate-room feature only. --%>
         <.message_menu
           message={@message}
           conversation_id={@conversation_id}
           mine={@mine}
+          me={@me}
+          quick={@quick}
         />
       </div>
     </div>
@@ -4226,17 +4381,60 @@ defmodule EdenWeb.ChatLive do
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
   attr :mine, :boolean, required: true
+  attr :me, :any, default: nil
+  # The viewer's personal quick-react row (the top of the menu).
+  attr :quick, :list, default: []
   attr :in_thread, :boolean, default: false
   # Threads are a corporate-room feature only (#26) — off in the DM/group menu.
   attr :threads, :boolean, default: false
 
   # The message context menu — opened by right-click / long-press on the bubble
-  # (the `.ContextMenu` hook). Copy actions run client-side; forward/delete dispatch
-  # to the LiveView. The hook re-applies the open state after a re-render, so no
-  # phx-update="ignore" is needed and item labels stay free to change.
+  # (the `.ContextMenu` hook). It opens with a Telegram-style quick-react row on
+  # top (#67): tapping an emoji dispatches "react" and closes the menu, the "more"
+  # chevron expands the full emoji grid in place. Copy actions run client-side;
+  # forward/delete dispatch to the LiveView. The hook re-applies the open state
+  # after a re-render, so no phx-update="ignore" is needed and labels stay free.
   defp message_menu(assigns) do
+    assigns = assign(assigns, :mine_emoji, mine_emoji(assigns.message, assigns.me))
+
     ~H"""
     <div class="ed-menu" id={"menu-#{@message.id}"} data-menu role="menu" hidden>
+      <div class="ed-menu__reacts" role="group" aria-label={gettext("React")}>
+        <button
+          :for={e <- @quick}
+          type="button"
+          class={["ed-menu__react", e in @mine_emoji && "ed-menu__react--active"]}
+          phx-click="react"
+          phx-value-id={@message.id}
+          phx-value-emoji={e}
+          aria-pressed={to_string(e in @mine_emoji)}
+        >
+          {e}
+        </button>
+        <button
+          type="button"
+          class="ed-menu__react ed-menu__react-more"
+          data-react-expand
+          aria-label={gettext("More emoji")}
+          aria-expanded="false"
+        >
+          <.icon name="hero-chevron-down-micro" class="size-4" />
+        </button>
+      </div>
+      <div class="ed-menu__grid" data-react-grid hidden>
+        <button
+          :for={e <- reaction_set()}
+          type="button"
+          class={["ed-menu__react", e in @mine_emoji && "ed-menu__react--active"]}
+          phx-click="react"
+          phx-value-id={@message.id}
+          phx-value-emoji={e}
+          aria-pressed={to_string(e in @mine_emoji)}
+        >
+          {e}
+        </button>
+      </div>
+      <div class="ed-menu__sep"></div>
       <button
         :if={@threads and not @in_thread and is_nil(@message.root_id)}
         type="button"
@@ -4972,6 +5170,7 @@ defmodule EdenWeb.ChatLive do
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       thread_root: nil,
       last_flat: last_flat,
+      compacts: Map.new(messages, &{&1.id, &1.compact}),
       thread_participants: facepiles(scope, conversation, messages),
       # In-room search is per-room state — closed on every selection.
       room_search_open: false,
@@ -5156,6 +5355,33 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp compact?(_message, nil), do: false
+
+  # Re-streaming a row (reaction/thumbnail) loses the virtual compact flag (the
+  # broadcast struct doesn't carry it); restore it from what we recorded when the
+  # row was first streamed so the flat layout stays put.
+  defp restore_compact(socket, message),
+    do: %{message | compact: Map.get(socket.assigns.compacts, message.id, message.compact)}
+
+  # Apply a {:reaction_changed, message} to the right stream. A top-level message
+  # / thread root lives in the main stream (refresh the panel head too when this
+  # root's thread is open); a reply lives only in the thread panel — re-rendered
+  # only when its thread is the one open (matched by sharing root_id with the open
+  # root), never the main stream. Any other reply is a no-op for this view.
+  # A tombstone reaching here (a reaction that raced a delete-for-both) must not
+  # be re-inserted — {:message_deleted} already removed the row.
+  defp apply_reaction_change(socket, %{deleted_at: deleted} = _message, _root)
+       when not is_nil(deleted),
+       do: socket
+
+  defp apply_reaction_change(socket, %{root_id: nil} = message, root) do
+    socket = stream_insert(socket, :messages, restore_compact(socket, message))
+    if root && root.id == message.id, do: assign(socket, thread_root: message), else: socket
+  end
+
+  defp apply_reaction_change(socket, %{root_id: root_id} = message, %{id: root_id}),
+    do: stream_insert(socket, :thread, message)
+
+  defp apply_reaction_change(socket, _message, _root), do: socket
 
   defp facepiles(_scope, %{channel_id: nil}, _messages), do: %{}
 

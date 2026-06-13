@@ -544,6 +544,13 @@
     position: fixed;
     z-index: 60;
     min-width: 12rem;
+    /* Never exceed the viewport (the reaction grid can make the menu tall, #67):
+       cap to the screen and scroll inside, and contain the scroll so reaching an
+       edge never chains out to the message pane behind it. */
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 0.25rem;
     border-radius: var(--ed-radius);
     background: var(--ed-surface);
@@ -632,6 +639,149 @@
     color: oklch(0.99 0 0);
     font-size: 0.6875rem;
     line-height: 1;
+  }
+
+  /* Reactions (#67): chips under a message + a hover smiley + the shared bar. */
+  .ed-reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.3rem;
+  }
+  .ed-react {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--ed-radius-full);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    font-size: 0.8125rem;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: border-color 0.16s var(--ed-ease), background 0.16s var(--ed-ease);
+  }
+  .ed-react:hover {
+    border-color: var(--ed-primary);
+  }
+  .ed-react--mine {
+    border-color: var(--ed-primary);
+    background: color-mix(in oklab, var(--ed-primary) 14%, transparent);
+  }
+  .ed-react__count {
+    color: var(--ed-muted);
+    font: 600 0.75rem/1 var(--ed-mono);
+  }
+  .ed-react--mine .ed-react__count {
+    color: var(--ed-primary);
+  }
+
+  /* Reaction row at the top of the message context menu (Telegram-style, #67):
+     quick emoji + a chevron that expands the full grid. No hover affordance on
+     the message itself — reacting is reachable via right-click / long-press. */
+  .ed-menu__reacts {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.125rem;
+    padding: 0.125rem;
+    /* The quick row is user-configurable (up to 8) — cap its width so a long row
+       wraps within the menu instead of stretching it past the viewport. */
+    max-width: 17rem;
+  }
+  .ed-menu__react {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: var(--ed-radius-sm);
+    font-size: 1.375rem;
+    line-height: 1;
+    transition: background 0.14s var(--ed-ease), transform 0.14s var(--ed-ease);
+  }
+  .ed-menu__react:hover {
+    background: var(--ed-surface-2);
+  }
+  /* Keyboard focus needs a real indicator (the row isn't part of the menu's
+     arrow-key navigation, so Tab is how it's reached). */
+  .ed-menu__react:focus-visible {
+    background: var(--ed-surface-2);
+    outline: 2px solid var(--ed-primary);
+    outline-offset: -2px;
+  }
+  @media (hover: hover) {
+    .ed-menu__react:hover {
+      transform: scale(1.18);
+    }
+  }
+  .ed-menu__react--active {
+    background: color-mix(in oklab, var(--ed-primary) 22%, transparent);
+  }
+  .ed-menu__react-more {
+    color: var(--ed-muted);
+    font-size: 1rem;
+  }
+  .ed-menu__react-more:hover {
+    color: var(--ed-ink);
+  }
+  .ed-menu__grid {
+    display: grid;
+    grid-template-columns: repeat(7, 2.25rem);
+    gap: 0.125rem;
+    max-height: 11rem;
+    overflow-y: auto;
+    /* Keep the grid's scroll to itself — never bleed into the message pane. */
+    overscroll-behavior: contain;
+    padding: 0.125rem;
+  }
+  .ed-menu__grid[hidden] {
+    display: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-menu__react {
+      transition: none;
+    }
+    .ed-menu__react:hover {
+      transform: none;
+    }
+  }
+
+  /* Settings → Reactions: the picker for the personal quick-react row (#67). */
+  .ed-qr-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 2.5rem);
+    gap: 0.25rem;
+  }
+  .ed-qr {
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--ed-radius-sm);
+    border: 1px solid transparent;
+    font-size: 1.5rem;
+    line-height: 1;
+    transition: background 0.14s var(--ed-ease), border-color 0.14s var(--ed-ease);
+  }
+  .ed-qr:hover {
+    background: var(--ed-surface-2);
+  }
+  .ed-qr:focus-visible {
+    outline: 2px solid var(--ed-primary);
+    outline-offset: -2px;
+  }
+  .ed-qr--on {
+    border-color: var(--ed-primary);
+    background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
+  }
+  .ed-qr:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-qr {
+      transition: none;
+    }
   }
 
   /* Permalink target: briefly ring the message scrolled to. */

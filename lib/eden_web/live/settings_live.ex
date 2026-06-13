@@ -20,8 +20,27 @@ defmodule EdenWeb.SettingsLive do
       |> assign(page_title: gettext("Settings"), locale: Gettext.get_locale(), new_folder: "")
       |> assign_profile()
       |> assign_folders()
+      |> assign_reactions()
 
     {:ok, socket}
+  end
+
+  # The personal quick-react row (#67) is account-scoped — only when signed in.
+  # `quick_set` is the user's current row (or the default); `reaction_set` is the
+  # full pool of selectable emoji.
+  defp assign_reactions(socket) do
+    case socket.assigns[:current_scope] do
+      %{user: %User{}} = scope ->
+        assign(socket,
+          reaction_set: Chat.allowed_reactions(),
+          quick_set: Chat.quick_reactions(scope),
+          quick_limit: Chat.quick_reaction_limit(),
+          default_quick: Chat.default_quick_reactions()
+        )
+
+      _ ->
+        assign(socket, reaction_set: [], quick_set: [], quick_limit: 0, default_quick: [])
+    end
   end
 
   # Folders are account-scoped, so they only appear when signed in. `folder_rows`
@@ -264,6 +283,47 @@ defmodule EdenWeb.SettingsLive do
             class="rounded-[var(--ed-radius-lg)] border p-5"
             style="border-color: var(--ed-border); background: var(--ed-surface);"
           >
+            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Reactions")}</h2>
+            <p class="mt-0.5 mb-3" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext(
+                "Pick the emoji in your quick-react row — the shortcuts shown first when you react to a message. Tap to add or remove (up to %{count}).",
+                count: @quick_limit
+              )}
+            </p>
+            <div class="flex items-center justify-between mb-2">
+              <span style="color: var(--ed-muted); font-size:0.75rem; font-variant-numeric: tabular-nums;">
+                {gettext("%{n} of %{max}", n: length(@quick_set), max: @quick_limit)}
+              </span>
+              <button
+                :if={@quick_set != @default_quick}
+                type="button"
+                class="ed-btn ed-btn--ghost"
+                style="font-size:0.8125rem; padding:0.25rem 0.5rem;"
+                phx-click="reset_quick_reactions"
+              >
+                {gettext("Reset to default")}
+              </button>
+            </div>
+            <div class="ed-qr-grid" role="group" aria-label={gettext("Quick reactions")}>
+              <button
+                :for={e <- @reaction_set}
+                type="button"
+                class={["ed-qr", e in @quick_set && "ed-qr--on"]}
+                phx-click="toggle_quick_reaction"
+                phx-value-emoji={e}
+                aria-pressed={to_string(e in @quick_set)}
+                disabled={e not in @quick_set and length(@quick_set) >= @quick_limit}
+              >
+                {e}
+              </button>
+            </div>
+          </section>
+
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
             <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
               {gettext(
@@ -498,6 +558,26 @@ defmodule EdenWeb.SettingsLive do
   def handle_event("reorder_folders", %{"ids" => ids}, socket) do
     Chat.reorder_folders(socket.assigns.current_scope, ids)
     {:noreply, reload_folders(socket)}
+  end
+
+  # Toggle one emoji in the personal quick-react row (#67): present → remove,
+  # absent → append (kept in pick order). Clearing all reverts to the default set.
+  def handle_event("toggle_quick_reaction", %{"emoji" => emoji}, socket) do
+    current = socket.assigns.quick_set
+
+    next =
+      if emoji in current,
+        do: List.delete(current, emoji),
+        else: current ++ [emoji]
+
+    {:ok, saved} = Chat.set_quick_reactions(socket.assigns.current_scope, next)
+    {:noreply, assign(socket, quick_set: saved)}
+  end
+
+  # Drop the personal quick row back to the default set.
+  def handle_event("reset_quick_reactions", _params, socket) do
+    {:ok, saved} = Chat.set_quick_reactions(socket.assigns.current_scope, [])
+    {:noreply, assign(socket, quick_set: saved)}
   end
 
   defp reload_folders(socket), do: assign_folders(socket)

@@ -21,6 +21,7 @@ defmodule Eden.Chat do
     Membership,
     Message,
     MessageDeletion,
+    MessageReaction,
     ThumbnailWorker
   }
 
@@ -1138,7 +1139,7 @@ defmodule Eden.Chat do
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload([:sender, :attachments, forwarded_from: :sender])
+        |> preload([:sender, :attachments, :reactions, forwarded_from: :sender])
         |> Repo.all()
         |> Enum.reverse()
 
@@ -1478,10 +1479,11 @@ defmodule Eden.Chat do
         |> where([_m, d], is_nil(d.id))
         |> order_by([m], asc: m.id)
         |> limit(@thread_cap)
-        |> preload([:sender, :attachments, forwarded_from: :sender])
+        |> preload([:sender, :attachments, :reactions, forwarded_from: :sender])
         |> Repo.all()
 
-      {:ok, Repo.preload(root, [:sender, :attachments, forwarded_from: :sender]), replies}
+      {:ok, Repo.preload(root, [:sender, :attachments, :reactions, forwarded_from: :sender]),
+       replies}
     end
   end
 
@@ -1557,7 +1559,7 @@ defmodule Eden.Chat do
         set: [last_reply_at: reply.inserted_at]
       )
 
-    reply = Repo.preload(reply, [:sender, :attachments, forwarded_from: :sender])
+    reply = Repo.preload(reply, [:sender, :attachments, :reactions, forwarded_from: :sender])
 
     with 1 <- bumped,
          %Message{} = fresh_root <- preloaded_message(root.id) do
@@ -1571,8 +1573,119 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.id == ^id,
-        preload: [:sender, :attachments, forwarded_from: :sender]
+        preload: [:sender, :attachments, :reactions, forwarded_from: :sender]
     )
+  end
+
+  ## Reactions (#67)
+
+  @doc "Every allowed reaction emoji (quick row first) the full picker renders."
+  def allowed_reactions, do: MessageReaction.allowed()
+
+  @doc "Max emoji a personal quick-react row may hold."
+  def quick_reaction_limit, do: MessageReaction.quick_limit()
+
+  @doc "The default quick-react row (used when a user hasn't customized theirs)."
+  def default_quick_reactions, do: MessageReaction.quick()
+
+  @doc "The scoped user's personal quick-react row, or the default set if unset."
+  def quick_reactions(%Scope{user: user}) do
+    Repo.one(from p in FolderPrefs, where: p.user_id == ^user.id, select: p.quick_reactions)
+    |> normalize_quick()
+    |> case do
+      [] -> MessageReaction.quick()
+      list -> list
+    end
+  end
+
+  @doc """
+  Sets the scoped user's quick-react row: keeps only allowed emoji (deduped, order
+  preserved) capped at `MessageReaction.quick_limit/0`. An empty result resets to
+  the default (stored as `nil`). Returns `{:ok, effective_list}`.
+  """
+  def set_quick_reactions(%Scope{user: user}, emojis) when is_list(emojis) do
+    stored =
+      case normalize_quick(emojis) do
+        [] -> nil
+        list -> list
+      end
+
+    Repo.insert!(%FolderPrefs{user_id: user.id, quick_reactions: stored},
+      on_conflict: [set: [quick_reactions: stored, updated_at: now()]],
+      conflict_target: :user_id
+    )
+
+    # `stored` is already normalized, so skip the re-read; nil → the default set.
+    {:ok, stored || MessageReaction.quick()}
+  end
+
+  # Keep only currently-allowed emoji (deduped, order preserved, capped). nil-safe:
+  # a NULL column — or a set curated down in a later release — normalizes cleanly,
+  # so a now-stale stored emoji silently drops instead of becoming a dead button.
+  defp normalize_quick(nil), do: []
+
+  defp normalize_quick(emojis) when is_list(emojis) do
+    allowed = MapSet.new(MessageReaction.allowed())
+
+    emojis
+    |> Enum.filter(&MapSet.member?(allowed, &1))
+    |> Enum.uniq()
+    |> Enum.take(MessageReaction.quick_limit())
+  end
+
+  @doc """
+  Toggles the scoped user's `emoji` reaction on a message (DM or room): adds it
+  if absent, removes it if present. Authorized by **active** conversation
+  membership (`:not_found` if you never joined or have left it); tombstoned
+  messages reject; a non-allowed `emoji` fails the changeset. Broadcasts
+  `{:reaction_changed, message}` (reactions reloaded) so every viewer recomputes
+  their own chips. Returns `{:ok, message}`.
+  """
+  def toggle_reaction(%Scope{user: user} = scope, message_id, emoji) do
+    with {:ok, message} <- fetch_message(scope, message_id),
+         :ok <- ensure_active_member(scope, message.conversation_id),
+         :ok <- ensure_not_deleted(message),
+         {:ok, _} <- do_toggle_reaction(message.id, user.id, emoji),
+         # Re-read after the write; a concurrent delete-for-both may have
+         # tombstoned it — don't broadcast (and thereby re-insert) a dead message.
+         %Message{deleted_at: nil} = fresh <- preloaded_message(message.id) do
+      broadcast(fresh.conversation_id, {:reaction_changed, fresh})
+      {:ok, fresh}
+    else
+      %Message{} -> {:error, :deleted}
+      other -> other
+    end
+  end
+
+  # Active = a membership row with no `left_at`. Unlike the shared `member?`/
+  # `fetch_message` (which a left member still passes, by design, for forward/
+  # delete paths), reacting from a chat you've left would broadcast to the
+  # remaining members — so reactions require live membership.
+  defp ensure_active_member(%Scope{user: user}, conversation_id) do
+    active? =
+      Repo.exists?(
+        from m in Membership,
+          where:
+            m.conversation_id == ^conversation_id and m.user_id == ^user.id and
+              is_nil(m.left_at)
+      )
+
+    if active?, do: :ok, else: {:error, :not_found}
+  end
+
+  # A single get-then-(insert|delete); no transaction needed — events on one
+  # session are serialized, and the unique index (not isolation) guards the
+  # add-add race, surfacing it as a changeset error we treat as a no-op.
+  defp do_toggle_reaction(message_id, user_id, emoji) do
+    case Repo.get_by(MessageReaction, message_id: message_id, user_id: user_id, emoji: emoji) do
+      %MessageReaction{} = existing ->
+        Repo.delete(existing)
+
+      nil ->
+        %MessageReaction{message_id: message_id, user_id: user_id}
+        |> MessageReaction.changeset(%{"emoji" => emoji})
+        |> Repo.insert()
+    end
   end
 
   @doc """
@@ -1642,6 +1755,9 @@ defmodule Eden.Chat do
       message = Repo.preload(message, :attachments)
       orphan_keys = unshared_blob_keys(message.attachments)
       Enum.each(message.attachments, &Repo.delete/1)
+      # A tombstone has no reactions — drop them (the row survives, so the FK
+      # cascade doesn't fire on a soft delete).
+      Repo.delete_all(from(r in MessageReaction, where: r.message_id == ^message.id))
 
       with {:ok, tombstone} <-
              message
@@ -1955,7 +2071,7 @@ defmodule Eden.Chat do
     resurface_direct(conversation_id)
     # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
     # bubble would phantom-render its "Forwarded" label on realtime messages.
-    message = Repo.preload(message, [:sender, :attachments, forwarded_from: :sender])
+    message = Repo.preload(message, [:sender, :attachments, :reactions, forwarded_from: :sender])
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
     message
@@ -2024,7 +2140,7 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.sender_id == ^sender_id and m.client_id == ^client_id,
-        preload: [:sender, :attachments]
+        preload: [:sender, :attachments, :reactions]
     )
   end
 
@@ -2113,7 +2229,9 @@ defmodule Eden.Chat do
         :ok
 
       message ->
-        message = Repo.preload(message, [:sender, :attachments, forwarded_from: :sender])
+        message =
+          Repo.preload(message, [:sender, :attachments, :reactions, forwarded_from: :sender])
+
         broadcast(message.conversation_id, {:thumbnail_ready, message})
     end
   end

@@ -207,6 +207,52 @@ defmodule EdenWeb.SettingsLiveTest do
     end
   end
 
+  describe "reactions section (#67)" do
+    alias Eden.Accounts.Scope
+    alias Eden.Chat
+
+    test "is hidden for signed-out visitors", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/settings")
+      refute html =~ "quick-react row"
+    end
+
+    test "toggling an emoji adds then removes it from the personal quick row", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      refute "🔥" in Chat.quick_reactions(scope)
+
+      view |> element(~s(.ed-qr[phx-value-emoji="🔥"])) |> render_click()
+      assert "🔥" in Chat.quick_reactions(scope)
+      assert has_element?(view, ~s(.ed-qr--on[phx-value-emoji="🔥"]))
+
+      # Toggling again removes it.
+      view |> element(~s(.ed-qr[phx-value-emoji="🔥"])) |> render_click()
+      refute "🔥" in Chat.quick_reactions(scope)
+    end
+
+    test "reset returns the quick row to the default (and the button only shows when custom)", %{
+      conn: conn
+    } do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      # Default state: nothing to reset.
+      refute has_element?(view, ~s(button[phx-click="reset_quick_reactions"]))
+
+      view |> element(~s(.ed-qr[phx-value-emoji="🔥"])) |> render_click()
+      assert has_element?(view, ~s(button[phx-click="reset_quick_reactions"]))
+
+      view |> element(~s(button[phx-click="reset_quick_reactions"])) |> render_click()
+      assert Chat.quick_reactions(scope) == Chat.default_quick_reactions()
+      refute has_element?(view, ~s(button[phx-click="reset_quick_reactions"]))
+    end
+  end
+
   defp png_bytes(w \\ 600, h \\ 600) do
     {:ok, img} = Image.new(w, h, color: [10, 200, 90])
     {:ok, bytes} = Image.write(img, :memory, suffix: ".png")

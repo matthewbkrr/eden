@@ -31,6 +31,9 @@ defmodule Eden.Chat.Message do
     # plain photo/file send, several for an album). Always preload/render via
     # this list — ordered by `position` so the grid is deterministic.
     has_many :attachments, Eden.Chat.Attachment, preload_order: [asc: :position]
+    # Emoji reactions (#67); raw rows, aggregated to chips (emoji → count + mine)
+    # in the web layer so each viewer computes "mine" from their own id.
+    has_many :reactions, Eden.Chat.MessageReaction
 
     # Threads (flat, Mattermost-style): a reply points at its root; the root
     # carries denormalized counters maintained by the context.

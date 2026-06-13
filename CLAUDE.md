@@ -62,6 +62,21 @@ design — built incrementally as features land.)
     `#`/`##`/`###` headings, inline `**bold**`/`*italic*`/`` `code` `` and bare-URL
     links, emitted as escaped iodata (whitelist tags only, no HTML-injection path);
     previews/snippets strip the markers. The composer has a built-in emoji picker.
+    **Reactions** (`MessageReaction`, #67) are emoji a member toggles on a message
+    (`toggle_reaction/3`; one row per member+emoji, `unique_index`); raw rows are
+    preloaded and aggregated to chips in the web layer so each viewer computes
+    "mine" from their own id. The emoji is validated against a closed set
+    (`MessageReaction.allowed/0`) since the `react` event is client-supplied.
+    Reacting is reachable only from the **message context menu** (right-click /
+    long-press, Telegram-style) — a quick-react row + a "more" chevron that expands
+    the full emoji grid in place — never a per-message hover affordance (that
+    reflows the bubble). The quick-react row is **per-user**: each member picks
+    their own in Settings (`Chat.set_quick_reactions/2`, stored in
+    `chat_folder_prefs.quick_reactions`; `nil` = the default set). Chips render
+    under the message in both DM bubbles and Mattermost-flat rooms; a change
+    broadcasts `{:reaction_changed, message}` so all clients recompute (a reply's
+    reaction routes only to the open thread panel, never the main stream). The
+    soft-delete tombstone clears a message's reactions.
   - `Attachment` — **a message has many** (`#58`; ordered by `position`, lone
     sends are just an album of one), each classified by **magic bytes** into a
     `kind` (`image | video | file | audio`), never the client content-type.

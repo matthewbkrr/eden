@@ -11,9 +11,11 @@ defmodule Eden.ChatTest do
   alias Eden.Chat.{
     Attachment,
     Conversation,
+    FolderPrefs,
     Membership,
     Message,
     MessageDeletion,
+    MessageReaction,
     ThumbnailWorker
   }
 
@@ -613,6 +615,127 @@ defmodule Eden.ChatTest do
 
       assert first.id == again.id
       assert {:ok, %{reply_count: 1}, _} = Chat.list_thread(scope(bob), root.id)
+    end
+  end
+
+  describe "reactions (#67)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "react to me"})
+      %{conv: conv, msg: msg}
+    end
+
+    test "toggling adds then removes, idempotently; broadcasts", %{
+      alice: alice,
+      conv: conv,
+      msg: msg
+    } do
+      Chat.subscribe(conv.id)
+
+      assert {:ok, m1} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+      assert [%{emoji: "👍", user_id: uid}] = m1.reactions
+      assert uid == alice.id
+      assert_receive {:reaction_changed, %{id: id}} when id == msg.id
+
+      # Same emoji again toggles it off.
+      assert {:ok, m2} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+      assert m2.reactions == []
+    end
+
+    test "different emoji and different users coexist", %{alice: alice, bob: bob, msg: msg} do
+      {:ok, _} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+      {:ok, _} = Chat.toggle_reaction(scope(bob), msg.id, "👍")
+      {:ok, m} = Chat.toggle_reaction(scope(alice), msg.id, "❤️")
+
+      emojis = Enum.frequencies_by(m.reactions, & &1.emoji)
+      assert emojis == %{"👍" => 2, "❤️" => 1}
+    end
+
+    test "non-members can't react", %{msg: msg} do
+      carol = user_fixture(%{username: "carol_react"})
+      assert {:error, :not_found} = Chat.toggle_reaction(scope(carol), msg.id, "👍")
+    end
+
+    test "a member who has left the conversation can't react", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      msg: msg
+    } do
+      # Alice leaves (left_at set); bob stays, so the chat isn't GC'd.
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      assert {:error, :not_found} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+      # An active member still can.
+      assert {:ok, _} = Chat.toggle_reaction(scope(bob), msg.id, "👍")
+    end
+
+    test "rejects an emoji outside the allowed set", %{alice: alice, msg: msg} do
+      assert {:error, %Ecto.Changeset{}} = Chat.toggle_reaction(scope(alice), msg.id, "lol")
+      assert Repo.aggregate(MessageReaction, :count) == 0
+      # An allowed one still goes through.
+      assert {:ok, _} = Chat.toggle_reaction(scope(alice), msg.id, hd(Chat.allowed_reactions()))
+    end
+
+    test "a tombstoned message rejects reactions", %{alice: alice, msg: msg} do
+      :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+      assert {:error, :deleted} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+    end
+
+    test "deleting the message cascades its reactions", %{alice: alice, msg: msg} do
+      {:ok, _} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+      assert Repo.aggregate(MessageReaction, :count) == 1
+
+      :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+      assert Repo.aggregate(MessageReaction, :count) == 0
+    end
+
+    test "list_messages preloads reactions", %{alice: alice, conv: conv, msg: msg} do
+      {:ok, _} = Chat.toggle_reaction(scope(alice), msg.id, "🎉")
+      {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
+      reacted = Enum.find(messages, &(&1.id == msg.id))
+      assert [%{emoji: "🎉"}] = reacted.reactions
+    end
+
+    test "a personal quick-react row defaults until set, then persists", %{alice: alice} do
+      assert Chat.quick_reactions(scope(alice)) == MessageReaction.quick()
+
+      {:ok, saved} = Chat.set_quick_reactions(scope(alice), ["🔥", "👀"])
+      assert saved == ["🔥", "👀"]
+      assert Chat.quick_reactions(scope(alice)) == ["🔥", "👀"]
+    end
+
+    test "set_quick_reactions drops non-allowed, dedups, and caps", %{alice: alice} do
+      limit = Chat.quick_reaction_limit()
+      {:ok, saved} = Chat.set_quick_reactions(scope(alice), ["🔥", "not-emoji", "🔥", "👀"])
+      assert saved == ["🔥", "👀"]
+
+      # More than the cap is truncated to the limit.
+      too_many = Enum.take(Chat.allowed_reactions(), limit + 3)
+      {:ok, capped} = Chat.set_quick_reactions(scope(alice), too_many)
+      assert length(capped) == limit
+    end
+
+    test "clearing the quick row reverts to the default", %{alice: alice} do
+      {:ok, _} = Chat.set_quick_reactions(scope(alice), ["🔥"])
+      {:ok, reverted} = Chat.set_quick_reactions(scope(alice), [])
+      assert reverted == MessageReaction.quick()
+    end
+
+    test "a stored emoji no longer in the allowed set is dropped on read", %{alice: alice} do
+      # Simulate a set curated down after the user saved: write past the API.
+      Repo.insert!(%FolderPrefs{user_id: alice.id, quick_reactions: ["🔥", "💀"]},
+        on_conflict: [set: [quick_reactions: ["🔥", "💀"]]],
+        conflict_target: :user_id
+      )
+
+      # 💀 isn't allowed → silently dropped; the valid one survives.
+      assert Chat.quick_reactions(scope(alice)) == ["🔥"]
+    end
+
+    test "quick rows are per-user", %{alice: alice, bob: bob} do
+      {:ok, _} = Chat.set_quick_reactions(scope(alice), ["🔥"])
+      assert Chat.quick_reactions(scope(alice)) == ["🔥"]
+      assert Chat.quick_reactions(scope(bob)) == MessageReaction.quick()
     end
   end
 
