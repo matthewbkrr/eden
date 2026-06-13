@@ -299,6 +299,38 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "reactions in rooms + threads (#67)" do
+    setup [:setup_channel]
+
+    test "reacting to a thread reply updates the panel, never the main stream", ctx do
+      {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "agenda"})
+      {:ok, reply} = Chat.create_reply(scope(ctx.bob), root.id, %{"body" => "follow-up"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      # The reply permalink opens the room with the thread panel showing the reply.
+      {:ok, view, _html} =
+        live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/#{reply.id}")
+
+      assert has_element?(view, "#thread-#{reply.id}")
+
+      # Bob reacts to the reply; it lands via broadcast in the thread panel...
+      {:ok, _} = Chat.toggle_reaction(scope(ctx.bob), reply.id, "👍")
+      assert has_element?(view, ~s(#thread-#{reply.id} .ed-react[phx-value-emoji="👍"]))
+      # ...and must NOT leak into the main message stream (replies live only there).
+      refute has_element?(view, "#messages-#{reply.id}")
+    end
+
+    test "reacting to a room root message updates the main stream", ctx do
+      {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "ship it"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      {:ok, _} = Chat.toggle_reaction(scope(ctx.bob), root.id, "🎉")
+      assert has_element?(view, ~s(#messages-#{root.id} .ed-react[phx-value-emoji="🎉"]))
+    end
+  end
+
   describe "room visibility picker" do
     setup [:setup_channel]
 

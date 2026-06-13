@@ -98,6 +98,84 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#emoji-picker [data-emoji-toggle]))
     end
 
+    test "reactions: toggle adds a chip (highlighted as mine), toggle again removes (#67)", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "react me"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # The quick-react row lives in the message context menu (right-click /
+      # long-press), not a hover affordance; the "more" chevron expands the grid.
+      assert has_element?(
+               view,
+               ~s(#menu-#{msg.id} .ed-menu__react[phx-click="react"][phx-value-emoji="👍"])
+             )
+
+      assert has_element?(view, ~s(#menu-#{msg.id} [data-react-expand]))
+      assert has_element?(view, ~s(#menu-#{msg.id} [data-react-grid] .ed-menu__react))
+
+      render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
+      # A chip appears under the message, highlighted as mine.
+      assert has_element?(view, ~s(.ed-react--mine[phx-value-emoji="👍"]))
+      assert render(view) =~ "ed-react__count"
+      # The matching menu button reflects the active state too.
+      assert has_element?(view, ~s(#menu-#{msg.id} .ed-menu__react--active[phx-value-emoji="👍"]))
+
+      # Toggling the same emoji removes the chip.
+      render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
+      refute has_element?(view, ~s(.ed-react[phx-value-emoji="👍"]))
+    end
+
+    test "a malformed react payload is ignored, not a crash (#67)", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Missing "emoji" key (a crafted client) must not crash the LiveView.
+      render_hook(view, "react", %{"id" => to_string(msg.id)})
+      assert render(view) =~ "x"
+      refute has_element?(view, ".ed-react")
+    end
+
+    test "a reaction from another user appears live (#67)", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "hi"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      {:ok, _} = Chat.toggle_reaction(Scope.for_user(ctx.bob), msg.id, "🎉")
+
+      # Bob's reaction lands via broadcast; not highlighted as mine for alice.
+      assert has_element?(view, ~s(.ed-react[phx-value-emoji="🎉"]))
+      refute has_element?(view, ~s(.ed-react--mine[phx-value-emoji="🎉"]))
+    end
+
+    test "the menu's quick row reflects the viewer's personal set (#67)", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hi"})
+
+      # Alice customizes her quick row before opening the chat.
+      {:ok, _} = Chat.set_quick_reactions(Scope.for_user(ctx.alice), ["🔥", "👀"])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert has_element?(
+               view,
+               ~s(#menu-#{msg.id} .ed-menu__reacts .ed-menu__react[phx-value-emoji="🔥"])
+             )
+
+      # A default that she dropped is no longer in the quick row (still in the grid).
+      refute has_element?(
+               view,
+               ~s(#menu-#{msg.id} .ed-menu__reacts .ed-menu__react[phx-value-emoji="👍"])
+             )
+    end
+
     test "the active highlight follows the selected conversation", ctx do
       carol = user_fixture(%{username: "carol_hl", display_name: "Carol"})
       {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
