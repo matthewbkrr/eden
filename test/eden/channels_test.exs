@@ -6,6 +6,7 @@ defmodule Eden.ChannelsTest do
   alias Eden.Accounts.Scope
   alias Eden.Channels
   alias Eden.Channels.{Channel, Membership}
+  alias Eden.Storage
 
   defp scope(user), do: Scope.for_user(user)
 
@@ -130,6 +131,72 @@ defmodule Eden.ChannelsTest do
       Channels.subscribe_channel(channel.id)
       {:ok, _} = Channels.update_channel(scope(alice), channel.id, %{"name" => "Renamed"})
       assert_receive {:channel_renamed, %Channel{name: "Renamed"}}
+    end
+  end
+
+  describe "channel avatar (#70)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      %{channel: channel}
+    end
+
+    test "owner sets an avatar; the key is stored and the blob readable", %{
+      alice: alice,
+      channel: channel
+    } do
+      assert {:ok, %{avatar_key: key, role: "owner"}} =
+               Channels.set_channel_avatar(scope(alice), channel.id, real_png())
+
+      assert is_binary(key)
+      assert {:ok, _bytes} = Storage.read(key)
+    end
+
+    test "admin may set; a plain member may not", %{bob: bob, channel: channel} do
+      assert {:error, :forbidden} =
+               Channels.set_channel_avatar(scope(bob), channel.id, real_png())
+
+      promote(channel.id, bob.id, "admin")
+
+      assert {:ok, %{avatar_key: key}} =
+               Channels.set_channel_avatar(scope(bob), channel.id, real_png())
+
+      assert is_binary(key)
+    end
+
+    test "replacing deletes the previous blob", %{alice: alice, channel: channel} do
+      {:ok, %{avatar_key: old}} =
+        Channels.set_channel_avatar(scope(alice), channel.id, real_png())
+
+      {:ok, %{avatar_key: new}} =
+        Channels.set_channel_avatar(scope(alice), channel.id, real_png())
+
+      refute old == new
+      assert {:error, _} = Storage.read(old)
+      assert {:ok, _} = Storage.read(new)
+    end
+
+    test "remove clears the avatar and its blob", %{alice: alice, channel: channel} do
+      {:ok, %{avatar_key: key}} =
+        Channels.set_channel_avatar(scope(alice), channel.id, real_png())
+
+      assert {:ok, %{avatar_key: nil}} = Channels.remove_channel_avatar(scope(alice), channel.id)
+      assert {:error, _} = Storage.read(key)
+    end
+
+    test "a non-member can't set", %{channel: channel} do
+      carol = user_fixture(%{username: "carol_av"})
+
+      assert {:error, :not_found} =
+               Channels.set_channel_avatar(scope(carol), channel.id, real_png())
+    end
+
+    test "deleting the channel reclaims its avatar blob", %{alice: alice, channel: channel} do
+      {:ok, %{avatar_key: key}} =
+        Channels.set_channel_avatar(scope(alice), channel.id, real_png())
+
+      :ok = Channels.delete_channel(scope(alice), channel.id)
+      assert {:error, _} = Storage.read(key)
     end
   end
 
