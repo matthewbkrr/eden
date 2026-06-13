@@ -4304,13 +4304,16 @@ defmodule EdenWeb.ChatLive do
         href={~p"/files/#{item.id}"}
         target="_blank"
         rel="noopener"
+        aria-label={item.kind == "video" && (item.filename || gettext("Video"))}
         class={["ed-album__tile", item.kind == "image" && "cursor-zoom-in"]}
       >
         <img
           :if={item.kind == "image" or item.thumbnail_key}
           src={thumb_src(item)}
           loading="lazy"
-          alt={item.filename || gettext("Photo")}
+          alt={
+            item.filename || if(item.kind == "video", do: gettext("Video"), else: gettext("Photo"))
+          }
         />
         <%!-- A video with no poster yet (worker pending) gets a neutral tile,
               never the raw video bytes piped into an <img>. --%>

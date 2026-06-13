@@ -1210,7 +1210,8 @@ defmodule Eden.Chat do
   # file fails the batch atomically (the common failure modes — too-large, bad
   # type — never produce a half-sent album). Server-side magic-byte
   # classification; the client content-type is advisory. The kind is reused to
-  # split media (album) from files, so each source is classified once here.
+  # split media (album) from files; the actual store re-classifies (a cheap
+  # header read) since create_album_message/4 is also a standalone entry point.
   defp preflight(sources) do
     sources
     |> Enum.reduce_while({:ok, []}, fn source, {:ok, acc} ->
