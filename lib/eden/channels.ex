@@ -215,14 +215,26 @@ defmodule Eden.Channels do
   def set_channel_avatar(%Scope{} = scope, channel_id, source_path) do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)),
-         {:ok, jpeg} <- Images.square_avatar(source_path),
-         key = Storage.build_key("avatars", "jpg"),
-         :ok <- Storage.put_binary(key, jpeg),
-         {:ok, updated} <- channel |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
+         {:ok, jpeg} <- Images.square_avatar(source_path) do
+      store_and_swap_avatar(channel, jpeg)
+    end
+  end
+
+  defp store_and_swap_avatar(channel, jpeg) do
+    key = Storage.build_key("avatars", "jpg")
+
+    with :ok <- Storage.put_binary(key, jpeg),
+         {:ok, updated} <- put_avatar_key(channel, key) do
       # Best-effort cleanup of the replaced blob (don't fail the update on it).
       if channel.avatar_key, do: Storage.delete(channel.avatar_key)
       notify_members(updated.id, :channels_changed)
       {:ok, %{updated | role: channel.role}}
+    else
+      error ->
+        # The new blob may be written but the row update failed (e.g. the channel
+        # was deleted mid-flight) — reclaim it so it isn't orphaned.
+        Storage.delete(key)
+        error
     end
   end
 
@@ -230,17 +242,28 @@ defmodule Eden.Channels do
   def remove_channel_avatar(%Scope{} = scope, channel_id) do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)),
-         {:ok, updated} <- channel |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
+         {:ok, updated} <- put_avatar_key(channel, nil) do
       if channel.avatar_key, do: Storage.delete(channel.avatar_key)
       notify_members(updated.id, :channels_changed)
       {:ok, %{updated | role: channel.role}}
     end
   end
 
+  # Swap a channel's avatar_key, race-safely: a concurrent delete between the read
+  # and the write becomes {:error, :not_found}, not an Ecto.StaleEntryError crash
+  # — same convention as update_channel/3.
+  defp put_avatar_key(channel, key) do
+    channel
+    |> Ecto.Changeset.change(avatar_key: key)
+    |> Repo.update(stale_error_field: :id)
+    |> normalize_stale()
+  end
+
   @doc """
   Deletes a channel. Owner only. Member rails refresh via `:channels_changed`;
-  sessions inside the channel get `{:channel_deleted, id}` on the channel
-  topic. (Rooms cascade by FK; their attachment-blob GC arrives with #29.)
+  sessions inside the channel get `{:channel_deleted, id}` on the channel topic.
+  Rooms cascade by FK; their attachment blobs and the channel's own avatar blob
+  are reclaimed (forward-safely) after the delete commits.
   """
   def delete_channel(%Scope{} = scope, channel_id) do
     with {:ok, channel} <- get_channel(scope, channel_id),

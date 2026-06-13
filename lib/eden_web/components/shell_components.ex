@@ -190,20 +190,47 @@ defmodule EdenWeb.ShellComponents do
                 />
                 <span :if={!entry && !@channel.avatar_key}>{channel_initials(@channel.name)}</span>
               </span>
-              <div class="flex items-center gap-2">
-                <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
-                  {gettext("Upload photo")}
-                  <.live_file_input :if={@upload} upload={@upload} class="sr-only" />
-                </label>
-                <button
-                  :if={@channel.avatar_key && @upload && Enum.empty?(@upload.entries)}
-                  type="button"
-                  phx-click="remove_channel_avatar"
-                  class="ed-btn ed-btn--ghost text-sm"
-                  style="color: var(--ed-danger);"
+              <div class="flex flex-col gap-1.5">
+                <div class="flex items-center gap-2">
+                  <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
+                    {gettext("Upload photo")}
+                    <.live_file_input :if={@upload} upload={@upload} class="sr-only" />
+                  </label>
+                  <button
+                    :if={@channel.avatar_key && @upload && Enum.empty?(@upload.entries)}
+                    type="button"
+                    phx-click="remove_channel_avatar"
+                    class="ed-btn ed-btn--ghost text-sm"
+                    style="color: var(--ed-danger);"
+                  >
+                    {gettext("Remove")}
+                  </button>
+                  <button
+                    :for={e <- (@upload && @upload.entries) || []}
+                    type="button"
+                    phx-click="cancel_channel_avatar"
+                    phx-value-ref={e.ref}
+                    class="ed-btn ed-btn--ghost text-sm"
+                  >
+                    {gettext("Cancel")}
+                  </button>
+                </div>
+                <%!-- Surface a rejected upload (too large / wrong type) instead of
+                      failing silently. --%>
+                <p
+                  :for={err <- (@upload && upload_errors(@upload)) || []}
+                  style="color: var(--ed-danger); font-size:0.75rem;"
                 >
-                  {gettext("Remove")}
-                </button>
+                  {channel_avatar_error(err)}
+                </p>
+                <%= for e <- (@upload && @upload.entries) || [] do %>
+                  <p
+                    :for={err <- upload_errors(@upload, e)}
+                    style="color: var(--ed-danger); font-size:0.75rem;"
+                  >
+                    {channel_avatar_error(err)}
+                  </p>
+                <% end %>
               </div>
             </div>
             <.ed_field
@@ -231,6 +258,12 @@ defmodule EdenWeb.ShellComponents do
     do: ~p"/channels/#{id}/avatar?v=#{:erlang.phash2(key)}"
 
   def channel_avatar_src(_channel), do: nil
+
+  # A rejected channel-avatar upload (#70), in human terms.
+  defp channel_avatar_error(:too_large), do: gettext("That image is too large (up to 5 MB).")
+  defp channel_avatar_error(:not_accepted), do: gettext("Use a JPEG, PNG, GIF or WebP image.")
+  defp channel_avatar_error(:too_many_files), do: gettext("Pick a single image.")
+  defp channel_avatar_error(_other), do: gettext("Couldn't upload that image.")
 
   @doc "Up to two initials for a channel's rail icon."
   def channel_initials(name) do

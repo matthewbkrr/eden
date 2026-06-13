@@ -543,7 +543,18 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_channel_edit", _params, socket) do
+    # Drop any staged (incl. errored) avatar entry so it can't linger or apply to
+    # the wrong channel later.
+    socket =
+      Enum.reduce(socket.assigns.uploads.channel_avatar.entries, socket, fn entry, acc ->
+        cancel_upload(acc, :channel_avatar, entry.ref)
+      end)
+
     {:noreply, assign(socket, show_channel_edit: false)}
+  end
+
+  def handle_event("cancel_channel_avatar", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :channel_avatar, ref)}
   end
 
   # Live-upload + form validation for the edit modal (#70): registers the staged
