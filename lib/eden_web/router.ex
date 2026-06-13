@@ -44,6 +44,7 @@ defmodule EdenWeb.Router do
       get "/files/:id", FileController, :show
       get "/files/:id/thumb", FileController, :thumb
       get "/users/:id/avatar", AvatarController, :show
+      get "/channels/:id/avatar", ChannelAvatarController, :show
       # Channel invite links. Declared before the /channels/:channel_id live
       # route, so "join" is never parsed as a channel id.
       get "/channels/join/:token", ChannelJoinController, :join

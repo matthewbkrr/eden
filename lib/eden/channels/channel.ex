@@ -13,6 +13,10 @@ defmodule Eden.Channels.Channel do
   schema "channels" do
     field :name, :string
     field :about, :string
+    # Storage key of the channel's avatar (processed square JPEG), shown in the
+    # rail; nil = initials fallback. Set via Channels.set_channel_avatar/3, never
+    # cast from params.
+    field :avatar_key, :string
 
     # The scoped user's role in this channel, filled by Eden.Channels queries.
     field :role, :string, virtual: true

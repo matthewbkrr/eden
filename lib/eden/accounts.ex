@@ -19,11 +19,6 @@ defmodule Eden.Accounts do
   @token_bytes 32
   @default_ttl_days 7
 
-  # Avatars: processed to a square JPEG of this edge; source caps guard memory.
-  @avatar_size 512
-  @max_avatar_bytes 5 * 1024 * 1024
-  @max_avatar_pixels 100_000_000
-
   ## Users
 
   @doc "Fetches a user by id, raising if missing."
@@ -86,7 +81,7 @@ defmodule Eden.Accounts do
   temp file. Returns `{:ok, user}` or `{:error, :too_large | :unprocessable | reason}`.
   """
   def set_avatar(%User{} = user, source_path) do
-    with {:ok, jpeg} <- process_avatar(source_path),
+    with {:ok, jpeg} <- Eden.Images.square_avatar(source_path),
          key = Storage.build_key("avatars", "jpg"),
          :ok <- Storage.put_binary(key, jpeg),
          {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
@@ -110,37 +105,6 @@ defmodule Eden.Accounts do
     Phoenix.PubSub.broadcast(@pubsub, @user_updates_topic, {:user_updated, user})
     user
   end
-
-  # Decode → center-crop to a @avatar_size square → re-encode JPEG with metadata
-  # stripped. The header is read lazily first to reject decompression bombs; any
-  # libvips failure (non-image, corrupt) becomes {:error, :unprocessable}.
-  # `path` is a server-assigned upload temp file, not user-supplied.
-  # sobelow_skip ["Traversal.FileModule"]
-  defp process_avatar(path) do
-    with {:ok, bytes} <- File.read(path),
-         :ok <- check_avatar_size(bytes),
-         {:ok, image} <- Image.from_binary(bytes),
-         :ok <- check_avatar_pixels(Image.width(image), Image.height(image)),
-         {:ok, square} <-
-           Vix.Vips.Operation.thumbnail_buffer(bytes, @avatar_size,
-             height: @avatar_size,
-             crop: :VIPS_INTERESTING_CENTRE,
-             size: :VIPS_SIZE_BOTH
-           ) do
-      Image.write(square, :memory, suffix: ".jpg", quality: 82, strip_metadata: true)
-    end
-  rescue
-    _ -> {:error, :unprocessable}
-  end
-
-  defp check_avatar_size(bytes) when byte_size(bytes) <= @max_avatar_bytes, do: :ok
-  defp check_avatar_size(_bytes), do: {:error, :too_large}
-
-  defp check_avatar_pixels(w, h)
-       when is_integer(w) and is_integer(h) and w * h <= @max_avatar_pixels,
-       do: :ok
-
-  defp check_avatar_pixels(_w, _h), do: {:error, :unprocessable}
 
   ## Session tokens
 

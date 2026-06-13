@@ -299,6 +299,33 @@ defmodule EdenWeb.ChannelModeTest do
     end
   end
 
+  describe "channel avatar (#70)" do
+    setup [:setup_channel]
+
+    test "an owner uploads an avatar via the edit modal; the rail shows it", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+
+      render_click(view, "open_channel_edit", %{})
+      assert has_element?(view, "#edit-channel input[type=file]")
+
+      {:ok, img} = Image.new(400, 300, color: [200, 80, 40])
+      {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+
+      avatar =
+        file_input(view, "#edit-channel-form", :channel_avatar, [
+          %{name: "a.png", content: bytes, type: "image/png"}
+        ])
+
+      render_upload(avatar, "a.png")
+      view |> form("#edit-channel-form", channel: %{name: "Engineering"}) |> render_submit()
+
+      assert {:ok, %{avatar_key: key}} = Channels.get_channel(scope(ctx.alice), ctx.channel.id)
+      assert is_binary(key)
+      assert has_element?(view, "#rail-channel-#{ctx.channel.id} img.ed-rail__img")
+    end
+  end
+
   describe "quote-reply inside a thread (#71)" do
     setup [:setup_channel]
 

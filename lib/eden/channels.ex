@@ -19,7 +19,9 @@ defmodule Eden.Channels do
   alias Eden.Channels.{Channel, Invite, Membership}
   alias Eden.Chat
   alias Eden.Ids
+  alias Eden.Images
   alias Eden.Repo
+  alias Eden.Storage
 
   @pubsub Eden.PubSub
 
@@ -204,9 +206,64 @@ defmodule Eden.Channels do
   defp normalize_stale(result), do: result
 
   @doc """
+  Sets a channel's avatar (#70). Admin or owner. Processes the upload into a
+  square JPEG (shared `Eden.Images`), stores it via the adapter, swaps
+  `avatar_key`, deletes the previous blob, and pings every member's rail.
+  `source_path` is a local temp file. `{:error, :not_found | :forbidden |
+  :too_large | :unprocessable}`.
+  """
+  def set_channel_avatar(%Scope{} = scope, channel_id, source_path) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)),
+         {:ok, jpeg} <- Images.square_avatar(source_path) do
+      store_and_swap_avatar(channel, jpeg)
+    end
+  end
+
+  defp store_and_swap_avatar(channel, jpeg) do
+    key = Storage.build_key("avatars", "jpg")
+
+    with :ok <- Storage.put_binary(key, jpeg),
+         {:ok, updated} <- put_avatar_key(channel, key) do
+      # Best-effort cleanup of the replaced blob (don't fail the update on it).
+      if channel.avatar_key, do: Storage.delete(channel.avatar_key)
+      notify_members(updated.id, :channels_changed)
+      {:ok, %{updated | role: channel.role}}
+    else
+      error ->
+        # The new blob may be written but the row update failed (e.g. the channel
+        # was deleted mid-flight) — reclaim it so it isn't orphaned.
+        Storage.delete(key)
+        error
+    end
+  end
+
+  @doc "Removes a channel's avatar (and its blob). Admin or owner."
+  def remove_channel_avatar(%Scope{} = scope, channel_id) do
+    with {:ok, channel} <- get_channel(scope, channel_id),
+         :ok <- ensure_role(channel.role, ~w(owner admin)),
+         {:ok, updated} <- put_avatar_key(channel, nil) do
+      if channel.avatar_key, do: Storage.delete(channel.avatar_key)
+      notify_members(updated.id, :channels_changed)
+      {:ok, %{updated | role: channel.role}}
+    end
+  end
+
+  # Swap a channel's avatar_key, race-safely: a concurrent delete between the read
+  # and the write becomes {:error, :not_found}, not an Ecto.StaleEntryError crash
+  # — same convention as update_channel/3.
+  defp put_avatar_key(channel, key) do
+    channel
+    |> Ecto.Changeset.change(avatar_key: key)
+    |> Repo.update(stale_error_field: :id)
+    |> normalize_stale()
+  end
+
+  @doc """
   Deletes a channel. Owner only. Member rails refresh via `:channels_changed`;
-  sessions inside the channel get `{:channel_deleted, id}` on the channel
-  topic. (Rooms cascade by FK; their attachment-blob GC arrives with #29.)
+  sessions inside the channel get `{:channel_deleted, id}` on the channel topic.
+  Rooms cascade by FK; their attachment blobs and the channel's own avatar blob
+  are reclaimed (forward-safely) after the delete commits.
   """
   def delete_channel(%Scope{} = scope, channel_id) do
     with {:ok, channel} <- get_channel(scope, channel_id),
@@ -222,6 +279,8 @@ defmodule Eden.Channels do
           # Rooms cascaded with the channel; reclaim their attachment blobs
           # (forward-safely) only after the delete committed.
           Chat.delete_unreferenced_blobs(blob_keys)
+          # The channel's own avatar blob (#70) — best-effort cleanup.
+          if channel.avatar_key, do: Storage.delete(channel.avatar_key)
           broadcast_channel(channel.id, {:channel_deleted, channel.id})
           Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
           :ok

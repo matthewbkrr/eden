@@ -115,6 +115,12 @@ defmodule EdenWeb.ChatLive do
         max_entries: Chat.max_album_entries(),
         max_file_size: Chat.max_attachment_bytes()
       )
+      # Channel avatar (#70): a single image, processed server-side to a square.
+      |> allow_upload(:channel_avatar,
+        accept: ~w(.png .jpg .jpeg .gif .webp),
+        max_entries: 1,
+        max_file_size: 5_000_000
+      )
 
     {:ok, socket}
   end
@@ -537,14 +543,46 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_channel_edit", _params, socket) do
+    # Drop any staged (incl. errored) avatar entry so it can't linger or apply to
+    # the wrong channel later.
+    socket =
+      Enum.reduce(socket.assigns.uploads.channel_avatar.entries, socket, fn entry, acc ->
+        cancel_upload(acc, :channel_avatar, entry.ref)
+      end)
+
     {:noreply, assign(socket, show_channel_edit: false)}
   end
 
+  def handle_event("cancel_channel_avatar", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :channel_avatar, ref)}
+  end
+
+  # Live-upload + form validation for the edit modal (#70): registers the staged
+  # avatar entry and keeps the name/about inputs controlled while typing.
+  def handle_event("validate_channel", %{"channel" => params}, socket) do
+    form = to_form(Channels.change_channel(socket.assigns.channel, params))
+    {:noreply, assign(socket, channel_form: form)}
+  end
+
   def handle_event("save_channel", %{"channel" => params}, socket) do
-    case Channels.update_channel(socket.assigns.current_scope, socket.assigns.channel.id, params) do
+    scope = socket.assigns.current_scope
+
+    case Channels.update_channel(scope, socket.assigns.channel.id, params) do
       {:ok, channel} ->
-        {:noreply,
-         assign(socket, channel: channel, show_channel_edit: false, page_title: channel.name)}
+        # A staged avatar (#70) rides the same save.
+        {channel, avatar_err} = consume_channel_avatar(socket, scope, channel)
+
+        socket =
+          socket
+          |> assign(channel: channel, show_channel_edit: false, page_title: channel.name)
+          |> then(
+            &if(avatar_err,
+              do: put_flash(&1, :error, gettext("Couldn't process that image.")),
+              else: &1
+            )
+          )
+
+        {:noreply, socket}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, channel_form: to_form(changeset))}
@@ -554,6 +592,14 @@ defmodule EdenWeb.ChatLive do
          socket
          |> assign(show_channel_edit: false)
          |> put_flash(:error, gettext("Couldn't update that channel."))}
+    end
+  end
+
+  # Admin+ removes the channel avatar from the open edit modal (keeps it open).
+  def handle_event("remove_channel_avatar", _params, socket) do
+    case Channels.remove_channel_avatar(socket.assigns.current_scope, socket.assigns.channel.id) do
+      {:ok, channel} -> {:noreply, assign(socket, channel: channel)}
+      {:error, _} -> {:noreply, socket}
     end
   end
 
@@ -2319,6 +2365,9 @@ defmodule EdenWeb.ChatLive do
         submit="save_channel"
         close="close_channel_edit"
         submit_label={gettext("Save")}
+        channel={@channel}
+        upload={@uploads.channel_avatar}
+        change="validate_channel"
       />
       <.room_form_modal
         :if={@room_modal}
@@ -5816,6 +5865,17 @@ defmodule EdenWeb.ChatLive do
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, attachment_error(reason))}
         end
+    end
+  end
+
+  # Consume a staged channel-avatar upload (#70), if any → {channel, error_or_nil}.
+  defp consume_channel_avatar(socket, scope, channel) do
+    case consume_uploaded_entries(socket, :channel_avatar, fn %{path: path}, _entry ->
+           {:ok, Channels.set_channel_avatar(scope, channel.id, path)}
+         end) do
+      [{:ok, updated}] -> {updated, nil}
+      [{:error, reason}] -> {channel, reason}
+      [] -> {channel, nil}
     end
   end
 
