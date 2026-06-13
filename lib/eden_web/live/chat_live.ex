@@ -4293,35 +4293,47 @@ defmodule EdenWeb.ChatLive do
 
     ~H"""
     <div :if={@media != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@media))}"]}>
-      <%!-- Images are lightbox tiles sharing a gallery (paged together); videos
-            are poster tiles with a play badge that open the clip. --%>
-      <a
-        :for={item <- @media}
-        id={"att-#{item.id}"}
-        phx-hook={item.kind == "image" && ".Lightbox"}
-        data-full={item.kind == "image" && ~p"/files/#{item.id}"}
-        data-gallery={item.kind == "image" && @gallery}
-        href={~p"/files/#{item.id}"}
-        target="_blank"
-        rel="noopener"
-        aria-label={item.kind == "video" && (item.filename || gettext("Video"))}
-        class={["ed-album__tile", item.kind == "image" && "cursor-zoom-in"]}
-      >
-        <img
-          :if={item.kind == "image" or item.thumbnail_key}
-          src={thumb_src(item)}
-          loading="lazy"
-          alt={
-            item.filename || if(item.kind == "video", do: gettext("Video"), else: gettext("Photo"))
-          }
-        />
-        <%!-- A video with no poster yet (worker pending) gets a neutral tile,
-              never the raw video bytes piped into an <img>. --%>
-        <span :if={item.kind == "video" and is_nil(item.thumbnail_key)} class="ed-album__tile-fill" />
-        <span :if={item.kind == "video"} class="ed-album__play" aria-hidden="true">
-          <.icon name="hero-play-solid" class="size-6" />
-        </span>
-      </a>
+      <%!-- Image tiles share a gallery so the lightbox pages them together. The
+            phx-hook must be a LITERAL string — a dynamic value skips the
+            compile-time colocated-hook rewrite (client: "unknown hook"). --%>
+      <%= for item <- @media do %>
+        <a
+          :if={item.kind == "image"}
+          id={"att-#{item.id}"}
+          phx-hook=".Lightbox"
+          data-full={~p"/files/#{item.id}"}
+          data-gallery={@gallery}
+          href={~p"/files/#{item.id}"}
+          target="_blank"
+          rel="noopener"
+          class="ed-album__tile cursor-zoom-in"
+        >
+          <img src={thumb_src(item)} loading="lazy" alt={item.filename || gettext("Photo")} />
+        </a>
+        <%!-- A video is a poster tile with a play badge that opens the clip; no
+              poster yet (worker pending) gets a neutral fill, never the raw
+              bytes piped into an <img>. --%>
+        <a
+          :if={item.kind == "video"}
+          id={"att-#{item.id}"}
+          href={~p"/files/#{item.id}"}
+          target="_blank"
+          rel="noopener"
+          aria-label={item.filename || gettext("Video")}
+          class="ed-album__tile"
+        >
+          <img
+            :if={item.thumbnail_key}
+            src={thumb_src(item)}
+            loading="lazy"
+            alt={item.filename || gettext("Video")}
+          />
+          <span :if={is_nil(item.thumbnail_key)} class="ed-album__tile-fill" />
+          <span class="ed-album__play" aria-hidden="true">
+            <.icon name="hero-play-solid" class="size-6" />
+          </span>
+        </a>
+      <% end %>
     </div>
     <.attachment_view :for={attachment <- @rest} attachment={attachment} />
     """
