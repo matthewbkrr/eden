@@ -412,7 +412,7 @@ defmodule Eden.ChatTest do
 
     test "deletes the attachment row and blob", %{alice: alice, conv: conv} do
       {:ok, msg} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
-      key = msg.attachment.storage_key
+      key = hd(msg.attachments).storage_key
       assert Eden.Storage.exists?(key)
 
       assert :ok = Chat.delete_message_for_both(scope(alice), msg.id)
@@ -629,17 +629,17 @@ defmodule Eden.ChatTest do
       {:ok, original} = Chat.create_attachment_message(scope(alice), src.id, %{path: real_png()})
 
       assert {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, tgt.id)
-      forwarded = Repo.preload(forwarded, :attachment)
+      forwarded = Repo.preload(forwarded, :attachments)
 
-      assert forwarded.attachment.id != original.attachment.id
-      assert forwarded.attachment.storage_key == original.attachment.storage_key
+      assert hd(forwarded.attachments).id != hd(original.attachments).id
+      assert hd(forwarded.attachments).storage_key == hd(original.attachments).storage_key
       assert Repo.aggregate(Attachment, :count) == 2
     end
 
     test "keeps the shared blob until the last referencing message is deleted", ctx do
       %{alice: alice, source_conv: src, target_conv: tgt} = ctx
       {:ok, original} = Chat.create_attachment_message(scope(alice), src.id, %{path: real_png()})
-      key = original.attachment.storage_key
+      key = hd(original.attachments).storage_key
       {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, tgt.id)
 
       # Deleting the original must NOT remove the blob the forward still references.
@@ -714,7 +714,7 @@ defmodule Eden.ChatTest do
     } do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       {:ok, msg} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
-      key = msg.attachment.storage_key
+      key = hd(msg.attachments).storage_key
       assert Eden.Storage.exists?(key)
 
       :ok = Chat.delete_conversation(scope(alice), conv.id)
@@ -731,7 +731,7 @@ defmodule Eden.ChatTest do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       {:ok, other} = Chat.create_conversation(scope(alice), [carol.id])
       {:ok, msg} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
-      key = msg.attachment.storage_key
+      key = hd(msg.attachments).storage_key
       {:ok, _fwd} = Chat.forward_message(scope(alice), msg.id, other.id)
 
       :ok = Chat.delete_conversation(scope(alice), conv.id)
@@ -787,17 +787,17 @@ defmodule Eden.ChatTest do
                Chat.create_attachment_message(scope(alice), conv.id, %{path: path, body: "look"})
 
       assert message.body == "look"
-      assert message.attachment.kind == "image"
-      assert message.attachment.content_type == "image/png"
-      assert message.attachment.byte_size > 0
-      assert Eden.Storage.exists?(message.attachment.storage_key)
+      assert hd(message.attachments).kind == "image"
+      assert hd(message.attachments).content_type == "image/png"
+      assert hd(message.attachments).byte_size > 0
+      assert Eden.Storage.exists?(hd(message.attachments).storage_key)
     end
 
     test "allows a photo with no caption", %{alice: alice, conv: conv} do
       path = image_path(@png_signature <> "x")
       assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
       assert message.body == ""
-      assert message.attachment
+      assert hd(message.attachments)
     end
 
     test "accepts an arbitrary file as kind=file with a safe type and sanitized name", %{
@@ -812,25 +812,25 @@ defmodule Eden.ChatTest do
                  filename: "../notes.txt"
                })
 
-      assert message.attachment.kind == "file"
-      assert message.attachment.content_type == "application/octet-stream"
-      assert message.attachment.filename == "notes.txt"
+      assert hd(message.attachments).kind == "file"
+      assert hd(message.attachments).content_type == "application/octet-stream"
+      assert hd(message.attachments).filename == "notes.txt"
     end
 
     test "detects an mp4 video by magic bytes", %{alice: alice, conv: conv} do
       path = image_path(<<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16))
 
       assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
-      assert message.attachment.kind == "video"
-      assert message.attachment.content_type == "video/mp4"
+      assert hd(message.attachments).kind == "video"
+      assert hd(message.attachments).content_type == "video/mp4"
     end
 
     test "detects a webm video by magic bytes", %{alice: alice, conv: conv} do
       path = image_path(<<0x1A, 0x45, 0xDF, 0xA3>> <> :binary.copy("0", 16))
 
       assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
-      assert message.attachment.kind == "video"
-      assert message.attachment.content_type == "video/webm"
+      assert hd(message.attachments).kind == "video"
+      assert hd(message.attachments).content_type == "video/webm"
     end
 
     test "detects a pdf as a file", %{alice: alice, conv: conv} do
@@ -842,8 +842,8 @@ defmodule Eden.ChatTest do
                  filename: "report.pdf"
                })
 
-      assert message.attachment.kind == "file"
-      assert message.attachment.content_type == "application/pdf"
+      assert hd(message.attachments).kind == "file"
+      assert hd(message.attachments).content_type == "application/pdf"
     end
 
     test "rejects an empty (0-byte) upload", %{alice: alice, conv: conv} do
@@ -869,7 +869,7 @@ defmodule Eden.ChatTest do
       path = image_path(body)
 
       assert {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
-      assert message.attachment.kind == "video"
+      assert hd(message.attachments).kind == "video"
     end
 
     test "non-members cannot post a photo", %{conv: conv} do
@@ -885,7 +885,7 @@ defmodule Eden.ChatTest do
       path = image_path(@png_signature <> "x")
       {:ok, _} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
       assert_receive {:new_message, message}
-      assert message.attachment.content_type == "image/png"
+      assert hd(message.attachments).content_type == "image/png"
     end
 
     test "enqueues a thumbnail job on the media queue", %{alice: alice, conv: conv} do
@@ -894,7 +894,7 @@ defmodule Eden.ChatTest do
       assert_enqueued(
         worker: ThumbnailWorker,
         queue: :media,
-        args: %{attachment_id: message.attachment.id}
+        args: %{attachment_id: hd(message.attachments).id}
       )
     end
 
@@ -902,8 +902,8 @@ defmodule Eden.ChatTest do
       path = image_path(<<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16))
       {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
 
-      assert message.attachment.kind == "video"
-      assert_enqueued(worker: ThumbnailWorker, args: %{attachment_id: message.attachment.id})
+      assert hd(message.attachments).kind == "video"
+      assert_enqueued(worker: ThumbnailWorker, args: %{attachment_id: hd(message.attachments).id})
     end
 
     test "does not enqueue a media job for a plain file", %{alice: alice, conv: conv} do
@@ -912,8 +912,179 @@ defmodule Eden.ChatTest do
       {:ok, message} =
         Chat.create_attachment_message(scope(alice), conv.id, %{path: path, filename: "a.txt"})
 
-      assert message.attachment.kind == "file"
-      refute_enqueued(worker: ThumbnailWorker, args: %{attachment_id: message.attachment.id})
+      assert hd(message.attachments).kind == "file"
+      refute_enqueued(worker: ThumbnailWorker, args: %{attachment_id: hd(message.attachments).id})
+    end
+  end
+
+  describe "create_album_message/4 (#58)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "stores several attachments in order on one message", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("plain text"), filename: "notes.txt"},
+        %{path: image_path(@png_signature <> "c"), filename: "3.png"}
+      ]
+
+      assert {:ok, message} =
+               Chat.create_album_message(scope(alice), conv.id, sources, %{body: "trip"})
+
+      assert message.body == "trip"
+      kinds = Enum.map(message.attachments, & &1.kind)
+      assert kinds == ["image", "file", "image"]
+      assert Enum.map(message.attachments, & &1.position) == [0, 1, 2]
+      assert Enum.all?(message.attachments, &Eden.Storage.exists?(&1.storage_key))
+    end
+
+    test "enqueues media processing per image/video, not for files", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("plain text"), filename: "notes.txt"}
+      ]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      [img, file] = message.attachments
+      assert_enqueued(worker: ThumbnailWorker, args: %{attachment_id: img.id})
+      refute_enqueued(worker: ThumbnailWorker, args: %{attachment_id: file.id})
+    end
+
+    test "rejects an empty list and an over-cap album", %{alice: alice, conv: conv} do
+      assert {:error, :empty} = Chat.create_album_message(scope(alice), conv.id, [], %{})
+
+      too_many =
+        for i <- 1..11, do: %{path: image_path(@png_signature <> "#{i}"), filename: "#{i}.png"}
+
+      assert {:error, :too_many} = Chat.create_album_message(scope(alice), conv.id, too_many, %{})
+    end
+
+    test "rolls back every stored blob when one source is too large", %{alice: alice, conv: conv} do
+      big = @png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1)
+
+      sources = [
+        %{path: image_path(@png_signature <> "ok"), filename: "ok.png"},
+        %{path: image_path(big), filename: "huge.png"}
+      ]
+
+      assert {:error, :too_large} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      # The first blob, stored before the failure, must not leak.
+      assert Repo.aggregate(Attachment, :count) == 0
+    end
+
+    test "forwarding an album copies every attachment, sharing blobs", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      {:ok, other} = Chat.create_conversation(scope(alice), [bob.id])
+
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      {:ok, original} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, other.id)
+      forwarded = Repo.preload(forwarded, :attachments)
+
+      assert length(forwarded.attachments) == 2
+      assert Enum.map(forwarded.attachments, & &1.position) == [0, 1]
+
+      assert Enum.map(forwarded.attachments, & &1.storage_key) ==
+               Enum.map(original.attachments, & &1.storage_key)
+    end
+
+    test "delete-for-both removes every unshared blob of the album", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      keys = Enum.map(message.attachments, & &1.storage_key)
+      assert Enum.all?(keys, &Eden.Storage.exists?/1)
+
+      :ok = Chat.delete_message_for_both(scope(alice), message.id)
+      refute Enum.any?(keys, &Eden.Storage.exists?/1)
+      assert Repo.aggregate(Attachment, :count) == 0
+    end
+  end
+
+  describe "create_attachments/4 — media album + separate files (#58)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "photos group into one album; each file is its own message", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("plain doc one"), filename: "a.txt"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"},
+        %{path: image_path("plain doc two"), filename: "b.txt"}
+      ]
+
+      assert {:ok, messages} =
+               Chat.create_attachments(scope(alice), conv.id, sources, %{body: "trip"})
+
+      # 1 album (2 photos) + 2 file messages = 3 messages.
+      assert length(messages) == 3
+      [album | files] = messages
+
+      # The album holds only the photos, in order, with the caption.
+      assert album.body == "trip"
+      assert Enum.map(album.attachments, & &1.kind) == ["image", "image"]
+
+      # Each file is a standalone single-attachment message; no file in the album.
+      assert Enum.all?(files, fn m ->
+               [a] = m.attachments
+               a.kind == "file"
+             end)
+
+      refute Enum.any?(album.attachments, &(&1.kind == "file"))
+    end
+
+    test "files only: caption rides the first file, the rest are plain", %{
+      alice: alice,
+      conv: conv
+    } do
+      sources = [
+        %{path: image_path("doc one"), filename: "a.txt"},
+        %{path: image_path("doc two"), filename: "b.txt"}
+      ]
+
+      assert {:ok, [first, second]} =
+               Chat.create_attachments(scope(alice), conv.id, sources, %{body: "here"})
+
+      assert first.body == "here"
+      assert second.body == ""
+    end
+
+    test "media only: a single album message", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      assert {:ok, [album]} = Chat.create_attachments(scope(alice), conv.id, sources, %{})
+      assert length(album.attachments) == 2
+    end
+
+    test "one oversized file fails the whole batch — nothing is sent", %{alice: alice, conv: conv} do
+      big = @png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1)
+
+      sources = [
+        %{path: image_path(@png_signature <> "ok"), filename: "ok.png"},
+        %{path: image_path(big), filename: "huge.png"}
+      ]
+
+      assert {:error, :too_large} = Chat.create_attachments(scope(alice), conv.id, sources, %{})
+      # Preflight rejects before any message/blob is created (no partial album).
+      assert Repo.aggregate(Message, :count) == 0
+      assert Repo.aggregate(Attachment, :count) == 0
     end
   end
 
@@ -932,12 +1103,12 @@ defmodule Eden.ChatTest do
 
       # Original dimensions are known immediately (before any thumbnail), so the
       # first render can reserve layout space.
-      assert message.attachment.width == 1200
-      assert message.attachment.height == 800
+      assert hd(message.attachments).width == 1200
+      assert hd(message.attachments).height == 800
 
-      assert :ok = Chat.generate_thumbnail(message.attachment)
+      assert :ok = Chat.generate_thumbnail(hd(message.attachments))
 
-      attachment = Repo.get(Attachment, message.attachment.id)
+      attachment = Repo.get(Attachment, hd(message.attachments).id)
       assert is_binary(attachment.thumbnail_key)
       assert attachment.width == 1200
       assert attachment.height == 800
@@ -948,16 +1119,16 @@ defmodule Eden.ChatTest do
       assert max(Image.width(thumb), Image.height(thumb)) == 800
 
       assert_receive {:thumbnail_ready, broadcast}
-      assert broadcast.attachment.thumbnail_key == attachment.thumbnail_key
+      assert hd(broadcast.attachments).thumbnail_key == attachment.thumbnail_key
     end
 
     test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
       {:ok, message} =
         Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(300, 200)})
 
-      assert :ok = Chat.generate_thumbnail(message.attachment)
+      assert :ok = Chat.generate_thumbnail(hd(message.attachments))
 
-      attachment = Repo.get(Attachment, message.attachment.id)
+      attachment = Repo.get(Attachment, hd(message.attachments).id)
       {:ok, thumb_bytes} = Eden.Storage.read(attachment.thumbnail_key)
       {:ok, thumb} = Image.from_binary(thumb_bytes)
       assert Image.width(thumb) == 300
@@ -966,14 +1137,14 @@ defmodule Eden.ChatTest do
 
     test "the worker generates the thumbnail and is idempotent", %{alice: alice, conv: conv} do
       {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
-      args = %{attachment_id: message.attachment.id}
+      args = %{attachment_id: hd(message.attachments).id}
 
       assert :ok = perform_job(ThumbnailWorker, args)
-      first_key = Repo.get(Attachment, message.attachment.id).thumbnail_key
+      first_key = Repo.get(Attachment, hd(message.attachments).id).thumbnail_key
       assert is_binary(first_key)
 
       assert :ok = perform_job(ThumbnailWorker, args)
-      assert Repo.get(Attachment, message.attachment.id).thumbnail_key == first_key
+      assert Repo.get(Attachment, hd(message.attachments).id).thumbnail_key == first_key
     end
 
     test "the worker is a no-op for a missing attachment" do
@@ -986,12 +1157,12 @@ defmodule Eden.ChatTest do
       path = image_path(@png_signature <> "not actually a png body")
       {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
 
-      assert {:error, {:unprocessable, _}} = Chat.generate_thumbnail(message.attachment)
+      assert {:error, {:unprocessable, _}} = Chat.generate_thumbnail(hd(message.attachments))
 
       assert {:cancel, {:unprocessable, _}} =
-               perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+               perform_job(ThumbnailWorker, %{attachment_id: hd(message.attachments).id})
 
-      refute Repo.get(Attachment, message.attachment.id).thumbnail_key
+      refute Repo.get(Attachment, hd(message.attachments).id).thumbnail_key
     end
 
     @tag :ffmpeg
@@ -1005,14 +1176,14 @@ defmodule Eden.ChatTest do
           filename: "clip.mp4"
         })
 
-      assert message.attachment.kind == "video"
+      assert hd(message.attachments).kind == "video"
       # Video dimensions/duration are unknown until the worker probes the file.
-      assert is_nil(message.attachment.thumbnail_key)
-      assert is_nil(message.attachment.duration)
+      assert is_nil(hd(message.attachments).thumbnail_key)
+      assert is_nil(hd(message.attachments).duration)
 
-      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: hd(message.attachments).id})
 
-      attachment = Repo.get(Attachment, message.attachment.id)
+      attachment = Repo.get(Attachment, hd(message.attachments).id)
       assert is_binary(attachment.thumbnail_key)
       assert Eden.Storage.exists?(attachment.thumbnail_key)
       assert attachment.width == 320
@@ -1037,10 +1208,10 @@ defmodule Eden.ChatTest do
           filename: "voice.mp4"
         })
 
-      assert message.attachment.kind == "video"
-      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: message.attachment.id})
+      assert hd(message.attachments).kind == "video"
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: hd(message.attachments).id})
 
-      attachment = Repo.get(Attachment, message.attachment.id)
+      attachment = Repo.get(Attachment, hd(message.attachments).id)
       # No video stream → no poster, but the duration is still saved.
       assert is_nil(attachment.thumbnail_key)
       assert attachment.duration in 800..1300

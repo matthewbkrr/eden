@@ -301,7 +301,7 @@ defmodule Eden.ChannelsTest do
       {:ok, msg} =
         Eden.Chat.create_attachment_message(scope(alice), room.id, %{path: real_png()})
 
-      key = msg.attachment.storage_key
+      key = hd(msg.attachments).storage_key
 
       # A forward into a DM must keep the shared blob alive.
       {:ok, dm} = Eden.Chat.create_conversation(scope(alice), [bob.id])
@@ -317,7 +317,7 @@ defmodule Eden.ChannelsTest do
       {:ok, msg2} =
         Eden.Chat.create_attachment_message(scope(alice), room2.id, %{path: real_png()})
 
-      key2 = msg2.attachment.storage_key
+      key2 = hd(msg2.attachments).storage_key
       :ok = Channels.delete_channel(scope(alice), ch2.id)
       refute Eden.Storage.exists?(key2)
     end

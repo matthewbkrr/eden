@@ -24,6 +24,8 @@ defmodule Eden.Chat.Attachment do
     field :height, :integer
     field :duration, :integer
     field :thumbnail_key, :string
+    # Order within an album (#58); 0 for a lone attachment.
+    field :position, :integer, default: 0
 
     belongs_to :message, Eden.Chat.Message
 
@@ -44,7 +46,8 @@ defmodule Eden.Chat.Attachment do
       :width,
       :height,
       :duration,
-      :thumbnail_key
+      :thumbnail_key,
+      :position
     ])
     |> validate_required([:kind, :storage_key, :content_type, :byte_size])
     |> validate_inclusion(:kind, @kinds)

@@ -141,8 +141,8 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert html =~ ~s(src="/files/#{message.attachment.id}")
-      assert html =~ ~s(href="/files/#{message.attachment.id}")
+      assert html =~ ~s(src="/files/#{hd(message.attachments).id}")
+      assert html =~ ~s(href="/files/#{hd(message.attachments).id}")
     end
 
     test "renders a generic file as a download card with its name", ctx do
@@ -157,10 +157,10 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert message.attachment.kind == "file"
+      assert hd(message.attachments).kind == "file"
       assert html =~ "ed-file"
       assert html =~ "notes.txt"
-      assert html =~ ~s(href="/files/#{message.attachment.id}")
+      assert html =~ ~s(href="/files/#{hd(message.attachments).id}")
     end
 
     test "renders a video as an in-app player", ctx do
@@ -175,9 +175,9 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert message.attachment.kind == "video"
+      assert hd(message.attachments).kind == "video"
       assert html =~ "<video"
-      assert html =~ ~s(<source src="/files/#{message.attachment.id}")
+      assert html =~ ~s(<source src="/files/#{hd(message.attachments).id}")
       assert html =~ "video/mp4"
     end
 
@@ -190,12 +190,80 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      refute render(view) =~ "/files/#{message.attachment.id}/thumb"
+      refute render(view) =~ "/files/#{hd(message.attachments).id}/thumb"
 
       # Generating the thumbnail broadcasts on the conversation topic the view
       # is subscribed to, so the image source updates in place.
-      :ok = Chat.generate_thumbnail(message.attachment)
-      assert render(view) =~ "/files/#{message.attachment.id}/thumb"
+      :ok = Chat.generate_thumbnail(hd(message.attachments))
+      assert render(view) =~ "/files/#{hd(message.attachments).id}/thumb"
+    end
+
+    test "renders a multi-photo album as a media grid (#58)", ctx do
+      sources = [
+        %{path: real_png_path(), filename: "1.png"},
+        %{path: real_png_path(), filename: "2.png"},
+        %{path: real_png_path(), filename: "3.png"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert html =~ "ed-album"
+      # Each photo is a gallery tile pointing at its own file, sharing one gallery.
+      for attachment <- message.attachments do
+        assert has_element?(
+                 view,
+                 ~s([data-gallery="album-#{message.id}"][data-full="/files/#{attachment.id}"])
+               )
+      end
+    end
+
+    test "a video in an album tiles in the grid with a play badge (#58)", ctx do
+      mp4 = <<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16)
+
+      sources = [
+        %{path: real_png_path(), filename: "1.png"},
+        %{path: write_tmp(mp4), filename: "clip.mp4"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Both photo and video are grid tiles (not a stacked <video> player).
+      assert html =~ "ed-album"
+      assert html =~ "ed-album__play"
+      refute html =~ "<video"
+
+      for attachment <- message.attachments do
+        assert has_element?(view, ~s(#att-#{attachment.id}))
+      end
+    end
+
+    test "files send as separate messages, never inside an album (#58)", ctx do
+      sources = [
+        %{path: write_tmp("plain one"), filename: "a.txt"},
+        %{path: write_tmp("plain two"), filename: "b.txt"}
+      ]
+
+      {:ok, messages} =
+        Chat.create_attachments(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      # Two files -> two standalone single-attachment messages, no album grid.
+      assert length(messages) == 2
+      assert Enum.all?(messages, fn m -> length(m.attachments) == 1 end)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      refute html =~ "ed-album"
+      assert html =~ "a.txt"
+      assert html =~ "b.txt"
     end
   end
 

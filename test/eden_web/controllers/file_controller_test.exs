@@ -26,7 +26,7 @@ defmodule EdenWeb.FileControllerTest do
     path = image_path(body)
     {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
 
-    %{alice: alice, bob: bob, attachment: message.attachment, png: body}
+    %{alice: alice, bob: bob, attachment: hd(message.attachments), png: body}
   end
 
   describe "GET /files/:id" do
@@ -155,7 +155,7 @@ defmodule EdenWeb.FileControllerTest do
           filename: "quarterly report.txt"
         })
 
-      conn = conn |> log_in_user(alice) |> get(~p"/files/#{message.attachment.id}")
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{hd(message.attachments).id}")
 
       assert response(conn, 200)
       assert get_resp_header(conn, "content-type") == ["application/octet-stream"]
@@ -184,9 +184,9 @@ defmodule EdenWeb.FileControllerTest do
       path = image_path(png)
 
       {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
-      :ok = Chat.generate_thumbnail(message.attachment)
+      :ok = Chat.generate_thumbnail(hd(message.attachments))
 
-      conn = conn |> log_in_user(bob) |> get(~p"/files/#{message.attachment.id}/thumb")
+      conn = conn |> log_in_user(bob) |> get(~p"/files/#{hd(message.attachments).id}/thumb")
       assert response(conn, 200)
       assert get_resp_header(conn, "content-type") == ["image/jpeg"]
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
