@@ -50,6 +50,9 @@ defmodule Eden.Chat.Message do
     timestamps(type: :utc_datetime)
   end
 
+  @doc "Max body length in codepoints; oversized sends are split into parts (#68)."
+  def max_body, do: @max_body
+
   @doc "Whether this is a system message (no human sender; renders from `meta`)."
   def system?(%__MODULE__{kind: "system"}), do: true
   def system?(%__MODULE__{}), do: false

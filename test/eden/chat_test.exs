@@ -196,9 +196,20 @@ defmodule Eden.ChatTest do
                Chat.create_message(scope(alice), conv.id, %{"body" => "   "})
     end
 
-    test "rejects an over-long body", %{alice: alice, conv: conv} do
+    test "rejects an over-long body (the split limit's server backstop, #68)", %{
+      alice: alice,
+      conv: conv
+    } do
+      over = String.duplicate("x", Message.max_body() + 1)
+
       assert {:error, %Ecto.Changeset{}} =
-               Chat.create_message(scope(alice), conv.id, %{"body" => String.duplicate("x", 4001)})
+               Chat.create_message(scope(alice), conv.id, %{"body" => over})
+
+      # A part at exactly the limit (what the client splits to) is accepted.
+      assert {:ok, _} =
+               Chat.create_message(scope(alice), conv.id, %{
+                 "body" => String.duplicate("x", Message.max_body())
+               })
     end
 
     test "non-members cannot post", %{conv: conv} do

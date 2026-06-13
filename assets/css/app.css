@@ -610,6 +610,30 @@
     animation: ed-msg-in 0.14s var(--ed-ease);
   }
 
+  /* A send that the server rejected (#68): the node stays, click to retry, with
+     a ✕ to dismiss — never a permanent grey ghost. */
+  .ed-msg-failed {
+    cursor: pointer;
+  }
+  .ed-bubble,
+  .ed-flat__body {
+    position: relative;
+  }
+  .ed-msg-failed__x {
+    position: absolute;
+    top: -0.5rem;
+    right: -0.5rem;
+    display: grid;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-danger);
+    color: oklch(0.99 0 0);
+    font-size: 0.6875rem;
+    line-height: 1;
+  }
+
   /* Permalink target: briefly ring the message scrolled to. */
   @keyframes ed-msg-focus {
     0%,
