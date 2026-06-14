@@ -123,13 +123,19 @@ design — built incrementally as features land.)
     directly-muted rooms excluded, replies never counted), and a muted channel's
     badge renders de-emphasized. Rooms can't enter folders (guarded in
     `toggle_conversation_folder/3`), so room unread never leaks into folder badges.
-  - **Search** (`search/2`) — conversations by participant display name /
-    username (or group title) and messages by body, all scoped through the
-    user's non-left memberships (deleted/hidden messages never match). Plain
-    escaped `ILIKE '%term%'` (min 2 chars, 20 per group) — right-sized for this
-    scale; the FTS/pg_trgm upgrade path is documented in issue #12. The sidebar
-    search bar renders grouped results; a message result deep-links via the
-    permalink (scroll-to + highlight).
+  - **Search** (`search/2`, rooms via `search_rooms/3` #43) — conversations by
+    participant display name / username (or group title) and messages by body,
+    all scoped through the user's non-left memberships (deleted/hidden messages
+    never match; min 2 chars, 20 per group). Message bodies use a **trigram**
+    match (#56, `body_match/1` shared by DM + room search): escaped `ILIKE
+    '%term%'` substring **plus** word-similarity (`<%`) typo tolerance for
+    metacharacter-free terms ≥ 4 chars — both served by the
+    `messages_body_trgm_idx` GIN `gin_trgm_ops` index (a BitmapOr, no sequential
+    scan), so literal `%`/`_` searches keep exact semantics while typos still
+    match. Conversation names/titles stay plain `ILIKE` (a small set). FTS /
+    relevance ranking (stemming) remains the documented Option-A follow-up. The
+    sidebar search bar renders grouped results; a message result deep-links via
+    the permalink (scroll-to + highlight).
   - **Profile visibility is authorized here, not in the web layer:**
     `get_shared_user/2` returns another user only when the scoped user shares a
     conversation with them (otherwise `:not_found`). The chat header reads

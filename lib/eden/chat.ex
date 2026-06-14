@@ -899,6 +899,15 @@ defmodule Eden.Chat do
 
   @search_limit 20
   @search_min_chars 2
+  # Trigram word-similarity threshold for fuzzy message search (#56). Set
+  # transaction-locally per fuzzy query (see run_search/2) so matching never
+  # depends on the server's unpinned default (0.6, instance/provider-tunable).
+  # Measured word_similarity: real single-char typos cluster at ~0.61–0.70
+  # ("rendezous"↔"rendezvous" 0.615, "докуметация"↔"документацию" 0.53), while
+  # unrelated prefix-sharing words sit lower ("помощь"↔"помещение" 0.43). 0.5 sits
+  # in that gap — it catches typos the strict 0.6 default would miss by a hair,
+  # yet rejects the 0.43 noise that 0.4 would let through.
+  @fuzzy_threshold 0.5
 
   @doc "Shortest query `search/2` will run (shorter ones return empty results)."
   def search_min_chars, do: @search_min_chars
@@ -908,10 +917,11 @@ defmodule Eden.Chat do
   username (or group title) and messages by body. Everything is scoped through
   the user's memberships — nothing outside their conversations can match.
 
-  Plain `ILIKE '%term%'` substring matching, right-sized for this scale; the
-  upgrade path (Postgres FTS / pg_trgm) is documented in issue #12. Returns
-  `%{conversations: [...], messages: [...]}` (each capped at #{@search_limit});
-  a blank or single-character query returns empty lists.
+  Message bodies use a **trigram-indexed** match (#56): indexed `ILIKE '%term%'`
+  substring plus typo-tolerant word-similarity for longer, metacharacter-free
+  terms (see `body_match/1`). Conversation names/titles stay plain `ILIKE` (a
+  small set). Returns `%{conversations: [...], messages: [...]}` (each capped at
+  #{@search_limit}); a blank or single-character query returns empty lists.
   """
   def search(%Scope{user: user}, query) do
     term = query |> to_string() |> String.trim()
@@ -919,11 +929,9 @@ defmodule Eden.Chat do
     if String.length(term) < @search_min_chars do
       %{conversations: [], messages: []}
     else
-      pattern = "%" <> escape_like(term) <> "%"
-
       %{
-        conversations: search_conversations(user, pattern),
-        messages: search_messages(user, pattern)
+        conversations: search_conversations(user, like_pattern(term)),
+        messages: search_messages(user, term)
       }
     end
   end
@@ -932,9 +940,9 @@ defmodule Eden.Chat do
   Searches message bodies in the corporate layer (#43), scoped to
   `{:channel, channel_id}` (across that channel's rooms the user is a member
   of) or `{:room, room_id}` (one room). Same guards as `search/2` (min
-  #{@search_min_chars} chars, escaped ILIKE, capped at #{@search_limit});
-  tombstoned/per-user-hidden messages never match. Replies ARE included —
-  their permalinks open the thread panel. Results preload sender +
+  #{@search_min_chars} chars, the trigram-indexed body match, capped at
+  #{@search_limit}); tombstoned/per-user-hidden messages never match. Replies
+  ARE included — their permalinks open the thread panel. Results preload sender +
   conversation (for the room-name breadcrumb).
   """
   def search_rooms(%Scope{user: user}, search_scope, query) do
@@ -943,15 +951,14 @@ defmodule Eden.Chat do
     if String.length(term) < @search_min_chars do
       []
     else
-      pattern = "%" <> escape_like(term) <> "%"
-
-      room_search_base(user, pattern)
+      room_search_base(user, term)
       |> room_search_scope(search_scope)
-      |> Repo.all()
+      |> order_by(^search_order(term))
+      |> run_search(term)
     end
   end
 
-  defp room_search_base(user, pattern) do
+  defp room_search_base(user, term) do
     from(m in Message,
       join: mem in Membership,
       # Room memberships are delete-based today (leave_rooms hard-deletes), so
@@ -968,11 +975,11 @@ defmodule Eden.Chat do
       # Only real messages — join-request system rows (kind "system") carry an
       # empty body and a meta payload, never something a user means to find.
       where: m.kind == "user",
-      where: ilike(m.body, ^pattern) and is_nil(m.deleted_at) and is_nil(d.id),
-      order_by: [desc: m.id],
+      where: is_nil(m.deleted_at) and is_nil(d.id),
       limit: @search_limit,
       preload: [:sender, :conversation]
     )
+    |> where(^body_match(term))
   end
 
   defp room_search_scope(query, {:channel, channel_id}) do
@@ -1017,7 +1024,7 @@ defmodule Eden.Chat do
     |> Enum.take(@search_limit)
   end
 
-  defp search_messages(user, pattern) do
+  defp search_messages(user, term) do
     from(m in Message,
       join: mem in Membership,
       on:
@@ -1029,13 +1036,80 @@ defmodule Eden.Chat do
       on: d.message_id == m.id and d.user_id == ^user.id,
       # Room messages join search with #32 (need channel-aware presentation).
       where: is_nil(c.channel_id),
-      where: ilike(m.body, ^pattern) and is_nil(m.deleted_at) and is_nil(d.id),
-      order_by: [desc: m.id],
+      where: is_nil(m.deleted_at) and is_nil(d.id),
       limit: @search_limit,
       preload: [:sender, conversation: [memberships: :user]]
     )
-    |> Repo.all()
+    |> where(^body_match(term))
+    |> order_by(^search_order(term))
+    |> run_search(term)
   end
+
+  # The message-body match, shared by DM (#12) and room (#43) search and served by
+  # the `messages_body_trgm_idx` GIN trigram index (#56):
+  #
+  #   * `ILIKE '%term%'` — exact substring (the index serves it for 3+ char terms;
+  #     a 2-char term, the allowed minimum, has no full trigram and scans),
+  #     escaped so `%`/`_` match literally.
+  #   * `term <% body` — trigram word-similarity, for typo tolerance. Also a
+  #     trigram-index operator, so the OR stays index-served (a BitmapOr of two
+  #     index scans, not a sequential scan). Its threshold is pinned per query in
+  #     run_search/2.
+  #
+  # Fuzzy only kicks in for word-like terms of a useful length: short or
+  # metacharacter-bearing terms stay pure substring, so literal `%`/`_` searches
+  # keep their exact semantics and tiny terms don't drag in noise.
+  defp body_match(term) do
+    pattern = like_pattern(term)
+
+    if fuzzy_term?(term) do
+      dynamic([m], ilike(m.body, ^pattern) or fragment("? <% ?", ^term, m.body))
+    else
+      dynamic([m], ilike(m.body, ^pattern))
+    end
+  end
+
+  # Closest match first for a typo search (an exact substring scores ~1.0, so it
+  # still floats to the top); plain recency for exact-substring searches, where a
+  # similarity sort would be meaningless.
+  defp search_order(term) do
+    if fuzzy_term?(term) do
+      [
+        desc: dynamic([m], fragment("word_similarity(?, ?)", ^term, m.body)),
+        desc: dynamic([m], m.id)
+      ]
+    else
+      [desc: dynamic([m], m.id)]
+    end
+  end
+
+  # Runs a message-search query. Fuzzy queries pin the trigram word-similarity
+  # threshold transaction-locally (via set_config/3, parameterized — no SQL
+  # interpolation) so matching never depends on the server's unpinned default.
+  # Non-fuzzy queries skip the transaction entirely.
+  defp run_search(query, term) do
+    if fuzzy_term?(term) do
+      {:ok, rows} =
+        Repo.transaction(fn ->
+          Repo.query!(
+            "SELECT set_config('pg_trgm.word_similarity_threshold', $1, true)",
+            [to_string(@fuzzy_threshold)]
+          )
+
+          Repo.all(query)
+        end)
+
+      rows
+    else
+      Repo.all(query)
+    end
+  end
+
+  defp fuzzy_term?(term),
+    do: String.length(term) >= 4 and not String.contains?(term, ["%", "_", "\\"])
+
+  # The escaped `%term%` LIKE pattern, shared by message + conversation search.
+  defp like_pattern(term), do: "%" <> escape_like(term) <> "%"
 
   @doc """
   Toggles a conversation's membership in one of the scoped user's folders. Both
