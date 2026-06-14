@@ -544,9 +544,10 @@
     position: fixed;
     z-index: 60;
     min-width: 12rem;
-    /* Never exceed the viewport (the reaction grid can make the menu tall, #67):
-       cap to the screen and scroll inside, and contain the scroll so reaching an
-       edge never chains out to the message pane behind it. */
+    /* Never exceed the viewport (a long menu — many actions, a tall quoted
+       reply — can run off-screen): cap to the screen and scroll inside, and
+       contain the scroll so reaching an edge never chains out to the message
+       pane behind it. */
     max-width: calc(100vw - 1rem);
     max-height: calc(100dvh - 1rem);
     overflow-y: auto;
@@ -724,17 +725,25 @@
   .ed-menu__react-more:hover {
     color: var(--ed-ink);
   }
-  .ed-menu__grid {
+  /* Shared full-emoji grid popover (#72): position:fixed, placed by the
+     .ReactionGrid hook at the menu's "more" chevron. One per page. */
+  .ed-react-grid {
+    position: fixed;
+    z-index: 61;
     display: grid;
     grid-template-columns: repeat(7, 2.25rem);
     gap: 0.125rem;
-    max-height: 11rem;
+    max-height: 13rem;
     overflow-y: auto;
     /* Keep the grid's scroll to itself — never bleed into the message pane. */
     overscroll-behavior: contain;
-    padding: 0.125rem;
+    padding: 0.25rem;
+    border: 1px solid var(--ed-border);
+    border-radius: var(--ed-radius);
+    background: var(--ed-surface);
+    box-shadow: 0 12px 32px oklch(0 0 0 / 0.32);
   }
-  .ed-menu__grid[hidden] {
+  .ed-react-grid[hidden] {
     display: none;
   }
   @media (prefers-reduced-motion: reduce) {

@@ -2076,6 +2076,28 @@ defmodule EdenWeb.ChatLive do
             <div class="flex flex-col gap-2 mt-2" id="pending-messages" phx-update="ignore"></div>
           </div>
 
+          <%!-- Shared full-emoji grid (#72): ONE popover for the page, opened by a
+                message menu's "more" chevron, instead of a 39-button grid hidden in
+                every message. Positioned + targeted by the .ReactionGrid hook. --%>
+          <div
+            id="reaction-grid"
+            class="ed-react-grid"
+            phx-hook=".ReactionGrid"
+            role="menu"
+            aria-label={gettext("Add reaction")}
+            hidden
+          >
+            <button
+              :for={e <- reaction_set()}
+              type="button"
+              class="ed-menu__react"
+              role="menuitem"
+              data-emoji={e}
+            >
+              {e}
+            </button>
+          </div>
+
           <.form
             for={@composer}
             id="composer"
@@ -2720,18 +2742,8 @@ defmodule EdenWeb.ChatLive do
             this.wire()
             if (active === this) {
               this.menu.hidden = false
-              this.restoreGrid()
               this.position(this.x, this.y)
             }
-          },
-          // Re-apply the reaction grid's expanded state after a morph: a
-          // re-render (e.g. someone else reacts to this message) resets it to the
-          // server default (collapsed). No-ops on menus without a grid.
-          restoreGrid() {
-            const grid = this.menu.querySelector("[data-react-grid]")
-            const exp = this.menu.querySelector("[data-react-expand]")
-            if (grid) grid.hidden = !this.gridOpen
-            if (exp) exp.setAttribute("aria-expanded", String(!!this.gridOpen))
           },
           destroyed() { this.close() },
           // Bind the menu node + its delegated click handler. Idempotent: re-runs on
@@ -2764,18 +2776,25 @@ defmodule EdenWeb.ChatLive do
             }
           },
           onItem(e) {
-            // The reaction row's "more" chevron expands the full emoji grid in
-            // place (#67) — keep the menu open and re-clamp to the viewport.
+            // The reaction row's "more" chevron opens the shared full-emoji grid
+            // popover (#72) for this message, then closes the menu.
             const expand = e.target.closest("[data-react-expand]")
             if (expand) {
               e.preventDefault()
-              const grid = this.menu.querySelector("[data-react-grid]")
-              if (grid) {
-                this.gridOpen = grid.hidden
-                grid.hidden = !this.gridOpen
-                expand.setAttribute("aria-expanded", String(this.gridOpen))
-                this.position(this.x, this.y)
-              }
+              // Anchor the grid to the MENU's on-screen box, not the chevron —
+              // the chevron is the rightmost item in the reacts row, so on a
+              // right-aligned bubble its left edge clamps the grid to the far
+              // screen edge. The menu's top-left puts the grid where the menu was.
+              const mr = this.menu.getBoundingClientRect()
+              window.dispatchEvent(new CustomEvent("ed:open-reaction-grid", {
+                detail: {
+                  id: this.el.dataset.messageId,
+                  mine: expand.dataset.mine || "",
+                  x: mr.left,
+                  y: mr.top
+                }
+              }))
+              this.close()
               return
             }
             const ct = e.target.closest("[data-copy-text]")
@@ -2803,8 +2822,6 @@ defmodule EdenWeb.ChatLive do
             if (active && active !== this) active.close()
             active = this
             this.x = x; this.y = y
-            // Every open starts with the reaction grid collapsed (quick row only).
-            this.gridOpen = false
             // Remember a focused trigger (keyboard open) to restore focus on Escape.
             this.opener = this.el.contains(document.activeElement) ? document.activeElement : null
             this.menu.hidden = false
@@ -2852,6 +2869,83 @@ defmodule EdenWeb.ChatLive do
             ta.focus()
             ta.select()
             try { if (document.execCommand("copy")) done() } finally { ta.remove() }
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ReactionGrid">
+        // The shared full-emoji grid popover (#72). One instance for the page; a
+        // message menu's "more" chevron fires `ed:open-reaction-grid` with the
+        // message id + anchor, we position over it and (on pick) push "react" for
+        // that message. Closes on outside-click / Esc / any scroll outside the
+        // grid (its own scroll is contained by CSS overscroll-behavior).
+        export default {
+          mounted() {
+            this.onOpen = (e) => this.open(e.detail.id, e.detail.x, e.detail.y, e.detail.mine)
+            window.addEventListener("ed:open-reaction-grid", this.onOpen)
+            this.el.addEventListener("click", (e) => {
+              const btn = e.target.closest("[data-emoji]")
+              if (!btn) return
+              this.pushEvent("react", { id: this.msgId, emoji: btn.dataset.emoji })
+              this.close()
+            })
+            // Close on any interaction outside the grid: a left-click, OR a
+            // right-click (which opens a fresh context menu — the two popovers are
+            // mutually exclusive), OR a scroll. Without the contextmenu case the
+            // grid would linger under a newly-opened menu.
+            this.onDoc = (e) => { if (!this.el.contains(e.target)) this.close() }
+            this.onKey = (e) => { if (e.key === "Escape") this.close() }
+            this.onScroll = (e) => { if (!this.el.contains(e.target)) this.close() }
+          },
+          // Destroyed while open (e.g. @selected -> nil on leave/remove, or a
+          // server-driven navigate) must drop the document listeners too — else
+          // they'd survive on a detached node. close() does exactly that.
+          destroyed() {
+            window.removeEventListener("ed:open-reaction-grid", this.onOpen)
+            this.close()
+          },
+          open(id, x, y, mine) {
+            // Re-entrant: tear down any listeners from a prior open FIRST. If the
+            // grid was already open (a new menu opened over it, then its chevron
+            // clicked), a surviving onDoc would fire on this very opening click and
+            // slam the grid shut — and leave a stale listener that breaks every
+            // future open. Clearing first guarantees the opening gesture is clean.
+            this.teardown()
+            this.msgId = id
+            // Mirror the per-message highlight the in-menu grid used to show: mark
+            // the viewer's existing reactions (space-joined in the chevron's
+            // data-mine) so the full grid still tells you what you've already picked.
+            const set = new Set((mine || "").split(" ").filter(Boolean))
+            this.el.querySelectorAll("[data-emoji]").forEach((b) => {
+              const on = set.has(b.dataset.emoji)
+              b.classList.toggle("ed-menu__react--active", on)
+              b.setAttribute("aria-pressed", String(on))
+            })
+            this.el.hidden = false
+            const w = this.el.offsetWidth, h = this.el.offsetHeight
+            this.el.style.left = Math.max(8, Math.min(x, window.innerWidth - w - 8)) + "px"
+            this.el.style.top = Math.max(8, Math.min(y, window.innerHeight - h - 8)) + "px"
+            // Move focus into the popover so keyboard users land on it (the menu
+            // that opened it has closed, dropping focus to <body>).
+            const first = this.el.querySelector("[data-emoji]")
+            if (first) first.focus({ preventScroll: true })
+            // Defer the outside-interaction listeners so the same gesture that
+            // opened the grid doesn't immediately close it.
+            setTimeout(() => {
+              document.addEventListener("click", this.onDoc)
+              document.addEventListener("contextmenu", this.onDoc)
+            }, 0)
+            document.addEventListener("keydown", this.onKey)
+            document.addEventListener("scroll", this.onScroll, { capture: true, passive: true })
+          },
+          close() {
+            this.el.hidden = true
+            this.teardown()
+          },
+          teardown() {
+            document.removeEventListener("click", this.onDoc)
+            document.removeEventListener("contextmenu", this.onDoc)
+            document.removeEventListener("keydown", this.onKey)
+            document.removeEventListener("scroll", this.onScroll, { capture: true })
           }
         }
       </script>
@@ -4629,9 +4723,10 @@ defmodule EdenWeb.ChatLive do
   # The message context menu — opened by right-click / long-press on the bubble
   # (the `.ContextMenu` hook). It opens with a Telegram-style quick-react row on
   # top (#67): tapping an emoji dispatches "react" and closes the menu, the "more"
-  # chevron expands the full emoji grid in place. Copy actions run client-side;
-  # forward/delete dispatch to the LiveView. The hook re-applies the open state
-  # after a re-render, so no phx-update="ignore" is needed and labels stay free.
+  # chevron opens the shared full-emoji grid popover (#72, the `.ReactionGrid`
+  # hook) anchored to it — carrying the viewer's current reactions in data-mine so
+  # the grid can highlight them. Copy actions run client-side; forward/delete
+  # dispatch to the LiveView.
   defp message_menu(assigns) do
     assigns = assign(assigns, :mine_emoji, mine_emoji(assigns.message, assigns.me))
 
@@ -4649,27 +4744,17 @@ defmodule EdenWeb.ChatLive do
         >
           {e}
         </button>
+        <%!-- Opens the shared full-emoji grid (#72): one popover per page, not a
+              39-button grid hidden inside every message's menu. --%>
         <button
           type="button"
           class="ed-menu__react ed-menu__react-more"
           data-react-expand
+          data-mine={Enum.join(@mine_emoji, " ")}
           aria-label={gettext("More emoji")}
-          aria-expanded="false"
+          aria-haspopup="menu"
         >
           <.icon name="hero-chevron-down-micro" class="size-4" />
-        </button>
-      </div>
-      <div class="ed-menu__grid" data-react-grid hidden>
-        <button
-          :for={e <- reaction_set()}
-          type="button"
-          class={["ed-menu__react", e in @mine_emoji && "ed-menu__react--active"]}
-          phx-click="react"
-          phx-value-id={@message.id}
-          phx-value-emoji={e}
-          aria-pressed={to_string(e in @mine_emoji)}
-        >
-          {e}
         </button>
       </div>
       <div class="ed-menu__sep"></div>

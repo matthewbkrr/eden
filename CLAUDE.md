@@ -76,9 +76,11 @@ design — built incrementally as features land.)
     "mine" from their own id. The emoji is validated against a closed set
     (`MessageReaction.allowed/0`) since the `react` event is client-supplied.
     Reacting is reachable only from the **message context menu** (right-click /
-    long-press, Telegram-style) — a quick-react row + a "more" chevron that expands
-    the full emoji grid in place — never a per-message hover affordance (that
-    reflows the bubble). The quick-react row is **per-user**: each member picks
+    long-press, Telegram-style) — a quick-react row + a "more" chevron that opens
+    one **shared full-emoji grid popover** (`#reaction-grid`, the `.ReactionGrid`
+    hook — #72: one per page, not a 39-button grid hidden in every message) —
+    never a per-message hover affordance (that reflows the bubble). The quick-react
+    row is **per-user**: each member picks
     their own in Settings (`Chat.set_quick_reactions/2`, stored in
     `chat_folder_prefs.quick_reactions`; `nil` = the default set). Chips render
     under the message in both DM bubbles and Mattermost-flat rooms; a change
