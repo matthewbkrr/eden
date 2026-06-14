@@ -618,6 +618,178 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "thread following (#57)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "talk"})
+      :ok = Chat.join_room(room.id, bob.id)
+      carol = user_fixture(%{username: "carolf"})
+      :ok = Chat.join_room(room.id, carol.id)
+      {:ok, root} = Chat.create_message(scope(alice), room.id, %{"body" => "root post"})
+      %{conv: room, root: root, carol: carol}
+    end
+
+    test "a reply auto-follows the replier and pulls in the root author with an unread", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "hi"})
+
+      # The replier follows and has, by definition, seen their own reply.
+      assert %{following: true, unread: 0} = Chat.thread_follow_state(scope(bob), root.id)
+      # The root author is pulled in and owes one unread.
+      assert %{following: true, unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "every other follower's unread increments; the replier's own does not", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      root: root
+    } do
+      {:ok, :following} = Chat.follow_thread(scope(carol), root.id)
+
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+
+      # bob authored both replies — stays at zero.
+      assert %{following: true, unread: 0} = Chat.thread_follow_state(scope(bob), root.id)
+      # alice (root author) + carol (opted-in follower) each counted both.
+      assert %{following: true, unread: 2} = Chat.thread_follow_state(scope(alice), root.id)
+      assert %{following: true, unread: 2} = Chat.thread_follow_state(scope(carol), root.id)
+    end
+
+    test "opening a thread resets the viewer's unread (mark_thread_read)", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "ping"})
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+
+      assert :ok = Chat.mark_thread_read(scope(alice), root.id)
+      assert %{following: true, unread: 0} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "unfollow stops counting; a later reply does not re-subscribe", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "first"})
+      assert {:ok, :unfollowed} = Chat.unfollow_thread(scope(alice), root.id)
+      assert %{following: false, unread: 0} = Chat.thread_follow_state(scope(alice), root.id)
+
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "second"})
+      # An explicit unfollow is sticky — still not following, still zero.
+      assert %{following: false, unread: 0} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "follow_thread is idempotent and never clobbers an existing unread", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "ping"})
+      assert %{following: true, unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+
+      assert {:ok, :following} = Chat.follow_thread(scope(alice), root.id)
+      assert %{following: true, unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "thread_unread_counts and list_followed_threads are per-user and scoped", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      conv: conv,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "ping"})
+
+      # carol never followed → no row at all.
+      assert %{} == Chat.thread_unread_counts(scope(carol), conv.id)
+      # alice (root author) owes one; bob (replier) follows at zero.
+      assert %{root.id => 1} == Chat.thread_unread_counts(scope(alice), conv.id)
+      assert %{root.id => 0} == Chat.thread_unread_counts(scope(bob), conv.id)
+
+      assert [{%{id: root_id}, 1}] = Chat.list_followed_threads(scope(alice), conv.id)
+      assert root_id == root.id
+
+      # Non-member sees nothing.
+      dave = user_fixture(%{username: "davef"})
+      assert %{} == Chat.thread_unread_counts(scope(dave), conv.id)
+      assert [] == Chat.list_followed_threads(scope(dave), conv.id)
+    end
+
+    test "deleting an unread reply decrements the follower's count (no phantom unread)", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, _r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+      # alice (root author) owes two unread.
+      assert %{unread: 2} = Chat.thread_follow_state(scope(alice), root.id)
+
+      # bob deletes one reply for everyone → it stops counting against alice.
+      :ok = Chat.delete_message_for_both(scope(bob), r1.id)
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "a root the viewer deleted-for-me drops from their list and counts", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "hi"})
+      assert %{root.id => 1} == Chat.thread_unread_counts(scope(alice), conv.id)
+
+      :ok = Chat.delete_message_for_me(scope(alice), root.id)
+      assert %{} == Chat.thread_unread_counts(scope(alice), conv.id)
+      assert [] == Chat.list_followed_threads(scope(alice), conv.id)
+      # bob (also a follower) still sees it.
+      assert %{root.id => 0} == Chat.thread_unread_counts(scope(bob), conv.id)
+    end
+
+    test "followed reply-less threads sort after active ones", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "active"})
+      {:ok, empty} = Chat.create_message(scope(alice), conv.id, %{"body" => "lonely root"})
+      {:ok, :following} = Chat.follow_thread(scope(alice), empty.id)
+
+      ids = Chat.list_followed_threads(scope(alice), conv.id) |> Enum.map(fn {r, _} -> r.id end)
+      # The active thread (has last_reply_at) first; the reply-less root last
+      # (not first, as a naive DESC NULLS-FIRST would put it).
+      assert ids == [root.id, empty.id]
+    end
+
+    test "follow/mark reject non-roots, non-rooms, and non-members", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "r"})
+      assert {:error, :not_a_root} = Chat.follow_thread(scope(alice), reply.id)
+
+      # DM root: threads are rooms-only (#26).
+      eve = user_fixture(%{username: "evef"})
+      {:ok, dm} = Chat.create_conversation(scope(alice), [eve.id])
+      {:ok, dm_msg} = Chat.create_message(scope(alice), dm.id, %{"body" => "hey"})
+      assert {:error, :not_found} = Chat.follow_thread(scope(alice), dm_msg.id)
+
+      # Non-member.
+      mallory = user_fixture(%{username: "malloryf"})
+      assert {:error, :not_found} = Chat.follow_thread(scope(mallory), root.id)
+      assert {:error, :not_found} = Chat.mark_thread_read(scope(mallory), root.id)
+    end
+  end
+
   describe "reactions (#67)" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

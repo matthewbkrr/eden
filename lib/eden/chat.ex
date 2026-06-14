@@ -22,6 +22,7 @@ defmodule Eden.Chat do
     Message,
     MessageDeletion,
     MessageReaction,
+    ThreadMembership,
     ThumbnailWorker
   }
 
@@ -1471,12 +1472,27 @@ defmodule Eden.Chat do
   # zero against races) and lets open panels/footers refresh.
   defp sync_thread_after_delete(%Message{root_id: nil}), do: :ok
 
-  defp sync_thread_after_delete(%Message{root_id: root_id, conversation_id: conversation_id}) do
+  defp sync_thread_after_delete(%Message{
+         root_id: root_id,
+         conversation_id: conversation_id,
+         inserted_at: reply_at
+       }) do
     from(m in Message,
       where: m.id == ^root_id,
       update: [set: [reply_count: fragment("GREATEST(reply_count - 1, 0)")]]
     )
     |> Repo.update_all([])
+
+    # The deleted reply was still unread for any follower who hadn't viewed past
+    # it (#57): decrement their count so a removed reply can't leave a phantom
+    # unread. `unread_replies > 0` floors it; `last_viewed_at` gates who it counted
+    # against (a viewer who read past it already had it cleared to zero on view).
+    from(tm in ThreadMembership,
+      where:
+        tm.root_id == ^root_id and tm.unread_replies > 0 and
+          (is_nil(tm.last_viewed_at) or tm.last_viewed_at < ^reply_at)
+    )
+    |> Repo.update_all(inc: [unread_replies: -1])
 
     case preloaded_message(root_id) do
       nil -> :ok
@@ -1618,6 +1634,126 @@ defmodule Eden.Chat do
     end
   end
 
+  @doc """
+  Follow a thread (#57) so its new replies count toward the viewer's unread.
+  Idempotent (re-following never resets the count); authorized via the root's
+  room membership. `{:error, :not_found | :not_a_root}`.
+  """
+  def follow_thread(%Scope{user: user} = scope, root_id) do
+    with {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id) do
+      upsert_thread_membership(user.id, root.id, following: true)
+      {:ok, :following}
+    end
+  end
+
+  @doc """
+  Unfollow a thread: keeps the row (so a later reply by someone else won't
+  silently re-subscribe you) but stops counting and clears the unread count.
+  """
+  def unfollow_thread(%Scope{user: user} = scope, root_id) do
+    with {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id) do
+      upsert_thread_membership(user.id, root.id, following: false, unread_replies: 0)
+      {:ok, :unfollowed}
+    end
+  end
+
+  @doc """
+  Marks a thread read for the scoped user: resets its unread count and stamps
+  `last_viewed_at`. Viewing does not subscribe you (Mattermost semantics), so a
+  non-follower's missing row is left untouched (nothing to reset).
+  """
+  def mark_thread_read(%Scope{user: user} = scope, root_id) do
+    with {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id) do
+      from(tm in ThreadMembership, where: tm.user_id == ^user.id and tm.root_id == ^root.id)
+      |> Repo.update_all(set: [last_viewed_at: now(), unread_replies: 0])
+
+      # Sync the user's other open sessions (multi-tab): zero this thread's badge.
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user.id),
+        {:thread_read, root.conversation_id, root.id}
+      )
+
+      :ok
+    end
+  end
+
+  @doc """
+  The scoped user's follow state for one thread:
+  `%{following: boolean, unread: integer}` (defaults when there is no row).
+  """
+  def thread_follow_state(%Scope{user: user}, root_id) do
+    case Repo.one(
+           from tm in ThreadMembership,
+             where: tm.user_id == ^user.id and tm.root_id == ^root_id,
+             select: {tm.following, tm.unread_replies}
+         ) do
+      {following, unread} -> %{following: following, unread: unread}
+      nil -> %{following: false, unread: 0}
+    end
+  end
+
+  @doc """
+  Per-thread unread counts for the scoped user within one room:
+  `%{root_id => unread_replies}` over the threads they follow (a count may be 0).
+  Seeds the room's Threads badge + per-thread indicators; scoped by membership.
+  """
+  def thread_unread_counts(%Scope{user: user} = scope, conversation_id) do
+    if member?(scope, conversation_id) do
+      Repo.all(
+        from r in Message,
+          join: tm in ThreadMembership,
+          on: tm.root_id == r.id and tm.user_id == ^user.id,
+          left_join: d in MessageDeletion,
+          on: d.message_id == r.id and d.user_id == ^user.id,
+          where:
+            tm.following == true and r.conversation_id == ^conversation_id and
+              is_nil(r.deleted_at) and is_nil(d.id),
+          select: {r.id, tm.unread_replies}
+      )
+      |> Map.new()
+    else
+      %{}
+    end
+  end
+
+  @doc """
+  The scoped user's followed threads in a room, most-recently active first:
+  `[{root_message, unread_replies}]` with the root's sender/attachments preloaded.
+  Backs the room's Threads list; tombstoned roots excluded; capped at #{@thread_cap}.
+  """
+  def list_followed_threads(%Scope{user: user} = scope, conversation_id) do
+    if member?(scope, conversation_id) do
+      Repo.all(
+        from r in Message,
+          join: tm in ThreadMembership,
+          on: tm.root_id == r.id and tm.user_id == ^user.id,
+          left_join: d in MessageDeletion,
+          on: d.message_id == r.id and d.user_id == ^user.id,
+          where:
+            tm.following == true and r.conversation_id == ^conversation_id and
+              is_nil(r.deleted_at) and is_nil(d.id),
+          # Active threads first; a followed reply-less root (last_reply_at NULL)
+          # must sort last, not first (Postgres DESC is NULLS FIRST by default).
+          order_by: [desc_nulls_last: r.last_reply_at, desc: r.id],
+          limit: @thread_cap,
+          preload: [:sender, :attachments],
+          select: {r, tm.unread_replies}
+      )
+    else
+      []
+    end
+  end
+
   defp ensure_root(%Message{root_id: nil}), do: :ok
   defp ensure_root(_reply), do: {:error, :not_a_root}
 
@@ -1631,7 +1767,9 @@ defmodule Eden.Chat do
   # Counter bump + fanout. The root is re-read fresh so every session renders
   # the same footer (count, last reply time). A 0-row bump means the root was
   # hard-deleted underneath us (admin deleted the room mid-send) — everything
-  # cascaded, so there is nobody left to notify; don't crash the sender.
+  # cascaded, so there is nobody left to notify; skip follow-tracking and the
+  # broadcast (track_reply's FK insert would otherwise raise) and don't crash the
+  # sender.
   defp deliver_reply(root, reply) do
     {bumped, _} =
       Repo.update_all(from(m in Message, where: m.id == ^root.id),
@@ -1650,6 +1788,9 @@ defmodule Eden.Chat do
 
     with 1 <- bumped,
          %Message{} = fresh_root <- preloaded_message(root.id) do
+      # Follow tracking (#57): the replier auto-follows, the root author is pulled
+      # in on the first reply, and every other follower gains one unread reply.
+      track_reply(root, reply)
       broadcast(root.conversation_id, {:thread_reply, fresh_root, reply})
     end
 
@@ -1667,6 +1808,62 @@ defmodule Eden.Chat do
           reply_to: [:sender, :attachments],
           forwarded_from: :sender
         ]
+    )
+  end
+
+  # Follow bookkeeping for a new reply (#57). Sequenced inside one transaction:
+  # (1) the replier auto-follows and has seen their own reply (count reset to 0);
+  # (2) the root author is pulled in on the first reply — insert-if-missing, so an
+  # explicit unfollow is never undone; (3) every OTHER follower gains one unread.
+  # The order matters: the replier is reset before the fan-out skips them, and the
+  # author's row exists before it's counted.
+  defp track_reply(root, reply) do
+    Repo.transact(fn ->
+      upsert_thread_membership(reply.sender_id, root.id,
+        following: true,
+        last_viewed_at: reply.inserted_at,
+        unread_replies: 0
+      )
+
+      if root.sender_id not in [nil, reply.sender_id] do
+        ensure_following(root.sender_id, root.id)
+      end
+
+      from(tm in ThreadMembership,
+        where:
+          tm.root_id == ^root.id and tm.following == true and
+            tm.user_id != ^reply.sender_id
+      )
+      |> Repo.update_all(inc: [unread_replies: 1])
+
+      {:ok, :tracked}
+    end)
+  end
+
+  # Insert-or-update a thread membership. `set` is applied on conflict, so callers
+  # control exactly which fields a re-follow / reply touches (e.g. follow_thread
+  # sets only :following, preserving any unread count).
+  defp upsert_thread_membership(user_id, root_id, set) do
+    Repo.insert!(
+      %ThreadMembership{
+        user_id: user_id,
+        root_id: root_id,
+        following: Keyword.get(set, :following, true),
+        last_viewed_at: Keyword.get(set, :last_viewed_at),
+        unread_replies: Keyword.get(set, :unread_replies, 0)
+      },
+      on_conflict: [set: Keyword.put(set, :updated_at, now())],
+      conflict_target: [:user_id, :root_id]
+    )
+  end
+
+  # Ensure a follow row exists without disturbing an existing one (respects a
+  # prior unfollow).
+  defp ensure_following(user_id, root_id) do
+    Repo.insert!(
+      %ThreadMembership{user_id: user_id, root_id: root_id, following: true},
+      on_conflict: :nothing,
+      conflict_target: [:user_id, :root_id]
     )
   end
 

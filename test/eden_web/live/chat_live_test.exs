@@ -747,6 +747,64 @@ defmodule EdenWeb.ChatLiveTest do
 
       assert has_element?(view, ~s(#composer[data-layout="bubble"]))
     end
+
+    test "following (#57): footer 'new' badge, Threads list, follow toggle", ctx do
+      {:ok, channel} = Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Crt"})
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      :ok = Chat.join_room(room.id, ctx.bob.id)
+      ascope = Scope.for_user(ctx.alice)
+      {:ok, root} = Chat.create_message(ascope, room.id, %{"body" => "the root"})
+      # bob replies → alice (root author) is auto-followed with one unread.
+      {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), root.id, %{"body" => "a reply"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # The footer shows the per-thread unread; the toolbar carries the count.
+      assert has_element?(view, ".ed-thread-footer__new", "1")
+      assert has_element?(view, ".ed-thread-badge", "1")
+
+      # The Threads list lists the followed thread.
+      view |> element(~s(button[phx-click="open_threads"])) |> render_click()
+      assert has_element?(view, ".ed-thread-row")
+
+      # Opening the thread reads it: bell shows Following, the unread clears.
+      view |> element(".ed-thread-row") |> render_click()
+      assert has_element?(view, ~s(button[phx-click="toggle_follow_thread"][aria-pressed="true"]))
+      assert %{following: true, unread: 0} = Chat.thread_follow_state(ascope, root.id)
+      refute has_element?(view, ".ed-thread-footer__new")
+
+      # Unfollow via the bell.
+      view |> element(~s(button[phx-click="toggle_follow_thread"])) |> render_click()
+
+      assert has_element?(
+               view,
+               ~s(button[phx-click="toggle_follow_thread"][aria-pressed="false"])
+             )
+
+      assert %{following: false} = Chat.thread_follow_state(ascope, root.id)
+    end
+
+    test "following (#57): the badge appears live when another user replies", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Live"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      :ok = Chat.join_room(room.id, ctx.bob.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # alice opened before any reply — not yet a follower, no badge.
+      refute has_element?(view, ".ed-thread-footer__new")
+
+      # bob replies → alice is auto-followed (root author); the badge must appear
+      # live (regression: the local map had no key for a mid-session auto-follow).
+      {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), root.id, %{"body" => "ping"})
+      assert has_element?(view, ".ed-thread-footer__new", "1")
+      assert has_element?(view, ".ed-thread-badge", "1")
+    end
   end
 
   describe "search" do

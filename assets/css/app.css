@@ -1414,6 +1414,84 @@
     background: var(--ed-border);
   }
 
+  /* Thread following (#57) ----------------------------------------------- */
+  /* "N new" pill on a thread footer when the viewer has unread replies. */
+  .ed-thread-footer__new {
+    display: inline-grid;
+    place-items: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.375rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-primary);
+    color: var(--ed-on-primary);
+    font: 600 0.6875rem/1 var(--ed-font);
+  }
+  /* Unread badge floating over the Threads toolbar icon. */
+  .ed-thread-badge {
+    position: absolute;
+    top: -0.125rem;
+    right: -0.125rem;
+    display: inline-grid;
+    place-items: center;
+    min-width: 1rem;
+    height: 1rem;
+    padding: 0 0.25rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-primary);
+    color: var(--ed-on-primary);
+    font: 600 0.625rem/1 var(--ed-font);
+  }
+  .ed-thread-badge--inline {
+    position: static;
+    margin-left: auto;
+    align-self: center;
+  }
+  /* The follow bell, lit while following. */
+  .ed-btn--icon--on {
+    color: var(--ed-primary);
+  }
+  /* A row in the Threads list panel. */
+  .ed-thread-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    width: 100%;
+    padding: 0.625rem 1rem;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.14s var(--ed-ease);
+  }
+  .ed-thread-row:hover {
+    background: var(--ed-surface);
+  }
+  .ed-thread-row__name {
+    font-weight: 600;
+    font-size: 0.875rem;
+    color: var(--ed-ink);
+  }
+  .ed-thread-row__time {
+    margin-left: auto;
+    color: var(--ed-muted);
+    font-size: 0.6875rem;
+    white-space: nowrap;
+  }
+  .ed-thread-row__preview {
+    margin-top: 0.0625rem;
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ed-thread-empty {
+    padding: 2rem 1.5rem;
+    text-align: center;
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
   /* Channel rooms (sidebar rows; reuse .ed-convo geometry) -------------- */
   .ed-room {
     gap: 0.5rem;

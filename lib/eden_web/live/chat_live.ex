@@ -76,6 +76,13 @@ defmodule EdenWeb.ChatLive do
         thread_root: nil,
         reply_composer: to_form(%{"body" => ""}, as: "reply"),
         thread_participants: %{},
+        # Thread following (#57): whether the viewer follows the open thread, the
+        # room's Threads-list panel + its rows, and per-thread unread counts
+        # (root_id => unread) seeding the toolbar badge and per-footer indicators.
+        thread_following: false,
+        thread_list_open: false,
+        thread_list: [],
+        thread_unreads: %{},
         last_flat: nil,
         # Per-id compact flag, so re-streaming a row (reaction / thumbnail) keeps
         # the flat layout instead of re-showing the avatar/name (#67).
@@ -304,7 +311,13 @@ defmodule EdenWeb.ChatLive do
       room_invite_url: nil,
       # A staged quote-reply (#71) belonged to a room — drop it on the way out.
       reply_to: nil,
-      thread_reply_to: nil
+      thread_reply_to: nil,
+      # Threads (#57) are a rooms feature — clear the panel + badges leaving channel mode.
+      thread_root: nil,
+      thread_following: false,
+      thread_list_open: false,
+      thread_list: [],
+      thread_unreads: %{}
     )
   end
 
@@ -1076,6 +1089,50 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, thread_root: nil, thread_reply_to: nil)}
   end
 
+  # The Threads list panel (#57): the room's followed threads, drill into any.
+  def handle_event("open_threads", _params, socket) do
+    scope = socket.assigns.current_scope
+
+    {:noreply,
+     assign(socket,
+       thread_list_open: true,
+       thread_root: nil,
+       thread_reply_to: nil,
+       thread_list: Chat.list_followed_threads(scope, socket.assigns.selected.id)
+     )}
+  end
+
+  def handle_event("close_threads", _params, socket),
+    do: {:noreply, assign(socket, thread_list_open: false)}
+
+  # Follow / unfollow the open thread; reflects in the header bell + unread badges.
+  def handle_event("toggle_follow_thread", _params, socket) do
+    case socket.assigns.thread_root do
+      %{} = root ->
+        scope = socket.assigns.current_scope
+
+        {following, unreads} =
+          if socket.assigns.thread_following do
+            Chat.unfollow_thread(scope, root.id)
+            {false, Map.delete(socket.assigns.thread_unreads, root.id)}
+          else
+            Chat.follow_thread(scope, root.id)
+            {true, Map.put_new(socket.assigns.thread_unreads, root.id, 0)}
+          end
+
+        # No root re-stream: the footer pill only shows when unread > 0, and the
+        # thread is already read (unread 0) by the time its bell is reachable —
+        # so toggling follow never changes the footer.
+        {:noreply,
+         socket
+         |> assign(thread_following: following, thread_unreads: unreads)
+         |> refresh_thread_list()}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("react", %{"id" => id, "emoji" => emoji}, socket)
       when is_binary(emoji) do
     # The toggle broadcasts {:reaction_changed, message}; our own session
@@ -1137,7 +1194,9 @@ defmodule EdenWeb.ChatLive do
       %{id: id} ->
         {:noreply,
          socket
-         |> assign(thread_root: nil)
+         # Close BOTH the thread and the Threads-list panel — otherwise nulling
+         # thread_root re-reveals the list aside over the message we jumped to.
+         |> assign(thread_root: nil, thread_list_open: false)
          |> push_event("focus_message", %{domId: "messages-#{id}"})}
 
       _ ->
@@ -1256,25 +1315,34 @@ defmodule EdenWeb.ChatLive do
   end
 
   # A reply landed in a thread of the open conversation: refresh the root's
-  # footer (count/time/facepile) and append to the panel if it's open.
+  # footer (count/time/facepile), the viewer's unread, and the panel if open.
   def handle_info({:thread_reply, root, reply}, socket) do
+    viewing? = thread_open_for?(socket, root.id)
+    # Reading the thread keeps it read on the server (the DB just incremented it).
+    if viewing?, do: Chat.mark_thread_read(socket.assigns.current_scope, root.id)
+
     socket =
       if open?(socket, root.conversation_id) do
         socket
-        |> stream_insert(:messages, root)
+        # Authoritative unread from the server: covers the auto-followed root
+        # author (no local key yet) and viewers reading right now (now zero).
+        |> sync_thread_unread(root.id)
+        |> restream_root_if_loaded(root)
         |> bump_facepile(root.id, reply.sender)
+        |> refresh_thread_list()
       else
         socket
       end
 
-    if thread_open_for?(socket, root.id) do
+    if viewing? do
       {:noreply, socket |> assign(thread_root: root) |> stream_insert(:thread, reply)}
     else
       {:noreply, socket}
     end
   end
 
-  # A reply was deleted for everyone: the root's footer changed.
+  # A reply was deleted for everyone: the root's footer + the viewer's unread and
+  # the Threads list all need to re-settle.
   def handle_info({:thread_updated, root}, socket) do
     socket =
       if open?(socket, root.conversation_id) do
@@ -1282,11 +1350,13 @@ defmodule EdenWeb.ChatLive do
           Chat.thread_participants(socket.assigns.current_scope, root.conversation_id, [root.id])
 
         socket
-        |> stream_insert(:messages, root)
+        |> restream_root_if_loaded(root)
         |> assign(
           :thread_participants,
           Map.merge(socket.assigns.thread_participants, participants)
         )
+        |> sync_thread_unread(root.id)
+        |> refresh_thread_list()
       else
         socket
       end
@@ -1299,13 +1369,28 @@ defmodule EdenWeb.ChatLive do
   end
 
   # Delete-for-both: the message is removed from the conversation for everyone.
+  # If it was a thread root, drop it from the unread map + Threads list too.
   def handle_info({:message_deleted, message}, socket) do
     if open?(socket, message.conversation_id) do
       {:noreply,
        socket
        |> stream_delete_by_dom_id(:messages, "messages-#{message.id}")
        |> stream_delete_by_dom_id(:thread, "thread-#{message.id}")
-       |> close_thread_if_root_gone(message.id)}
+       |> close_thread_if_root_gone(message.id)
+       |> assign(:thread_unreads, Map.delete(socket.assigns.thread_unreads, message.id))
+       |> refresh_thread_list()}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Another tab of the same user read a thread: zero its badge here too.
+  def handle_info({:thread_read, conversation_id, root_id}, socket) do
+    if open?(socket, conversation_id) do
+      {:noreply,
+       socket
+       |> assign(:thread_unreads, Map.replace(socket.assigns.thread_unreads, root_id, 0))
+       |> refresh_thread_list()}
     else
       {:noreply, socket}
     end
@@ -1928,6 +2013,28 @@ defmodule EdenWeb.ChatLive do
                 </div>
               </div>
             </div>
+            <%!-- Threads list (#57): the room's followed threads + an unread badge. --%>
+            <button
+              :if={@selected.channel_id}
+              type="button"
+              class="ed-btn--icon shrink-0 relative"
+              phx-click="open_threads"
+              title={gettext("Threads")}
+              aria-label={
+                if unread_thread_count(@thread_unreads) > 0,
+                  do:
+                    gettext("Threads, %{count} unread",
+                      count: unread_thread_count(@thread_unreads)
+                    ),
+                  else: gettext("Threads")
+              }
+              aria-expanded={to_string(@thread_list_open)}
+            >
+              <.icon name="hero-chat-bubble-left-right-mini" class="size-5" />
+              <span :if={unread_thread_count(@thread_unreads) > 0} class="ed-thread-badge">
+                {unread_thread_count(@thread_unreads)}
+              </span>
+            </button>
             <button
               :if={@selected.channel_id}
               type="button"
@@ -2056,6 +2163,7 @@ defmodule EdenWeb.ChatLive do
                     me={@current_scope.user.id}
                     quick={@my_quick}
                     participants={Map.get(@thread_participants, message.id, [])}
+                    thread_unread={Map.get(@thread_unreads, message.id, 0)}
                     admin={@channel && @channel.role in ~w(owner admin)}
                   />
                 <% else %>
@@ -2256,6 +2364,23 @@ defmodule EdenWeb.ChatLive do
                 title(@selected, @current_scope.user)}
             </div>
           </div>
+          <%!-- Follow / unfollow this thread (#57): following counts its new
+                replies toward your unread badge. --%>
+          <button
+            type="button"
+            class={["ed-btn--icon", @thread_following && "ed-btn--icon--on"]}
+            phx-click="toggle_follow_thread"
+            title={if @thread_following, do: gettext("Following"), else: gettext("Follow thread")}
+            aria-label={
+              if @thread_following, do: gettext("Following"), else: gettext("Follow thread")
+            }
+            aria-pressed={to_string(@thread_following)}
+          >
+            <.icon
+              name={if @thread_following, do: "hero-bell-alert-mini", else: "hero-bell-mini"}
+              class="size-5"
+            />
+          </button>
           <%!-- Jump to the root in the main stream (closes the panel — on mobile
                 it's a full-screen overlay covering the message). --%>
           <button
@@ -2348,6 +2473,68 @@ defmodule EdenWeb.ChatLive do
             </button>
           </div>
         </.form>
+      </aside>
+
+      <%!-- Threads list (#57): the room's followed threads, drill into any one.
+            Shares the RHS aside; a single thread (above) takes precedence, so
+            closing it falls back here. --%>
+      <aside
+        :if={@thread_list_open and is_nil(@thread_root) and @selected}
+        class="ed-thread"
+        aria-label={gettext("Threads")}
+      >
+        <header
+          class="flex items-center gap-2 px-4 h-14 border-b shrink-0"
+          style="border-color: var(--ed-border);"
+        >
+          <button
+            type="button"
+            class="ed-btn--icon md:hidden"
+            phx-click="close_threads"
+            aria-label={gettext("Back")}
+          >
+            <.icon name="hero-arrow-left-mini" class="size-5" />
+          </button>
+          <div class="min-w-0 flex-1">
+            <div class="font-semibold" style="font-size:0.9375rem;">{gettext("Threads")}</div>
+            <div class="truncate" style="font-size:0.6875rem; color: var(--ed-muted);">
+              {@selected.name}
+            </div>
+          </div>
+          <button
+            type="button"
+            class="ed-btn--icon hidden md:inline-flex"
+            phx-click="close_threads"
+            aria-label={gettext("Close")}
+          >
+            <.icon name="hero-x-mark-mini" class="size-5" />
+          </button>
+        </header>
+
+        <div class="flex-1 overflow-y-auto py-1">
+          <button
+            :for={{root, unread} <- @thread_list}
+            type="button"
+            class="ed-thread-row"
+            phx-click="open_thread"
+            phx-value-id={root.id}
+          >
+            <.avatar name={reply_author(root)} src={avatar_src(root.sender)} size={:sm} />
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-2">
+                <span class="ed-thread-row__name">{reply_author(root)}</span>
+                <span :if={root.last_reply_at} class="ed-thread-row__time">
+                  <.local_time at={root.last_reply_at} />
+                </span>
+              </div>
+              <div class="ed-thread-row__preview">{reply_snippet(root)}</div>
+            </div>
+            <span :if={unread > 0} class="ed-thread-badge ed-thread-badge--inline">{unread}</span>
+          </button>
+          <div :if={@thread_list == []} class="ed-thread-empty">
+            {gettext("No followed threads yet. Reply to one to follow it.")}
+          </div>
+        </div>
       </aside>
 
       <.new_conversation_modal :if={@show_new} people={@people} />
@@ -4468,6 +4655,7 @@ defmodule EdenWeb.ChatLive do
   attr :in_thread, :boolean, default: false
   attr :menu, :boolean, default: true
   attr :admin, :boolean, default: false
+  attr :thread_unread, :integer, default: 0
 
   # A system message (no human sender) — a centered notice rendered from `meta`.
   # The join-request carries an inline «Add» for channel admins while pending.
@@ -4585,6 +4773,13 @@ defmodule EdenWeb.ChatLive do
           </span>
           <span class="ed-thread-footer__count">
             {ngettext("%{count} reply", "%{count} replies", @message.reply_count)}
+          </span>
+          <span
+            :if={@thread_unread > 0}
+            class="ed-thread-footer__new"
+            aria-label={ngettext("%{count} unread reply", "%{count} unread replies", @thread_unread)}
+          >
+            {@thread_unread}
           </span>
           <span :if={@message.last_reply_at} class="ed-thread-footer__time">
             <.local_time at={@message.last_reply_at} />
@@ -5506,6 +5701,17 @@ defmodule EdenWeb.ChatLive do
       # Drop any staged quote-reply (#71) — its target is the old conversation's.
       reply_to: nil,
       thread_reply_to: nil,
+      # Thread following (#57) is per-room: reset the panel + seed the per-thread
+      # unread badges from the DB for the room just opened.
+      thread_following: false,
+      thread_list_open: false,
+      thread_list: [],
+      # Threads are rooms-only — skip the (always-empty) query for DMs/groups.
+      thread_unreads:
+        if(conversation.channel_id,
+          do: Chat.thread_unread_counts(scope, conversation.id),
+          else: %{}
+        ),
       last_flat: last_flat,
       compacts: Map.new(messages, &{&1.id, &1.compact}),
       thread_participants: facepiles(scope, conversation, messages),
@@ -5770,19 +5976,69 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp open_thread(socket, root_id) do
-    case Chat.list_thread(socket.assigns.current_scope, root_id) do
+    scope = socket.assigns.current_scope
+
+    case Chat.list_thread(scope, root_id) do
       {:ok, root, replies} ->
+        # Opening a thread reads it: clear the unread (server + the local badge)
+        # and surface the follow state in the header bell.
+        Chat.mark_thread_read(scope, root.id)
+        %{following: following} = Chat.thread_follow_state(scope, root.id)
+
         socket
         |> assign(
           thread_root: root,
+          thread_following: following,
+          thread_unreads: Map.put(socket.assigns.thread_unreads, root.id, 0),
           reply_composer: to_form(%{"body" => ""}, as: "reply")
         )
         |> stream(:thread, replies, reset: true)
+        |> restream_root_if_loaded(root)
 
       {:error, _} ->
         put_flash(socket, :error, gettext("Thread not found."))
     end
   end
+
+  # Set one thread's unread badge from the authoritative server state — drops the
+  # key when the viewer doesn't follow. Keeps the local map in lockstep with the
+  # DB across every lifecycle event (new reply, reply delete), not just guesses.
+  defp sync_thread_unread(socket, root_id) do
+    %{following: following, unread: unread} =
+      Chat.thread_follow_state(socket.assigns.current_scope, root_id)
+
+    unreads =
+      if following,
+        do: Map.put(socket.assigns.thread_unreads, root_id, unread),
+        else: Map.delete(socket.assigns.thread_unreads, root_id)
+
+    assign(socket, :thread_unreads, unreads)
+  end
+
+  # Re-stream a root ONLY when it's in the loaded message window (tracked by the
+  # `compacts` map). The `:messages` stream is unbounded with manual paging, so
+  # inserting a paged-out root would resurrect it out of order at the stream end.
+  defp restream_root_if_loaded(socket, root) do
+    if Map.has_key?(socket.assigns.compacts, root.id),
+      do: stream_insert(socket, :messages, restore_compact(socket, root)),
+      else: socket
+  end
+
+  # Reload the Threads list panel when it's open (cheap; only while shown).
+  defp refresh_thread_list(socket) do
+    if socket.assigns.thread_list_open and socket.assigns.selected do
+      assign(
+        socket,
+        :thread_list,
+        Chat.list_followed_threads(socket.assigns.current_scope, socket.assigns.selected.id)
+      )
+    else
+      socket
+    end
+  end
+
+  # How many followed threads carry unread replies — the toolbar badge.
+  defp unread_thread_count(unreads), do: Enum.count(unreads, fn {_id, n} -> n > 0 end)
 
   defp parse_folder_id(""), do: nil
 
