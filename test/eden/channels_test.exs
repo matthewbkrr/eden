@@ -1020,6 +1020,27 @@ defmodule Eden.ChannelsTest do
       results = Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "0% d")
       assert ["100% done"] == Enum.map(results, & &1.body)
     end
+
+    test "room search tolerates a typo too (#56 fuzzy match)", ctx do
+      %{alice: alice, general: general} = ctx
+
+      {:ok, _} =
+        Eden.Chat.create_message(scope(alice), general.id, %{"body" => "deployment notes"})
+
+      # One-letter typo, not a substring — word-similarity finds it (same body
+      # match as DM search, so the trigram upgrade lifts both).
+      results = Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "deploymant")
+      assert ["deployment notes"] == Enum.map(results, & &1.body)
+    end
+
+    test "fuzzy room search never leaks a room you're not in (#56)", ctx do
+      # bob is in `general` but NOT in `other_general` (a different channel's room).
+      %{alice: alice, bob: bob, other_general: og} = ctx
+      {:ok, _} = Eden.Chat.create_message(scope(alice), og.id, %{"body" => "deployment notes"})
+
+      # The typo matches that body, but bob isn't a member of og — scoped out.
+      assert [] == Eden.Chat.search_rooms(scope(bob), {:room, og.id}, "deploymant")
+    end
   end
 
   describe "cross-layer (#32)" do

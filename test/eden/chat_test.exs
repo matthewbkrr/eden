@@ -2064,5 +2064,60 @@ defmodule Eden.ChatTest do
       assert %{messages: messages} = Chat.search(scope(alice), "haystack")
       assert length(messages) == 20
     end
+
+    test "trigram search tolerates a typo (#56 fuzzy match)", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(bob), conv.id, %{"body" => "the rendezvous point"})
+
+      # A one-letter typo is NOT a substring, but word-similarity still finds it.
+      assert %{messages: [found]} = Chat.search(scope(alice), "rendezous")
+      assert found.id == msg.id
+
+      # A short / metacharacter term stays exact-substring (no fuzzy noise).
+      assert %{messages: []} = Chat.search(scope(alice), "rzv")
+    end
+
+    test "the pinned threshold matches typos the 0.6 default would miss, but not noise (#56)", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, doc} = Chat.create_message(scope(bob), conv.id, %{"body" => "обновили документацию"})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "помещение свободно"})
+
+      # "докуметация" (dropped н) scores word_similarity ≈ 0.53 — BELOW the server
+      # default 0.6, so this only matches because run_search pins the threshold to
+      # 0.5. Reverting the pin would make this assertion fail: a real guard.
+      assert %{messages: [found]} = Chat.search(scope(alice), "докуметация")
+      assert found.id == doc.id
+
+      # "помощь" vs "помещение" share a prefix and score ≈ 0.43 — below 0.5, so the
+      # threshold rejects this unrelated-word noise (guards against over-loosening).
+      assert %{messages: []} = Chat.search(scope(alice), "помощь")
+    end
+
+    test "fuzzy search never leaks across conversations (#56)", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carolfz"})
+      # bob ↔ carol share a chat; alice is NOT a member.
+      {:ok, conv} = Chat.create_conversation(scope(bob), [carol.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "the rendezvous point"})
+
+      # The typo would match the body, but the OR fuzzy branch is still scoped by
+      # membership — alice sees nothing.
+      assert %{messages: []} = Chat.search(scope(alice), "rendezous")
+    end
+
+    test "a trigram GIN index backs message-body search (#56)", %{alice: alice} do
+      defs =
+        Eden.Repo.query!(
+          "SELECT indexdef FROM pg_indexes WHERE indexname = 'messages_body_trgm_idx'"
+        ).rows
+
+      assert [[indexdef]] = defs
+      assert indexdef =~ "gin"
+      assert indexdef =~ "gin_trgm_ops"
+      # Sanity: alice's scope still works against the indexed column.
+      assert %{messages: _} = Chat.search(scope(alice), "anything")
+    end
   end
 end
