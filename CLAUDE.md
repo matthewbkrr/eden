@@ -173,7 +173,29 @@ design — built incrementally as features land.)
   non-reply root carrying denormalized `reply_count`/`last_reply_at`; replies stay
   out of the main stream, sidebar previews, and unread badges (footer count
   instead); a root with replies refuses delete-for-both; reply permalinks open the
-  thread panel. **Room message UI is Mattermost-flat** (avatar · name · time rows,
+  thread panel. **Collapsed reply threads (#57)**: per-user thread following +
+  per-thread unread, modeled on Mattermost. `ThreadMembership`
+  (`thread_memberships`, one row per `(user, root)`) carries `following`,
+  `last_viewed_at`, `unread_replies`. A reply auto-follows its sender and pulls
+  the root's author in on the first reply (`ensure_following` — never undoing an
+  explicit unfollow), then increments `unread_replies` for every other follower
+  (`track_reply/2`, one transaction); opening a thread (`mark_thread_read/2`) or
+  re-following never clobbers another's count. `thread_unread_counts/2` /
+  `list_followed_threads/2` are room-scoped and per-user; the web layer seeds a
+  per-thread "N unread" footer pill + a Threads-list panel (RHS aside, reusing the
+  thread panel) opened from a room-toolbar button with an unread-thread badge, and
+  a follow bell in the thread header — all live over the existing `{:thread_reply}`
+  broadcast plus `{:thread_updated}`/`{:message_deleted}` (reply/root deletion
+  re-settles the count + list) and a `{:thread_read}` user-topic ping (multi-tab).
+  No global cross-room inbox; rooms-only, like threads themselves. Thread unread is
+  **deliberately independent of room mute** — it never feeds the channel rail or
+  folder badges (those filter `is_nil(root_id)`), only the in-room toolbar for a
+  thread you explicitly followed, so muting a room doesn't silence a followed
+  thread (matches Mattermost; the eden "no badge past mute" invariant is about
+  rail/folder badges). Following is **not backfilled**: pre-existing threads gain
+  followers only on their next reply (a root author/replier from before the
+  feature isn't retroactively subscribed).
+  **Room message UI is Mattermost-flat** (avatar · name · time rows,
   consecutive same-author runs collapse, hover quick-actions, facepile thread
   footer, RHS panel / mobile full-screen) — DMs keep bubbles.
 - **Storage** — file/photo persistence behind an **adapter behaviour**
