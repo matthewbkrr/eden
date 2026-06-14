@@ -106,14 +106,15 @@ defmodule EdenWeb.ChatLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
       # The quick-react row lives in the message context menu (right-click /
-      # long-press), not a hover affordance; the "more" chevron expands the grid.
+      # long-press); the "more" chevron opens the shared full-emoji grid (#72).
       assert has_element?(
                view,
                ~s(#menu-#{msg.id} .ed-menu__react[phx-click="react"][phx-value-emoji="👍"])
              )
 
       assert has_element?(view, ~s(#menu-#{msg.id} [data-react-expand]))
-      assert has_element?(view, ~s(#menu-#{msg.id} [data-react-grid] .ed-menu__react))
+      # The full grid is one shared popover for the page (not per-message).
+      assert has_element?(view, ~s(#reaction-grid [data-emoji]))
 
       render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
       # A chip appears under the message, highlighted as mine.
