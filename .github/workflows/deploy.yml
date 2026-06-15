@@ -1,0 +1,82 @@
+# Manual deploy: build the prod image, push to GHCR, then pull + migrate +
+# restart on the server over SSH. Manual (workflow_dispatch) so tester updates
+# are intentional — run it from the Actions tab when you want the box updated.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   DEPLOY_HOST       server IP / host (e.g. 95.169.166.216)
+#   DEPLOY_USER       SSH user (e.g. deploy)
+#   DEPLOY_SSH_KEY    private SSH key authorized on the server
+#   GHCR_PULL_TOKEN   a PAT (owner: matthewbkrr) with read:packages, for the
+#                     server to pull the (private) image
+#
+# NOTE: only backward-compatible (expand/contract) migrations are safe here — the
+# old container keeps serving until `up -d` recreates it, briefly against the new
+# schema. For a breaking change, stop the app before migrating.
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to deploy (branch / tag / SHA)"
+        default: main
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }},${{ env.IMAGE }}:latest
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        # Pass the token + image as remote env vars (forwarded by `envs:`), NOT
+        # interpolated into the script string — keeps the secret out of the
+        # rendered command / the server's process list (`--password-stdin`).
+        env:
+          DEPLOY_IMAGE: ${{ env.IMAGE }}:${{ github.sha }}
+          GHCR_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_IMAGE,GHCR_TOKEN
+          script: |
+            set -euo pipefail
+            cd /opt/eden
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u matthewbkrr --password-stdin
+            # Pin the exact image so a later `up`/reboot reuses this build.
+            if grep -q '^APP_IMAGE=' .env; then
+              sed -i "s|^APP_IMAGE=.*|APP_IMAGE=${DEPLOY_IMAGE}|" .env
+            else
+              echo "APP_IMAGE=${DEPLOY_IMAGE}" >> .env
+            fi
+            docker compose pull app
+            docker compose run --rm app /app/bin/migrate
+            docker compose up -d
+            docker image prune -f
+            docker logout ghcr.io

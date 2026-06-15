@@ -1,0 +1,21 @@
+# SITE_ADDRESS controls the phase:
+#   ":80"          → plain HTTP on any host (initial IP bring-up); no TLS, no HSTS.
+#   "chat.ihi.ru"  → automatic HTTPS via Let's Encrypt, with http→https redirect.
+# reverse_proxy upgrades WebSockets (the LiveView socket) automatically.
+#
+# Caddy auto-renews certs without an ACME email. To also receive Let's Encrypt
+# expiry notices, add a global options block ABOVE this site:
+#   {
+#       email you@example.com
+#   }
+# (Don't wire it to an env var that can be empty — a blank `email` is a parse
+# error, and a bogus default address fails ACME registration in the domain phase.)
+#
+# `:80` is the fallback if SITE_ADDRESS is empty/unset — an empty site address
+# would otherwise make Caddy read `{ … }` as a global-options block and crash.
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+	# HSTS — honored by browsers only over HTTPS, so it's inert in the IP phase.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	reverse_proxy app:4000
+}

@@ -41,3 +41,10 @@ npm-debug.log
 # Local-disk uploads (dev storage adapter).
 /priv/uploads/
 
+
+# Deploy secrets — never commit a filled .env (the example is tracked) or DB dumps.
+.env
+.env.*
+!.env.example
+/deploy/.env
+/deploy/backups/

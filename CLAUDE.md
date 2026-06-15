@@ -296,14 +296,24 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
 - `bin/server` — start the supervised app (sets `PHX_SERVER=true`).
 - `bin/migrate` — run migrations via `Eden.Release.migrate/0` (no Mix in prod).
 - `GET /healthz` — liveness probe, answered in the endpoint before the router
-  (cheap, no DB), excluded from `force_ssl`.
+  (cheap, no DB). TLS terminates at Caddy (no app-level `force_ssl`, #85), so the
+  probe hits plain HTTP without a redirect.
 - Required runtime env (see `config/runtime.exs`): `DATABASE_URL`,
   `SECRET_KEY_BASE`, `PHX_HOST`; `EDEN_UPLOADS_ROOT` for the uploads volume;
-  `PORT` optional.
+  `PORT` optional. **`PHX_SCHEME`/`PHX_PORT`** (#85) make the public URL
+  http-by-IP or https-by-domain without a recompile — the same release flips
+  phases by env (they drive URL generation + the LiveView socket `check_origin`).
 - CI's **release-smoke** job builds the prod release and runs migrations through
   it, so prod-only compile/runtime-config regressions are caught before deploy.
-- Still server-dependent (do at deploy time): domain + TLS (reverse-proxy),
-  Postgres backups, log shipping, prod metrics/alerts.
+- **Deploy kit (#85, `deploy/`)**: `docker-compose.yml` (app + Postgres 16 +
+  local `uploads` volume) behind **Caddy** (reverse proxy + auto-TLS, `:80` for
+  the IP phase → `chat.ihi.ru` for the domain phase via `SITE_ADDRESS`), an
+  `.env.example`, a `backup.sh` (pg_dump, keep-14), and `README.md` runbook
+  (Debian 12). CD is `.github/workflows/deploy.yml` — manual `workflow_dispatch`:
+  build image → push to GHCR → SSH `pull` + `bin/migrate` + `up -d`. Media stays
+  on the local volume; swap to R2/S3 via `EDEN_S3_*` env with no code change.
+- Still server-dependent (do at deploy time): log shipping, prod metrics/alerts,
+  shipping backups off-box.
 
 ## Security follow-ups (tracked)
 

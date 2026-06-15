@@ -52,7 +52,24 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host =
+    System.get_env("PHX_HOST") ||
+      raise """
+      environment variable PHX_HOST is missing.
+      Set it to the public host — the server IP (initial phase) or chat.ihi.ru.
+      """
+
+  # Scheme/port are env-driven so the SAME release runs over plain HTTP by IP
+  # (the initial bring-up, before a domain) and over HTTPS by domain (Caddy
+  # terminates TLS) with no recompile — flip PHX_SCHEME/PHX_HOST and restart.
+  # They drive URL generation AND the LiveView socket's check_origin.
+  scheme = System.get_env("PHX_SCHEME") || "https"
+
+  scheme in ~w(http https) ||
+    raise ~s|PHX_SCHEME must be "http" or "https", got: #{inspect(scheme)}|
+
+  default_url_port = if scheme == "https", do: "443", else: "80"
+  url_port = String.to_integer(System.get_env("PHX_PORT") || default_url_port)
 
   config :eden, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
@@ -82,7 +99,7 @@ if config_env() == :prod do
   end
 
   config :eden, EdenWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: url_port, scheme: scheme],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
@@ -116,11 +133,10 @@ if config_env() == :prod do
   # "priv/ssl/server.key". For all supported SSL configuration
   # options, see https://hexdocs.pm/plug/Plug.SSL.html#configure/1
   #
-  # We also recommend setting `force_ssl` in your config/prod.exs,
-  # ensuring no data is ever sent via http, always redirecting to https:
-  #
-  #     config :eden, EdenWeb.Endpoint,
-  #       force_ssl: [hsts: true]
-  #
-  # Check `Plug.SSL` for all available options in `force_ssl`.
+  # NOTE: eden intentionally does NOT set `force_ssl` (#85). TLS terminates at
+  # the reverse proxy (Caddy — see deploy/), which owns the http→https redirect +
+  # HSTS; the release runs plain HTTP internally so one image serves both the
+  # bare-IP/HTTP bring-up and the HTTPS-by-domain phase. `Plug.RewriteOn` in the
+  # endpoint trusts Caddy's X-Forwarded-Proto so the scheme (→ Secure cookie)
+  # stays correct.
 end
