@@ -3201,11 +3201,23 @@ defmodule EdenWeb.ChatLive do
             // instead of failing the whole send (#68). Each part is a normal
             // queued item (own client_id, optimistic node, dedup, resend).
             for (const part of this.split(body)) {
-              const clientId = crypto.randomUUID()
+              const clientId = this.uuid()
               this.addOptimistic(clientId, part)
               this.queue.push({ clientId, body: part, sent: false })
             }
             this.flush()
+          },
+          // A v4 UUID for the client_id. `crypto.randomUUID` only exists in a
+          // secure context (HTTPS or localhost); over plain HTTP by IP it's
+          // undefined and would throw, silently killing every text send. Fall back
+          // to `crypto.getRandomValues`, which IS available in insecure contexts.
+          uuid() {
+            if (crypto.randomUUID) return crypto.randomUUID()
+            const b = crypto.getRandomValues(new Uint8Array(16))
+            b[6] = (b[6] & 0x0f) | 0x40
+            b[8] = (b[8] & 0x3f) | 0x80
+            const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("")
+            return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
           },
           // Break a body into <=max-codepoint chunks, preferring the last space
           // before the limit so words aren't cut; a single unbroken run is hard
