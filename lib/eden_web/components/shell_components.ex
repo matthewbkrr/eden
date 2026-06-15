@@ -55,30 +55,37 @@ defmodule EdenWeb.ShellComponents do
           class="ed-rail__slot"
           phx-hook="EdenWeb.ChatLive.ContextMenu"
         >
-          <%!-- Open the channel's remembered room directly (#81), so switching
-                channels reopens where you left off instead of the empty state.
-                Falls back to the bare channel (room list) when there's no entry
-                room yet. --%>
+          <%!-- Desktop reopens the channel's remembered room directly (#81), so
+                switching channels lands where you left off. On mobile that skips
+                the room-choice screen with no way back, so mobile goes to the bare
+                channel (its room list) instead (#92). Two links toggled by
+                viewport; with no entry room yet, both fall back to the bare
+                channel, so only the second link renders. --%>
           <.link
-            navigate={
-              if channel.entry_room_id,
-                do: ~p"/channels/#{channel.id}/r/#{channel.entry_room_id}",
-                else: ~p"/channels/#{channel.id}"
-            }
-            class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
+            :if={channel.entry_room_id}
+            navigate={~p"/channels/#{channel.id}/r/#{channel.entry_room_id}"}
+            class={[
+              "ed-rail__btn hidden md:inline-flex",
+              @active == channel.id && "ed-rail__btn--active"
+            ]}
             title={channel.name}
             aria-label={rail_label(channel)}
             aria-haspopup="menu"
           >
-            <%!-- Channel avatar (#70) when set, initials fallback otherwise. The
-                  ?v= token cache-busts per avatar. --%>
-            <img
-              :if={channel.avatar_key}
-              src={channel_avatar_src(channel)}
-              alt=""
-              class="ed-rail__img"
-            />
-            <span :if={!channel.avatar_key}>{channel_initials(channel.name)}</span>
+            <.rail_channel_face channel={channel} />
+          </.link>
+          <.link
+            navigate={~p"/channels/#{channel.id}"}
+            class={[
+              "ed-rail__btn",
+              channel.entry_room_id && "md:hidden",
+              @active == channel.id && "ed-rail__btn--active"
+            ]}
+            title={channel.name}
+            aria-label={rail_label(channel)}
+            aria-haspopup="menu"
+          >
+            <.rail_channel_face channel={channel} />
           </.link>
           <span
             :if={channel.unread_count > 0}
@@ -135,6 +142,18 @@ defmodule EdenWeb.ShellComponents do
         </.link>
       </div>
     </nav>
+    """
+  end
+
+  # The rail button's face: channel avatar (#70) when set, initials fallback
+  # otherwise (?v= cache-busts per avatar). Shared by the two viewport-toggled
+  # rail links (#92) so they can't drift apart.
+  attr :channel, :any, required: true
+
+  defp rail_channel_face(assigns) do
+    ~H"""
+    <img :if={@channel.avatar_key} src={channel_avatar_src(@channel)} alt="" class="ed-rail__img" />
+    <span :if={!@channel.avatar_key}>{channel_initials(@channel.name)}</span>
     """
   end
 

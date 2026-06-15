@@ -37,6 +37,28 @@ defmodule EdenWeb.ChannelModeTest do
       assert html =~ "Pick a room to start reading."
     end
 
+    test "rail channel link: desktop reopens the entry room, mobile shows the room list (#92)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      slot = "#rail-channel-#{ctx.channel.id}"
+
+      # Desktop link → reopen the channel's remembered room (#81 intact): hidden by
+      # default, shown at md+. entry room falls back to general (no last room yet).
+      assert has_element?(
+               view,
+               ~s|#{slot} a[href="/channels/#{ctx.channel.id}/r/#{ctx.general.id}"][class*="hidden"][class*="md:inline-flex"]|
+             )
+
+      # Mobile link → bare channel (its room list), hidden at md+ (#92) so tapping a
+      # channel on a phone lands on the room choice, not a forced last room.
+      assert has_element?(
+               view,
+               ~s|#{slot} a[href="/channels/#{ctx.channel.id}"][class*="md:hidden"]|
+             )
+    end
+
     test "a long channel description wraps instead of overflowing (#63)", ctx do
       long = String.duplicate("флоыврлфыовфлор", 8)
       {:ok, ch} = Channels.create_channel(scope(ctx.alice), %{"name" => "Wide", "about" => long})
