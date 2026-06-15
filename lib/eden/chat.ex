@@ -620,6 +620,46 @@ defmodule Eden.Chat do
     )
   end
 
+  @doc """
+  The room to open when the scoped user enters each channel (#81). Given a
+  `%{channel_id => last_room_id | nil}` map (from `channel_memberships`), returns
+  `%{channel_id => entry_room_id}`: the last room if the user is still a member of
+  it (so a deleted/left/lost-access room can't strand them), otherwise the
+  channel's general room. One query each for the user's joined rooms and the
+  general rooms — no per-channel round-trips.
+  """
+  def entry_room_ids(%Scope{user: user}, last_by_channel) when is_map(last_by_channel) do
+    channel_ids = Map.keys(last_by_channel)
+
+    if channel_ids == [] do
+      %{}
+    else
+      generals =
+        Repo.all(
+          from c in Conversation,
+            where: c.channel_id in ^channel_ids and c.is_general == true,
+            select: {c.channel_id, c.id}
+        )
+        |> Map.new()
+
+      joined =
+        Repo.all(
+          from c in Conversation,
+            join: mem in Membership,
+            on: mem.conversation_id == c.id and mem.user_id == ^user.id,
+            where: c.channel_id in ^channel_ids,
+            select: c.id
+        )
+        |> MapSet.new()
+
+      Map.new(channel_ids, fn channel_id ->
+        last = last_by_channel[channel_id]
+        valid? = last && MapSet.member?(joined, last)
+        {channel_id, (valid? && last) || Map.get(generals, channel_id)}
+      end)
+    end
+  end
+
   @doc "Removes the user's memberships from every room of the channel."
   def leave_rooms(channel_id, user_id) do
     {_count, _} =

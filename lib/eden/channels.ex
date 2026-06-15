@@ -82,19 +82,26 @@ defmodule Eden.Channels do
   def list_channels(%Scope{user: user} = scope) do
     unread = Chat.channel_unread_counts(scope)
 
-    from(c in Channel,
-      join: m in Membership,
-      on: m.channel_id == c.id and m.user_id == ^user.id,
-      order_by: [asc: c.id],
-      select: {c, m.role, m.muted_at}
-    )
-    |> Repo.all()
-    |> Enum.map(fn {channel, role, muted_at} ->
+    rows =
+      from(c in Channel,
+        join: m in Membership,
+        on: m.channel_id == c.id and m.user_id == ^user.id,
+        order_by: [asc: c.id],
+        select: {c, m.role, m.muted_at, m.last_room_id}
+      )
+      |> Repo.all()
+
+    # The rail links each channel to its entry room (#81): the last room opened,
+    # or general — resolved against the user's current room memberships.
+    entry = Chat.entry_room_ids(scope, Map.new(rows, fn {c, _r, _m, last} -> {c.id, last} end))
+
+    Enum.map(rows, fn {channel, role, muted_at, _last} ->
       %{
         channel
         | role: role,
           muted: not is_nil(muted_at),
-          unread_count: Map.get(unread, channel.id, 0)
+          unread_count: Map.get(unread, channel.id, 0),
+          entry_room_id: Map.get(entry, channel.id)
       }
     end)
   end
@@ -122,6 +129,21 @@ defmodule Eden.Channels do
     else
       _ -> {:error, :not_found}
     end
+  end
+
+  @doc """
+  Records the scoped user's last-opened `room_id` for `channel_id` (#81) so
+  re-entering the channel reopens it (see `list_channels/1`'s `entry_room_id`).
+  `update_all` — a no-op (not a `StaleEntryError`) if the membership vanished
+  concurrently, and skips non-members. Always `:ok`.
+  """
+  def record_last_room(%Scope{user: user}, channel_id, room_id) do
+    Repo.update_all(
+      from(m in Membership, where: m.channel_id == ^channel_id and m.user_id == ^user.id),
+      set: [last_room_id: room_id]
+    )
+
+    :ok
   end
 
   @doc "Fetches a channel the scoped user belongs to (virtual `role` filled), or `{:error, :not_found}`."
