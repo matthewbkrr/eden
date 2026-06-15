@@ -517,6 +517,30 @@ defmodule EdenWeb.ChannelModeTest do
       refute has_element?(view, ".ed-rail__badge")
     end
 
+    test "a message in a sibling room bumps its room-list badge live, reading clears it (#93)",
+         ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+      :ok = Chat.join_room(ops.id, ctx.bob.id)
+      # Push bob's last_read back so a message posted "now" counts as unread (join
+      # stamps last_read at second granularity, same second as the message).
+      backdate_last_read(ops.id, ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      # bob is viewing general; ops is a sibling room he belongs to but isn't viewing.
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      badge = "#room-#{ops.id} .ed-badge"
+      refute has_element?(view, badge)
+
+      # alice posts to ops → bob's ops badge bumps live, no reload.
+      {:ok, _} = Chat.create_message(scope(ctx.alice), ops.id, %{"body" => "deploy now"})
+      assert has_element?(view, badge, "1")
+
+      # Reading ops clears its badge live.
+      render_click(view, "mark_as_read", %{"id" => to_string(ops.id)})
+      refute has_element?(view, badge)
+    end
+
     test "favorite floats the room into the Favorites block live", ctx do
       {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
 
