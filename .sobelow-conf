@@ -31,7 +31,15 @@
   # (per-request nonce — not expressible through `put_secure_browser_headers`,
   # the only mechanism sobelow's static check recognizes). CSP presence is
   # covered by EdenWeb.CSPTest. This is no longer a deferral.
-  ignore: ["Config.CSP"],
+  #
+  # Config.HTTPS — INTENDED (#85). TLS is terminated at the reverse proxy
+  # (Caddy, see deploy/), which owns the http→https redirect + HSTS. The release
+  # deliberately has no compile-time `force_ssl` so the same image serves both
+  # the initial bare-IP/HTTP bring-up and the HTTPS-by-domain phase; the endpoint's
+  # `Plug.RewriteOn` trusts Caddy's X-Forwarded-Proto, so the connection scheme
+  # (→ Secure cookie) stays correct. "HTTPS not enabled" at the app layer is by
+  # design, not a gap.
+  ignore: ["Config.CSP", "Config.HTTPS"],
 
   # Files to exclude from scanning. Keep empty.
   ignore_files: []

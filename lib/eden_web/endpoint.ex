@@ -40,6 +40,12 @@ defmodule EdenWeb.Endpoint do
     param_key: "request_logger",
     cookie_key: "request_logger"
 
+  # Behind the prod reverse proxy (Caddy terminates TLS), trust its forwarded
+  # headers so `conn.scheme` reflects the public scheme — this drives the session
+  # cookie's Secure flag in the HTTPS phase. Safe: the app port is never exposed
+  # directly (only Caddy reaches it), and in dev/test no proxy sets these headers.
+  plug Plug.RewriteOn, [:x_forwarded_proto, :x_forwarded_host, :x_forwarded_port]
+
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 

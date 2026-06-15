@@ -20,9 +20,13 @@ priv/uploads/
 .dockerignore
 Dockerfile
 
-# Local env / test artifacts.
+# Local env / test artifacts. `**/.env` also catches deploy/.env (the others are
+# root-anchored). The Dockerfile's explicit COPY allowlist never copies these
+# anyway — this is defense-in-depth.
 .env
 *.env
+**/.env
+deploy/
 /tmp/
 cover/
 doc/

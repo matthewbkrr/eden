@@ -7,18 +7,12 @@ import Config
 # before starting your production server.
 config :eden, EdenWeb.Endpoint, cache_static_manifest: "priv/static/cache_manifest.json"
 
-# Force using SSL in production. This also sets the "strict-security-transport" header,
-# known as HSTS. If you have a health check endpoint, you may want to exclude it below.
-# Note `:force_ssl` is required to be set at compile-time.
-config :eden, EdenWeb.Endpoint,
-  force_ssl: [
-    rewrite_on: [:x_forwarded_proto],
-    exclude: [
-      # Health probes hit plain HTTP (no X-Forwarded-Proto); don't redirect them.
-      paths: ["/healthz"],
-      hosts: ["localhost", "127.0.0.1"]
-    ]
-  ]
+# TLS is terminated at the reverse proxy (Caddy — see deploy/), which owns the
+# http→https redirect (domain phase) + HSTS. The app runs plain HTTP internally,
+# so there is deliberately NO compile-time `force_ssl` here: it would 301 every
+# page during the initial bare-IP/HTTP phase (#85). `Plug.RewriteOn` in the
+# endpoint trusts Caddy's `X-Forwarded-Proto`, so the connection scheme (and thus
+# the Secure cookie flag) is correct in the HTTPS phase.
 
 # Do not print debug messages in production
 config :logger, level: :info
