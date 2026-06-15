@@ -55,8 +55,16 @@ defmodule EdenWeb.ShellComponents do
           class="ed-rail__slot"
           phx-hook="EdenWeb.ChatLive.ContextMenu"
         >
+          <%!-- Open the channel's remembered room directly (#81), so switching
+                channels reopens where you left off instead of the empty state.
+                Falls back to the bare channel (room list) when there's no entry
+                room yet. --%>
           <.link
-            navigate={~p"/channels/#{channel.id}"}
+            navigate={
+              if channel.entry_room_id,
+                do: ~p"/channels/#{channel.id}/r/#{channel.entry_room_id}",
+                else: ~p"/channels/#{channel.id}"
+            }
             class={["ed-rail__btn", @active == channel.id && "ed-rail__btn--active"]}
             title={channel.name}
             aria-label={rail_label(channel)}

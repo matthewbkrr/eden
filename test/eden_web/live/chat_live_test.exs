@@ -807,6 +807,33 @@ defmodule EdenWeb.ChatLiveTest do
     end
   end
 
+  describe "channel mode (#81)" do
+    setup [:setup_conversation]
+
+    test "the rail links a channel to its last-opened room", ctx do
+      {:ok, channel} = Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Crt"})
+
+      {:ok, ops} =
+        Eden.Channels.create_room(Scope.for_user(ctx.alice), channel.id, %{"name" => "ops"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      # Open the ops room — this records it as the channel's last room.
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{ops.id}")
+
+      # The rail's channel button now navigates straight to ops, not the bare
+      # channel (which would show the "pick a room" empty state).
+      assert has_element?(view, ~s(a.ed-rail__btn[href="/channels/#{channel.id}/r/#{ops.id}"]))
+
+      entry =
+        Scope.for_user(ctx.alice)
+        |> Eden.Channels.list_channels()
+        |> Enum.find(&(&1.id == channel.id))
+        |> then(& &1.entry_room_id)
+
+      assert entry == ops.id
+    end
+  end
+
   describe "search" do
     setup [:setup_conversation]
 

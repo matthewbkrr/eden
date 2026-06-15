@@ -10,6 +10,14 @@ defmodule Eden.ChannelsTest do
 
   defp scope(user), do: Scope.for_user(user)
 
+  # The rail's entry room for a channel (#81), via the public list_channels path.
+  defp entry_room(scope, channel_id) do
+    scope
+    |> Channels.list_channels()
+    |> Enum.find(&(&1.id == channel_id))
+    |> then(& &1.entry_room_id)
+  end
+
   setup do
     %{
       alice: user_fixture(%{username: "alice", display_name: "Alice"}),
@@ -387,6 +395,63 @@ defmodule Eden.ChannelsTest do
       key2 = hd(msg2.attachments).storage_key
       :ok = Channels.delete_channel(scope(alice), ch2.id)
       refute Eden.Storage.exists?(key2)
+    end
+  end
+
+  describe "last-opened room (#81)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      # alice creates a second room; only the creator is seeded into it (#41).
+      {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
+      %{channel: channel, general: general, ops: ops}
+    end
+
+    test "entry room defaults to general when nothing is recorded", %{
+      alice: alice,
+      channel: channel,
+      general: general
+    } do
+      assert entry_room(scope(alice), channel.id) == general.id
+    end
+
+    test "recording a room makes it the entry room, per user", %{
+      alice: alice,
+      bob: bob,
+      channel: channel,
+      general: general,
+      ops: ops
+    } do
+      assert :ok = Channels.record_last_room(scope(alice), channel.id, ops.id)
+
+      # alice's entry room follows her last room; bob (never opened ops) still general.
+      assert entry_room(scope(alice), channel.id) == ops.id
+      assert entry_room(scope(bob), channel.id) == general.id
+    end
+
+    test "a remembered room the user can't access falls back to general", %{
+      bob: bob,
+      channel: channel,
+      general: general,
+      ops: ops
+    } do
+      # bob is pointed at ops but isn't a member of it (only alice was seeded).
+      :ok = Channels.record_last_room(scope(bob), channel.id, ops.id)
+      assert entry_room(scope(bob), channel.id) == general.id
+    end
+
+    test "a deleted remembered room nilifies and falls back to general", %{
+      alice: alice,
+      channel: channel,
+      general: general,
+      ops: ops
+    } do
+      :ok = Channels.record_last_room(scope(alice), channel.id, ops.id)
+      assert :ok = Channels.delete_room(scope(alice), ops.id)
+      # FK on_delete: :nilify_all cleared last_room_id → back to general.
+      assert entry_room(scope(alice), channel.id) == general.id
     end
   end
 

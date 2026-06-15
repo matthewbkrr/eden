@@ -674,8 +674,10 @@ defmodule EdenWeb.ChannelModeTest do
       {:ok, view, html} = live(conn, ~p"/channels/#{ctx.channel.id}")
       assert html =~ "ed-badge"
 
+      # The room-list link specifically — the rail button now also points at the
+      # room (#81 entry room), so disambiguate from it.
       view
-      |> element(~s(a[href="/channels/#{ctx.channel.id}/r/#{ctx.general.id}"]))
+      |> element(~s(a.ed-room[href="/channels/#{ctx.channel.id}/r/#{ctx.general.id}"]))
       |> render_click()
 
       # Regression: the rooms list refreshes on select, so the badge clears.

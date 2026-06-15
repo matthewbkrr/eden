@@ -153,7 +153,13 @@ design — built incrementally as features land.)
   sidebar/folders/search and per-user delete; room CRUD is admin-only via
   `Eden.Channels` (each channel is born with an `is_general` "general" room —
   always open, undeletable, auto-joined); channel deletion reclaims room
-  attachment blobs forward-safely. **Room access (#41)**: a channel join
+  attachment blobs forward-safely. **Last room (#81)**: opening a room records
+  `channel_memberships.last_room_id` (`Channels.record_last_room/3`); the rail
+  links each channel to its **entry room** — that last room if the user is still
+  a member, else `general` (`Chat.entry_room_ids/2`, carried on
+  `list_channels/1`) — so re-entering a channel reopens where you left off
+  instead of the empty state. Bare `/channels/:id` still shows the room list (so
+  mobile "back" lands there). **Room access (#41)**: a channel join
   materializes `general` only (`Chat.join_general`); other rooms are earned per
   room, and the sidebar lists only rooms you're in (link-discovered, never
   browsed). `conversations.visibility` is `open` (any link auto-joins via

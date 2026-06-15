@@ -259,6 +259,9 @@ defmodule EdenWeb.ChatLive do
     # channel home rather than crashing on a hard match.
     case Chat.get_conversation(socket.assigns.current_scope, room.id) do
       {:ok, loaded} ->
+        # Remember this as the channel's last room (#81) before select_conversation —
+        # its refresh_rail re-reads list_channels, so the rail's entry link updates.
+        Channels.record_last_room(socket.assigns.current_scope, loaded.channel_id, loaded.id)
         socket = socket |> refresh_rooms() |> select_conversation(loaded)
         socket = if message_id, do: focus_message_target(socket, message_id), else: socket
         {:noreply, socket}

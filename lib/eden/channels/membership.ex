@@ -15,6 +15,10 @@ defmodule Eden.Channels.Membership do
     field :role, :string, default: "member"
     # Per-user channel mute (badge-only); see the migration.
     field :muted_at, :utc_datetime
+    # Last room the user opened in this channel (#81); re-entering reopens it.
+    # Set via Channels.record_last_room/3 (never cast from params); nilified on
+    # room delete.
+    field :last_room_id, :id
 
     belongs_to :channel, Eden.Channels.Channel
     belongs_to :user, Eden.Accounts.User

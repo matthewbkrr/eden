@@ -24,6 +24,9 @@ defmodule Eden.Channels.Channel do
     # user's joined rooms (room-mute-aware) and whether the channel is muted.
     field :unread_count, :integer, virtual: true, default: 0
     field :muted, :boolean, virtual: true, default: false
+    # The room to open on rail entry (#81): the user's last-opened room if still
+    # joined, else the channel's general room. Filled by list_channels/1.
+    field :entry_room_id, :id, virtual: true
 
     belongs_to :creator, Eden.Accounts.User
     has_many :memberships, Eden.Channels.Membership
