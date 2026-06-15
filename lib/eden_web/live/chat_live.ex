@@ -1989,7 +1989,15 @@ defmodule EdenWeb.ChatLive do
       </aside>
 
       <main
-        class={["flex-1 flex flex-col min-w-0", !@selected && "hidden md:flex"]}
+        class={
+          [
+            "flex-1 flex flex-col min-w-0",
+            # Hidden on mobile when no room is open — UNLESS a private-room knock
+            # window is pending (it lives in here; without this it'd be invisible on
+            # mobile, #91). selected is nil during a knock, so guard on knock_room.
+            !@selected && is_nil(@knock_room) && "hidden md:flex"
+          ]
+        }
         style="background: var(--ed-bg);"
       >
         <%= if @selected do %>

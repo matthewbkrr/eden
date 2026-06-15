@@ -150,6 +150,11 @@ defmodule EdenWeb.ChannelModeTest do
       assert has_element?(bob_view, ~s(button[phx-click="request_join"]))
       refute has_element?(bob_view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{priv.id}"]))
 
+      # #91: the knock window lives inside <main>, which is hidden on mobile when no
+      # room is selected. A pending knock leaves selected nil, so the guard must keep
+      # <main> visible — otherwise the window is invisible on phones.
+      refute has_element?(bob_view, "main.hidden")
+
       # Request → pending state; not yet a member.
       render_click(bob_view, "request_join", %{})
       assert render(bob_view) =~ "Request sent."
