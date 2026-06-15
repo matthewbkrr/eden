@@ -2272,7 +2272,17 @@ defmodule EdenWeb.ChatLive do
                   autocomplete="off"
                   phx-hook=".PasteUpload"
                 />
-                <div class="ed-emoji" id="emoji-picker" phx-hook=".EmojiPicker">
+                <%!-- phx-update="ignore": the picker is fully client-managed (its
+                      open/closed `hidden` is toggled by the hook, contents are a
+                      static emoji set). Without it, the per-keystroke phx-change
+                      re-render re-asserts the pop's static `hidden` and snaps the
+                      picker shut after one pick — defeating multi-select (#90). --%>
+                <div
+                  class="ed-emoji"
+                  id="emoji-picker"
+                  phx-hook=".EmojiPicker"
+                  phx-update="ignore"
+                >
                   <button
                     type="button"
                     class="ed-btn--icon"
@@ -3519,8 +3529,9 @@ defmodule EdenWeb.ChatLive do
               const btn = e.target.closest("[data-emoji]")
               if (!btn) return
               e.preventDefault()
+              // Stay open so several emoji can be picked in a row (#90); the
+              // picker still closes on outside-click, Esc, or the toggle.
               this.insert(btn.dataset.emoji)
-              this.setOpen(false)
             })
           },
           destroyed() {

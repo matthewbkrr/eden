@@ -94,8 +94,10 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ "<strong>bold</strong>"
       assert html =~ "<em>italic</em>"
       assert html =~ "<code>code</code>"
-      # The composer offers an emoji picker.
-      assert has_element?(view, ~s(#emoji-picker [data-emoji-toggle]))
+      # The composer offers an emoji picker. It's phx-update="ignore" so the
+      # per-keystroke phx-change re-render can't re-assert the popover's static
+      # `hidden` and snap it shut between picks — multi-select stays open (#90).
+      assert has_element?(view, ~s(#emoji-picker[phx-update="ignore"] [data-emoji-toggle]))
     end
 
     test "reactions: toggle adds a chip (highlighted as mine), toggle again removes (#67)", ctx do
