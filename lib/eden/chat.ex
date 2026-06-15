@@ -1257,7 +1257,7 @@ defmodule Eden.Chat do
         |> preload([
           :sender,
           :attachments,
-          :reactions,
+          reactions: :user,
           reply_to: [:sender, :attachments],
           forwarded_from: :sender
         ])
@@ -1680,7 +1680,7 @@ defmodule Eden.Chat do
         |> preload([
           :sender,
           :attachments,
-          :reactions,
+          reactions: :user,
           reply_to: [:sender, :attachments],
           forwarded_from: :sender
         ])
@@ -1690,7 +1690,7 @@ defmodule Eden.Chat do
        Repo.preload(root, [
          :sender,
          :attachments,
-         :reactions,
+         reactions: :user,
          reply_to: [:sender, :attachments],
          forwarded_from: :sender
        ]), replies}
@@ -1895,7 +1895,7 @@ defmodule Eden.Chat do
       Repo.preload(reply, [
         :sender,
         :attachments,
-        :reactions,
+        reactions: :user,
         reply_to: [:sender, :attachments],
         forwarded_from: :sender
       ])
@@ -1918,7 +1918,7 @@ defmodule Eden.Chat do
         preload: [
           :sender,
           :attachments,
-          :reactions,
+          reactions: :user,
           reply_to: [:sender, :attachments],
           forwarded_from: :sender
         ]
@@ -2479,7 +2479,7 @@ defmodule Eden.Chat do
       Repo.preload(message, [
         :sender,
         :attachments,
-        :reactions,
+        reactions: :user,
         reply_to: [:sender, :attachments],
         forwarded_from: :sender
       ])
@@ -2556,7 +2556,7 @@ defmodule Eden.Chat do
     Repo.one(
       from m in Message,
         where: m.sender_id == ^sender_id and m.client_id == ^client_id,
-        preload: [:sender, :attachments, :reactions]
+        preload: [:sender, :attachments, reactions: :user]
     )
   end
 
@@ -2649,7 +2649,7 @@ defmodule Eden.Chat do
           Repo.preload(message, [
             :sender,
             :attachments,
-            :reactions,
+            reactions: :user,
             reply_to: [:sender, :attachments],
             forwarded_from: :sender
           ])

@@ -4656,35 +4656,72 @@ defmodule EdenWeb.ChatLive do
       rows
       |> Enum.group_by(& &1.emoji)
       |> Enum.map(fn {emoji, rs} ->
-        {emoji, length(rs), Enum.any?(rs, &(&1.user_id == assigns.me))}
+        mine = Enum.any?(rs, &(&1.user_id == assigns.me))
+        # Who reacted (#82): "Anna, Oleg and you" for the hover title + a11y label,
+        # resolved from the preloaded reactors — no extra query per chip.
+        who = reactor_label(rs, assigns.me)
+
+        label =
+          if who == "",
+            do:
+              ngettext("%{emoji}: %{count} reaction", "%{emoji}: %{count} reactions", length(rs),
+                emoji: emoji,
+                count: length(rs)
+              ),
+            else: "#{emoji}: #{who}"
+
+        {emoji, length(rs), mine, who, label}
       end)
       # Most-reacted first; emoji as a stable tiebreaker so order doesn't jitter.
-      |> Enum.sort_by(fn {emoji, count, _mine} -> {-count, emoji} end)
+      |> Enum.sort_by(fn {emoji, count, _mine, _who, _label} -> {-count, emoji} end)
 
     assigns = assign(assigns, :chips, chips)
 
     ~H"""
     <div :if={@chips != []} class="ed-reactions">
       <button
-        :for={{emoji, count, mine} <- @chips}
+        :for={{emoji, count, mine, who, label} <- @chips}
         type="button"
         class={["ed-react", mine && "ed-react--mine"]}
         phx-click="react"
         phx-value-id={@message.id}
         phx-value-emoji={emoji}
         aria-pressed={to_string(mine)}
-        aria-label={
-          ngettext("%{emoji}: %{count} reaction", "%{emoji}: %{count} reactions", count,
-            emoji: emoji,
-            count: count
-          )
-        }
+        title={who}
+        aria-label={label}
       >
         <span class="ed-react__emoji" aria-hidden="true">{emoji}</span>
         <span class="ed-react__count" aria-hidden="true">{count}</span>
       </button>
     </div>
     """
+  end
+
+  # Reactor names for a chip's hover title / a11y label: other reactors'
+  # display names plus the viewer rendered as "you", joined "Anna, Oleg and you".
+  # Empty when no name resolves (reactions not preloaded with :user) — the chip
+  # still shows its count.
+  defp reactor_label(rows, me) do
+    others =
+      rows
+      |> Enum.reject(&(&1.user_id == me))
+      |> Enum.map(&reactor_name/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.sort()
+
+    names = if Enum.any?(rows, &(&1.user_id == me)), do: others ++ [gettext("you")], else: others
+    format_name_list(names)
+  end
+
+  defp reactor_name(%{user: %{display_name: name}}) when is_binary(name), do: name
+  defp reactor_name(_), do: nil
+
+  defp format_name_list([]), do: ""
+  defp format_name_list([one]), do: one
+
+  defp format_name_list(names) do
+    {leading, [last]} = Enum.split(names, -1)
+    gettext("%{names} and %{last}", names: Enum.join(leading, ", "), last: last)
   end
 
   attr :id, :string, required: true

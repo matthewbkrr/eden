@@ -130,6 +130,29 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ~s(.ed-react[phx-value-emoji="👍"]))
     end
 
+    test "a reaction chip reveals its reactors on hover, 'you' for self, live (#82)", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "react me"})
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      refute has_element?(view, ~s(.ed-react[phx-value-emoji="👍"]))
+
+      # Alice reacts from another session → bob's open view recomputes live on
+      # {:reaction_changed}; the chip names her.
+      {:ok, _} = Chat.toggle_reaction(Scope.for_user(ctx.alice), msg.id, "👍")
+      assert has_element?(view, ~s(.ed-react[phx-value-emoji="👍"][title="Alice"]))
+
+      # Bob reacts too → "Alice and you", and the a11y label matches the title.
+      render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
+      assert has_element?(view, ~s(.ed-react--mine[phx-value-emoji="👍"][title="Alice and you"]))
+
+      assert has_element?(
+               view,
+               ~s(.ed-react[phx-value-emoji="👍"][aria-label="👍: Alice and you"])
+             )
+    end
+
     test "quote-reply: tray stages the target, send renders the quote (#71)", ctx do
       {:ok, target} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
