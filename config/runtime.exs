@@ -87,7 +87,12 @@ if config_env() == :prod do
   # config fails the boot loudly rather than silently mis-signing). REGION must be
   # the bucket's real region on AWS (a wrong region is a 403 on every request);
   # use "auto" for Cloudflare R2 / MinIO.
-  if bucket = System.get_env("EDEN_S3_BUCKET") do
+  #
+  # A PRESENT-BUT-EMPTY var counts as unset (#85): docker compose passes
+  # `EDEN_S3_BUCKET=` (empty string) when no bucket is set, and "" is truthy in
+  # Elixir — without this guard the S3 adapter would be selected with an empty
+  # endpoint and every attachment upload would crash ("scheme is required").
+  if (bucket = System.get_env("EDEN_S3_BUCKET")) not in [nil, ""] do
     config :eden, Eden.Storage, adapter: Eden.Storage.S3
 
     config :eden, Eden.Storage.S3,
