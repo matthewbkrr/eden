@@ -2215,6 +2215,7 @@ defmodule EdenWeb.ChatLive do
             phx-hook=".SendQueue"
             data-conversation-id={@selected.id}
             data-layout={if @selected.channel_id, do: "flat", else: "bubble"}
+            data-is-group={to_string(@selected.is_group)}
             data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
             data-max-body={Chat.Message.max_body()}
@@ -3310,12 +3311,19 @@ defmodule EdenWeb.ChatLive do
               // Mirror the real bubble's body + meta structure so the optimistic
               // node is the SAME height — without the meta line it was shorter,
               // so the real (taller) replacement looked like it grew ("small to
-              // large"). A lone "sending" check stands in for the read receipt.
+              // large"). A lone "sending" check stands in for the read receipt —
+              // but ONLY in 1:1s: group bubbles render no receipt (the real row
+              // hides it for groups), so showing one optimistically made the check
+              // flash then vanish as the real row swapped in (#89). Match that.
+              const isGroup = this.el.dataset.isGroup === "true"
+              const check =
+                isGroup
+                  ? ""
+                  : '<span class="inline-flex items-center" style="margin-left:2px;">' +
+                    '<span class="hero-check-micro size-3.5"></span></span>'
               bubble.innerHTML =
                 '<span class="break-words"></span>' +
-                '<span class="ed-bubble__meta"><time></time>' +
-                '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                '<span class="hero-check-micro size-3.5"></span></span></span>'
+                '<span class="ed-bubble__meta"><time></time>' + check + "</span>"
               bubble.querySelector("span.break-words").textContent = body
               bubble.querySelector("time").textContent =
                 new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -5713,6 +5721,10 @@ defmodule EdenWeb.ChatLive do
       has_more: length(messages) == @page,
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       thread_root: nil,
+      # The composer is per-conversation: reset it so a draft/last-sent body from
+      # the previous chat doesn't reappear in this one's input (#89). The input
+      # binds to @composer[:body].value, which otherwise keeps the stale text.
+      composer: empty_composer(),
       # Drop any staged quote-reply (#71) — its target is the old conversation's.
       reply_to: nil,
       thread_reply_to: nil,

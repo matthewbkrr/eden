@@ -201,6 +201,22 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-reply-bar")
     end
 
+    test "switching conversations clears the composer input (#89)", ctx do
+      carol = user_fixture(%{username: "carol_cz", display_name: "Carol"})
+      {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Type a draft into the composer → it lives in the @composer form assign.
+      render_change(view, "composer_changed", %{"message" => %{"body" => "leaky draft"}})
+      assert render(view) =~ "leaky draft"
+
+      # Switch conversations → the composer resets (the draft doesn't leak in).
+      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+      refute render(view) =~ "leaky draft"
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
