@@ -37,6 +37,28 @@ defmodule EdenWeb.ChannelModeTest do
       assert html =~ "Pick a room to start reading."
     end
 
+    test "rail channel link: desktop reopens the entry room, mobile shows the room list (#92)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      slot = "#rail-channel-#{ctx.channel.id}"
+
+      # Desktop link → reopen the channel's remembered room (#81 intact): hidden by
+      # default, shown at md+. entry room falls back to general (no last room yet).
+      assert has_element?(
+               view,
+               ~s|#{slot} a[href="/channels/#{ctx.channel.id}/r/#{ctx.general.id}"][class*="hidden"][class*="md:inline-flex"]|
+             )
+
+      # Mobile link → bare channel (its room list), hidden at md+ (#92) so tapping a
+      # channel on a phone lands on the room choice, not a forced last room.
+      assert has_element?(
+               view,
+               ~s|#{slot} a[href="/channels/#{ctx.channel.id}"][class*="md:hidden"]|
+             )
+    end
+
     test "a long channel description wraps instead of overflowing (#63)", ctx do
       long = String.duplicate("флоыврлфыовфлор", 8)
       {:ok, ch} = Channels.create_channel(scope(ctx.alice), %{"name" => "Wide", "about" => long})
@@ -149,6 +171,11 @@ defmodule EdenWeb.ChannelModeTest do
       assert html =~ "This room is private"
       assert has_element?(bob_view, ~s(button[phx-click="request_join"]))
       refute has_element?(bob_view, ~s(a[href="/channels/#{ctx.channel.id}/r/#{priv.id}"]))
+
+      # #91: the knock window lives inside <main>, which is hidden on mobile when no
+      # room is selected. A pending knock leaves selected nil, so the guard must keep
+      # <main> visible — otherwise the window is invisible on phones.
+      refute has_element?(bob_view, "main.hidden")
 
       # Request → pending state; not yet a member.
       render_click(bob_view, "request_join", %{})
@@ -488,6 +515,30 @@ defmodule EdenWeb.ChannelModeTest do
       render_click(view, "mark_as_read", %{"id" => to_string(ctx.general.id)})
       refute has_element?(view, "#room-#{ctx.general.id} .ed-badge")
       refute has_element?(view, ".ed-rail__badge")
+    end
+
+    test "a message in a sibling room bumps its room-list badge live, reading clears it (#93)",
+         ctx do
+      {:ok, ops} = Channels.create_room(scope(ctx.alice), ctx.channel.id, %{"name" => "ops"})
+      :ok = Chat.join_room(ops.id, ctx.bob.id)
+      # Push bob's last_read back so a message posted "now" counts as unread (join
+      # stamps last_read at second granularity, same second as the message).
+      backdate_last_read(ops.id, ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      # bob is viewing general; ops is a sibling room he belongs to but isn't viewing.
+      {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      badge = "#room-#{ops.id} .ed-badge"
+      refute has_element?(view, badge)
+
+      # alice posts to ops → bob's ops badge bumps live, no reload.
+      {:ok, _} = Chat.create_message(scope(ctx.alice), ops.id, %{"body" => "deploy now"})
+      assert has_element?(view, badge, "1")
+
+      # Reading ops clears its badge live.
+      render_click(view, "mark_as_read", %{"id" => to_string(ops.id)})
+      refute has_element?(view, badge)
     end
 
     test "favorite floats the room into the Favorites block live", ctx do

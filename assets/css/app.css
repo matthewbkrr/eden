@@ -341,7 +341,11 @@
   /* Message bubbles ----------------------------------------------------- */
   .ed-bubble {
     position: relative;
-    max-width: 30rem;
+    /* Cap to the viewport on phones: a right-aligned "me" bubble at a fixed
+       30rem (480px) runs off the LEFT edge on a ~360px screen, and a nowrap
+       quote stretches the bubble to that width (#91). 80vw keeps it on-screen;
+       30rem still wins on desktop. */
+    max-width: min(30rem, 80vw);
     width: fit-content;
     padding: 0.5rem 0.75rem;
     border-radius: var(--ed-radius-lg);

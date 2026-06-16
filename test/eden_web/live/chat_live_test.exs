@@ -94,8 +94,10 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ "<strong>bold</strong>"
       assert html =~ "<em>italic</em>"
       assert html =~ "<code>code</code>"
-      # The composer offers an emoji picker.
-      assert has_element?(view, ~s(#emoji-picker [data-emoji-toggle]))
+      # The composer offers an emoji picker. It's phx-update="ignore" so the
+      # per-keystroke phx-change re-render can't re-assert the popover's static
+      # `hidden` and snap it shut between picks — multi-select stays open (#90).
+      assert has_element?(view, ~s(#emoji-picker[phx-update="ignore"] [data-emoji-toggle]))
     end
 
     test "reactions: toggle adds a chip (highlighted as mine), toggle again removes (#67)", ctx do
@@ -126,6 +128,29 @@ defmodule EdenWeb.ChatLiveTest do
       # Toggling the same emoji removes the chip.
       render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
       refute has_element?(view, ~s(.ed-react[phx-value-emoji="👍"]))
+    end
+
+    test "a reaction chip reveals its reactors on hover, 'you' for self, live (#82)", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "react me"})
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      refute has_element?(view, ~s(.ed-react[phx-value-emoji="👍"]))
+
+      # Alice reacts from another session → bob's open view recomputes live on
+      # {:reaction_changed}; the chip names her.
+      {:ok, _} = Chat.toggle_reaction(Scope.for_user(ctx.alice), msg.id, "👍")
+      assert has_element?(view, ~s(.ed-react[phx-value-emoji="👍"][title="Alice"]))
+
+      # Bob reacts too → "Alice and you", and the a11y label matches the title.
+      render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
+      assert has_element?(view, ~s(.ed-react--mine[phx-value-emoji="👍"][title="Alice and you"]))
+
+      assert has_element?(
+               view,
+               ~s(.ed-react[phx-value-emoji="👍"][aria-label="👍: Alice and you"])
+             )
     end
 
     test "quote-reply: tray stages the target, send renders the quote (#71)", ctx do
@@ -199,6 +224,44 @@ defmodule EdenWeb.ChatLiveTest do
       # Switch conversations → the staged reply (its target is the old chat) drops.
       view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
       refute has_element?(view, ".ed-reply-bar")
+    end
+
+    test "switching conversations clears the composer input (#89)", ctx do
+      carol = user_fixture(%{username: "carol_cz", display_name: "Carol"})
+      {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Type a draft into the composer → it lives in the @composer form assign.
+      render_change(view, "composer_changed", %{"message" => %{"body" => "leaky draft"}})
+      assert render(view) =~ "leaky draft"
+
+      # Switch conversations → the composer resets (the draft doesn't leak in).
+      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+      refute render(view) =~ "leaky draft"
+    end
+
+    test "switching conversations also drops staged attachments, not just text (#89)", ctx do
+      carol = user_fixture(%{username: "carol_up", display_name: "Carol"})
+      {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Stage a photo in conversation A → the compose tray appears.
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, ".ed-compose")
+
+      # Switch conversations → the staged tray is dropped, otherwise A's media
+      # would ride into B's composer and a send would attach it to the wrong chat.
+      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+      refute has_element?(view, ".ed-compose")
     end
 
     test "a malformed react payload is ignored, not a crash (#67)", ctx do

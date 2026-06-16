@@ -370,12 +370,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("cancel_all_uploads", _params, socket) do
-    socket =
-      Enum.reduce(socket.assigns.uploads.attachment.entries, socket, fn entry, acc ->
-        cancel_upload(acc, :attachment, entry.ref)
-      end)
-
-    {:noreply, socket}
+    {:noreply, cancel_staged_attachments(socket)}
   end
 
   def handle_event("load_more", _params, socket) do
@@ -1989,7 +1984,15 @@ defmodule EdenWeb.ChatLive do
       </aside>
 
       <main
-        class={["flex-1 flex flex-col min-w-0", !@selected && "hidden md:flex"]}
+        class={
+          [
+            "flex-1 flex flex-col min-w-0",
+            # Hidden on mobile when no room is open — UNLESS a private-room knock
+            # window is pending (it lives in here; without this it'd be invisible on
+            # mobile, #91). selected is nil during a knock, so guard on knock_room.
+            !@selected && is_nil(@knock_room) && "hidden md:flex"
+          ]
+        }
         style="background: var(--ed-bg);"
       >
         <%= if @selected do %>
@@ -2215,6 +2218,7 @@ defmodule EdenWeb.ChatLive do
             phx-hook=".SendQueue"
             data-conversation-id={@selected.id}
             data-layout={if @selected.channel_id, do: "flat", else: "bubble"}
+            data-is-group={to_string(@selected.is_group)}
             data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
             data-max-body={Chat.Message.max_body()}
@@ -2263,7 +2267,17 @@ defmodule EdenWeb.ChatLive do
                   autocomplete="off"
                   phx-hook=".PasteUpload"
                 />
-                <div class="ed-emoji" id="emoji-picker" phx-hook=".EmojiPicker">
+                <%!-- phx-update="ignore": the picker is fully client-managed (its
+                      open/closed `hidden` is toggled by the hook, contents are a
+                      static emoji set). Without it, the per-keystroke phx-change
+                      re-render re-asserts the pop's static `hidden` and snaps the
+                      picker shut after one pick — defeating multi-select (#90). --%>
+                <div
+                  class="ed-emoji"
+                  id="emoji-picker"
+                  phx-hook=".EmojiPicker"
+                  phx-update="ignore"
+                >
                   <button
                     type="button"
                     class="ed-btn--icon"
@@ -3310,12 +3324,19 @@ defmodule EdenWeb.ChatLive do
               // Mirror the real bubble's body + meta structure so the optimistic
               // node is the SAME height — without the meta line it was shorter,
               // so the real (taller) replacement looked like it grew ("small to
-              // large"). A lone "sending" check stands in for the read receipt.
+              // large"). A lone "sending" check stands in for the read receipt —
+              // but ONLY in 1:1s: group bubbles render no receipt (the real row
+              // hides it for groups), so showing one optimistically made the check
+              // flash then vanish as the real row swapped in (#89). Match that.
+              const isGroup = this.el.dataset.isGroup === "true"
+              const check =
+                isGroup
+                  ? ""
+                  : '<span class="inline-flex items-center" style="margin-left:2px;">' +
+                    '<span class="hero-check-micro size-3.5"></span></span>'
               bubble.innerHTML =
                 '<span class="break-words"></span>' +
-                '<span class="ed-bubble__meta"><time></time>' +
-                '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                '<span class="hero-check-micro size-3.5"></span></span></span>'
+                '<span class="ed-bubble__meta"><time></time>' + check + "</span>"
               bubble.querySelector("span.break-words").textContent = body
               bubble.querySelector("time").textContent =
                 new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -3492,7 +3513,6 @@ defmodule EdenWeb.ChatLive do
           mounted() {
             this.toggle = this.el.querySelector("[data-emoji-toggle]")
             this.pop = this.el.querySelector("[data-emoji-pop]")
-            this.input = this.el.closest("form")?.querySelector('input[name="message[body]"]')
             this.onDoc = (e) => { if (!this.el.contains(e.target)) this.setOpen(false) }
             this.onKey = (e) => { if (e.key === "Escape") this.setOpen(false) }
             this.toggle.addEventListener("click", (e) => {
@@ -3503,8 +3523,9 @@ defmodule EdenWeb.ChatLive do
               const btn = e.target.closest("[data-emoji]")
               if (!btn) return
               e.preventDefault()
+              // Stay open so several emoji can be picked in a row (#90); the
+              // picker still closes on outside-click, Esc, or the toggle.
               this.insert(btn.dataset.emoji)
-              this.setOpen(false)
             })
           },
           destroyed() {
@@ -3519,7 +3540,10 @@ defmodule EdenWeb.ChatLive do
             document[fn]("keydown", this.onKey)
           },
           insert(emoji) {
-            const i = this.input
+            // Re-query each time: phx-update="ignore" is on the picker, not the
+            // input, so the input can be re-rendered and a ref cached at mount
+            // could go stale (#82 review).
+            const i = this.el.closest("form")?.querySelector('input[name="message[body]"]')
             if (!i) return
             const s = i.selectionStart ?? i.value.length
             const e = i.selectionEnd ?? i.value.length
@@ -4628,36 +4652,72 @@ defmodule EdenWeb.ChatLive do
     chips =
       rows
       |> Enum.group_by(& &1.emoji)
-      |> Enum.map(fn {emoji, rs} ->
-        {emoji, length(rs), Enum.any?(rs, &(&1.user_id == assigns.me))}
-      end)
+      |> Enum.map(&build_chip(&1, assigns.me))
       # Most-reacted first; emoji as a stable tiebreaker so order doesn't jitter.
-      |> Enum.sort_by(fn {emoji, count, _mine} -> {-count, emoji} end)
+      |> Enum.sort_by(&{-&1.count, &1.emoji})
 
     assigns = assign(assigns, :chips, chips)
 
     ~H"""
     <div :if={@chips != []} class="ed-reactions">
       <button
-        :for={{emoji, count, mine} <- @chips}
+        :for={chip <- @chips}
         type="button"
-        class={["ed-react", mine && "ed-react--mine"]}
+        class={["ed-react", chip.mine && "ed-react--mine"]}
         phx-click="react"
         phx-value-id={@message.id}
-        phx-value-emoji={emoji}
-        aria-pressed={to_string(mine)}
-        aria-label={
-          ngettext("%{emoji}: %{count} reaction", "%{emoji}: %{count} reactions", count,
-            emoji: emoji,
-            count: count
-          )
-        }
+        phx-value-emoji={chip.emoji}
+        aria-pressed={to_string(chip.mine)}
+        title={chip.title}
+        aria-label={chip.label}
       >
-        <span class="ed-react__emoji" aria-hidden="true">{emoji}</span>
-        <span class="ed-react__count" aria-hidden="true">{count}</span>
+        <span class="ed-react__emoji" aria-hidden="true">{chip.emoji}</span>
+        <span class="ed-react__count" aria-hidden="true">{chip.count}</span>
       </button>
     </div>
     """
+  end
+
+  # One reaction chip: count, whether it's mine, the reactor list (#82) for the
+  # hover title + a11y label. `me` and the rows are split once; `length` once.
+  defp build_chip({emoji, rows}, me) do
+    {mine_rows, other_rows} = Enum.split_with(rows, &(&1.user_id == me))
+    count = length(rows)
+    who = format_reactors(other_rows, mine_rows != [])
+
+    %{
+      emoji: emoji,
+      count: count,
+      mine: mine_rows != [],
+      # nil so HEEx omits the attribute when no reactor name resolved (reactions
+      # not preloaded with :user) — no empty tooltip; aria-label keeps the count.
+      title: if(who == "", do: nil, else: who),
+      label: if(who == "", do: count_label(emoji, count), else: "#{emoji}: #{who}")
+    }
+  end
+
+  # "Anna, Oleg and you": other reactors' display names (the viewer as "you").
+  defp format_reactors(other_rows, mine?) do
+    names = other_rows |> Enum.map(&reactor_name/1) |> Enum.reject(&is_nil/1) |> Enum.sort()
+    format_name_list(if mine?, do: names ++ [gettext("you")], else: names)
+  end
+
+  defp count_label(emoji, count) do
+    ngettext("%{emoji}: %{count} reaction", "%{emoji}: %{count} reactions", count,
+      emoji: emoji,
+      count: count
+    )
+  end
+
+  defp reactor_name(%{user: %{display_name: name}}) when is_binary(name), do: name
+  defp reactor_name(_), do: nil
+
+  defp format_name_list([]), do: ""
+  defp format_name_list([one]), do: one
+
+  defp format_name_list(names) do
+    {leading, [last]} = Enum.split(names, -1)
+    gettext("%{names} and %{last}", names: Enum.join(leading, ", "), last: last)
   end
 
   attr :id, :string, required: true
@@ -5706,6 +5766,11 @@ defmodule EdenWeb.ChatLive do
     {messages, last_flat} = mark_compact(messages, conversation)
 
     socket
+    # Drop chat A's staged attachments before opening B — they belong to the
+    # conversation they were composed in; otherwise they ride into the new
+    # composer and a send would attach them to the wrong chat (#89, with the
+    # text-draft reset below).
+    |> cancel_staged_attachments()
     |> assign(
       selected: conversation,
       subscribed_id: conversation.id,
@@ -5713,6 +5778,10 @@ defmodule EdenWeb.ChatLive do
       has_more: length(messages) == @page,
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       thread_root: nil,
+      # The composer is per-conversation: reset it so a draft/last-sent body from
+      # the previous chat doesn't reappear in this one's input (#89). The input
+      # binds to @composer[:body].value, which otherwise keeps the stale text.
+      composer: empty_composer(),
       # Drop any staged quote-reply (#71) — its target is the old conversation's.
       reply_to: nil,
       thread_reply_to: nil,
@@ -6158,6 +6227,15 @@ defmodule EdenWeb.ChatLive do
   defp read?(message, read_at), do: DateTime.compare(message.inserted_at, read_at) != :gt
 
   defp empty_composer, do: to_form(%{}, as: "message")
+
+  # Cancel every staged attachment upload (the composer tray). Used both by the
+  # explicit "clear tray" action and on conversation switch so media staged in
+  # one chat can't be sent into another (#89).
+  defp cancel_staged_attachments(socket) do
+    Enum.reduce(socket.assigns.uploads.attachment.entries, socket, fn entry, acc ->
+      cancel_upload(acc, :attachment, entry.ref)
+    end)
+  end
 
   defp send_text(socket, scope, conversation, body, client_id, reply_to_id) do
     attrs = %{"body" => body, "client_id" => client_id, "reply_to_id" => reply_to_id}
