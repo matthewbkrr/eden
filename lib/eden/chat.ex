@@ -1362,7 +1362,7 @@ defmodule Eden.Chat do
         Enum.split_with(classified, fn {_source, kind} -> kind in ~w(image video) end)
 
       steps = attachment_steps(sources_of(media), sources_of(files), Map.get(opts, :body, ""))
-      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id])
+      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id], opts[:client_id])
     else
       false -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -1405,13 +1405,20 @@ defmodule Eden.Chat do
 
   # A quote-reply with attachments rides only the FIRST sent message (the album,
   # or the first file); the rest are plain.
-  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id) do
+  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id, client_id) do
     steps
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {{srcs, body}, i}, {:ok, acc} ->
+      # reply_to and the optimistic client_id (#95) belong to the first message
+      # (the media album with the caption), not the trailing per-file messages.
       reply = if i == 0, do: reply_to_id, else: nil
+      cid = if i == 0, do: client_id, else: nil
 
-      case create_album_message(scope, conversation_id, srcs, %{body: body, reply_to_id: reply}) do
+      case create_album_message(scope, conversation_id, srcs, %{
+             body: body,
+             reply_to_id: reply,
+             client_id: cid
+           }) do
         {:ok, message} -> {:cont, {:ok, [message | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end

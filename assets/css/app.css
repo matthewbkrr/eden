@@ -2005,6 +2005,36 @@
   .ed-typing-row .ed-typing { padding: 0; }
   .ed-typing-row__label { line-height: 1; }
 
+  /* Optimistic media-send node (#95): layered on the REAL .ed-album so it's
+     pixel-identical to the sent message — only a soft dim + a spinner mark it as
+     still uploading, then the SendQueue observer swaps the twin for the real row.
+     No grid/sizing of its own; it inherits all of that from .ed-album. */
+  .ed-media-sending {
+    position: relative;
+  }
+  .ed-media-sending::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: oklch(0 0 0 / 0.28);
+    pointer-events: none;
+  }
+  .ed-media-sending__spin {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 2.5px solid oklch(1 0 0 / 0.4);
+    border-top-color: #fff;
+    border-radius: var(--ed-radius-full);
+    animation: ed-spin 0.7s linear infinite;
+    z-index: 1;
+  }
+  @keyframes ed-spin {
+    to { transform: rotate(360deg); }
+  }
+
   /* Toasts -------------------------------------------------------------- */
   .ed-toast {
     display: flex;
@@ -2079,6 +2109,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ed-typing span { animation: none; }
+  .ed-media-sending__spin { animation: none; }
   .ed-btn, .ed-input, .ed-convo { transition: none; }
   .ed-folder-indicator, .ed-search { transition: none; }
   .ed-lightbox__nav, .ed-compose__remove { transition: none; }

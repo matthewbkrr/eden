@@ -984,6 +984,20 @@ defmodule Eden.ChatTest do
       assert msg.reply_to_id == target.id
     end
 
+    test "create_attachments stamps the album message with the client_id (#95)", %{
+      alice: alice,
+      conv: conv
+    } do
+      cid = "fa739712-e09f-4445-a36a-01c6fc01af40"
+
+      {:ok, [msg]} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png()}], %{client_id: cid})
+
+      # Threads create_attachments → send_attachment_steps → create_album_message
+      # → persist_album so the real message swaps the hook's optimistic twin.
+      assert msg.client_id == cid
+    end
+
     test "get_message stages a visible target but not a deleted/hidden one", %{
       alice: alice,
       bob: bob,

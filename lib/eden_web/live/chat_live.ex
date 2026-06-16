@@ -62,6 +62,10 @@ defmodule EdenWeb.ChatLive do
         # list (not MapSet) — it's tiny and read back from assigns as an opaque
         # term, so MapSet ops would trip dialyzer's opaqueness check.
         sidebar_peer_ids: [],
+        # Client ids for in-flight media sends (#95), FIFO: the hook pushes one
+        # just before each upload submit, send_attachment pops the oldest to stamp
+        # the real message so its optimistic twin swaps out.
+        media_client_ids: [],
         composer: empty_composer(),
         folders: [],
         folder_tabs: [],
@@ -362,6 +366,13 @@ defmodule EdenWeb.ChatLive do
      |> maybe_broadcast_typing(body)}
   end
 
+  # The hook pushes a client_id just before each media upload submit (#95); queue
+  # it FIFO so send_attachment can stamp the real message and the optimistic twin
+  # swaps out (an upload submit can't carry an untracked hidden form field).
+  def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
+    {:noreply, assign(socket, media_client_ids: socket.assigns.media_client_ids ++ [id])}
+  end
+
   def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
     client_id = msg["client_id"]
@@ -372,7 +383,11 @@ defmodule EdenWeb.ChatLive do
         {:noreply, socket}
 
       socket.assigns.uploads.attachment.entries != [] ->
-        send_attachment(socket, scope, conversation, body, reply_to_id)
+        # Media client_id rides over the socket (pushed by the hook), not the form;
+        # pop the oldest queued one to stamp this send (#95).
+        {cid, rest} = pop_media_client_id(socket.assigns.media_client_ids)
+        socket = assign(socket, media_client_ids: rest)
+        send_attachment(socket, scope, conversation, body, reply_to_id, cid)
 
       String.trim(body) == "" ->
         {:noreply, assign(socket, composer: empty_composer())}
@@ -3263,8 +3278,31 @@ defmodule EdenWeb.ChatLive do
             }
           },
           onSubmit(e) {
-            // Photos go through the normal phx-submit (they carry an upload).
-            if (this.el.querySelector("[data-upload-preview]")) return
+            // Media: stamp a client_id so the real message swaps the optimistic
+            // twin, render a local-preview node with a spinner, then let the live
+            // upload proceed (#95 — do NOT preventDefault; LiveView drives upload).
+            const overlay = this.el.querySelector("[data-upload-preview]")
+            if (overlay) {
+              // Two-pass (#95): a hidden form field isn't serialized through the
+              // upload submit, so the client_id rides the socket. To beat the race
+              // where a tiny upload's "send" outruns the push, we hold the submit,
+              // push the id, and only re-submit from the ack callback — so the
+              // server has stashed it before "send" arrives. mediaPass guards the
+              // re-entry so the second submit falls through to the live upload.
+              if (this.mediaPass) {
+                this.mediaPass = false
+                return
+              }
+              e.preventDefault()
+              e.stopPropagation()
+              const clientId = this.uuid()
+              this.addOptimisticMedia(clientId, overlay)
+              this.pushEvent("media_client_id", { id: clientId }, () => {
+                this.mediaPass = true
+                this.el.requestSubmit()
+              })
+              return
+            }
             // A quote-reply (#71) also defers to the server path so the reply_to_id
             // rides along and the quote renders at the right height (no optimistic
             // node that would pop taller when the real row streams in).
@@ -3422,6 +3460,89 @@ defmodule EdenWeb.ChatLive do
                 top: this.scroller.scrollHeight,
                 behavior: smooth ? "smooth" : "auto",
               })
+            }
+          },
+          // Optimistic media node (#95): a local preview of the staged photos with
+          // a spinner, tagged with client_id so the real message swaps it out when
+          // it streams in (the same data-client-id observer as text). Previews are
+          // snapshotted to data-URLs because the overlay's object URLs are revoked
+          // once the upload is consumed.
+          addOptimisticMedia(clientId, overlay) {
+            const previews = [...overlay.querySelectorAll(".ed-compose__img")]
+              .map((img) => this.snapshot(img))
+              .filter(Boolean)
+            const videos = overlay.querySelectorAll(".ed-compose__video").length
+            const n = previews.length + videos
+            const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
+
+            // Reuse the REAL album markup (.ed-album / .ed-album__tile) so the
+            // optimistic node is pixel-identical to the message it becomes — only
+            // a dim + spinner overlay marks it as still uploading (#95). Matching
+            // album_cols/album_view keeps the swap seamless (no reflow).
+            const media = document.createElement("div")
+            media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
+            for (const src of previews) {
+              const tile = document.createElement("span")
+              tile.className = "ed-album__tile"
+              const img = document.createElement("img")
+              img.src = src
+              img.alt = ""
+              tile.appendChild(img)
+              media.appendChild(tile)
+            }
+            for (let i = 0; i < videos; i++) {
+              const tile = document.createElement("span")
+              tile.className = "ed-album__tile"
+              tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+              media.appendChild(tile)
+            }
+            const spin = document.createElement("span")
+            spin.className = "ed-media-sending__spin"
+            spin.setAttribute("aria-hidden", "true")
+            media.appendChild(spin)
+
+            const row = document.createElement("div")
+            row.dataset.clientId = clientId
+            if (this.el.dataset.layout === "flat") {
+              row.className = "ed-flat"
+              row.innerHTML =
+                '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>'
+              const name = this.el.dataset.senderName || ""
+              row.querySelector(".ed-avatar span").textContent =
+                (name.trim().charAt(0) || "?").toUpperCase()
+              const main = document.createElement("div")
+              main.className = "ed-flat__main"
+              main.appendChild(media)
+              row.appendChild(main)
+            } else {
+              row.className = "ed-msg flex justify-end"
+              const bubble = document.createElement("div")
+              bubble.className = "ed-bubble ed-bubble--me"
+              bubble.appendChild(media)
+              row.appendChild(bubble)
+            }
+            this.pending.appendChild(row)
+            row.classList.add("ed-msg--enter")
+            setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
+            if (this.scroller) {
+              const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" })
+            }
+          },
+          // Snapshot a loaded preview <img> to a persistent JPEG data-URL. Returns
+          // null on taint/empty so the node just shows the spinner over a blank tile.
+          snapshot(img) {
+            try {
+              const w = img.naturalWidth || img.width
+              const h = img.naturalHeight || img.height
+              if (!w || !h) return null
+              const c = document.createElement("canvas")
+              c.width = w
+              c.height = h
+              c.getContext("2d").drawImage(img, 0, 0, w, h)
+              return c.toDataURL("image/jpeg", 0.7)
+            } catch (_e) {
+              return null
             }
           },
           // The last flat row to compare against for the compact rule: a queued
@@ -6403,11 +6524,14 @@ defmodule EdenWeb.ChatLive do
   defp nack(socket, nil), do: {:noreply, socket}
   defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
+  defp pop_media_client_id([id | rest]), do: {id, rest}
+  defp pop_media_client_id([]), do: {nil, []}
+
   # Both paths are framework/app-generated, never user input: `path` is the
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
-  defp send_attachment(socket, scope, conversation, body, reply_to_id) do
+  defp send_attachment(socket, scope, conversation, body, reply_to_id, client_id) do
     # consume_uploaded_entries cleans up each temp file as its callback returns,
     # so to build ONE album from several entries we copy each to a stable temp,
     # then persist them together (atomic) and remove the temps.
@@ -6424,10 +6548,12 @@ defmodule EdenWeb.ChatLive do
       [] ->
         if String.trim(body) == "",
           do: {:noreply, socket},
-          else: send_text(socket, scope, conversation, body, nil, reply_to_id)
+          else: send_text(socket, scope, conversation, body, client_id, reply_to_id)
 
       sources ->
-        opts = %{body: body, reply_to_id: reply_to_id}
+        # client_id correlates the real message with the hook's optimistic node so
+        # the existing data-client-id swap drops the twin when it streams in (#95).
+        opts = %{body: body, reply_to_id: reply_to_id, client_id: client_id}
         result = Chat.create_attachments(scope, conversation.id, sources, opts)
         Enum.each(sources, &File.rm(&1.path))
 
