@@ -2048,20 +2048,37 @@
     background: oklch(0 0 0 / 0.28);
     pointer-events: none;
   }
-  .ed-media-sending__spin {
+  /* Determinate upload ring (#95): a faint full track with a white arc that fills
+     as the upload progresses (Telegram-style), driven by the server's media_progress
+     over the socket. White on the dim scrim reads on any photo. */
+  .ed-media-sending__ring {
     position: absolute;
     inset: 0;
     margin: auto;
-    width: 1.75rem;
-    height: 1.75rem;
-    border: 2.5px solid oklch(1 0 0 / 0.4);
-    border-top-color: #fff;
-    border-radius: var(--ed-radius-full);
-    animation: ed-spin 0.7s linear infinite;
+    width: 2.75rem;
+    height: 2.75rem;
     z-index: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 1px 2px oklch(0 0 0 / 0.45));
   }
-  @keyframes ed-spin {
-    to { transform: rotate(360deg); }
+  .ed-media-sending__ring svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+  .ed-media-sending__ring-track {
+    fill: none;
+    stroke: oklch(1 0 0 / 0.3);
+    stroke-width: 3;
+  }
+  .ed-media-sending__ring-fill {
+    fill: none;
+    stroke: #fff;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 100.53;
+    stroke-dashoffset: 100.53;
+    transition: stroke-dashoffset 0.25s cubic-bezier(0.22, 1, 0.36, 1);
   }
   /* Single-photo optimistic node (#95 review): match attachment_view — a plain
      natural-aspect image (NOT a square album tile), so the swap doesn't reflow. */
@@ -2152,7 +2169,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ed-typing span { animation: none; }
-  .ed-media-sending__spin { animation: none; }
+  .ed-media-sending__ring-fill { transition: none; }
   .ed-btn, .ed-input, .ed-convo { transition: none; }
   .ed-folder-indicator, .ed-search { transition: none; }
   .ed-lightbox__nav, .ed-lightbox__close, .ed-compose__remove { transition: none; }

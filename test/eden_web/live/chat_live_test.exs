@@ -341,15 +341,71 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-react")
     end
 
-    test "a malformed media_client_id payload is ignored, not a crash (#95 review)", ctx do
+    test "a stale-client (or malformed) media_client_id payload never crashes (#95)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      # Non-binary id / missing key (a crafted client) must hit the fallback clause,
-      # not a FunctionClauseError that kills the LiveView.
+      # A client on cached pre-redesign JS still pushes the id on this event; the
+      # server stashes a binary id (deploy-window compat) and ignores any other
+      # shape — never a FunctionClauseError that kills the LiveView.
+      render_hook(view, "media_client_id", %{"id" => "abc"})
       render_hook(view, "media_client_id", %{"id" => 123})
       render_hook(view, "media_client_id", %{})
       assert has_element?(view, "#composer")
+    end
+
+    test "a media send closes the overlay, stamps the album with the pushed client_id, clears (#95)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, ".ed-compose")
+
+      # The hook pushes media_sending{id} the instant the send is submitted: the
+      # overlay closes at once (normal composer returns) even though the entry is
+      # still staged, and the id is queued to stamp the real message.
+      render_hook(view, "media_sending", %{"id" => "cid-7"})
+      refute has_element?(view, ".ed-compose")
+      assert has_element?(view, "#composer-body")
+      # Sends are serialized while one is in flight: the attach affordance is gated
+      # (pointer-events off) so a second media send can't overlap the first (#95).
+      assert has_element?(view, "#composer label.pointer-events-none")
+
+      # Submit: the stashed id stamps the album so its optimistic twin swaps out
+      # client-side by data-client-id (no heuristic).
+      view |> form("#composer", %{message: %{body: "look"}}) |> render_submit()
+
+      assert {:ok, [%{body: "look", client_id: "cid-7", attachments: [%{kind: "image"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      refute has_element?(view, ".ed-compose")
+    end
+
+    test "the stall-watchdog reset re-shows the overlay so a stuck send can be cancelled (#95)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png", 20)
+      render_hook(view, "media_sending", %{"id" => "cid-stall"})
+      refute has_element?(view, ".ed-compose")
+
+      # The upload stalled (no real row, no error); the hook's watchdog asks the
+      # server to clear the flag. The entry is still staged, so the overlay (with its
+      # cancel button) returns and the user can abandon the stuck send.
+      render_hook(view, "media_send_reset", %{})
+      assert has_element?(view, ".ed-compose")
     end
 
     test "a reaction from another user appears live (#67)", ctx do
