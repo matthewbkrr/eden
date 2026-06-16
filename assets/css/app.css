@@ -1035,6 +1035,35 @@
   .ed-lightbox__nav--next {
     right: 1rem;
   }
+  /* Always-visible close (#96): Esc has no mobile equivalent and tap-outside is
+     fiddly on a small viewport. Mirrors the nav buttons, pinned top-right. */
+  .ed-lightbox__close {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(1 0 0 / 0.12);
+    color: oklch(0.99 0 0);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-lightbox__close svg {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+  .ed-lightbox__close:hover {
+    background: oklch(1 0 0 / 0.22);
+  }
+  /* Phone: no room for side arrows — swipe left/right pages instead (#96). */
+  @media (max-width: 767px) {
+    .ed-lightbox--gallery .ed-lightbox__nav {
+      display: none;
+    }
+  }
 
   /* Sent album: tight media mosaic in a bubble/flat row (#58, photos/videos
      only — files send separately). One image renders via attachment_view; two

@@ -3626,6 +3626,9 @@ defmodule EdenWeb.ChatLive do
             show(i)
 
             box.classList.add("ed-lightbox--open")
+            // Start each open with a clean gesture flag — a stale `__swiped` from a
+            // prior swipe would otherwise suppress the first tap (e.g. the X) (#96).
+            box.__swiped = false
             document.body.style.overflow = "hidden"
             document.addEventListener("keydown", box.__onKey)
           },
@@ -3642,7 +3645,9 @@ defmodule EdenWeb.ChatLive do
               `<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="${d}" clip-rule="evenodd"/></svg>`
             const left = "M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
             const right = "M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
+            const xmark = "M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
             box.innerHTML =
+              `<button class="ed-lightbox__close" aria-label="Close">${chevron(xmark)}</button>` +
               `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="Previous">${chevron(left)}</button>` +
               '<img class="ed-lightbox__img" alt="">' +
               `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="Next">${chevron(right)}</button>`
@@ -3658,6 +3663,13 @@ defmodule EdenWeb.ChatLive do
               else if (e.key === "ArrowRight") box.__step(1)
             }
             box.addEventListener("click", (e) => {
+              // A swipe ends in a synthetic click — ignore it so a page/close
+              // gesture doesn't also fire the tap-to-close (#96).
+              if (box.__swiped) {
+                box.__swiped = false
+                return
+              }
+              if (e.target.closest(".ed-lightbox__close")) return close()
               const nav = e.target.closest(".ed-lightbox__nav")
               if (nav) {
                 e.stopPropagation()
@@ -3666,6 +3678,43 @@ defmodule EdenWeb.ChatLive do
                 close()
               }
             })
+            // Touch (#96): no keyboard/arrows on a phone — swipe down to close,
+            // swipe left/right to page an album. A gesture must clear ~50-70px and
+            // be mostly on one axis to register (so a tap or tiny drift doesn't).
+            let tx = 0
+            let ty = 0
+            box.addEventListener(
+              "touchstart",
+              (e) => {
+                if (e.touches.length === 1) {
+                  tx = e.touches[0].clientX
+                  ty = e.touches[0].clientY
+                }
+                box.__swiped = false
+              },
+              { passive: true }
+            )
+            box.addEventListener(
+              "touchend",
+              (e) => {
+                const t = e.changedTouches[0]
+                if (!t) return
+                const dx = t.clientX - tx
+                const dy = t.clientY - ty
+                if (dy > 70 && dy > Math.abs(dx)) {
+                  box.__swiped = true
+                  close()
+                } else if (
+                  Math.abs(dx) > 50 &&
+                  Math.abs(dx) > Math.abs(dy) &&
+                  box.classList.contains("ed-lightbox--gallery")
+                ) {
+                  box.__swiped = true
+                  box.__step(dx < 0 ? 1 : -1)
+                }
+              },
+              { passive: true }
+            )
             document.body.appendChild(box)
             return box
           },
