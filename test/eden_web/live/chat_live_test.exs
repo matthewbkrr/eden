@@ -341,6 +341,17 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-react")
     end
 
+    test "a malformed media_client_id payload is ignored, not a crash (#95 review)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Non-binary id / missing key (a crafted client) must hit the fallback clause,
+      # not a FunctionClauseError that kills the LiveView.
+      render_hook(view, "media_client_id", %{"id" => 123})
+      render_hook(view, "media_client_id", %{})
+      assert has_element?(view, "#composer")
+    end
+
     test "a reaction from another user appears live (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "hi"})

@@ -373,6 +373,10 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, media_client_ids: socket.assigns.media_client_ids ++ [id])}
   end
 
+  # Ignore a malformed payload instead of crashing the LiveView (#95 review),
+  # matching the defensive convention of the other client-supplied events.
+  def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
+
   def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
     client_id = msg["client_id"]
@@ -2220,7 +2224,16 @@ defmodule EdenWeb.ChatLive do
             </div>
           </div>
 
-          <div class="flex-1 overflow-y-auto p-4" id="message-scroll" phx-hook=".ScrollBottom">
+          <%!-- Localized lightbox button labels (#95 review): gettext isn't reachable
+                inside the colocated .Lightbox hook, so the hook reads these. --%>
+          <div
+            class="flex-1 overflow-y-auto p-4"
+            id="message-scroll"
+            phx-hook=".ScrollBottom"
+            data-lb-close={gettext("Close")}
+            data-lb-prev={gettext("Previous")}
+            data-lb-next={gettext("Next")}
+          >
             <div :if={@has_more} class="text-center mb-3">
               <button class="ed-btn ed-btn--ghost" phx-click="load_more">
                 {gettext("Load older")}
@@ -3260,6 +3273,12 @@ defmodule EdenWeb.ChatLive do
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
+            // A media send that errored (or consumed no entry) has no real row to
+            // swap its optimistic twin, so the server tells us to drop it — else it
+            // spins forever and pins its preview data-URLs (#95 review).
+            this.handleEvent("media_failed", ({ id }) => {
+              this.pending?.querySelector(`[data-client-id="${id}"]`)?.remove()
+            })
           },
           disconnected() { this.connected = false },
           reconnected() {
@@ -3473,28 +3492,37 @@ defmodule EdenWeb.ChatLive do
               .filter(Boolean)
             const videos = overlay.querySelectorAll(".ed-compose__video").length
             const n = previews.length + videos
-            const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
 
-            // Reuse the REAL album markup (.ed-album / .ed-album__tile) so the
-            // optimistic node is pixel-identical to the message it becomes — only
-            // a dim + spinner overlay marks it as still uploading (#95). Matching
-            // album_cols/album_view keeps the swap seamless (no reflow).
-            const media = document.createElement("div")
-            media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
-            for (const src of previews) {
-              const tile = document.createElement("span")
-              tile.className = "ed-album__tile"
+            // Match the REAL render so the swap doesn't reflow (#95 review): a lone
+            // image renders via attachment_view (natural aspect, NOT a square album
+            // tile); 2+ use the .ed-album grid. Only a dim + spinner mark it sending.
+            let media
+            if (n === 1 && previews.length === 1) {
+              media = document.createElement("div")
+              media.className = "ed-media-sending ed-media-sending--single"
               const img = document.createElement("img")
-              img.src = src
+              img.src = previews[0]
               img.alt = ""
-              tile.appendChild(img)
-              media.appendChild(tile)
-            }
-            for (let i = 0; i < videos; i++) {
-              const tile = document.createElement("span")
-              tile.className = "ed-album__tile"
-              tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
-              media.appendChild(tile)
+              media.appendChild(img)
+            } else {
+              const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
+              media = document.createElement("div")
+              media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
+              for (const src of previews) {
+                const tile = document.createElement("span")
+                tile.className = "ed-album__tile"
+                const img = document.createElement("img")
+                img.src = src
+                img.alt = ""
+                tile.appendChild(img)
+                media.appendChild(tile)
+              }
+              for (let i = 0; i < videos; i++) {
+                const tile = document.createElement("span")
+                tile.className = "ed-album__tile"
+                tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+                media.appendChild(tile)
+              }
             }
             const spin = document.createElement("span")
             spin.className = "ed-media-sending__spin"
@@ -3504,14 +3532,34 @@ defmodule EdenWeb.ChatLive do
             const row = document.createElement("div")
             row.dataset.clientId = clientId
             if (this.el.dataset.layout === "flat") {
-              row.className = "ed-flat"
-              row.innerHTML =
-                '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>'
+              // Mirror the real flat row incl. the compact rule (#95 review): a
+              // continuation (same author within 5 min) drops the avatar + name
+              // header, matching the optimistic text node.
+              const myId = this.el.dataset.senderId
+              const last = this.lastFlatRow()
+              const compact =
+                !!last &&
+                last.dataset.senderId === myId &&
+                Date.now() / 1000 - Number(last.dataset.ts || 0) < 300
+              row.className = compact ? "ed-flat ed-flat--compact" : "ed-flat"
+              row.dataset.senderId = myId
+              row.dataset.ts = Math.floor(Date.now() / 1000)
               const name = this.el.dataset.senderName || ""
-              row.querySelector(".ed-avatar span").textContent =
-                (name.trim().charAt(0) || "?").toUpperCase()
               const main = document.createElement("div")
               main.className = "ed-flat__main"
+              if (compact) {
+                row.innerHTML = '<div class="ed-flat__gutter"></div>'
+              } else {
+                row.innerHTML =
+                  '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>'
+                row.querySelector(".ed-avatar span").textContent =
+                  (name.trim().charAt(0) || "?").toUpperCase()
+                const head = document.createElement("div")
+                head.className = "ed-flat__head"
+                head.innerHTML = '<span class="ed-flat__name"></span>'
+                head.querySelector(".ed-flat__name").textContent = name
+                main.appendChild(head)
+              }
               main.appendChild(media)
               row.appendChild(main)
             } else {
@@ -3533,9 +3581,18 @@ defmodule EdenWeb.ChatLive do
           // null on taint/empty so the node just shows the spinner over a blank tile.
           snapshot(img) {
             try {
-              const w = img.naturalWidth || img.width
-              const h = img.naturalHeight || img.height
+              let w = img.naturalWidth || img.width
+              let h = img.naturalHeight || img.height
               if (!w || !h) return null
+              // Downscale to a preview size (#95 review): a full-res phone photo
+              // would allocate a ~tens-of-MB canvas and hold a multi-MB data-URL
+              // per tile. 800px on the long edge is ample for the in-stream preview.
+              const max = 800
+              if (w > max || h > max) {
+                const s = max / Math.max(w, h)
+                w = Math.round(w * s)
+                h = Math.round(h * s)
+              }
               const c = document.createElement("canvas")
               c.width = w
               c.height = h
@@ -3646,11 +3703,13 @@ defmodule EdenWeb.ChatLive do
             const left = "M11.78 5.22a.75.75 0 0 1 0 1.06L8.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"
             const right = "M8.22 5.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L11.94 10 8.22 6.28a.75.75 0 0 1 0-1.06Z"
             const xmark = "M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
+            // Localized labels from #message-scroll (gettext is unreachable here).
+            const lbl = document.getElementById("message-scroll")?.dataset || {}
             box.innerHTML =
-              `<button class="ed-lightbox__close" aria-label="Close">${chevron(xmark)}</button>` +
-              `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="Previous">${chevron(left)}</button>` +
+              `<button class="ed-lightbox__close" aria-label="${lbl.lbClose || "Close"}">${chevron(xmark)}</button>` +
+              `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="${lbl.lbPrev || "Previous"}">${chevron(left)}</button>` +
               '<img class="ed-lightbox__img" alt="">' +
-              `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="Next">${chevron(right)}</button>`
+              `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="${lbl.lbNext || "Next"}">${chevron(right)}</button>`
 
             const close = () => {
               box.classList.remove("ed-lightbox--open")
@@ -3681,22 +3740,37 @@ defmodule EdenWeb.ChatLive do
             // Touch (#96): no keyboard/arrows on a phone — swipe down to close,
             // swipe left/right to page an album. A gesture must clear ~50-70px and
             // be mostly on one axis to register (so a tap or tiny drift doesn't).
+            // `multi` ignores pinch-zoom: a 2-finger gesture must not be read as a
+            // swipe against a stale 1-finger origin (#95 review).
             let tx = 0
             let ty = 0
+            let multi = false
             box.addEventListener(
               "touchstart",
               (e) => {
                 if (e.touches.length === 1) {
                   tx = e.touches[0].clientX
                   ty = e.touches[0].clientY
+                  multi = false
+                } else {
+                  multi = true
                 }
                 box.__swiped = false
               },
               { passive: true }
             )
+            box.addEventListener("touchmove", (e) => { if (e.touches.length > 1) multi = true }, {
+              passive: true,
+            })
             box.addEventListener(
               "touchend",
               (e) => {
+                // Wait out a pinch — only act once every finger has lifted on a
+                // single-touch gesture.
+                if (multi) {
+                  if (e.touches.length === 0) multi = false
+                  return
+                }
                 const t = e.changedTouches[0]
                 if (!t) return
                 const dx = t.clientX - tx
@@ -6485,9 +6559,17 @@ defmodule EdenWeb.ChatLive do
   # explicit "clear tray" action and on conversation switch so media staged in
   # one chat can't be sent into another (#89).
   defp cancel_staged_attachments(socket) do
-    Enum.reduce(socket.assigns.uploads.attachment.entries, socket, fn entry, acc ->
-      cancel_upload(acc, :attachment, entry.ref)
+    socket
+    |> then(fn s ->
+      Enum.reduce(s.assigns.uploads.attachment.entries, s, fn entry, acc ->
+        cancel_upload(acc, :attachment, entry.ref)
+      end)
     end)
+    # Drop any in-flight media client_ids too (#95 review): a tray cleared (cancel)
+    # or a conversation switch abandons those sends, so a stranded id can't mis-stamp
+    # (and mis-swap) a later media send or grow the queue unbounded. Runs on both
+    # cancel_all_uploads and select_conversation.
+    |> assign(media_client_ids: [])
   end
 
   ## Typing indicator (#11)
@@ -6576,6 +6658,13 @@ defmodule EdenWeb.ChatLive do
   defp pop_media_client_id([id | rest]), do: {id, rest}
   defp pop_media_client_id([]), do: {nil, []}
 
+  # Tell the hook to drop the optimistic media node for a send that never produced
+  # a real row (server error or no consumed entry), so it doesn't spin forever (#95).
+  defp push_media_failed(socket, nil), do: socket
+
+  defp push_media_failed(socket, client_id),
+    do: push_event(socket, "media_failed", %{id: client_id})
+
   # Both paths are framework/app-generated, never user input: `path` is the
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
@@ -6593,11 +6682,15 @@ defmodule EdenWeb.ChatLive do
 
     case sources do
       # No entry was consumed (still uploading or failed client-side validation).
-      # Don't drop a caption the user already typed.
+      # The media never sends, so drop its optimistic ghost (#95 review); keep a
+      # caption the user typed as a plain text message (not stamped with the media
+      # client_id — that twin is a photo, the text must not claim it).
       [] ->
+        socket = push_media_failed(socket, client_id)
+
         if String.trim(body) == "",
           do: {:noreply, socket},
-          else: send_text(socket, scope, conversation, body, client_id, reply_to_id)
+          else: send_text(socket, scope, conversation, body, nil, reply_to_id)
 
       sources ->
         # client_id correlates the real message with the hook's optimistic node so
@@ -6613,7 +6706,11 @@ defmodule EdenWeb.ChatLive do
              assign(socket, composer: empty_composer(), reply_to: nil, last_typing_at: nil)}
 
           {:error, reason} ->
-            {:noreply, put_flash(socket, :error, attachment_error(reason))}
+            # No real row will stream in, so the optimistic media node would spin
+            # forever (and pin its preview data-URLs in memory) — tell the hook to
+            # drop it (#95 review). Text sends have nack/markFailed; media didn't.
+            {:noreply,
+             socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(client_id)}
         end
     end
   end

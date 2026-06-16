@@ -998,6 +998,27 @@ defmodule Eden.ChatTest do
       assert msg.client_id == cid
     end
 
+    test "the client_id stamps only the album, not trailing per-file messages (#95 review)", %{
+      alice: alice,
+      conv: conv
+    } do
+      cid = "c0ffee00-0000-0000-0000-000000000001"
+      file = Path.join(System.tmp_dir!(), "note-#{System.unique_integer([:positive])}.txt")
+      File.write!(file, "just a note")
+      on_exit(fn -> File.rm(file) end)
+
+      {:ok, messages} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png()}, %{path: file}], %{
+          client_id: cid
+        })
+
+      # First message = the media album (carries the id); the non-media file is its
+      # own message and must NOT claim the optimistic twin (i==0-only, #95 review).
+      assert [%{client_id: ^cid} | rest] = messages
+      assert rest != []
+      assert Enum.all?(rest, &is_nil(&1.client_id))
+    end
+
     test "get_message stages a visible target but not a deleted/hidden one", %{
       alice: alice,
       bob: bob,
