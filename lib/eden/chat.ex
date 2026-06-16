@@ -2374,6 +2374,20 @@ defmodule Eden.Chat do
   def subscribe_user(%Scope{user: user}),
     do: Phoenix.PubSub.subscribe(@pubsub, user_topic(user.id))
 
+  @doc """
+  Broadcast that the scoped user is typing in `conversation_id`, on the
+  conversation topic — so only sessions with that conversation open see it.
+  Ephemeral: no DB write, receivers track it with a short TTL. Throttle at the
+  call site (it fires per keystroke otherwise).
+
+  Like `subscribe/1`, this does NOT re-check membership — pass a
+  `conversation_id` the scoped user is authorized for. The only caller uses the
+  open, already-authorized conversation, and only its members are subscribed to
+  the topic, so the typing event never reaches a non-member.
+  """
+  def broadcast_typing(%Scope{user: user}, conversation_id),
+    do: broadcast(conversation_id, {:typing, user.id, user.display_name})
+
   defp broadcast(conversation_id, message),
     do: Phoenix.PubSub.broadcast(@pubsub, topic(conversation_id), message)
 

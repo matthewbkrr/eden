@@ -264,6 +264,70 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-compose")
     end
 
+    test "a peer coming online updates the sidebar dot live (#10/#94)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      slot = "#conversations-#{ctx.conversation.id}"
+      # bob is offline → no online dot on his DM in alice's sidebar.
+      refute has_element?(view, "#{slot} .ed-avatar__dot")
+
+      # bob comes online; the presence diff makes alice's (streamed) sidebar
+      # re-render the dot live — the bug was that stream items stayed stale. The
+      # payload names bob, so the re-stream isn't skipped (he's a sidebar peer).
+      EdenWeb.Presence.track_user(self(), ctx.bob.id)
+
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.topic(),
+        payload: %{joins: %{to_string(ctx.bob.id) => %{metas: [%{}]}}, leaves: %{}}
+      })
+
+      assert has_element?(view, "#{slot} .ed-avatar__dot")
+    end
+
+    test "a peer typing shows the indicator (not self), survives a stale expiry, clears on send (#11/#94)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      refute has_element?(view, ".ed-typing-row")
+
+      # bob's own typing must never show to bob.
+      render_change(view, "composer_changed", %{"message" => %{"body" => "hi"}})
+      refute has_element?(view, ".ed-typing-row")
+
+      # alice types → bob sees it live, with her name (strong label assertion).
+      Chat.broadcast_typing(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert has_element?(view, ".ed-typing-row__label", "Alice is typing")
+
+      # A superseded TTL timer (stale token) must NOT drop a current typer (P2-1).
+      send(view.pid, {:typing_expired, ctx.alice.id, make_ref()})
+      assert has_element?(view, ".ed-typing-row__label", "Alice is typing")
+
+      # alice sends → bob's indicator clears at once (clear-on-send), no TTL wait.
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "go"})
+
+      refute has_element?(view, ".ed-typing-row")
+    end
+
+    test "multiple peers typing show a combined label; switching chats clears it (#11/#94)",
+         ctx do
+      carol = user_fixture(%{username: "carol_ty", display_name: "Carol"})
+      {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{group.id}")
+
+      Chat.broadcast_typing(Scope.for_user(ctx.alice), group.id)
+      Chat.broadcast_typing(Scope.for_user(carol), group.id)
+      assert has_element?(view, ".ed-typing-row__label", "are typing")
+
+      # Switching conversations clears the typers (via unsubscribe → clear_typing).
+      view |> element(~s(a[href="/app/c/#{ctx.conversation.id}"])) |> render_click()
+      refute has_element?(view, ".ed-typing-row")
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})

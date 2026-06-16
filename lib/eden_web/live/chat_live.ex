@@ -18,6 +18,13 @@ defmodule EdenWeb.ChatLive do
 
   @page 50
 
+  # Typing indicator (#11): throttle outgoing "typing" broadcasts to at most one
+  # per this window while composing; each received broadcast keeps the indicator
+  # alive for the (longer) TTL, after which it auto-expires. TTL > throttle so a
+  # continuous typer never flickers off between broadcasts.
+  @typing_throttle_ms 2_000
+  @typing_ttl_ms 4_000
+
   @impl true
   def mount(_params, _session, socket) do
     scope = socket.assigns.current_scope
@@ -45,6 +52,16 @@ defmodule EdenWeb.ChatLive do
         oldest_id: nil,
         other_read_at: nil,
         online_ids: EdenWeb.Presence.online_ids(),
+        # Typing indicator (#11): user_id => %{name, token} for everyone currently
+        # typing in the open conversation; `last_typing_at` throttles our own
+        # outgoing broadcasts (monotonic ms, nil until first keystroke).
+        typing_users: %{},
+        last_typing_at: nil,
+        # DM peers in the sidebar (#94 review): lets presence_diff skip the
+        # per-diff re-query when no peer's online status actually changed. Plain
+        # list (not MapSet) — it's tiny and read back from assigns as an opaque
+        # term, so MapSet ops would trip dialyzer's opaqueness check.
+        sidebar_peer_ids: [],
         composer: empty_composer(),
         folders: [],
         folder_tabs: [],
@@ -339,7 +356,10 @@ defmodule EdenWeb.ChatLive do
   def handle_event("composer_changed", %{"message" => %{"body" => body}}, socket) do
     # Track the value server-side so resetting to "" after send produces a real
     # diff that clears the input.
-    {:noreply, assign(socket, composer: to_form(%{"body" => body}, as: "message"))}
+    {:noreply,
+     socket
+     |> assign(composer: to_form(%{"body" => body}, as: "message"))
+     |> maybe_broadcast_typing(body)}
   end
 
   def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
@@ -1308,6 +1328,9 @@ defmodule EdenWeb.ChatLive do
 
     {:noreply,
      socket
+     # The sender just sent — they're no longer typing, so clear them now rather
+     # than waiting out the TTL (#11).
+     |> drop_typing(message.sender_id)
      |> assign(compacts: Map.put(socket.assigns.compacts, message.id, message.compact))
      |> stream_insert(:messages, message)}
   end
@@ -1566,8 +1589,42 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    {:noreply, assign(socket, online_ids: EdenWeb.Presence.online_ids())}
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: payload}, socket) do
+    # Header status + open profile read @online_ids (plain assigns) and refresh on
+    # this update for free. The sidebar dots live in a `phx-update="stream"` list,
+    # so they need a re-stream (#10) — but only when a conversation *peer's* status
+    # actually changed; otherwise skip the per-diff DB re-query, since presence is
+    # one global topic and every connect/nav by anyone fans a diff to all sessions
+    # (#94 review). No-op in channel mode (rooms show no presence dot).
+    socket = assign(socket, online_ids: EdenWeb.Presence.online_ids())
+    changed = presence_changed_ids(payload)
+    peers = socket.assigns.sidebar_peer_ids
+
+    if socket.assigns.channel || Enum.all?(changed, &(&1 not in peers)) do
+      {:noreply, socket}
+    else
+      {:noreply, stream_conversations(socket, [])}
+    end
+  end
+
+  # Someone is typing in the open conversation (#11). Ignore our own echo (incl.
+  # other tabs of ours); (re)arm their TTL timer so a steady typer keeps a single
+  # timer and the indicator doesn't flicker.
+  def handle_info({:typing, user_id, name}, socket) do
+    if user_id == socket.assigns.current_scope.user.id do
+      {:noreply, socket}
+    else
+      {:noreply, track_typing(socket, user_id, name)}
+    end
+  end
+
+  # A TTL fired — drop the typer only if this is their latest arm (token match);
+  # a superseded timer that fired after a re-arm is ignored (#94 review).
+  def handle_info({:typing_expired, user_id, token}, socket) do
+    case socket.assigns.typing_users do
+      %{^user_id => %{token: ^token}} -> {:noreply, drop_typing(socket, user_id)}
+      _ -> {:noreply, socket}
+    end
   end
 
   # A user changed their profile (name/avatar). Identity is rendered wherever a
@@ -2210,6 +2267,15 @@ defmodule EdenWeb.ChatLive do
             >
               {e}
             </button>
+          </div>
+
+          <%!-- Typing indicator (#11): shown above the MAIN composer for the open
+                conversation (DMs + rooms); each typer auto-expires via its TTL.
+                Thread-reply composing is intentionally out of scope — it has its
+                own composer and doesn't broadcast/surface typing. --%>
+          <div :if={@typing_users != %{}} class="ed-typing-row" aria-live="polite">
+            <span class="ed-typing" aria-hidden="true"><span></span><span></span><span></span></span>
+            <span class="ed-typing-row__label">{typing_label(@typing_users)}</span>
           </div>
 
           <.form
@@ -5825,10 +5891,24 @@ defmodule EdenWeb.ChatLive do
     if socket.assigns.channel do
       socket
     else
+      user = socket.assigns.current_scope.user
       convos = Chat.list_conversations(socket.assigns.current_scope, socket.assigns.folder_id)
-      stream(socket, :conversations, convos, opts)
+      # Remember the DM peers on display so presence_diff can skip a re-query when
+      # no peer's status changed (#94 review). Groups have no peer/dot → excluded.
+      peers = for c <- convos, p = peer(c, user), not is_nil(p), do: p.id
+
+      socket
+      |> assign(sidebar_peer_ids: peers)
+      |> stream(:conversations, convos, opts)
     end
   end
+
+  # User ids whose presence changed in a `presence_diff` payload (keys are the
+  # tracked user ids as strings). Empty for a payload without joins/leaves.
+  defp presence_changed_ids(%{joins: joins, leaves: leaves}),
+    do: Enum.map(Map.keys(joins) ++ Map.keys(leaves), &String.to_integer/1)
+
+  defp presence_changed_ids(_), do: []
 
   defp refresh_folders(socket) do
     scope = socket.assigns.current_scope
@@ -6164,7 +6244,10 @@ defmodule EdenWeb.ChatLive do
 
   defp unsubscribe(socket) do
     if id = socket.assigns[:subscribed_id], do: Chat.unsubscribe(id)
-    assign(socket, subscribed_id: nil)
+    # Leaving a conversation's topic means its typers are no longer relevant —
+    # clear them here so every deselect path (not just chat-switch) drops them
+    # (#94 review). Stale TTL timers fire later and self-ignore on token mismatch.
+    socket |> assign(subscribed_id: nil) |> clear_typing()
   end
 
   defp title(%{is_group: true, title: title}, _user) when is_binary(title) and title != "",
@@ -6237,6 +6320,59 @@ defmodule EdenWeb.ChatLive do
     end)
   end
 
+  ## Typing indicator (#11)
+
+  # Tell the open conversation we're typing — throttled (composer_changed fires
+  # per keystroke) and only with real content. Monotonic ms so the throttle is
+  # immune to wall-clock changes.
+  defp maybe_broadcast_typing(%{assigns: %{selected: nil}} = socket, _body), do: socket
+
+  defp maybe_broadcast_typing(socket, body) do
+    now = System.monotonic_time(:millisecond)
+    last = socket.assigns.last_typing_at
+
+    if String.trim(body) != "" and (is_nil(last) or now - last >= @typing_throttle_ms) do
+      Chat.broadcast_typing(socket.assigns.current_scope, socket.assigns.selected.id)
+      assign(socket, last_typing_at: now)
+    else
+      socket
+    end
+  end
+
+  # (Re)arm this typer's TTL. Each arm gets a fresh token carried in the expiry
+  # message; only the matching (latest) expiry drops the typer, so an earlier
+  # timer that already fired can't drop someone who just re-armed (#94 review).
+  # Superseded timers aren't cancelled — a stale one fires within the TTL and is
+  # ignored on token mismatch, which keeps this allocation-free and race-free.
+  defp track_typing(socket, user_id, name) do
+    token = make_ref()
+    Process.send_after(self(), {:typing_expired, user_id, token}, @typing_ttl_ms)
+
+    assign(socket,
+      typing_users: Map.put(socket.assigns.typing_users, user_id, %{name: name, token: token})
+    )
+  end
+
+  defp drop_typing(socket, user_id) do
+    assign(socket, typing_users: Map.delete(socket.assigns.typing_users, user_id))
+  end
+
+  defp clear_typing(socket) do
+    # Pending timers just fire later with stale tokens and are ignored — no cancel
+    # needed (bounded: at most ~TTL/throttle timers per typer).
+    assign(socket, typing_users: %{}, last_typing_at: nil)
+  end
+
+  # "Anna is typing…" / "Anna and Oleg are typing…" / "Several people are typing…".
+  defp typing_label(typing_users) do
+    case Map.values(typing_users) |> Enum.map(& &1.name) |> Enum.sort() do
+      [] -> ""
+      [a] -> gettext("%{name} is typing…", name: a)
+      [a, b] -> gettext("%{a} and %{b} are typing…", a: a, b: b)
+      _ -> gettext("Several people are typing…")
+    end
+  end
+
   defp send_text(socket, scope, conversation, body, client_id, reply_to_id) do
     attrs = %{"body" => body, "client_id" => client_id, "reply_to_id" => reply_to_id}
 
@@ -6248,6 +6384,9 @@ defmodule EdenWeb.ChatLive do
         # always clears the tray.
         socket = if client_id, do: socket, else: assign(socket, composer: empty_composer())
         socket = if reply_to_id, do: assign(socket, reply_to: nil), else: socket
+        # Just sent → reset the typing throttle so the next keystroke re-broadcasts
+        # "typing" at once instead of waiting out the window (#94 review).
+        socket = assign(socket, last_typing_at: nil)
         ack(socket, client_id)
 
       {:error, _changeset} ->
@@ -6294,7 +6433,9 @@ defmodule EdenWeb.ChatLive do
 
         case result do
           {:ok, _messages} ->
-            {:noreply, assign(socket, composer: empty_composer(), reply_to: nil)}
+            # Reset the typing throttle on send too, same as send_text (#94 review).
+            {:noreply,
+             assign(socket, composer: empty_composer(), reply_to: nil, last_typing_at: nil)}
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, attachment_error(reason))}
