@@ -1991,6 +1991,19 @@
     0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
     30% { opacity: 1; transform: translateY(-2px); }
   }
+  /* Typing row above the composer (#11): compact dots + a muted label. The dots
+     reuse .ed-typing; reset its standalone padding so it sits tight by the text. */
+  .ed-typing-row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0 0.75rem 0.25rem;
+    min-height: 1.5rem;
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+  }
+  .ed-typing-row .ed-typing { padding: 0; }
+  .ed-typing-row__label { line-height: 1; }
 
   /* Toasts -------------------------------------------------------------- */
   .ed-toast {

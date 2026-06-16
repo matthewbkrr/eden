@@ -264,6 +264,46 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-compose")
     end
 
+    test "a peer coming online updates the sidebar dot live (#10/#94)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      slot = "#conversations-#{ctx.conversation.id}"
+      # bob is offline → no online dot on his DM in alice's sidebar.
+      refute has_element?(view, "#{slot} .ed-avatar__dot")
+
+      # bob comes online; the presence diff makes alice's (streamed) sidebar
+      # re-render the dot live — the bug was that stream items stayed stale.
+      EdenWeb.Presence.track_user(self(), ctx.bob.id)
+
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.topic(),
+        payload: %{}
+      })
+
+      assert has_element?(view, "#{slot} .ed-avatar__dot")
+    end
+
+    test "a peer typing shows the indicator (not for self) and it clears (#11/#94)", ctx do
+      conn = log_in_user(ctx.conn, ctx.bob)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      refute has_element?(view, ".ed-typing-row")
+
+      # bob's own typing must never show to bob.
+      render_change(view, "composer_changed", %{"message" => %{"body" => "hi"}})
+      refute has_element?(view, ".ed-typing-row")
+
+      # alice types → broadcast on the conversation topic → bob sees it live.
+      Chat.broadcast_typing(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert has_element?(view, ".ed-typing-row")
+      assert render(view) =~ "Alice"
+
+      # The per-typer TTL expiry clears the indicator.
+      send(view.pid, {:typing_expired, ctx.alice.id})
+      refute has_element?(view, ".ed-typing-row")
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
