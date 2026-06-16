@@ -341,15 +341,38 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-react")
     end
 
-    test "a malformed media_client_id payload is ignored, not a crash (#95 review)", ctx do
+    test "a stale-client media_client_id payload is ignored, not a crash (#95)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      # Non-binary id / missing key (a crafted client) must hit the fallback clause,
-      # not a FunctionClauseError that kills the LiveView.
+      # The redesign dropped the client_id-over-socket path, but a client running
+      # cached pre-redesign JS may still push this during a deploy. The defensive
+      # no-op clause must absorb it (any shape) instead of a FunctionClauseError.
+      render_hook(view, "media_client_id", %{"id" => "abc"})
       render_hook(view, "media_client_id", %{"id" => 123})
       render_hook(view, "media_client_id", %{})
       assert has_element?(view, "#composer")
+    end
+
+    test "submitting a media send closes the preview overlay at once (#95)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, ".ed-compose")
+
+      # The hook fires media_sending the instant the upload submit starts. The
+      # overlay must close immediately (the in-stream node + ring take over) rather
+      # than linger until the slow upload finishes consuming — even though the
+      # entry is still staged. The normal composer returns in its place.
+      render_hook(view, "media_sending", %{})
+      refute has_element?(view, ".ed-compose")
+      assert has_element?(view, "#composer-body")
     end
 
     test "a reaction from another user appears live (#67)", ctx do
