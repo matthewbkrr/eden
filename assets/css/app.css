@@ -1035,6 +1035,35 @@
   .ed-lightbox__nav--next {
     right: 1rem;
   }
+  /* Always-visible close (#96): Esc has no mobile equivalent and tap-outside is
+     fiddly on a small viewport. Mirrors the nav buttons, pinned top-right. */
+  .ed-lightbox__close {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(1 0 0 / 0.12);
+    color: oklch(0.99 0 0);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-lightbox__close svg {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+  .ed-lightbox__close:hover {
+    background: oklch(1 0 0 / 0.22);
+  }
+  /* Phone: no room for side arrows — swipe left/right pages instead (#96). */
+  @media (max-width: 767px) {
+    .ed-lightbox--gallery .ed-lightbox__nav {
+      display: none;
+    }
+  }
 
   /* Sent album: tight media mosaic in a bubble/flat row (#58, photos/videos
      only — files send separately). One image renders via attachment_view; two
@@ -2005,6 +2034,50 @@
   .ed-typing-row .ed-typing { padding: 0; }
   .ed-typing-row__label { line-height: 1; }
 
+  /* Optimistic media-send node (#95): layered on the REAL .ed-album so it's
+     pixel-identical to the sent message — only a soft dim + a spinner mark it as
+     still uploading, then the SendQueue observer swaps the twin for the real row.
+     No grid/sizing of its own; it inherits all of that from .ed-album. */
+  .ed-media-sending {
+    position: relative;
+  }
+  .ed-media-sending::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: oklch(0 0 0 / 0.28);
+    pointer-events: none;
+  }
+  .ed-media-sending__spin {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 2.5px solid oklch(1 0 0 / 0.4);
+    border-top-color: #fff;
+    border-radius: var(--ed-radius-full);
+    animation: ed-spin 0.7s linear infinite;
+    z-index: 1;
+  }
+  @keyframes ed-spin {
+    to { transform: rotate(360deg); }
+  }
+  /* Single-photo optimistic node (#95 review): match attachment_view — a plain
+     natural-aspect image (NOT a square album tile), so the swap doesn't reflow. */
+  .ed-media-sending--single {
+    display: inline-block;
+    border-radius: 0.6rem;
+    overflow: hidden;
+  }
+  .ed-media-sending--single img {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: min(20rem, 100%);
+    max-height: 20rem;
+  }
+
   /* Toasts -------------------------------------------------------------- */
   .ed-toast {
     display: flex;
@@ -2079,9 +2152,10 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ed-typing span { animation: none; }
+  .ed-media-sending__spin { animation: none; }
   .ed-btn, .ed-input, .ed-convo { transition: none; }
   .ed-folder-indicator, .ed-search { transition: none; }
-  .ed-lightbox__nav, .ed-compose__remove { transition: none; }
+  .ed-lightbox__nav, .ed-lightbox__close, .ed-compose__remove { transition: none; }
 }
 
 /* This file is for your main application CSS */
