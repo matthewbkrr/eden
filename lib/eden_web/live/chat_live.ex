@@ -66,6 +66,13 @@ defmodule EdenWeb.ChatLive do
         # the preview overlay immediately so the in-stream node takes over, instead
         # of the overlay lingering for the whole upload. Reset once consumed.
         sending_media: false,
+        # FIFO of client_ids for in-flight media sends (#95): the hook pushes one on
+        # media_sending just before each upload submit; send_attachment pops the
+        # oldest to stamp the real message so its optimistic twin swaps out.
+        media_client_ids: [],
+        # Last upload percent pushed to the ring; gates redundant media_progress
+        # frames so a slow link isn't flooded with no-op diffs (#95).
+        last_media_pct: nil,
         composer: empty_composer(),
         folders: [],
         folder_tabs: [],
@@ -370,16 +377,33 @@ defmodule EdenWeb.ChatLive do
      |> maybe_broadcast_typing(body)}
   end
 
-  # The hook fires this the instant a media send is submitted, so the preview
-  # overlay closes immediately (#95) and the in-stream optimistic node takes over
-  # — rather than the overlay lingering until the upload finishes consuming.
-  def handle_event("media_sending", _params, socket) do
-    {:noreply, assign(socket, sending_media: true)}
+  # Fired the instant a media send is submitted (#95): close the preview overlay
+  # now (the in-stream node takes over) AND stash the send's client_id FIFO. The id
+  # rides this fire-and-forget push, which reaches us BEFORE the upload's "send"
+  # (same channel → ordered), so `send_attachment` can stamp the real message and
+  # its optimistic twin swaps out — without the old two-pass gating the upload.
+  def handle_event("media_sending", %{"id" => id}, socket) when is_binary(id) do
+    {:noreply, assign(socket, sending_media: true, media_client_ids: stash_cid(socket, id))}
   end
 
-  # A stale client (cached pre-redesign JS) may still push this; accept and ignore
-  # it so the LiveView can't crash during a deploy window. The redesign correlates
-  # the optimistic media twin client-side (FIFO), with no server client_id (#95).
+  def handle_event("media_sending", _params, socket),
+    do: {:noreply, assign(socket, sending_media: true)}
+
+  # The watchdog hook fires this when an upload stalled (no real row, no error): the
+  # entry is still staged, so clearing the flag re-shows the overlay (with its
+  # cancel affordance) and the user can retry or cancel (#95).
+  def handle_event("media_send_reset", _params, socket),
+    do: {:noreply, assign(socket, sending_media: false)}
+
+  # A client on cached PRE-redesign JS still uses the old two-pass and pushes the
+  # id on this event instead of media_sending. Stash it the same way so its send
+  # still correlates during the deploy window; a malformed payload is ignored.
+  # Safe to delete (this clause + the catch-all below) once no client can still be
+  # serving cached pre-#95 JS — i.e. one asset-cache lifetime after the deploy.
+  def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
+    {:noreply, assign(socket, media_client_ids: stash_cid(socket, id))}
+  end
+
   def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
 
   def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
@@ -392,7 +416,11 @@ defmodule EdenWeb.ChatLive do
         {:noreply, socket}
 
       socket.assigns.uploads.attachment.entries != [] ->
-        send_attachment(socket, scope, conversation, body, reply_to_id)
+        # The media client_id rode the socket (media_sending), not the form; pop the
+        # oldest queued one to stamp this send so its optimistic twin swaps out (#95).
+        {cid, rest} = pop_media_client_id(socket.assigns.media_client_ids)
+        socket = assign(socket, media_client_ids: rest)
+        send_attachment(socket, scope, conversation, body, reply_to_id, cid)
 
       String.trim(body) == "" ->
         {:noreply, assign(socket, composer: empty_composer())}
@@ -2317,6 +2345,7 @@ defmodule EdenWeb.ChatLive do
             data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
             data-max-body={Chat.Message.max_body()}
+            data-sending-media={to_string(@sending_media)}
             phx-submit="send"
             phx-change="composer_changed"
             class={[
@@ -2350,7 +2379,19 @@ defmodule EdenWeb.ChatLive do
             <%= if @uploads.attachment.entries == [] or @sending_media do %>
               <%!-- Normal composer bar: attach + caption + send. --%>
               <div class="flex items-center gap-2">
-                <label class="ed-btn--icon cursor-pointer" aria-label={gettext("Attach a file")}>
+                <%!-- While a media send is uploading, gate attach (and paste, in the
+                      PasteUpload hook) so sends stay serialized — one in-flight set of
+                      entries keeps the progress average exact and the FIFO swap
+                      unambiguous (#95). pointer-events only: the live_file_input stays
+                      enabled so the in-flight upload it's bound to isn't dropped. --%>
+                <label
+                  class={[
+                    "ed-btn--icon",
+                    (@sending_media && "opacity-40 pointer-events-none") || "cursor-pointer"
+                  ]}
+                  aria-label={gettext("Attach a file")}
+                  aria-disabled={@sending_media}
+                >
                   <.icon name="hero-paper-clip-micro" class="size-5" />
                   <%!-- sr-only (not hidden) keeps the input focusable / keyboard-reachable. --%>
                   <.live_file_input upload={@uploads.attachment} class="sr-only" />
@@ -2913,16 +2954,14 @@ defmodule EdenWeb.ChatLive do
             // Runs for nodes added AFTER mount only — the initial list is already
             // in the DOM when the observer starts, so it never animates (no
             // page-load choreography). Two jobs:
-            //   1a. Text swap: when MY real text row streams in (data-client-id, in
-            //       #messages), drop its optimistic twin from #pending in this same
-            //       microtask — before paint. The list never holds both, so it can't
-            //       grow-then-shrink by a row (the "whole line dips then snaps up"
-            //       jerk). The real one doesn't re-animate (the optimistic rose in).
-            //   1b. Media swap (#95): MY real media row carries NO client_id (the
-            //       upload submit can't reliably carry one), so drop the OLDEST
-            //       optimistic media twin (FIFO, data-media-pending) — same atomic
-            //       swap, correlated by send order instead of id.
-            //   2.  Rise-in for everyone else's messages.
+            //   1. Atomic swap: when MY real row streams in (data-client-id, in
+            //      #messages), drop its optimistic twin from #pending in this same
+            //      microtask — before paint. The list never holds both, so it can't
+            //      grow-then-shrink by a row (the "whole line dips then snaps up"
+            //      jerk). Both text AND media rows carry data-client-id now (#95: the
+            //      id rides the fire-and-forget media_sending push, not the upload
+            //      form), so one precise id-keyed swap covers both — no heuristic.
+            //   2. Rise-in for everyone else's messages.
             this.riser = new MutationObserver((muts) => {
               for (const mut of muts) {
                 for (const node of mut.addedNodes) {
@@ -2939,14 +2978,6 @@ defmodule EdenWeb.ChatLive do
                     }
                     continue
                   }
-                  if (!inPending && this.isMineMedia(row)) {
-                    const twin = document.getElementById("pending-messages")
-                      ?.querySelector("[data-media-pending]")
-                    if (twin) {
-                      twin.remove()
-                      continue
-                    }
-                  }
                   // Optimistic nodes already animated themselves in SendQueue;
                   // never re-animate one that's sitting in #pending.
                   if (inPending) continue
@@ -2956,18 +2987,6 @@ defmodule EdenWeb.ChatLive do
               }
             })
             this.riser.observe(this.el, { childList: true, subtree: true })
-          },
-          // Is this streamed row MY OWN media message? (#95) DM rows align right
-          // (justify-end, .ed-bubble--me); flat rows carry data-sender-id. "Media"
-          // means it renders an attachment (album, single image link, video, or
-          // file), not just an avatar — so a plain text row never matches.
-          isMineMedia(row) {
-            const myId = document.getElementById("composer")?.dataset.senderId
-            const mine =
-              row.classList.contains("justify-end") ||
-              !!row.querySelector(".ed-bubble--me") ||
-              (!!row.dataset.senderId && row.dataset.senderId === myId)
-            return mine && !!row.querySelector(".ed-album, [data-full], .ed-video, .ed-file")
           },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
@@ -3305,17 +3324,17 @@ defmodule EdenWeb.ChatLive do
             this.scroller = document.getElementById("message-scroll")
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
             // A media send that errored (or consumed no entry) has no real row to
-            // swap its optimistic twin, so the server tells us to drop the oldest
-            // pending media node (FIFO) — else it spins forever and pins its
-            // preview data-URLs (#95). No id: media correlates by send order.
-            this.handleEvent("media_failed", () => {
-              this.pending?.querySelector("[data-media-pending]")?.remove()
+            // swap its optimistic twin, so the server names the exact client_id to
+            // drop — else it spins forever and pins its preview data-URLs (#95).
+            this.handleEvent("media_failed", ({ id }) => {
+              this.dropPending(id)
             })
             // Determinate upload progress for the in-flight media send (#95): the
-            // server averages the album's entries and pushes the percent here; we
-            // drive the ring on the oldest pending media node (the one uploading).
-            this.handleEvent("media_progress", ({ percent }) => {
-              this.setRing(this.pending?.querySelector("[data-media-pending]"), percent)
+            // server averages the album's entries and pushes {percent, id}; we drive
+            // the ring on that exact optimistic node.
+            this.handleEvent("media_progress", ({ id, percent }) => {
+              this.setRing(this.pending?.querySelector(`[data-client-id="${id}"]`), percent)
+              this.armStall(id)
             })
           },
           disconnected() { this.connected = false },
@@ -3335,17 +3354,21 @@ defmodule EdenWeb.ChatLive do
             }
           },
           onSubmit(e) {
-            // Media (#95 redesign): render the local-preview node with a progress
-            // ring, tell the server to close the preview overlay now, and let the
-            // live upload proceed UNTOUCHED — do NOT preventDefault, do NOT gate it
-            // on a socket round-trip. The old two-pass held the submit until a
-            // pushEvent ack re-fired it; that ack path was the fragile bit that
-            // stalled real uploads in prod (the spinner-forever bug). The twin now
-            // correlates by send order (FIFO), so no client_id rides the upload.
+            // Media (#95 redesign): mint a client_id, render the local-preview node
+            // (tagged with it) + a progress ring, push it fire-and-forget on
+            // media_sending (which also closes the overlay), and let the live upload
+            // proceed UNTOUCHED — no preventDefault, no gating. The id rides the
+            // socket BEFORE the native submit's "send" (same channel → FIFO order),
+            // so the server stamps the real message and the existing data-client-id
+            // swap drops this exact twin. The OLD two-pass instead held the submit
+            // until a pushEvent ack re-fired it; that ack path was the fragile bit
+            // that stalled real uploads in prod (the spinner-forever bug).
             const overlay = this.el.querySelector("[data-upload-preview]")
             if (overlay) {
-              this.addOptimisticMedia(overlay)
-              this.pushEvent("media_sending", {})
+              const clientId = this.uuid()
+              this.addOptimisticMedia(clientId, overlay)
+              this.pushEvent("media_sending", { id: clientId })
+              this.armStall(clientId)
               return
             }
             // A quote-reply (#71) also defers to the server path so the reply_to_id
@@ -3507,17 +3530,20 @@ defmodule EdenWeb.ChatLive do
               })
             }
           },
-          // Optimistic media node (#95): a local preview of the staged photos with
-          // a determinate progress ring, tagged data-media-pending so the riser
-          // observer drops the OLDEST such twin when MY real media row streams in
-          // (FIFO — media carries no client_id). Previews are snapshotted to
-          // data-URLs because the overlay's object URLs are revoked on consume.
-          addOptimisticMedia(overlay) {
+          // Optimistic media node (#95): a local preview of the staged photos with a
+          // determinate progress ring, tagged with the send's client_id so the riser
+          // observer swaps exactly this twin when the real row streams in. Previews
+          // are snapshotted to data-URLs because the overlay's object URLs are
+          // revoked on consume. A files-only send (no image/video preview) gets NO
+          // node — files render as cards with no meaningful local preview, and an
+          // empty album box would just flash; their real rows rise in normally.
+          addOptimisticMedia(clientId, overlay) {
             const previews = [...overlay.querySelectorAll(".ed-compose__img")]
               .map((img) => this.snapshot(img))
               .filter(Boolean)
             const videos = overlay.querySelectorAll(".ed-compose__video").length
             const n = previews.length + videos
+            if (n === 0) return
 
             // Match the REAL render so the swap doesn't reflow (#95 review): a lone
             // image renders via attachment_view (natural aspect, NOT a square album
@@ -3564,7 +3590,7 @@ defmodule EdenWeb.ChatLive do
             media.appendChild(ring)
 
             const row = document.createElement("div")
-            row.dataset.mediaPending = ""
+            row.dataset.clientId = clientId
             if (this.el.dataset.layout === "flat") {
               // Mirror the real flat row incl. the compact rule (#95 review): a
               // continuation (same author within 5 min) drops the avatar + name
@@ -3621,8 +3647,33 @@ defmodule EdenWeb.ChatLive do
             const p = Math.max(0, Math.min(100, Number(percent) || 0))
             fill.style.strokeDashoffset = c * (1 - p / 100)
           },
+          // Remove an optimistic media node by client_id (the server names the exact
+          // one on failure) and cancel its stall watchdog.
+          dropPending(id) {
+            const node = this.pending?.querySelector(`[data-client-id="${id}"]`)
+            if (!node) return
+            if (node._stall) clearTimeout(node._stall)
+            node.remove()
+          },
+          // Stall watchdog (#95): if an upload makes NO progress for 30s — the link
+          // died after the optimistic node + media_sending, so "send" never fires —
+          // drop the stuck preview and ask the server to clear sending_media, which
+          // re-shows the overlay (the entry is still staged) so the user can retry or
+          // cancel. Every media_progress tick re-arms it, so a merely-slow upload is
+          // never killed; a node removed by the swap leaves a harmless dead timer
+          // (the callback no-ops once the node is disconnected).
+          armStall(clientId) {
+            const node = this.pending?.querySelector(`[data-client-id="${clientId}"]`)
+            if (!node) return
+            if (node._stall) clearTimeout(node._stall)
+            node._stall = setTimeout(() => {
+              if (!node.isConnected) return
+              node.remove()
+              this.pushEvent("media_send_reset", {})
+            }, 30000)
+          },
           // Snapshot a loaded preview <img> to a persistent JPEG data-URL. Returns
-          // null on taint/empty so the node just shows the spinner over a blank tile.
+          // null on taint/empty so the node just shows the ring over a blank tile.
           snapshot(img) {
             try {
               let w = img.naturalWidth || img.width
@@ -3847,6 +3898,9 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("paste", (e) => {
               const files = [...(e.clipboardData?.files || [])]
               if (!files.length) return
+              // Serialize media sends (#95): ignore a paste while one is uploading,
+              // matching the gated attach button — keeps a single send in flight.
+              if (this.el.closest("#composer")?.dataset.sendingMedia === "true") return
               const input = this.el.closest("form")?.querySelector('input[type="file"]')
               if (!input) return
               e.preventDefault()
@@ -6609,10 +6663,11 @@ defmodule EdenWeb.ChatLive do
         cancel_upload(acc, :attachment, entry.ref)
       end)
     end)
-    # A cleared tray or a conversation switch abandons the staged send, so clear
-    # the sending flag too (#95) — else a stale `true` would hide the overlay the
-    # next time files are staged. Runs on cancel_all_uploads + select_conversation.
-    |> assign(sending_media: false)
+    # A cleared tray or a conversation switch abandons the staged send, so drop the
+    # sending flag + any queued client_ids + the progress gate (#95) — else a stale
+    # `true` hides the overlay next staging, or a stranded id mis-stamps a later
+    # send. Runs on cancel_all_uploads + select_conversation.
+    |> assign(sending_media: false, media_client_ids: [], last_media_pct: nil)
   end
 
   ## Typing indicator (#11)
@@ -6698,29 +6753,46 @@ defmodule EdenWeb.ChatLive do
   defp nack(socket, nil), do: {:noreply, socket}
   defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
-  # Push the album's overall upload progress to the optimistic node's ring (#95).
-  # Fires per entry as chunks arrive; we average across the in-flight album so the
-  # ring reflects the whole send, not whichever tile is currently transferring.
+  # Push the album's overall upload progress to the optimistic node's ring (#95),
+  # addressed to the send's client_id (the oldest queued — media sends are serialized
+  # client-side, so that's the in-flight one). Fires per entry as chunks arrive, so
+  # we gate on the integer percent CHANGING — else a 10-photo album floods a slow
+  # link with no-op frames. `ceil` lets the arc actually reach 100%.
   defp handle_attachment_progress(:attachment, _entry, socket) do
-    {:noreply,
-     push_event(socket, "media_progress", %{percent: overall_progress(socket.assigns.uploads)})}
+    pct = overall_progress(socket.assigns.uploads)
+
+    if pct == socket.assigns.last_media_pct do
+      {:noreply, socket}
+    else
+      socket = assign(socket, last_media_pct: pct)
+      id = List.first(socket.assigns.media_client_ids)
+      {:noreply, push_event(socket, "media_progress", %{percent: pct, id: id})}
+    end
   end
 
   defp overall_progress(%{attachment: %{entries: []}}), do: 0
 
   defp overall_progress(%{attachment: %{entries: entries}}),
-    do: div(Enum.sum(Enum.map(entries, & &1.progress)), length(entries))
+    do: ceil(Enum.sum(Enum.map(entries, & &1.progress)) / length(entries))
 
-  # Tell the hook to drop the oldest optimistic media node (FIFO) for a send that
-  # produced no real row (server error or no consumed entry), so it doesn't spin
-  # forever (#95). No client_id — the hook drops its oldest pending media twin.
-  defp push_media_failed(socket), do: push_event(socket, "media_failed", %{})
+  # Stash a media send's client_id FIFO, bounded so a misbehaving client can't grow
+  # it unbounded (sends are serialized, so 1-2 is the real depth) (#95).
+  defp stash_cid(socket, id), do: Enum.take(socket.assigns.media_client_ids ++ [id], 16)
+
+  defp pop_media_client_id([id | rest]), do: {id, rest}
+  defp pop_media_client_id([]), do: {nil, []}
+
+  # Tell the hook to drop the exact optimistic media node for a send that produced
+  # no real row (server error or no consumed entry), so it doesn't spin forever and
+  # pin its preview data-URLs (#95). A nil id (no twin tracked) is a no-op.
+  defp push_media_failed(socket, nil), do: socket
+  defp push_media_failed(socket, id), do: push_event(socket, "media_failed", %{id: id})
 
   # Both paths are framework/app-generated, never user input: `path` is the
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
-  defp send_attachment(socket, scope, conversation, body, reply_to_id) do
+  defp send_attachment(socket, scope, conversation, body, reply_to_id, client_id) do
     # consume_uploaded_entries cleans up each temp file as its callback returns,
     # so to build ONE album from several entries we copy each to a stable temp,
     # then persist them together (atomic) and remove the temps.
@@ -6732,22 +6804,25 @@ defmodule EdenWeb.ChatLive do
       end)
 
     # The upload has been consumed (entries are now []), so the normal composer
-    # returns regardless; clear the flag so the next staging shows the overlay.
-    socket = assign(socket, sending_media: false)
+    # returns regardless; clear the flag (+ progress gate) so the next staging
+    # shows the overlay and a fresh ring starts from 0.
+    socket = assign(socket, sending_media: false, last_media_pct: nil)
 
     case sources do
       # No entry was consumed (still uploading or failed client-side validation).
       # The media never sends, so drop its optimistic ghost (#95); keep a caption
       # the user typed as a plain text message (the twin is a photo, not the text).
       [] ->
-        socket = push_media_failed(socket)
+        socket = push_media_failed(socket, client_id)
 
         if String.trim(body) == "",
           do: {:noreply, socket},
           else: send_text(socket, scope, conversation, body, nil, reply_to_id)
 
       sources ->
-        opts = %{body: body, reply_to_id: reply_to_id}
+        # client_id correlates the real album message with the hook's optimistic node
+        # so the data-client-id swap drops the exact twin when it streams in (#95).
+        opts = %{body: body, reply_to_id: reply_to_id, client_id: client_id}
         result = Chat.create_attachments(scope, conversation.id, sources, opts)
         Enum.each(sources, &File.rm(&1.path))
 
@@ -6760,9 +6835,9 @@ defmodule EdenWeb.ChatLive do
           {:error, reason} ->
             # No real row will stream in, so the optimistic media node would spin
             # forever (and pin its preview data-URLs in memory) — tell the hook to
-            # drop its oldest pending twin (#95). Text sends have nack/markFailed.
+            # drop that exact twin (#95). Text sends have nack/markFailed.
             {:noreply,
-             socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed()}
+             socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(client_id)}
         end
     end
   end
