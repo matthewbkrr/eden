@@ -242,6 +242,28 @@ defmodule EdenWeb.ChatLiveTest do
       refute render(view) =~ "leaky draft"
     end
 
+    test "switching conversations also drops staged attachments, not just text (#89)", ctx do
+      carol = user_fixture(%{username: "carol_up", display_name: "Carol"})
+      {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Stage a photo in conversation A → the compose tray appears.
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, ".ed-compose")
+
+      # Switch conversations → the staged tray is dropped, otherwise A's media
+      # would ride into B's composer and a send would attach it to the wrong chat.
+      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+      refute has_element?(view, ".ed-compose")
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
