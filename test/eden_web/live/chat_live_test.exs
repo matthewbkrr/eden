@@ -935,6 +935,53 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#composer[data-layout="flat"]))
     end
 
+    test "thread replies collapse consecutive same-author runs in the panel (#105)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Threads105"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      scope = Scope.for_user(ctx.alice)
+      {:ok, root} = Chat.create_message(scope, room.id, %{"body" => "root"})
+      {:ok, _r1} = Chat.create_reply(scope, root.id, %{"body" => "reply one"})
+      {:ok, _r2} = Chat.create_reply(scope, root.id, %{"body" => "reply two"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      # The second same-author reply is compact (no repeated avatar/name). The bug
+      # was that the thread panel never computed compacting, so every reply showed
+      # its avatar + name.
+      assert has_element?(view, "#thread-replies .ed-flat--compact")
+    end
+
+    test "paginating older messages keeps the compact run + stitches the seam (#105)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Page105"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      scope = Scope.for_user(ctx.alice)
+      # > @page (50) same-author messages, so there's an older page to load.
+      msgs =
+        Enum.map(1..52, fn i ->
+          {:ok, m} = Chat.create_message(scope, room.id, %{"body" => "m#{i}"})
+          m
+        end)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # The initial page is the newest 50; the oldest two aren't loaded yet.
+      refute has_element?(view, "#messages-#{Enum.at(msgs, 0).id}")
+      render_click(view, "load_more", %{})
+
+      # The paged-in batch is compacted (the 2nd-oldest continues the run) — the bug
+      # was streaming the older page raw, so a whole batch re-showed avatar+name.
+      assert has_element?(view, "#messages-#{Enum.at(msgs, 1).id}.ed-flat--compact")
+      # And the seam message (the previous on-screen top) now continues the older run.
+      assert has_element?(view, "#messages-#{Enum.at(msgs, 2).id}.ed-flat--compact")
+    end
+
     test "the composer advertises the bubble layout in DMs", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

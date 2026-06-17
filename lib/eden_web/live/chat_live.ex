@@ -112,6 +112,12 @@ defmodule EdenWeb.ChatLive do
         thread_list: [],
         thread_unreads: %{},
         last_flat: nil,
+        # The newest run tracker for the THREAD panel, mirroring last_flat for the
+        # main stream — lets a live thread reply continue/break the compact run (#105).
+        thread_last_flat: nil,
+        # The currently-oldest on-screen message, so paginating older can re-stitch
+        # the compact run across the page seam (#105).
+        oldest_msg: nil,
         # Per-id compact flag, so re-streaming a row (reaction / thumbnail) keeps
         # the flat layout instead of re-showing the avatar/name (#67).
         compacts: %{},
@@ -447,15 +453,23 @@ defmodule EdenWeb.ChatLive do
     case conversation && oldest_id &&
            Chat.list_messages(scope, conversation.id, limit: @page, before: oldest_id) do
       {:ok, older} when older != [] ->
+        # Compact the paged-in batch (the bug was streaming it raw, so a whole page
+        # of older messages re-showed avatar+name — #105), then re-stitch the run
+        # across the seam: the message that WAS the top may now continue the newest
+        # older message's run.
+        {marked, _} = mark_compact(older, conversation)
+
         {:noreply,
          socket
-         |> stream(:messages, older, at: 0)
+         |> restitch_seam(conversation, marked)
+         |> stream(:messages, marked, at: 0)
          |> assign(
            has_more: length(older) == @page,
-           oldest_id: hd(older).id,
-           # Record their compact flag too, so a later reaction/thumbnail re-stream
-           # restores it instead of falling back to the broadcast struct's default.
-           compacts: Map.merge(socket.assigns.compacts, Map.new(older, &{&1.id, &1.compact}))
+           oldest_id: hd(marked).id,
+           oldest_msg: List.first(marked),
+           # Record their (now-correct) compact flags so a later reaction/thumbnail
+           # re-stream restores them instead of falling back to the struct default.
+           compacts: Map.merge(socket.assigns.compacts, Map.new(marked, &{&1.id, &1.compact}))
          )}
 
       _ ->
@@ -1404,6 +1418,7 @@ defmodule EdenWeb.ChatLive do
       end
 
     if viewing? do
+      {reply, socket} = mark_thread_compact(socket, reply)
       {:noreply, socket |> assign(thread_root: root) |> stream_insert(:thread, reply)}
     else
       {:noreply, socket}
@@ -6206,6 +6221,7 @@ defmodule EdenWeb.ChatLive do
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
+      oldest_msg: List.first(messages),
       thread_root: nil,
       # The composer is per-conversation: reset it so a draft/last-sent body from
       # the previous chat doesn't reappear in this one's input (#89). The input
@@ -6226,6 +6242,7 @@ defmodule EdenWeb.ChatLive do
           else: %{}
         ),
       last_flat: last_flat,
+      thread_last_flat: nil,
       compacts: Map.new(messages, &{&1.id, &1.compact}),
       thread_participants: facepiles(scope, conversation, messages),
       # In-room search is per-room state — closed on every selection.
@@ -6426,11 +6443,45 @@ defmodule EdenWeb.ChatLive do
 
   defp compact?(_message, nil), do: false
 
+  # Continue/break the thread panel's compact run for a live reply (#105), mirroring
+  # the main stream's last_flat logic. Threads are rooms-only, so always flat.
+  defp mark_thread_compact(socket, reply) do
+    marked = %{reply | compact: compact?(reply, socket.assigns.thread_last_flat)}
+    {marked, assign(socket, thread_last_flat: {reply.sender_id, reply.inserted_at})}
+  end
+
   # Re-streaming a row (reaction/thumbnail) loses the virtual compact flag (the
   # broadcast struct doesn't carry it); restore it from what we recorded when the
   # row was first streamed so the flat layout stays put.
   defp restore_compact(socket, message),
     do: %{message | compact: Map.get(socket.assigns.compacts, message.id, message.compact)}
+
+  # After paging in an older batch, the message that WAS the on-screen top may now
+  # continue the newest older message's run — recompute its compact flag and
+  # re-stream it so the seam doesn't show a stray avatar/name (#105). DMs use
+  # bubbles, so there's nothing to stitch.
+  defp restitch_seam(socket, %{channel_id: nil}, _older), do: socket
+
+  defp restitch_seam(socket, _room, older) do
+    case socket.assigns.oldest_msg do
+      %{} = top ->
+        newest_older = List.last(older)
+        compact = compact?(top, {newest_older.sender_id, newest_older.inserted_at})
+
+        if compact == top.compact do
+          socket
+        else
+          stitched = %{top | compact: compact}
+
+          socket
+          |> stream_insert(:messages, stitched)
+          |> assign(compacts: Map.put(socket.assigns.compacts, stitched.id, compact))
+        end
+
+      _ ->
+        socket
+    end
+  end
 
   # Apply a {:reaction_changed, message} to the right stream. A top-level message
   # / thread root lives in the main stream (refresh the panel head too when this
@@ -6511,12 +6562,16 @@ defmodule EdenWeb.ChatLive do
         # and surface the follow state in the header bell.
         Chat.mark_thread_read(scope, root.id)
         %{following: following} = Chat.thread_follow_state(scope, root.id)
+        # Collapse consecutive same-author replies, same as the main flat stream,
+        # so the panel doesn't repeat avatar+name on every reply (#105).
+        {replies, thread_last_flat} = mark_compact(replies, socket.assigns.selected)
 
         socket
         |> assign(
           thread_root: root,
           thread_following: following,
           thread_unreads: Map.put(socket.assigns.thread_unreads, root.id, 0),
+          thread_last_flat: thread_last_flat,
           reply_composer: to_form(%{"body" => ""}, as: "reply")
         )
         |> stream(:thread, replies, reset: true)
