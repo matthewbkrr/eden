@@ -5352,53 +5352,58 @@ defmodule EdenWeb.ChatLive do
       class={["ed-msg flex", @mine && "justify-end"]}
       data-client-id={@mine && @message.client_id}
     >
-      <div
-        class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
-        id={"bubble-#{@message.id}"}
-        data-message-id={@message.id}
-        phx-hook=".ContextMenu"
-        aria-haspopup="menu"
-      >
-        <span
-          :if={@group and not @mine and @message.sender}
-          class="block"
-          style="font-size:0.75rem; font-weight:600; color: var(--ed-primary);"
+      <%!-- Bubble + reactions stack in a column so reactions hang UNDER the bubble
+            (aligned to its side), not inside it (#107). Inside the bubble their chip
+            outline + count blended into the bubble fill and read as a bare emoji. --%>
+      <div class={["flex flex-col min-w-0", (@mine && "items-end") || "items-start"]}>
+        <div
+          class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
+          id={"bubble-#{@message.id}"}
+          data-message-id={@message.id}
+          phx-hook=".ContextMenu"
+          aria-haspopup="menu"
         >
-          {@message.sender.display_name}
-        </span>
-        <.quoted_reply message={@message} />
-        <span :if={@message.forwarded_from} class="ed-forwarded">
-          <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
-          {forwarded_label(@message.forwarded_from)}
-        </span>
-        <.album_view
-          :if={@message.attachments != []}
-          attachments={@message.attachments}
-          message_id={@message.id}
-        />
-        <span :if={@message.body != ""} class="break-words">
-          {Markup.to_iodata(@message.body)}
-        </span>
-        <span class="ed-bubble__meta">
-          <.local_time at={@message.inserted_at} />
-          <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
-            <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
-            <span :if={@read} class="inline-flex items-center">
-              <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
-              <.icon name="hero-check-micro" class="size-3.5" />
+          <span
+            :if={@group and not @mine and @message.sender}
+            class="block"
+            style="font-size:0.75rem; font-weight:600; color: var(--ed-primary);"
+          >
+            {@message.sender.display_name}
+          </span>
+          <.quoted_reply message={@message} />
+          <span :if={@message.forwarded_from} class="ed-forwarded">
+            <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+            {forwarded_label(@message.forwarded_from)}
+          </span>
+          <.album_view
+            :if={@message.attachments != []}
+            attachments={@message.attachments}
+            message_id={@message.id}
+          />
+          <span :if={@message.body != ""} class="break-words">
+            {Markup.to_iodata(@message.body)}
+          </span>
+          <span class="ed-bubble__meta">
+            <.local_time at={@message.inserted_at} />
+            <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
+              <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
+              <span :if={@read} class="inline-flex items-center">
+                <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
+                <.icon name="hero-check-micro" class="size-3.5" />
+              </span>
             </span>
           </span>
-        </span>
+          <%!-- No thread affordance in the personal messenger (#26): threads are
+                a corporate-room feature only. --%>
+          <.message_menu
+            message={@message}
+            conversation_id={@conversation_id}
+            mine={@mine}
+            me={@me}
+            quick={@quick}
+          />
+        </div>
         <.reactions message={@message} me={@me} />
-        <%!-- No thread affordance in the personal messenger (#26): threads are
-              a corporate-room feature only. --%>
-        <.message_menu
-          message={@message}
-          conversation_id={@conversation_id}
-          mine={@mine}
-          me={@me}
-          quick={@quick}
-        />
       </div>
     </div>
     """
