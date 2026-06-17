@@ -2083,7 +2083,13 @@
   /* Single-photo optimistic node (#95 review): match attachment_view — a plain
      natural-aspect image (NOT a square album tile), so the swap doesn't reflow. */
   .ed-media-sending--single {
-    display: inline-block;
+    /* block (not inline-block) so it matches attachment_view's block <a> exactly:
+       an inline-block leaves a ~6px baseline descender gap that made the optimistic
+       twin taller than the real row. fit-content keeps the box (and its sending
+       scrim) hugging the image. */
+    display: block;
+    width: fit-content;
+    max-width: 100%;
     border-radius: 0.6rem;
     overflow: hidden;
   }
