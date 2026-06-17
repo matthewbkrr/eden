@@ -3388,6 +3388,15 @@ defmodule EdenWeb.ChatLive do
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
+            // Compress images client-side BEFORE they upload (#97): smaller transfer
+            // on a slow cross-border link + smaller storage. We intercept the file
+            // input's own input/change in capture, downscale/re-encode each image,
+            // then re-feed the input so LiveView stages the COMPRESSED file (the
+            // PasteUpload set-files+dispatch path, which is proven to stage). Paste
+            // flows through the same handler, so pasted images compress too.
+            this.onPick = (e) => this.compressPicked(e)
+            this.el.addEventListener("input", this.onPick, true)
+            this.el.addEventListener("change", this.onPick, true)
             // A media send that errored (or consumed no entry) has no real row to
             // swap its optimistic twin, so the server names the exact client_id to
             // drop — else it spins forever and pins its preview data-URLs (#95).
@@ -3777,6 +3786,113 @@ defmodule EdenWeb.ChatLive do
             } catch (_e) {
               return null
             }
+          },
+          // Intercept a file selection (#97): compress images, then re-feed the input
+          // so LiveView stages the COMPRESSED file, never the original. A native pick
+          // fires BOTH `input` and `change`; we must stop EACH (else the unstopped one
+          // stages the original → a duplicate). `_picking` then ignores the second of
+          // the pair; `_edenCompressed` lets our re-dispatched events through.
+          async compressPicked(e) {
+            const input = e.target
+            if (!(input instanceof HTMLInputElement) || input.type !== "file") return
+            if (input._edenCompressed) return
+            const files = [...input.files]
+            if (!files.length) return
+            if (!files.some((f) => (f.type || "").startsWith("image/"))) return
+            // Stop FIRST so neither event of the pair stages the original. A pick that
+            // arrives while an earlier compress is still running is then dropped (rare,
+            // bounded by compressImage's timeout) rather than staged uncompressed.
+            e.stopImmediatePropagation()
+            e.preventDefault()
+            if (this._picking) return
+            this._picking = true
+            try {
+              const out = []
+              for (const f of files) {
+                out.push((f.type || "").startsWith("image/") ? await this.compressImage(f) : f)
+              }
+              this.feedInput(input, out)
+            } finally {
+              this._picking = false
+            }
+          },
+          // Re-feed an input with an exact File set so LiveView stages it (the
+          // PasteUpload set-files + dispatch path). _edenCompressed short-circuits
+          // compressPicked so these files aren't re-processed.
+          feedInput(input, files) {
+            const dt = new DataTransfer()
+            files.forEach((f) => dt.items.add(f))
+            input.files = dt.files
+            input._edenCompressed = true
+            input.dispatchEvent(new Event("input", { bubbles: true }))
+            input.dispatchEvent(new Event("change", { bubbles: true }))
+            input._edenCompressed = false
+          },
+          // Downscale + re-encode one image to a JPEG File (#97). Returns the original
+          // untouched for animated GIFs, undecodable images, or when it wouldn't
+          // meaningfully shrink. createImageBitmap honors EXIF orientation (so phone
+          // portraits aren't baked sideways) and decodes off the main thread; the
+          // timeout guarantees the promise always settles so the pick loop can't hang.
+          compressImage(file) {
+            if (file.type === "image/gif") return Promise.resolve(file)
+            return new Promise((resolve) => {
+              // done() is the single settle point — it clears the timer, so the 8s
+              // safety net covers EVERY async step (createImageBitmap AND toBlob); the
+              // `settled` guard makes a late callback after the timeout a no-op.
+              let settled = false
+              const done = (out) => {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
+                resolve(out || file)
+              }
+              const timer = setTimeout(() => done(file), 8000)
+              createImageBitmap(file, { imageOrientation: "from-image" })
+                .then((bmp) => {
+                  const w0 = bmp.width
+                  const h0 = bmp.height
+                  const max = 1920
+                  // Only re-encode when the image actually needs downscaling. One
+                  // already within bounds is kept UNTOUCHED — no lossy JPEG round-trip
+                  // on screenshots (crisp text), small images, animated WebP/APNG, or
+                  // transparent art. Large phone photos (the real win) still downscale.
+                  if (!w0 || !h0 || (w0 <= max && h0 <= max)) {
+                    bmp.close && bmp.close()
+                    return done(file)
+                  }
+                  const s = max / Math.max(w0, h0)
+                  const w = Math.round(w0 * s)
+                  const h = Math.round(h0 * s)
+                  const c = document.createElement("canvas")
+                  c.width = w
+                  c.height = h
+                  const ctx = c.getContext("2d")
+                  if (!ctx) {
+                    bmp.close && bmp.close()
+                    return done(file)
+                  }
+                  // JPEG has no alpha — flatten any transparency (png/webp/avif/…) onto
+                  // white. Harmless for opaque images (drawImage covers the fill).
+                  ctx.fillStyle = "#fff"
+                  ctx.fillRect(0, 0, w, h)
+                  ctx.drawImage(bmp, 0, 0, w, h)
+                  bmp.close && bmp.close()
+                  c.toBlob(
+                    (blob) => {
+                      // Only accept a meaningful win, else keep the original.
+                      if (!blob || blob.size > file.size * 0.9) return done(file)
+                      done(
+                        new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", {
+                          type: "image/jpeg",
+                        })
+                      )
+                    },
+                    "image/jpeg",
+                    0.82
+                  )
+                })
+                .catch(() => done(file))
+            })
           },
           // The last flat row to compare against for the compact rule: a queued
           // optimistic node wins (rapid double-send), else the last streamed
