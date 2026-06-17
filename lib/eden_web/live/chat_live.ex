@@ -3396,6 +3396,16 @@ defmodule EdenWeb.ChatLive do
             // that stalled real uploads in prod (the spinner-forever bug).
             const overlay = this.el.querySelector("[data-upload-preview]")
             if (overlay) {
+              // A staged entry with a client-side error (e.g. a video over the size
+              // cap) won't upload. Don't close the overlay (media_sending) — that
+              // would hide the error — and don't fake an optimistic node; keep the
+              // error visible so the send isn't a silent no-op (#112: "при отправке
+              // видео ничего не происходит" was an oversized clip whose error the
+              // overlay-close swallowed).
+              if (overlay.querySelector(".ed-attach-err")) {
+                e.preventDefault()
+                return
+              }
               const clientId = this.uuid()
               this.addOptimisticMedia(clientId, overlay)
               this.pushEvent("media_sending", { id: clientId })
