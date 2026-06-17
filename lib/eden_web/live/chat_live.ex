@@ -2259,6 +2259,7 @@ defmodule EdenWeb.ChatLive do
             class="flex-1 overflow-y-auto p-4"
             id="message-scroll"
             phx-hook=".ScrollBottom"
+            data-conversation-id={@selected.id}
             data-lb-close={gettext("Close")}
             data-lb-prev={gettext("Previous")}
             data-lb-next={gettext("Next")}
@@ -2942,6 +2943,9 @@ defmodule EdenWeb.ChatLive do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
         export default {
           mounted() {
+            // Remember which conversation we're pinned to; a switch is a patch (no
+            // remount), so updated() must re-pin instantly rather than mounted (#109).
+            this.convId = this.el.dataset.conversationId
             this.toBottom()
             // Permalink: scroll to and briefly highlight a message, or report it's gone.
             this.handleEvent("focus_message", ({ domId }) => {
@@ -2994,7 +2998,19 @@ defmodule EdenWeb.ChatLive do
           // A new message while pinned: glide the list up to make room so it
           // eases in from the bottom instead of snapping (the "jerk"). Mount
           // stays instant — no page-load scroll choreography.
-          updated() { if (this.pinned) this.toBottom(true) },
+          updated() {
+            // Switched conversation (a patch, so mounted() didn't re-run): jump
+            // INSTANTLY to the latest message instead of smooth-scrolling from the
+            // previous chat's scroll position — that glide was the #109 bug. The
+            // `pinned` flag here was computed against the OLD conversation, so it
+            // must not drive the new one.
+            if (this.el.dataset.conversationId !== this.convId) {
+              this.convId = this.el.dataset.conversationId
+              this.toBottom(false)
+              return
+            }
+            if (this.pinned) this.toBottom(true)
+          },
           destroyed() { this.riser && this.riser.disconnect() },
           toBottom(smooth) {
             const motion =
