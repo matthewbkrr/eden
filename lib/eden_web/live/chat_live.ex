@@ -3716,7 +3716,29 @@ defmodule EdenWeb.ChatLive do
               row.className = "ed-msg flex justify-end"
               const bubble = document.createElement("div")
               bubble.className = "ed-bubble ed-bubble--me"
-              bubble.appendChild(media)
+              // Mirror the REAL media bubble so the optimistic twin is the SAME
+              // height and the swap doesn't nudge the stream: the photo sits in a
+              // block (mb-1) wrapper with an .ed-bubble__meta time line beneath it
+              // (+ a 1:1 sending check), exactly like the text optimistic node
+              // above. Without it the real row was ~20px taller (the residual jump
+              // left after the image-box reservation fix).
+              const wrap = document.createElement("div")
+              wrap.className = "mb-1"
+              wrap.appendChild(media)
+              bubble.appendChild(wrap)
+              const meta = document.createElement("span")
+              meta.className = "ed-bubble__meta"
+              const time = document.createElement("time")
+              time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              meta.appendChild(time)
+              if (this.el.dataset.isGroup !== "true") {
+                meta.insertAdjacentHTML(
+                  "beforeend",
+                  '<span class="inline-flex items-center" style="margin-left:2px;">' +
+                    '<span class="hero-check-micro size-3.5"></span></span>',
+                )
+              }
+              bubble.appendChild(meta)
               row.appendChild(bubble)
             }
             this.pending.appendChild(row)
@@ -5966,7 +5988,7 @@ defmodule EdenWeb.ChatLive do
         width={@attachment.width}
         height={@attachment.height}
         class="rounded-[0.6rem] block"
-        style="max-width:min(20rem,100%); max-height:20rem; width:auto; height:auto;"
+        style={img_box(@attachment)}
         loading="lazy"
         alt={gettext("Photo")}
       />
@@ -7148,4 +7170,20 @@ defmodule EdenWeb.ChatLive do
        do: "aspect-ratio: #{w} / #{h}"
 
   defp video_ratio(_attachment), do: nil
+
+  # Reserve an inline photo's display box BEFORE its bytes load. Image dimensions
+  # are known at create time (image_dimensions reads the header), so a definite
+  # width within the 20rem design cap + aspect-ratio holds the box — without it a
+  # just-sent/streamed photo collapsed to a sliver then popped to full height (the
+  # "photo shrinks then reopens, the stream jumps" bug; `width:auto` reserves
+  # nothing pre-load). max-width:100% keeps it responsive on narrow screens with
+  # the ratio held; we never upscale a small image (scale capped at 1).
+  defp img_box(%{width: w, height: h}) when is_integer(w) and is_integer(h) and w > 0 and h > 0 do
+    scale = min(min(320 / w, 320 / h), 1.0)
+    dw = round(w * scale)
+    "width:#{dw}px; max-width:100%; aspect-ratio:#{w}/#{h}; height:auto;"
+  end
+
+  defp img_box(_attachment),
+    do: "max-width:min(20rem,100%); max-height:20rem; width:auto; height:auto;"
 end
