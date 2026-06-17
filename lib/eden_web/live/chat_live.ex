@@ -3410,6 +3410,12 @@ defmodule EdenWeb.ChatLive do
               this.addOptimisticMedia(clientId, overlay)
               this.pushEvent("media_sending", { id: clientId })
               this.armStall(clientId)
+              // Close the preview INSTANTLY (#111) instead of waiting for the
+              // media_sending round-trip to re-render — on a slow link the overlay
+              // lingered ~seconds after Send. The element stays in the DOM (display
+              // none) so the in-flight upload bound to its file input isn't dropped;
+              // the server render then swaps it for the normal composer.
+              overlay.style.display = "none"
               return
             }
             // A quote-reply (#71) also defers to the server path so the reply_to_id
