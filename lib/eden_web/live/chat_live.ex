@@ -2275,14 +2275,22 @@ defmodule EdenWeb.ChatLive do
             id="message-scroll"
             phx-hook=".ScrollBottom"
             data-conversation-id={@selected.id}
+            data-has-more={to_string(@has_more)}
             data-lb-close={gettext("Close")}
             data-lb-prev={gettext("Previous")}
             data-lb-next={gettext("Next")}
           >
-            <div :if={@has_more} class="text-center mb-3">
-              <button class="ed-btn ed-btn--ghost" phx-click="load_more">
-                {gettext("Load older")}
-              </button>
+            <%!-- Older messages auto-load when you scroll near the top (#113); the
+                  ScrollBottom hook preserves the scroll position across the prepend.
+                  This spinner only comes into view at the very top — i.e. exactly
+                  when a page is loading. --%>
+            <div
+              :if={@has_more}
+              class="flex justify-center py-2"
+              style="color: var(--ed-muted);"
+              aria-hidden="true"
+            >
+              <.icon name="hero-arrow-path" class="size-5 motion-safe:animate-spin" />
             </div>
             <div
               class={["flex flex-col", (@selected.channel_id && "ed-flat-list") || "gap-2"]}
@@ -3006,6 +3014,18 @@ defmodule EdenWeb.ChatLive do
               }
             })
             this.riser.observe(this.el, { childList: true, subtree: true })
+            // Auto-load older messages on scroll near the top (#113), replacing the
+            // "Load older" button. updated() preserves the scroll position across
+            // the prepend so the list doesn't jump.
+            this.onScroll = () => this.maybeLoadOlder()
+            this.el.addEventListener("scroll", this.onScroll, { passive: true })
+          },
+          maybeLoadOlder() {
+            if (this.loadingMore || this.el.dataset.hasMore !== "true") return
+            if (this.el.scrollTop > 300) return
+            this.loadingMore = true
+            this.prevHeight = this.el.scrollHeight
+            this.pushEvent("load_more", {})
           },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
@@ -3016,17 +3036,31 @@ defmodule EdenWeb.ChatLive do
           updated() {
             // Switched conversation (a patch, so mounted() didn't re-run): jump
             // INSTANTLY to the latest message instead of smooth-scrolling from the
-            // previous chat's scroll position — that glide was the #109 bug. The
-            // `pinned` flag here was computed against the OLD conversation, so it
-            // must not drive the new one.
+            // previous chat's scroll position — that glide was the #109 bug. Checked
+            // FIRST and abandons any in-flight older-load from the previous chat, so
+            // its restore math never runs against the new conversation (review).
             if (this.el.dataset.conversationId !== this.convId) {
               this.convId = this.el.dataset.conversationId
+              this.loadingMore = false
               this.toBottom(false)
+              return
+            }
+            // An older-page prepend (#113): keep the same content under the viewport
+            // by adding the prepended height to scrollTop. Only when rows were
+            // actually added — the final empty page removes the spinner instead, so
+            // the height SHRINKS; don't yank the viewport up then (review).
+            if (this.loadingMore) {
+              const delta = this.el.scrollHeight - this.prevHeight
+              if (delta > 0) this.el.scrollTop += delta
+              this.loadingMore = false
               return
             }
             if (this.pinned) this.toBottom(true)
           },
-          destroyed() { this.riser && this.riser.disconnect() },
+          destroyed() {
+            this.riser && this.riser.disconnect()
+            this.onScroll && this.el.removeEventListener("scroll", this.onScroll)
+          },
           toBottom(smooth) {
             const motion =
               smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
