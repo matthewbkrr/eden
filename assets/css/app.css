@@ -109,6 +109,13 @@
    (prefers-color-scheme when no explicit data-theme). See DESIGN.md.
    ========================================================================== */
 
+/* Disable the browser's two-finger horizontal swipe → back/forward navigation,
+   so swipe-to-reply (#110) over the message list never navigates away (belt to
+   the per-scroller overscroll-x-contain). */
+html {
+  overscroll-behavior-x: contain;
+}
+
 :root {
   /* Light theme (default base) */
   --ed-bg: oklch(0.995 0.001 261);
@@ -341,6 +348,9 @@
   /* Message bubbles ----------------------------------------------------- */
   .ed-bubble {
     position: relative;
+    /* Establish a BFC so the floated .ed-bubble__meta (#108) is always contained —
+       including media bubbles where the meta floats below an in-flow image. */
+    display: flow-root;
     /* Cap to the viewport on phones: a right-aligned "me" bubble at a fixed
        30rem (480px) runs off the LEFT edge on a ~360px screen, and a nowrap
        quote stretches the bubble to that width (#91). 80vw keeps it on-screen;
@@ -350,6 +360,10 @@
     padding: 0.5rem 0.75rem;
     border-radius: var(--ed-radius-lg);
     font: 400 0.9375rem/1.45 var(--ed-font);
+    /* Swipe-to-reply (#110) snap-back: animates the row easing home even when the
+       post-reply re-render wipes the JS-set inline transform (the trackpad path).
+       Active drag/wheel sets inline transition:none for an instant 1:1 follow. */
+    transition: transform 0.18s var(--ed-ease);
   }
   .ed-bubble--them {
     background: var(--ed-surface);
@@ -363,13 +377,17 @@
     margin-left: auto;
   }
   .ed-bubble__meta {
+    /* #108: float right so the time + read-ticks pin to the bubble's bottom-right
+       (Telegram-style) instead of trailing wherever the last text line ends. The
+       last line wraps before it; a short single-line message keeps it inline-right;
+       media bubbles get it bottom-right under the photo. */
+    float: right;
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    margin-left: 0.5rem;
+    margin: 0.3rem 0 0 0.6rem;
     font: 500 0.6875rem/1 var(--ed-mono);
     opacity: 0.7;
-    vertical-align: baseline;
   }
   .ed-bubble--system {
     margin: 0 auto;
