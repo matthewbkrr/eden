@@ -1593,3 +1593,13 @@ msgstr "Вперёд"
 #, elixir-autogen, elixir-format
 msgid "Previous"
 msgstr "Назад"
+
+#: lib/eden_web/live/chat_live.ex:2306
+#, elixir-autogen, elixir-format
+msgid "Today"
+msgstr "Сегодня"
+
+#: lib/eden_web/live/chat_live.ex:2307
+#, elixir-autogen, elixir-format
+msgid "Yesterday"
+msgstr "Вчера"
