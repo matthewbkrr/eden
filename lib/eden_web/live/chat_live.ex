@@ -2271,7 +2271,7 @@ defmodule EdenWeb.ChatLive do
           <%!-- Localized lightbox button labels (#95 review): gettext isn't reachable
                 inside the colocated .Lightbox hook, so the hook reads these. --%>
           <div
-            class="flex-1 overflow-y-auto p-4"
+            class="flex-1 overflow-y-auto overscroll-x-contain p-4"
             id="message-scroll"
             phx-hook=".ScrollBottom"
             data-conversation-id={@selected.id}
@@ -2582,7 +2582,11 @@ defmodule EdenWeb.ChatLive do
           </button>
         </header>
 
-        <div class="flex-1 overflow-y-auto p-4" id="thread-scroll" phx-hook=".ScrollBottom">
+        <div
+          class="flex-1 overflow-y-auto overscroll-x-contain p-4"
+          id="thread-scroll"
+          phx-hook=".ScrollBottom"
+        >
           <%!-- in_thread: the "N replies" separator right below makes the
                 root's own footer pill redundant. --%>
           <.flat_message
@@ -3017,8 +3021,22 @@ defmodule EdenWeb.ChatLive do
             // Auto-load older messages on scroll near the top (#113), replacing the
             // "Load older" button. updated() preserves the scroll position across
             // the prepend so the list doesn't jump.
-            this.onScroll = () => this.maybeLoadOlder()
+            // Track "at the bottom" on every scroll so the ResizeObserver below can
+            // re-pin after a viewport shrink. Start pinned — mount() just scrolled down.
+            this.pinned = true
+            this.onScroll = () => {
+              this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
+              this.maybeLoadOlder()
+            }
             this.el.addEventListener("scroll", this.onScroll, { passive: true })
+            // The reply bar / typing row live OUTSIDE #message-scroll (in the composer),
+            // so their appearing never triggers this hook's updated(). A ResizeObserver
+            // catches the viewport shrinking and keeps the last message visible above the
+            // composer instead of letting it hide behind the reply bar.
+            this.ro = new ResizeObserver(() => {
+              if (this.pinned) this.toBottom(false)
+            })
+            this.ro.observe(this.el)
           },
           maybeLoadOlder() {
             if (this.loadingMore || this.el.dataset.hasMore !== "true") return
@@ -3059,6 +3077,7 @@ defmodule EdenWeb.ChatLive do
           },
           destroyed() {
             this.riser && this.riser.disconnect()
+            this.ro && this.ro.disconnect()
             this.onScroll && this.el.removeEventListener("scroll", this.onScroll)
           },
           toBottom(smooth) {
@@ -3107,15 +3126,42 @@ defmodule EdenWeb.ChatLive do
             // message row quote-replies (#71). A move cancels the long-press
             // (it's a scroll/swipe/select).
             let timer, sx, sy, dx, swiping
-            const SWIPE = 56
+            const SWIPE = 56 // px of leftward travel past which a swipe quote-replies
+            const ENGAGE = 12 // px before a mouse drag counts as a swipe (vs a click)
+            const CLAMP = 90 // px the row follows the gesture 1:1 before the elastic tail
+            const SETTLE = 200 // ms of wheel silence before a trackpad swipe re-arms
             const reset = () => {
               this.el.style.transition = "transform 0.18s var(--ed-ease)"
               this.el.style.transform = ""
               swiping = false
             }
+            // Rubber-band the row to the gesture: follow the finger 1:1 up to CLAMP (a
+            // comfortable, Telegram-like drag distance), then a soft exponential elastic
+            // tail past it so it never hits a hard wall. The reply trigger (SWIPE) sits
+            // well inside the 1:1 region, so it stays precise. `delta` is <= 0 (left).
+            const pull = (delta) => {
+              if (delta >= -CLAMP) return delta
+              const extra = -delta - CLAMP
+              return -(CLAMP + 30 * (1 - Math.exp(-extra / 70)))
+            }
+            // Fire the quote-reply for this row. In the thread panel the row carries
+            // reply_in_thread, so a swipe there replies INTO the thread, not the room.
+            const fireReply = () => {
+              if (!this.el.dataset.messageId) return
+              const event = this.el.dataset.replyEvent || "reply"
+              this.pushEvent(event, { id: this.el.dataset.messageId })
+              const sel = event === "reply_in_thread" ? "#reply-body" : "#composer-body"
+              const input = document.querySelector(sel)
+              input && input.focus()
+            }
             this.el.addEventListener("touchstart", (e) => {
               const t = e.touches[0]; sx = t.clientX; sy = t.clientY; dx = 0; swiping = false
-              this.el.style.transition = ""
+              this.el.style.transition = "none"
+              // Mark a recent touch so a touchscreen laptop's synthesized mouse events
+              // don't ALSO run the desktop drag path → double reply (#110 review S2).
+              this.recentTouch = true
+              clearTimeout(this._touchGuard)
+              this._touchGuard = setTimeout(() => { this.recentTouch = false }, 700)
               timer = setTimeout(() => { this.open(sx, sy); this.longPressed = true }, 450)
             }, { passive: true })
             const cancel = () => clearTimeout(timer)
@@ -3124,29 +3170,98 @@ defmodule EdenWeb.ChatLive do
               dx = t.clientX - sx
               const dy = t.clientY - sy
               if (Math.abs(dx) > 10 || Math.abs(dy) > 10) cancel()
-              // Drag a message row left with the finger (clamped); reply on release.
+              // Drag a message row left with the finger (rubber-banded); reply on release.
               if (this.el.dataset.messageId && dx < -10 && Math.abs(dx) > Math.abs(dy)) {
                 swiping = true
-                this.el.style.transform = `translateX(${Math.max(dx, -80)}px)`
+                this.el.style.transform = `translateX(${pull(dx)}px)`
               }
             }, { passive: true })
             this.el.addEventListener("touchend", () => {
               cancel()
-              if (swiping && dx <= -SWIPE && this.el.dataset.messageId) {
-                // In the thread panel the row carries reply_in_thread, so a swipe
-                // there quote-replies INTO the thread, not the room.
-                const event = this.el.dataset.replyEvent || "reply"
-                this.pushEvent(event, { id: this.el.dataset.messageId })
-                const sel = event === "reply_in_thread" ? "#reply-body" : "#composer-body"
-                const input = document.querySelector(sel)
-                input && input.focus()
-              }
+              if (swiping && dx <= -SWIPE) fireReply()
               if (swiping) reset()
             })
-            // Swallow the click/navigation a long-press would otherwise fire
-            // (a photo opening, or following a sidebar chat link).
+            // Desktop swipe-to-reply (#110) — DM/group BUBBLES only (rooms use flat
+            // rows; the thread panel too, so they keep right-click → Reply). Two inputs:
+            //   • Mouse: a CLEARLY horizontal left drag (past ENGAGE AND axis-dominant),
+            //     so dragging to SELECT TEXT isn't hijacked (#110 review M1).
+            //   • Trackpad: a PASSIVE wheel — keeps the list's vertical scroll on the
+            //     compositor fast-path (review M3); the row follows the gesture and
+            //     replies past SWIPE. overscroll-x-contain on the scroller stops the
+            //     browser's back/forward nav, so we never need preventDefault here.
+            // The document-level drag listeners + wheel timer are torn down in
+            // destroyed() so an interrupted gesture can't leak a detached node (M2).
+            if (this.el.classList.contains("ed-bubble")) {
+              let msx = 0, msy = 0, mdx = 0, mDrag = false
+              this._dragMove = (e) => {
+                mdx = e.clientX - msx
+                const mdy = e.clientY - msy
+                // Engage only past ENGAGE AND when clearly horizontal; else a
+                // vertical/diagonal text-selection drag would slide the row + reply.
+                if (!mDrag && (mdx > -ENGAGE || Math.abs(mdx) <= Math.abs(mdy))) return
+                mDrag = true
+                this.el.style.transition = "none"
+                this.el.style.transform = `translateX(${pull(mdx)}px)`
+                e.preventDefault() // suppress text selection once it IS a swipe
+              }
+              this._dragUp = () => {
+                document.removeEventListener("mousemove", this._dragMove)
+                document.removeEventListener("mouseup", this._dragUp)
+                if (mDrag && mdx <= -SWIPE) fireReply()
+                // A real drag suppresses the click it would otherwise fire (opening a
+                // photo). `dragged` is distinct from the touch long-press flag.
+                if (mDrag) { reset(); this.dragged = true; setTimeout(() => { this.dragged = false }, 0) }
+              }
+              this.el.addEventListener("mousedown", (e) => {
+                if (e.button !== 0 || this.recentTouch) return
+                msx = e.clientX; msy = e.clientY; mdx = 0; mDrag = false
+                clearTimeout(this._wheelTimer) // a just-ended wheel settle must not reset mid-drag
+                clearTimeout(this._wheelSnap)
+                document.addEventListener("mousemove", this._dragMove)
+                document.addEventListener("mouseup", this._dragUp)
+              })
+              // A photo is a natively-draggable <img>: without this a left drag starts
+              // the browser's image drag-and-drop and fights the reply swipe.
+              this.el.addEventListener("dragstart", (e) => e.preventDefault())
+              // Trackpad two-finger swipe. Vertical-dominant wheels fall through so
+              // normal scroll is untouched; positive wx = leftward (tracks the OS scroll
+              // direction). The row FOLLOWS the swipe rubber-banded, just like the mouse
+              // drag — it must not snap back the instant it crosses SWIPE or a quick flick
+              // only nudges ~20px. There's no "release" event (the OS keeps sending
+              // decaying momentum wheels for ~1s after a flick), so on crossing SWIPE we
+              // reply, let it follow a beat longer for feedback, then snap back and ignore
+              // the rest of the momentum tail — a BOUNDED follow so the row can't sit
+              // frozen until momentum dies. Idle silence (SETTLE) clears the state.
+              let wx = 0
+              this.el.addEventListener("wheel", (e) => {
+                if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
+                clearTimeout(this._wheelTimer)
+                this._wheelTimer = setTimeout(() => {
+                  wx = 0
+                  this._wheelFired = false
+                  this._wheelDone = false
+                  reset()
+                }, SETTLE)
+                if (this._wheelDone) return // replied + snapped; ignore the momentum tail
+                wx = Math.max(0, wx + e.deltaX)
+                this.el.style.transition = "none"
+                this.el.style.transform = `translateX(${pull(-wx)}px)`
+                if (!this._wheelFired && wx >= SWIPE) {
+                  this._wheelFired = true
+                  fireReply()
+                  this._wheelSnap = setTimeout(() => { this._wheelDone = true; reset() }, 180)
+                }
+              }, { passive: true })
+            }
+            // Swallow the click/navigation a long-press OR a desktop drag would
+            // otherwise fire (a photo opening, or following a sidebar chat link).
             this.el.addEventListener("click", (e) => {
-              if (this.longPressed) { e.preventDefault(); e.stopPropagation(); this.longPressed = false }
+              if (this.longPressed || this.dragged) {
+                e.preventDefault()
+                e.stopPropagation()
+                this.longPressed = false
+                this.dragged = false
+              }
             }, true)
           },
           // A stream re-render morphs the item; re-bind the (possibly new) menu node
@@ -3158,7 +3273,18 @@ defmodule EdenWeb.ChatLive do
               this.position(this.x, this.y)
             }
           },
-          destroyed() { this.close() },
+          destroyed() {
+            this.close()
+            // Tear down anything an in-flight desktop gesture left on `document` or
+            // any pending timer, so an interrupted drag/swipe (the row destroyed by a
+            // conversation switch, delete, or pagination mid-gesture) can't leak a
+            // detached node via a live listener/closure (#110 review M2/M3).
+            if (this._dragMove) document.removeEventListener("mousemove", this._dragMove)
+            if (this._dragUp) document.removeEventListener("mouseup", this._dragUp)
+            clearTimeout(this._touchGuard)
+            clearTimeout(this._wheelTimer)
+            clearTimeout(this._wheelSnap)
+          },
           // Bind the menu node + its delegated click handler. Idempotent: re-runs on
           // updated() and only attaches the listener to a freshly morphed-in node.
           wire() {
