@@ -301,7 +301,7 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ".ed-typing-row__label", "Alice is typing")
 
       # A superseded TTL timer (stale token) must NOT drop a current typer (P2-1).
-      send(view.pid, {:typing_expired, ctx.alice.id, make_ref()})
+      send(view.pid, {:typing_expired, :typing_users, ctx.alice.id, make_ref()})
       assert has_element?(view, ".ed-typing-row__label", "Alice is typing")
 
       # alice sends → bob's indicator clears at once (clear-on-send), no TTL wait.
@@ -953,6 +953,56 @@ defmodule EdenWeb.ChatLiveTest do
       # was that the thread panel never computed compacting, so every reply showed
       # its avatar + name.
       assert has_element?(view, "#thread-replies .ed-flat--compact")
+    end
+
+    test "typing in a thread shows only the thread indicator; room typing stays out (#103)",
+         ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrTyping"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      # A peer typing IN this thread (root_id set) → the thread panel's indicator.
+      Chat.broadcast_typing(Scope.for_user(ctx.bob), room.id, root.id)
+      assert has_element?(view, ".ed-thread .ed-typing-row__label", ctx.bob.display_name)
+
+      # A peer typing in the ROOM (root_id nil) must NOT leak into the thread indicator.
+      carol = user_fixture(%{username: "carol_thr", display_name: "Carol"})
+      Chat.broadcast_typing(Scope.for_user(carol), room.id)
+      refute has_element?(view, ".ed-thread .ed-typing-row__label", "Carol")
+      assert has_element?(view, ".ed-thread .ed-typing-row__label", ctx.bob.display_name)
+
+      # Closing the thread clears its typers — and proves the thread typer never leaked
+      # into the ROOM map (else Bob would surface in the room indicator now; Carol, who
+      # typed in the room, still does).
+      render_click(view, "close_thread", %{})
+      refute has_element?(view, ".ed-thread")
+      refute has_element?(view, ".ed-typing-row__label", ctx.bob.display_name)
+      assert has_element?(view, ".ed-typing-row__label", "Carol")
+    end
+
+    test "a thread typer's TTL expiry drops them (token match) (#103)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrTtl"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      Chat.broadcast_typing(Scope.for_user(ctx.bob), room.id, root.id)
+      assert has_element?(view, ".ed-thread .ed-typing-row__label", ctx.bob.display_name)
+
+      # A stale-token expiry must NOT drop the current thread typer (#94 race guard).
+      send(view.pid, {:typing_expired, :thread_typing_users, ctx.bob.id, make_ref()})
+      assert has_element?(view, ".ed-thread .ed-typing-row__label", ctx.bob.display_name)
     end
 
     test "paginating older messages keeps the compact run + stitches the seam (#105)", ctx do

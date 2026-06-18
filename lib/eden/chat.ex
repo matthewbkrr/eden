@@ -2391,9 +2391,13 @@ defmodule Eden.Chat do
   `conversation_id` the scoped user is authorized for. The only caller uses the
   open, already-authorized conversation, and only its members are subscribed to
   the topic, so the typing event never reaches a non-member.
+
+  `root_id` is `nil` for the main composer and the thread root's id for a thread
+  reply (#103) — receivers route it to the right indicator (a thread typer shows
+  only inside that open thread panel, never the main room stream).
   """
-  def broadcast_typing(%Scope{user: user}, conversation_id),
-    do: broadcast(conversation_id, {:typing, user.id, user.display_name})
+  def broadcast_typing(%Scope{user: user}, conversation_id, root_id \\ nil),
+    do: broadcast(conversation_id, {:typing, user.id, user.display_name, root_id})
 
   defp broadcast(conversation_id, message),
     do: Phoenix.PubSub.broadcast(@pubsub, topic(conversation_id), message)

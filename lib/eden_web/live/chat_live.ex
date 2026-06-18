@@ -57,6 +57,11 @@ defmodule EdenWeb.ChatLive do
         # outgoing broadcasts (monotonic ms, nil until first keystroke).
         typing_users: %{},
         last_typing_at: nil,
+        # Thread typing (#103): separate from the room indicator — a thread typer
+        # shows only inside the open thread panel (keyed by the root via the typing
+        # event's root_id), with its own throttle.
+        thread_typing_users: %{},
+        last_thread_typing_at: nil,
         # DM peers in the sidebar (#94 review): lets presence_diff skip the
         # per-diff re-query when no peer's online status actually changed. Plain
         # list (not MapSet) — it's tiny and read back from assigns as an opaque
@@ -1166,7 +1171,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_thread", _params, socket) do
-    {:noreply, assign(socket, thread_root: nil, thread_reply_to: nil)}
+    {:noreply, socket |> clear_thread_typing() |> assign(thread_root: nil, thread_reply_to: nil)}
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
@@ -1285,7 +1290,10 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("reply_changed", %{"reply" => %{"body" => body}}, socket) do
-    {:noreply, assign(socket, reply_composer: to_form(%{"body" => body}, as: "reply"))}
+    {:noreply,
+     socket
+     |> assign(reply_composer: to_form(%{"body" => body}, as: "reply"))
+     |> maybe_broadcast_thread_typing(body)}
   end
 
   def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
@@ -1302,7 +1310,8 @@ defmodule EdenWeb.ChatLive do
           {:noreply,
            assign(socket,
              reply_composer: to_form(%{"body" => ""}, as: "reply"),
-             thread_reply_to: nil
+             thread_reply_to: nil,
+             last_thread_typing_at: nil
            )}
 
         {:error, %Ecto.Changeset{}} ->
@@ -1392,7 +1401,7 @@ defmodule EdenWeb.ChatLive do
      socket
      # The sender just sent — they're no longer typing, so clear them now rather
      # than waiting out the TTL (#11).
-     |> drop_typing(message.sender_id)
+     |> drop_typing(:typing_users, message.sender_id)
      |> assign(compacts: Map.put(socket.assigns.compacts, message.id, message.compact))
      |> stream_insert(:messages, message)}
   end
@@ -1419,7 +1428,12 @@ defmodule EdenWeb.ChatLive do
 
     if viewing? do
       {reply, socket} = mark_thread_compact(socket, reply)
-      {:noreply, socket |> assign(thread_root: root) |> stream_insert(:thread, reply)}
+
+      {:noreply,
+       socket
+       |> drop_typing(:thread_typing_users, reply.sender_id)
+       |> assign(thread_root: root)
+       |> stream_insert(:thread, reply)}
     else
       {:noreply, socket}
     end
@@ -1673,19 +1687,30 @@ defmodule EdenWeb.ChatLive do
   # Someone is typing in the open conversation (#11). Ignore our own echo (incl.
   # other tabs of ours); (re)arm their TTL timer so a steady typer keeps a single
   # timer and the indicator doesn't flicker.
-  def handle_info({:typing, user_id, name}, socket) do
-    if user_id == socket.assigns.current_scope.user.id do
-      {:noreply, socket}
-    else
-      {:noreply, track_typing(socket, user_id, name)}
+  def handle_info({:typing, user_id, name, root_id}, socket) do
+    cond do
+      user_id == socket.assigns.current_scope.user.id ->
+        {:noreply, socket}
+
+      # Main composer (room/DM): root_id is nil → the room indicator.
+      is_nil(root_id) ->
+        {:noreply, track_typing(socket, :typing_users, user_id, name)}
+
+      # Thread reply (#103): show only inside that exact open thread panel.
+      match?(%{id: ^root_id}, socket.assigns.thread_root) ->
+        {:noreply, track_typing(socket, :thread_typing_users, user_id, name)}
+
+      true ->
+        {:noreply, socket}
     end
   end
 
-  # A TTL fired — drop the typer only if this is their latest arm (token match);
-  # a superseded timer that fired after a re-arm is ignored (#94 review).
-  def handle_info({:typing_expired, user_id, token}, socket) do
-    case socket.assigns.typing_users do
-      %{^user_id => %{token: ^token}} -> {:noreply, drop_typing(socket, user_id)}
+  # A TTL fired — drop the typer only if this is their latest arm (token match); a
+  # superseded timer that fired after a re-arm is ignored (#94 review). `field` routes
+  # to the room (:typing_users) or the open thread (:thread_typing_users, #103) map.
+  def handle_info({:typing_expired, field, user_id, token}, socket) do
+    case socket.assigns[field] do
+      %{^user_id => %{token: ^token}} -> {:noreply, drop_typing(socket, field, user_id)}
       _ -> {:noreply, socket}
     end
   end
@@ -1712,6 +1737,10 @@ defmodule EdenWeb.ChatLive do
 
     {:noreply, socket |> refresh_sidebar() |> refresh_selected_for(user)}
   end
+
+  # Swallow any unexpected message (a stray PubSub broadcast, a late async reply)
+  # instead of crashing the LiveView on a FunctionClauseError.
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   ## Render
 
@@ -2363,14 +2392,10 @@ defmodule EdenWeb.ChatLive do
             </button>
           </div>
 
-          <%!-- Typing indicator (#11): shown above the MAIN composer for the open
-                conversation (DMs + rooms); each typer auto-expires via its TTL.
-                Thread-reply composing is intentionally out of scope — it has its
-                own composer and doesn't broadcast/surface typing. --%>
-          <div :if={@typing_users != %{}} class="ed-typing-row" aria-live="polite">
-            <span class="ed-typing" aria-hidden="true"><span></span><span></span><span></span></span>
-            <span class="ed-typing-row__label">{typing_label(@typing_users)}</span>
-          </div>
+          <%!-- Typing indicator (#11): above the MAIN composer for the open conversation
+                (DMs + rooms); each typer auto-expires via its TTL. Thread replies have
+                their own indicator in the thread panel (#103). --%>
+          <.typing_row typers={@typing_users} />
 
           <.form
             for={@composer}
@@ -2627,6 +2652,9 @@ defmodule EdenWeb.ChatLive do
             />
           </div>
         </div>
+
+        <%!-- Thread typing indicator (#103): only peers typing IN THIS thread. --%>
+        <.typing_row typers={@thread_typing_users} />
 
         <.form
           for={@reply_composer}
@@ -6635,6 +6663,18 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :typers, :map, required: true
+
+  # The "… is typing" row — shared by the room composer and the thread panel (#103).
+  defp typing_row(assigns) do
+    ~H"""
+    <div :if={@typers != %{}} class="ed-typing-row" aria-live="polite">
+      <span class="ed-typing" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="ed-typing-row__label">{typing_label(@typers)}</span>
+    </div>
+    """
+  end
+
   # A timestamp that the browser reformats to the viewer's local time (the
   # server-rendered text is a UTC fallback shown before JS runs).
   attr :at, :any, required: true
@@ -7028,7 +7068,10 @@ defmodule EdenWeb.ChatLive do
           thread_following: following,
           thread_unreads: Map.put(socket.assigns.thread_unreads, root.id, 0),
           thread_last_flat: thread_last_flat,
-          reply_composer: to_form(%{"body" => ""}, as: "reply")
+          reply_composer: to_form(%{"body" => ""}, as: "reply"),
+          # Fresh thread → no stale typers from a previously-open one (#103).
+          thread_typing_users: %{},
+          last_thread_typing_at: nil
         )
         |> stream(:thread, replies, reset: true)
         |> restream_root_if_loaded(root)
@@ -7221,28 +7264,56 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # (Re)arm this typer's TTL. Each arm gets a fresh token carried in the expiry
-  # message; only the matching (latest) expiry drops the typer, so an earlier
-  # timer that already fired can't drop someone who just re-armed (#94 review).
-  # Superseded timers aren't cancelled — a stale one fires within the TTL and is
-  # ignored on token mismatch, which keeps this allocation-free and race-free.
-  defp track_typing(socket, user_id, name) do
+  # Thread-reply typing (#103): same throttle, tagged with the thread root's id so
+  # receivers route it to the thread panel only. No-op without an open thread.
+  defp maybe_broadcast_thread_typing(%{assigns: %{selected: nil}} = socket, _body), do: socket
+  defp maybe_broadcast_thread_typing(%{assigns: %{thread_root: nil}} = socket, _body), do: socket
+
+  defp maybe_broadcast_thread_typing(socket, body) do
+    now = System.monotonic_time(:millisecond)
+    last = socket.assigns.last_thread_typing_at
+
+    if String.trim(body) != "" and (is_nil(last) or now - last >= @typing_throttle_ms) do
+      Chat.broadcast_typing(
+        socket.assigns.current_scope,
+        socket.assigns.selected.id,
+        socket.assigns.thread_root.id
+      )
+
+      assign(socket, last_thread_typing_at: now)
+    else
+      socket
+    end
+  end
+
+  # (Re)arm a typer's TTL in `field` (:typing_users for the room, :thread_typing_users
+  # for the open thread, #103). Each arm gets a fresh token carried in the expiry
+  # message; only the matching (latest) expiry drops the typer, so an earlier timer that
+  # already fired can't drop someone who just re-armed (#94 review). Superseded timers
+  # aren't cancelled — a stale one fires within the TTL and is ignored on token mismatch,
+  # which keeps this allocation-free and race-free.
+  defp track_typing(socket, field, user_id, name) do
     token = make_ref()
-    Process.send_after(self(), {:typing_expired, user_id, token}, @typing_ttl_ms)
-
-    assign(socket,
-      typing_users: Map.put(socket.assigns.typing_users, user_id, %{name: name, token: token})
-    )
+    Process.send_after(self(), {:typing_expired, field, user_id, token}, @typing_ttl_ms)
+    assign(socket, field, Map.put(socket.assigns[field], user_id, %{name: name, token: token}))
   end
 
-  defp drop_typing(socket, user_id) do
-    assign(socket, typing_users: Map.delete(socket.assigns.typing_users, user_id))
-  end
+  defp drop_typing(socket, field, user_id),
+    do: assign(socket, field, Map.delete(socket.assigns[field], user_id))
+
+  defp clear_thread_typing(socket),
+    do: assign(socket, thread_typing_users: %{}, last_thread_typing_at: nil)
 
   defp clear_typing(socket) do
     # Pending timers just fire later with stale tokens and are ignored — no cancel
-    # needed (bounded: at most ~TTL/throttle timers per typer).
-    assign(socket, typing_users: %{}, last_typing_at: nil)
+    # needed (bounded: at most ~TTL/throttle timers per typer). Clears both the room
+    # and the thread indicators (a conversation switch tears both down).
+    assign(socket,
+      typing_users: %{},
+      last_typing_at: nil,
+      thread_typing_users: %{},
+      last_thread_typing_at: nil
+    )
   end
 
   # "Anna is typing…" / "Anna and Oleg are typing…" / "Several people are typing…".
