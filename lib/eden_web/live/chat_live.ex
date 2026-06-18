@@ -3612,7 +3612,20 @@ defmodule EdenWeb.ChatLive do
             if (!this.chip) return
             const rows = this.rows()
             if (!rows.length) { this.chip.classList.remove("is-visible"); return }
-            const top = this.scroller.getBoundingClientRect().top + 4
+            const vtop = this.scroller.getBoundingClientRect().top
+            // If an inline separator sits in the floating chip's band at the top, let it
+            // BE the label and keep the chip hidden — otherwise both render the same pill
+            // stacked at a day boundary (the reported duplicate).
+            const band = vtop + this.chip.offsetHeight + 6
+            for (const sep of this.el.querySelectorAll(":scope > .ed-date-sep")) {
+              const r = sep.getBoundingClientRect()
+              if (r.bottom > vtop && r.top < band) {
+                this.chip.classList.remove("is-visible")
+                clearTimeout(this._fade)
+                return
+              }
+            }
+            const top = vtop + 4
             let lo = 0, hi = rows.length - 1, cur = rows[rows.length - 1]
             while (lo <= hi) {
               const mid = (lo + hi) >> 1
