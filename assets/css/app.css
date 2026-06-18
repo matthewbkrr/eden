@@ -398,6 +398,52 @@ html {
     font-size: 0.75rem;
   }
 
+  /* Date separators + sticky day chip (#83). The .DateRail hook injects an
+     .ed-date-sep before each day-change row and drives the floating .ed-date-chip. */
+  .ed-date-sep {
+    display: flex;
+    justify-content: center;
+    margin: 0.5rem 0;
+  }
+  .ed-date-sep > span,
+  .ed-date-chip {
+    padding: 0.15rem 0.65rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
+    font: 500 0.75rem/1.4 var(--ed-font);
+    white-space: nowrap;
+  }
+  /* Floating chip: overlays the top of the scroll area (negative bottom margin so it
+     doesn't push the list down) and fades when scrolling stops. */
+  .ed-date-chip {
+    position: sticky;
+    top: 0.25rem;
+    z-index: 5;
+    width: fit-content;
+    max-width: 100%;
+    /* Negative bottom margin ≈ the chip's own height (0.3 padding + 1.05 line ≈ 1.35rem)
+       so it overlays the list instead of pushing it down. */
+    margin: 0 auto -1.4rem;
+    box-shadow: var(--ed-shadow);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s var(--ed-ease);
+  }
+  .ed-date-chip.is-visible {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-date-chip {
+      transition: none;
+    }
+    /* No pulsing floating chip under reduced motion — the inline separators convey the
+       date without the show/hide flash. */
+    .ed-date-chip.is-visible {
+      opacity: 0;
+    }
+  }
+
   /* Video + file attachments inside a bubble. They inherit the bubble's text
      color (white on --me, ink on --them) and tint themselves from it, so a
      single rule reads correctly on either side. */

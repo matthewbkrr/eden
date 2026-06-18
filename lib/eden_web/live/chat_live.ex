@@ -2280,6 +2280,10 @@ defmodule EdenWeb.ChatLive do
             data-lb-prev={gettext("Previous")}
             data-lb-next={gettext("Next")}
           >
+            <%!-- Floating day chip (#83): server-rendered so a re-render never drops it;
+                  the .DateRail hook sets its label to the topmost visible day + toggles
+                  .is-visible while scrolling. --%>
+            <div id="date-chip" class="ed-date-chip" aria-hidden="true"></div>
             <%!-- Older messages auto-load when you scroll near the top (#113); the
                   ScrollBottom hook preserves the scroll position across the prepend.
                   This spinner only comes into view at the very top — i.e. exactly
@@ -2292,10 +2296,19 @@ defmodule EdenWeb.ChatLive do
             >
               <.icon name="hero-arrow-path" class="size-5 motion-safe:animate-spin" />
             </div>
+            <%!-- Date separators + sticky day chip (#83): the .DateRail hook reconciles
+                  a centered chip before each day-change row (client-side, in the viewer's
+                  local TZ, robust to streamed inserts + "load older"). Labels via
+                  Intl(locale) + gettext Today/Yesterday — gettext is unreachable in the
+                  hook, so they ride as data-*. --%>
             <div
               class={["flex flex-col", (@selected.channel_id && "ed-flat-list") || "gap-2"]}
               id="messages"
               phx-update="stream"
+              phx-hook=".DateRail"
+              data-locale={Gettext.get_locale()}
+              data-today={gettext("Today")}
+              data-yesterday={gettext("Yesterday")}
             >
               <%= for {dom_id, message} <- @streams.messages do %>
                 <%= if @selected.channel_id do %>
@@ -3068,9 +3081,15 @@ defmodule EdenWeb.ChatLive do
             // actually added — the final empty page removes the spinner instead, so
             // the height SHRINKS; don't yank the viewport up then (review).
             if (this.loadingMore) {
-              const delta = this.el.scrollHeight - this.prevHeight
-              if (delta > 0) this.el.scrollTop += delta
               this.loadingMore = false
+              // Restore in a rAF so the prepended height is measured AFTER the DateRail
+              // hook (#83) has injected the older days' separators — otherwise their
+              // height isn't in `delta` and the viewport jumps by it. rAF runs after all
+              // hooks' updated() in this patch, before paint, so there's no flash.
+              requestAnimationFrame(() => {
+                const delta = this.el.scrollHeight - this.prevHeight
+                if (delta > 0) this.el.scrollTop += delta
+              })
               return
             }
             if (this.pinned) this.toBottom(true)
@@ -3496,6 +3515,115 @@ defmodule EdenWeb.ChatLive do
             const d = new Date(this.el.getAttribute("datetime"));
             if (!isNaN(d)) this.el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
           }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".DateRail">
+        // Date separators + a sticky day chip (#83), grouped in the viewer's LOCAL
+        // timezone from each row's data-ts (UTC unix seconds). Client-side so it groups
+        // by the local day and survives streamed inserts + "load older" — reconcile()
+        // re-derives the inline separators after every stream patch. Labels come from
+        // Intl(locale) + the gettext Today/Yesterday passed as data-* (gettext is
+        // unreachable in the hook).
+        export default {
+          mounted() {
+            this.scroller = this.el.closest("#message-scroll") || this.el.parentElement
+            this.locale = this.el.dataset.locale || undefined
+            this.today = this.el.dataset.today || "Today"
+            this.yesterday = this.el.dataset.yesterday || "Yesterday"
+            // The floating chip is server-rendered (#date-chip) so a re-render can't drop
+            // it — we only read/update it here, never inject it.
+            this.chip = this.scroller.querySelector("#date-chip")
+            this.onScroll = () => {
+              if (this._raf) return
+              this._raf = requestAnimationFrame(() => { this._raf = null; this.updateChip() })
+            }
+            this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
+            this.reconcile()
+            this.scheduleMidnight()
+          },
+          updated() { this.reconcile() },
+          destroyed() {
+            this.scroller && this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
+            this._raf && cancelAnimationFrame(this._raf)
+            clearTimeout(this._fade)
+            clearTimeout(this._midnight)
+          },
+          // Re-derive the labels at local midnight so a tab left open across it doesn't
+          // keep an old "Today"/"Yesterday" (the day key is unchanged, so force a relabel).
+          scheduleMidnight() {
+            const now = new Date()
+            const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5)
+            this._midnight = setTimeout(() => {
+              this._sig = null
+              this.reconcile()
+              this.updateChip()
+              this.scheduleMidnight()
+            }, next - now)
+          },
+          // Local-day key (browser TZ): a row's day-change boundary + Today/Yesterday.
+          dayKeyOf(d) { return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate() },
+          dayLabel(ts) {
+            if (!Number.isFinite(ts)) return ""
+            const d = new Date(ts * 1000)
+            const now = new Date()
+            if (this.dayKeyOf(d) === this.dayKeyOf(now)) return this.today
+            const y = new Date(now)
+            y.setDate(y.getDate() - 1)
+            if (this.dayKeyOf(d) === this.dayKeyOf(y)) return this.yesterday
+            const opts =
+              d.getFullYear() === now.getFullYear()
+                ? { day: "numeric", month: "long" }
+                : { day: "numeric", month: "long", year: "numeric" }
+            return new Intl.DateTimeFormat(this.locale, opts).format(d)
+          },
+          rows() { return [...this.el.children].filter((c) => c.dataset && c.dataset.ts) },
+          // Re-derive the boundary rows (first row of each local day; a non-finite ts is
+          // skipped, never crashing Intl). Skip the DOM remove+reinsert when the day
+          // structure is unchanged — most patches (a reaction toggle, read tick,
+          // thumbnail swap, a same-day message) don't move a boundary, so they no-op.
+          reconcile() {
+            const desired = []
+            let prev = null
+            for (const row of this.rows()) {
+              const k = this.dayKeyOf(new Date(Number(row.dataset.ts) * 1000))
+              if (Number.isFinite(k) && k !== prev) { desired.push(row); prev = k }
+            }
+            const existing = this.el.querySelectorAll(":scope > .ed-date-sep")
+            const sig = desired.map((r) => r.id).join("|")
+            // Skip the DOM churn only when the day structure is unchanged AND the
+            // separators are still in the DOM — a stream patch (e.g. an append) can drop
+            // the injected nodes, so we must re-add them even when the structure matches.
+            if (sig === this._sig && existing.length === desired.length) return
+            this._sig = sig
+            existing.forEach((s) => s.remove())
+            for (const row of desired) {
+              const sep = document.createElement("div")
+              sep.className = "ed-date-sep"
+              const span = document.createElement("span")
+              span.textContent = this.dayLabel(Number(row.dataset.ts))
+              sep.appendChild(span)
+              this.el.insertBefore(sep, row)
+            }
+          },
+          // Track the topmost visible row's day in the floating chip; fade when idle. The
+          // rows are vertically ordered, so binary-search the first one still in view
+          // (O(log n) rect reads) instead of scanning every row each scroll frame.
+          updateChip() {
+            if (!this.chip) return
+            const rows = this.rows()
+            if (!rows.length) { this.chip.classList.remove("is-visible"); return }
+            const top = this.scroller.getBoundingClientRect().top + 4
+            let lo = 0, hi = rows.length - 1, cur = rows[rows.length - 1]
+            while (lo <= hi) {
+              const mid = (lo + hi) >> 1
+              if (rows[mid].getBoundingClientRect().bottom > top) { cur = rows[mid]; hi = mid - 1 }
+              else lo = mid + 1
+            }
+            this.chip.textContent = this.dayLabel(Number(cur.dataset.ts))
+            this.chip.classList.add("is-visible")
+            clearTimeout(this._fade)
+            this._fade = setTimeout(() => this.chip.classList.remove("is-visible"), 1400)
+          },
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SendQueue">
@@ -5680,6 +5808,7 @@ defmodule EdenWeb.ChatLive do
       id={@id}
       class={["ed-msg flex", @mine && "justify-end"]}
       data-client-id={@mine && @message.client_id}
+      data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
     >
       <%!-- Bubble + reactions stack in a column so reactions hang UNDER the bubble
             (aligned to its side), not inside it (#107). Inside the bubble their chip
