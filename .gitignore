@@ -48,3 +48,6 @@ npm-debug.log
 !.env.example
 /deploy/.env
 /deploy/backups/
+
+# graphify knowledge-graph tooling output (local, not part of the app).
+/graphify-out/
