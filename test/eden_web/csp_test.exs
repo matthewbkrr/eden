@@ -4,7 +4,7 @@ defmodule EdenWeb.CSPTest do
   defp csp(conn), do: get_resp_header(conn, "content-security-policy") |> List.first()
 
   test "a browser response carries a full nonce-based policy", %{conn: conn} do
-    policy = conn |> get(~p"/") |> csp()
+    policy = conn |> get(~p"/login") |> csp()
 
     assert policy =~ "script-src 'self' 'nonce-"
     assert policy =~ "style-src 'self' 'unsafe-inline'"
@@ -14,11 +14,11 @@ defmodule EdenWeb.CSPTest do
   end
 
   test "the nonce is fresh per request" do
-    refute nonce(get(build_conn(), ~p"/")) == nonce(get(build_conn(), ~p"/"))
+    refute nonce(get(build_conn(), ~p"/login")) == nonce(get(build_conn(), ~p"/login"))
   end
 
   test "the inline script in the layout carries the request's nonce", %{conn: conn} do
-    conn = get(conn, ~p"/")
+    conn = get(conn, ~p"/login")
     assert html_response(conn, 200) =~ ~s(<script nonce="#{nonce(conn)}">)
   end
 
