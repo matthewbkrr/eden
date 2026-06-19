@@ -9,6 +9,7 @@ defmodule EdenWeb.CSPTest do
     assert policy =~ "script-src 'self' 'nonce-"
     assert policy =~ "style-src 'self' 'unsafe-inline'"
     assert policy =~ "img-src 'self' data: blob:"
+    assert policy =~ "media-src 'self' blob:"
     assert policy =~ "frame-ancestors 'none'"
     assert policy =~ "object-src 'none'"
   end

@@ -466,6 +466,31 @@ html {
     border-radius: 0.6rem;
     background: oklch(0 0 0 / 0.25);
   }
+  /* Positioning box for the poster cover (#130): hugs the <video> so the cover
+     overlays it exactly. */
+  .ed-video-box {
+    position: relative;
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+  }
+  /* Poster cover: masks the player (its frame, from the <video>'s poster) until it
+     can actually play, so a transient first-load error never flashes its icon.
+     pointer-events:none so the controls beneath stay clickable; fades out on reveal. */
+  .ed-video-cover {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 0.6rem;
+    pointer-events: none;
+    background: oklch(0 0 0 / 0.25);
+    transition: opacity 0.15s var(--ed-ease);
+  }
+  .ed-video-cover--gone {
+    opacity: 0;
+  }
   .ed-file {
     display: flex;
     align-items: center;
@@ -1187,8 +1212,9 @@ html {
     text-shadow: 0 1px 3px oklch(0 0 0 / 0.6);
   }
 
-  /* Attachment compose modal (#58): a Telegram-style overlay opened when files
-     are staged — media grid + caption + send, with files listed separately. */
+  /* Attachment compose modal (#58): a Telegram-style centered overlay opened when
+     files are staged — media grid + caption + send, files listed separately. It
+     floats on TOP of the always-present composer bar (#130), never replacing it. */
   .ed-compose {
     position: fixed;
     inset: 0;
@@ -1258,12 +1284,52 @@ html {
     object-fit: cover;
     display: block;
   }
-  .ed-compose__video {
-    display: grid;
-    place-items: center;
+  .ed-compose__video-wrap {
+    position: relative;
     width: 100%;
     height: 100%;
+  }
+  /* Film-icon fallback sits behind the <video> (#117): the loaded local frame
+     covers it, and it shows through if the object URL is ever missing. */
+  .ed-compose__video-fb {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
     color: var(--ed-muted);
+    /* Decorative only — never swallow clicks meant for the <video> controls. */
+    pointer-events: none;
+  }
+  .ed-compose__video {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    background: transparent;
+  }
+  /* A SINGLE staged item previews at its natural aspect (#117): a portrait clip
+     shows full-frame instead of a centre-cropped square. Albums (2+) keep the
+     square thumbnail grid above. The <video>'s real ratio is set by .VideoPreview
+     from metadata; the <img> sizes from its own intrinsic dimensions. */
+  .ed-compose__grid--single .ed-compose__tile {
+    aspect-ratio: auto;
+    background: transparent;
+  }
+  .ed-compose__grid--single .ed-compose__video-wrap {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    margin-inline: auto;
+  }
+  .ed-compose__grid--single .ed-compose__img,
+  .ed-compose__grid--single .ed-compose__video {
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 60vh;
+    object-fit: contain;
+    margin-inline: auto;
   }
   .ed-compose__remove {
     position: absolute;
