@@ -98,8 +98,11 @@ design — built incrementally as features land.)
     (`album_view`) with files stacked below; the composer stages them in a
     thumbnail tray (multi-select + clipboard paste) with the input as the caption.
     The `:media` Oban worker fills each preview asynchronously (image thumbnail, or
-    video poster + duration/dimensions via ffmpeg). Per-kind upload caps and a
-    decompression-bomb guard are enforced server-side.
+    video poster + duration via ffmpeg). **Pixel dimensions are read synchronously at
+    create** for both images (header) and video (`ffprobe`, best-effort with a
+    `{nil, nil}` fallback where ffmpeg is absent) so the just-sent row reserves its
+    box and never "pops to size"; the worker still confirms them on its pass. Per-kind
+    upload caps and a decompression-bomb guard are enforced server-side.
   - `Folder` / `FolderMembership` — **per-user, Telegram-style chat folders**: a
     personal grouping of the owner's sidebar that never affects other members.
     `Folder` (name, `position`) is created/renamed/reordered/deleted in Settings;

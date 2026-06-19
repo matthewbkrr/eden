@@ -1562,6 +1562,19 @@ defmodule Eden.Chat do
   # dimensions are read by the media worker (libvips can't decode video), so
   # they start nil here.
   defp media_dimensions("image", path), do: image_dimensions(path)
+
+  # Read a clip's pixel size synchronously at create (#117) so the just-sent video
+  # row reserves its box (video_ratio) instead of "popping to size" when the async
+  # poster worker later fills dimensions. Best-effort: a missing ffmpeg or an
+  # unreadable clip falls back to {nil, nil} exactly as before — the worker fills
+  # them on its own pass, so nothing regresses where ffmpeg is absent (CI/tests).
+  defp media_dimensions("video", path) do
+    case ffprobe_meta(path) do
+      {:ok, %{width: w, height: h}} when is_integer(w) and is_integer(h) -> {w, h}
+      _ -> {nil, nil}
+    end
+  end
+
   defp media_dimensions(_kind, _path), do: {nil, nil}
 
   ## Message management (delete, forward)

@@ -256,12 +256,41 @@ defmodule EdenWeb.ChatLiveTest do
         ])
 
       render_upload(file, "a.png")
-      assert has_element?(view, ".ed-compose")
+      assert has_element?(view, "[data-upload-preview]")
 
       # Switch conversations → the staged tray is dropped, otherwise A's media
       # would ride into B's composer and a send would attach it to the wrong chat.
       view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
-      refute has_element?(view, ".ed-compose")
+      refute has_element?(view, "[data-upload-preview]")
+    end
+
+    test "a staged video renders a playable <video> preview, not a static icon (#117)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{
+            name: "clip.mp4",
+            content: "fake-mp4",
+            type: "video/mp4",
+            last_modified: 1_700_000_000_000
+          }
+        ])
+
+      html = render_upload(file, "clip.mp4")
+
+      # A real <video> tile (wired to the VideoPreview hook) replaces the old static
+      # film-icon span, so the staged clip is playable before sending (#117).
+      assert has_element?(view, ~s(video.ed-compose__video[data-name="clip.mp4"]))
+      # data-modified must ride the tag — VideoPreview keys by name:size:lastModified,
+      # so dropping it would silently break the preview lookup.
+      assert html =~ ~s(data-modified="1700000000000")
+      # The interactive player carries an accessible name (the filename).
+      assert html =~ ~s(aria-label="clip.mp4")
+      # A lone clip previews at its natural aspect (#117) — the grid is flagged
+      # single, so the tile isn't forced to a centre-cropped square.
+      assert has_element?(view, ".ed-compose__grid--single video.ed-compose__video")
     end
 
     test "a peer coming online updates the sidebar dot live (#10/#94)", ctx do
@@ -365,13 +394,13 @@ defmodule EdenWeb.ChatLiveTest do
         ])
 
       render_upload(file, "a.png")
-      assert has_element?(view, ".ed-compose")
+      assert has_element?(view, "[data-upload-preview]")
 
       # The hook pushes media_sending{id} the instant the send is submitted: the
       # overlay closes at once (normal composer returns) even though the entry is
       # still staged, and the id is queued to stamp the real message.
       render_hook(view, "media_sending", %{"id" => "cid-7"})
-      refute has_element?(view, ".ed-compose")
+      refute has_element?(view, "[data-upload-preview]")
       assert has_element?(view, "#composer-body")
       # Sends are serialized while one is in flight: the attach affordance is gated
       # (pointer-events off) so a second media send can't overlap the first (#95).
@@ -384,7 +413,7 @@ defmodule EdenWeb.ChatLiveTest do
       assert {:ok, [%{body: "look", client_id: "cid-7", attachments: [%{kind: "image"}]}]} =
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
 
-      refute has_element?(view, ".ed-compose")
+      refute has_element?(view, "[data-upload-preview]")
     end
 
     test "the stall-watchdog reset re-shows the overlay so a stuck send can be cancelled (#95)",
@@ -399,13 +428,13 @@ defmodule EdenWeb.ChatLiveTest do
 
       render_upload(file, "a.png", 20)
       render_hook(view, "media_sending", %{"id" => "cid-stall"})
-      refute has_element?(view, ".ed-compose")
+      refute has_element?(view, "[data-upload-preview]")
 
       # The upload stalled (no real row, no error); the hook's watchdog asks the
       # server to clear the flag. The entry is still staged, so the overlay (with its
       # cancel button) returns and the user can abandon the stuck send.
       render_hook(view, "media_send_reset", %{})
-      assert has_element?(view, ".ed-compose")
+      assert has_element?(view, "[data-upload-preview]")
     end
 
     test "a reaction from another user appears live (#67)", ctx do

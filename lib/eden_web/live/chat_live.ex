@@ -2427,10 +2427,7 @@ defmodule EdenWeb.ChatLive do
             data-sending-media={to_string(@sending_media)}
             phx-submit="send"
             phx-change="composer_changed"
-            class={[
-              "flex flex-col shrink-0",
-              (@uploads.attachment.entries == [] or @sending_media) && "gap-2 p-3 border-t"
-            ]}
+            class="flex flex-col gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
             <%!-- Quote-reply tray (#71): shows the message being replied to. The
@@ -2452,86 +2449,95 @@ defmodule EdenWeb.ChatLive do
                 <.icon name="hero-x-mark-micro" class="size-4" />
               </button>
             </div>
-            <%!-- @sending_media closes the preview the instant a media send starts
-                  (#95): the normal composer returns (its own live_file_input keeps
-                  the in-flight upload alive) while the in-stream node shows progress. --%>
-            <%= if @uploads.attachment.entries == [] or @sending_media do %>
-              <%!-- Normal composer bar: attach + caption + send. --%>
-              <div class="flex items-center gap-2">
-                <%!-- While a media send is uploading, gate attach (and paste, in the
-                      PasteUpload hook) so sends stay serialized — one in-flight set of
-                      entries keeps the progress average exact and the FIFO swap
-                      unambiguous (#95). pointer-events only: the live_file_input stays
-                      enabled so the in-flight upload it's bound to isn't dropped. --%>
-                <label
-                  class={[
-                    "ed-btn--icon",
-                    (@sending_media && "opacity-40 pointer-events-none") || "cursor-pointer"
-                  ]}
-                  aria-label={gettext("Attach a file")}
-                  aria-disabled={@sending_media}
-                >
-                  <.icon name="hero-paper-clip-micro" class="size-5" />
-                  <%!-- sr-only (not hidden) keeps the input focusable / keyboard-reachable. --%>
-                  <.live_file_input upload={@uploads.attachment} class="sr-only" />
-                </label>
-                <input
-                  type="text"
-                  id="composer-body"
-                  name="message[body]"
-                  value={@composer[:body].value}
-                  class="ed-input"
-                  placeholder={gettext("Message")}
-                  autocomplete="off"
-                  phx-hook=".PasteUpload"
+            <%!-- Composer bar: attach + message + emoji + send. ALWAYS rendered (#130)
+                  so it never vanishes/jumps — the compose modal (below) floats on top
+                  of it when files are staged, instead of replacing it. --%>
+            <div class="flex items-center gap-2">
+              <%!-- While a media send is uploading, gate attach (and paste, in the
+                    PasteUpload hook) so sends stay serialized — one in-flight set of
+                    entries keeps the progress average exact and the FIFO swap
+                    unambiguous (#95). pointer-events only: the live_file_input stays
+                    enabled so the in-flight upload it's bound to isn't dropped. --%>
+              <label
+                class={[
+                  "ed-btn--icon",
+                  (@sending_media && "opacity-40 pointer-events-none") || "cursor-pointer"
+                ]}
+                aria-label={gettext("Attach a file")}
+                aria-disabled={@sending_media}
+              >
+                <.icon name="hero-paper-clip-micro" class="size-5" />
+                <%!-- sr-only (not hidden) keeps the input focusable / keyboard-reachable.
+                      Only ONE live_file_input may exist per upload (same id) — when the
+                      compose modal is open it owns "Add more", so the bar's drops out
+                      (#130). The bar is behind the scrim then anyway. --%>
+                <.live_file_input
+                  :if={@uploads.attachment.entries == [] or @sending_media}
+                  upload={@uploads.attachment}
+                  class="sr-only"
                 />
-                <%!-- phx-update="ignore": the picker is fully client-managed (its
-                      open/closed `hidden` is toggled by the hook, contents are a
-                      static emoji set). Without it, the per-keystroke phx-change
-                      re-render re-asserts the pop's static `hidden` and snaps the
-                      picker shut after one pick — defeating multi-select (#90). --%>
-                <div
-                  class="ed-emoji"
-                  id="emoji-picker"
-                  phx-hook=".EmojiPicker"
-                  phx-update="ignore"
-                >
-                  <button
-                    type="button"
-                    class="ed-btn--icon"
-                    data-emoji-toggle
-                    aria-label={gettext("Emoji")}
-                    aria-expanded="false"
-                  >
-                    <.icon name="hero-face-smile-micro" class="size-5" />
-                  </button>
-                  <div class="ed-emoji__pop" data-emoji-pop hidden role="menu">
-                    <button
-                      :for={e <- emoji_set()}
-                      type="button"
-                      class="ed-emoji__item"
-                      data-emoji={e}
-                      aria-label={e}
-                    >
-                      {e}
-                    </button>
-                  </div>
-                </div>
+              </label>
+              <input
+                type="text"
+                id="composer-body"
+                name="message[body]"
+                value={@composer[:body].value}
+                class="ed-input"
+                placeholder={gettext("Message")}
+                autocomplete="off"
+                phx-hook=".PasteUpload"
+              />
+              <%!-- phx-update="ignore": the picker is fully client-managed (its
+                    open/closed `hidden` is toggled by the hook, contents are a
+                    static emoji set). Without it, the per-keystroke phx-change
+                    re-render re-asserts the pop's static `hidden` and snaps the
+                    picker shut after one pick — defeating multi-select (#90). --%>
+              <div
+                class="ed-emoji"
+                id="emoji-picker"
+                phx-hook=".EmojiPicker"
+                phx-update="ignore"
+              >
                 <button
-                  class="ed-btn ed-btn--primary shrink-0"
-                  style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
-                  type="submit"
-                  aria-label={gettext("Send")}
+                  type="button"
+                  class="ed-btn--icon"
+                  data-emoji-toggle
+                  aria-label={gettext("Emoji")}
+                  aria-expanded="false"
                 >
-                  <.icon name="hero-paper-airplane-micro" class="size-4" />
+                  <.icon name="hero-face-smile-micro" class="size-5" />
                 </button>
+                <div class="ed-emoji__pop" data-emoji-pop hidden role="menu">
+                  <button
+                    :for={e <- emoji_set()}
+                    type="button"
+                    class="ed-emoji__item"
+                    data-emoji={e}
+                    aria-label={e}
+                  >
+                    {e}
+                  </button>
+                </div>
               </div>
-            <% else %>
-              <%!-- Attachment preview modal (#58): a Telegram-style overlay with a
-                    media grid, the caption + send inside it. data-upload-preview
-                    tells the SendQueue hook to defer to the normal phx-submit. --%>
-              <.compose_overlay upload={@uploads.attachment} form={@composer} />
-            <% end %>
+              <button
+                class="ed-btn ed-btn--primary shrink-0"
+                style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+                type="submit"
+                aria-label={gettext("Send")}
+              >
+                <.icon name="hero-paper-airplane-micro" class="size-4" />
+              </button>
+            </div>
+            <%!-- Attachment compose modal (#58): floats on TOP of the always-present
+                  bar when files are staged (#130) — no longer replaces it, so the bar
+                  never vanishes. Rendered LAST so its caption (name="message[body]")
+                  wins over the bar's input on submit. data-upload-preview routes the
+                  send through the SendQueue media path. --%>
+            <.compose_overlay
+              :if={@uploads.attachment.entries != [] and not @sending_media}
+              upload={@uploads.attachment}
+              form={@composer}
+            />
           </.form>
         <% else %>
           <div class="flex-1 grid place-items-center text-center p-8">
@@ -3116,6 +3122,20 @@ defmodule EdenWeb.ChatLive do
                     const twin = document.getElementById("pending-messages")
                       ?.querySelector(`[data-client-id="${row.dataset.clientId}"]`)
                     if (twin) {
+                      // Carry the local poster frame(s) onto the real <video>(s) so a
+                      // just-sent clip shows its frame while /files loads, instead of
+                      // flashing gray/"unsupported" until it decodes (#130). The server
+                      // poster ({:thumbnail_ready}) then takes over via morphdom. Only
+                      // when the poster↔video count is unambiguous (a lone clip or an
+                      // all-video album), so a mixed album never lands a photo's frame
+                      // on a video.
+                      const posters = [...twin.querySelectorAll("img")].map((i) => i.src)
+                      const vids = [...row.querySelectorAll("video")]
+                      if (vids.length && posters.length === vids.length) {
+                        vids.forEach((v, i) => {
+                          if (!v.getAttribute("poster")) v.setAttribute("poster", posters[i])
+                        })
+                      }
                       twin.remove()
                       continue
                     }
@@ -3823,6 +3843,13 @@ defmodule EdenWeb.ChatLive do
             this.connected = true
             this.convId = this.el.dataset.conversationId
             this.queue = []
+            // True while a media send is in flight — gates the overlay re-hide (#130).
+            this.sending = false
+            // Object URLs for staged video previews (#117), keyed
+            // "name:size:lastModified" and shared with the .VideoPreview hook via
+            // this element. Revoked when a
+            // clip is removed (VideoPreview destroyed) or the conversation switches.
+            this.el.edenVideoUrls = new Map()
             this.input = this.el.querySelector('input[name="message[body]"]')
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
@@ -3833,7 +3860,15 @@ defmodule EdenWeb.ChatLive do
             // then re-feed the input so LiveView stages the COMPRESSED file (the
             // PasteUpload set-files+dispatch path, which is proven to stage). Paste
             // flows through the same handler, so pasted images compress too.
-            this.onPick = (e) => this.compressPicked(e)
+            this.onPick = (e) => {
+              // A fresh file pick starts a new staging cycle — clear the
+              // send-in-flight guard so its preview overlay shows again (#130).
+              if (e.target instanceof HTMLInputElement && e.target.type === "file") {
+                this.sending = false
+              }
+              this.captureVideoUrls(e)
+              this.compressPicked(e)
+            }
             this.el.addEventListener("input", this.onPick, true)
             this.el.addEventListener("change", this.onPick, true)
             // A media send that errored (or consumed no entry) has no real row to
@@ -3851,6 +3886,16 @@ defmodule EdenWeb.ChatLive do
             })
           },
           disconnected() { this.connected = false },
+          destroyed() {
+            // Composer torn down (e.g. live_redirect out of chat without a
+            // conversation switch): per-tile VideoPreview.destroyed revokes live
+            // previews, this sweeps any object URL left without a tile (a rejected
+            // or never-rendered entry) so it can't outlive the page (#117).
+            if (this.el.edenVideoUrls) {
+              for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
+              this.el.edenVideoUrls.clear()
+            }
+          },
           reconnected() {
             this.connected = true
             // Re-arm anything that was in-flight when the link dropped; the
@@ -3863,7 +3908,20 @@ defmodule EdenWeb.ChatLive do
             if (this.el.dataset.conversationId !== this.convId) {
               this.convId = this.el.dataset.conversationId
               this.queue = []
+              this.sending = false
               if (this.pending) this.pending.replaceChildren()
+              // Revoke any staged-clip object URLs from the old conversation (#117).
+              for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
+              this.el.edenVideoUrls.clear()
+            }
+            // A media send is in flight (#130): re-hide the preview overlay on every
+            // patch so a re-render beating media_sending — or morphdom restoring the
+            // server markup over the JS display:none — can't flash it back. Runs in
+            // the patch cycle before paint, so the flash never reaches the screen.
+            // Cleared on a fresh pick (onPick) so the next staging shows normally.
+            if (this.sending) {
+              const ov = this.el.querySelector("[data-upload-preview]")
+              if (ov) ov.style.display = "none"
             }
           },
           onSubmit(e) {
@@ -3892,6 +3950,13 @@ defmodule EdenWeb.ChatLive do
               this.addOptimisticMedia(clientId, overlay)
               this.pushEvent("media_sending", { id: clientId })
               this.armStall(clientId)
+              // Mark the send in flight (#130 polish): updated() then re-hides the
+              // overlay on EVERY patch until a fresh pick. Without this, a re-render
+              // that beats the media_sending round-trip — or morphdom resetting the
+              // inline display:none below to the server's markup — flashes the
+              // preview back for a frame after Send (visible under screen-recording
+              // load, where transients stretch to several frames).
+              this.sending = true
               // Close the preview INSTANTLY (#111) instead of waiting for the
               // media_sending round-trip to re-render — on a slow link the overlay
               // lingered ~seconds after Send. The element stays in the DOM (display
@@ -4078,41 +4143,43 @@ defmodule EdenWeb.ChatLive do
           // node — files render as cards with no meaningful local preview, and an
           // empty album box would just flash; their real rows rise in normally.
           addOptimisticMedia(clientId, overlay) {
-            const previews = [...overlay.querySelectorAll(".ed-compose__img")]
-              .map((img) => this.snapshot(img))
-              .filter(Boolean)
-            const videos = overlay.querySelectorAll(".ed-compose__video").length
-            const n = previews.length + videos
+            // Snapshot every staged tile's frame IN ORDER — a photo's <img> or a
+            // loaded video's first frame (#117). So a sent clip rises in with its
+            // poster at full size, not a blank square that the real video later
+            // pops into. A tile whose frame can't be grabbed yet falls back to a
+            // fill so the album's tile count still matches the real row.
+            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")].map((tile) =>
+              this.snapshot(tile.querySelector(".ed-compose__img, .ed-compose__video"))
+            )
+            const n = tiles.length
             if (n === 0) return
 
             // Match the REAL render so the swap doesn't reflow (#95 review): a lone
-            // image renders via attachment_view (natural aspect, NOT a square album
-            // tile); 2+ use the .ed-album grid. Only a dim + spinner mark it sending.
+            // item renders via attachment_view (natural aspect, NOT a square album
+            // tile); 2+ use the .ed-album grid. Only a dim + ring mark it sending.
             let media
-            if (n === 1 && previews.length === 1) {
+            if (n === 1 && tiles[0]) {
               media = document.createElement("div")
               media.className = "ed-media-sending ed-media-sending--single"
               const img = document.createElement("img")
-              img.src = previews[0]
+              img.src = tiles[0]
               img.alt = ""
               media.appendChild(img)
             } else {
               const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
               media = document.createElement("div")
               media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
-              for (const src of previews) {
+              for (const src of tiles) {
                 const tile = document.createElement("span")
                 tile.className = "ed-album__tile"
-                const img = document.createElement("img")
-                img.src = src
-                img.alt = ""
-                tile.appendChild(img)
-                media.appendChild(tile)
-              }
-              for (let i = 0; i < videos; i++) {
-                const tile = document.createElement("span")
-                tile.className = "ed-album__tile"
-                tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+                if (src) {
+                  const img = document.createElement("img")
+                  img.src = src
+                  img.alt = ""
+                  tile.appendChild(img)
+                } else {
+                  tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+                }
                 media.appendChild(tile)
               }
             }
@@ -4245,10 +4312,13 @@ defmodule EdenWeb.ChatLive do
           },
           // Snapshot a loaded preview <img> to a persistent JPEG data-URL. Returns
           // null on taint/empty so the node just shows the ring over a blank tile.
-          snapshot(img) {
+          snapshot(el) {
+            if (!el) return null
             try {
-              let w = img.naturalWidth || img.width
-              let h = img.naturalHeight || img.height
+              // An <img> exposes naturalWidth/Height; a loaded <video> exposes
+              // videoWidth/Height (#117). drawImage paints either's current frame.
+              let w = el.naturalWidth || el.videoWidth || el.width
+              let h = el.naturalHeight || el.videoHeight || el.height
               if (!w || !h) return null
               // Downscale to a preview size (#95 review): a full-res phone photo
               // would allocate a ~tens-of-MB canvas and hold a multi-MB data-URL
@@ -4262,10 +4332,29 @@ defmodule EdenWeb.ChatLive do
               const c = document.createElement("canvas")
               c.width = w
               c.height = h
-              c.getContext("2d").drawImage(img, 0, 0, w, h)
+              c.getContext("2d").drawImage(el, 0, 0, w, h)
               return c.toDataURL("image/jpeg", 0.7)
             } catch (_e) {
               return null
+            }
+          },
+          // Capture a local object URL for each staged video at SELECTION time (#117)
+          // — the most reliable point, since the upload entry never exposes its File
+          // to a hook. Keyed "name:size:lastModified" (deduped, so the input/change
+          // pair and the compress re-dispatch don't double-create); .VideoPreview
+          // reads it back.
+          captureVideoUrls(e) {
+            const input = e.target
+            if (!(input instanceof HTMLInputElement) || input.type !== "file") return
+            for (const f of input.files || []) {
+              if (!(f.type || "").startsWith("video/")) continue
+              // name+size alone collide for two different clips of equal weight →
+              // the second tile would show the first file's frame. lastModified adds
+              // the distinguishing entropy (it matches entry.client_last_modified).
+              const key = f.name + ":" + f.size + ":" + f.lastModified
+              if (!this.el.edenVideoUrls.has(key)) {
+                this.el.edenVideoUrls.set(key, URL.createObjectURL(f))
+              }
             }
           },
           // Intercept a file selection (#97): compress images, then re-feed the input
@@ -4420,6 +4509,98 @@ defmodule EdenWeb.ChatLive do
             x.textContent = "✕"
             x.addEventListener("click", () => node.remove())
             ;(target || node).appendChild(x)
+          },
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".VideoPreview">
+        // Play a staged clip locally before it uploads (#117). The File is only
+        // reachable at selection (an upload entry never hands a hook its File), so
+        // the SendQueue hook stashes URL.createObjectURL(file) on #composer in a
+        // Map keyed "name:size:lastModified". We look ours up by those data-* attrs,
+        // point the <video> at it, and revoke on teardown so a clip can't leak.
+        export default {
+          key() {
+            return this.el.dataset.name + ":" + this.el.dataset.size + ":" + this.el.dataset.modified
+          },
+          mounted() {
+            // Cache the store now: in destroyed() the node is already detached, so
+            // closest("#composer") would return null.
+            this.store = this.el.closest("#composer")?.edenVideoUrls
+            const url = this.store && this.store.get(this.key())
+            if (url) {
+              this.el.src = url
+              this.el.load()
+              // Reflect the clip's real aspect once known (#117) so a single portrait
+              // preview shows full-frame, not a centre-cropped square. No-op in the
+              // album grid: there the square tile fixes width+height, which overrides
+              // aspect-ratio.
+              this.onMeta = () => {
+                if (this.el.videoWidth && this.el.videoHeight) {
+                  this.el.style.aspectRatio = this.el.videoWidth + " / " + this.el.videoHeight
+                }
+              }
+              this.el.addEventListener("loadedmetadata", this.onMeta)
+            } else {
+              // No local frame (rare) — hide the empty player so the film icon shows.
+              this.el.style.display = "none"
+            }
+          },
+          destroyed() {
+            if (this.onMeta) this.el.removeEventListener("loadedmetadata", this.onMeta)
+            const url = this.store && this.store.get(this.key())
+            if (url) {
+              URL.revokeObjectURL(url)
+              this.store.delete(this.key())
+            }
+          },
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".StreamVideo">
+        // Zero-flash stream video (#130). A just-sent clip's FIRST load can transiently
+        // error (the blob was only just stored; the metadata/Range fetch right after the
+        // optimistic→real swap races) and then play fine — Firefox would paint its
+        // "unsupported format" icon for a beat before recovering. We mask the player
+        // with a poster COVER (its own frame, mirrored from the <video>'s poster — the
+        // client snapshot via the riser, or the server thumbnail) and reveal the real
+        // player only once it can actually show a frame (loadeddata/canplay). So no
+        // load/error state is ever visible. A transient error also retries load() once,
+        // which then reaches canplay and fades the cover.
+        export default {
+          mounted() {
+            // The cover lives in the HEEx (phx-update="ignore" so morphdom leaves it
+            // alone); we just fill its src + fade it out.
+            this.cover = this.el.closest(".ed-video-box")?.querySelector(".ed-video-cover")
+            if (!this.cover) return
+            // Mirror the <video>'s poster (the riser's client snapshot, or the server
+            // thumbnail) — it can arrive after mount, so observe it.
+            this.syncCover = () => {
+              const p = this.el.getAttribute("poster")
+              if (p && this.cover.getAttribute("src") !== p) this.cover.setAttribute("src", p)
+            }
+            this.syncCover()
+            this.posterObs = new MutationObserver(this.syncCover)
+            this.posterObs.observe(this.el, { attributes: true, attributeFilter: ["poster"] })
+
+            this.reveal = () => this.cover.classList.add("ed-video-cover--gone")
+            this.el.addEventListener("loadeddata", this.reveal)
+            this.el.addEventListener("canplay", this.reveal)
+            // Already decodable (e.g. cached) — reveal immediately.
+            if (this.el.readyState >= 2) this.reveal()
+
+            this.onError = () => {
+              if (this._retried) return
+              this._retried = true
+              this.el.load()
+            }
+            this.el.addEventListener("error", this.onError)
+          },
+          destroyed() {
+            this.posterObs && this.posterObs.disconnect()
+            if (this.reveal) {
+              this.el.removeEventListener("loadeddata", this.reveal)
+              this.el.removeEventListener("canplay", this.reveal)
+            }
+            this.onError && this.el.removeEventListener("error", this.onError)
           },
         }
       </script>
@@ -6204,10 +6385,12 @@ defmodule EdenWeb.ChatLive do
   attr :upload, :any, required: true
   attr :form, :any, required: true
 
-  # Telegram-style attachment compose modal (#58): a lightbox-style overlay that opens
-  # the moment files are staged — a media grid (photos/videos) plus, separately, any
-  # non-media files (they send as their own messages, never inside the album). The
-  # caption + send live in the modal footer.
+  # Attachment compose modal (#58): a Telegram-style centered overlay (media grid +
+  # caption + send) opened when files are staged. The composer bar stays rendered
+  # behind the scrim (#130) so it never vanishes — the modal floats on top. Its
+  # caption uses a distinct id (compose-caption) so it doesn't collide with the
+  # always-present bar's #composer-body; both share name="message[body]", and the
+  # modal renders LAST so its value wins on submit.
   defp compose_overlay(assigns) do
     entries = assigns.upload.entries
     media = Enum.filter(entries, &media_entry?/1)
@@ -6250,13 +6433,38 @@ defmodule EdenWeb.ChatLive do
         <div class="ed-compose__body">
           <div
             :if={@media != []}
-            class={["ed-compose__grid", "ed-album--#{album_cols(length(@media))}"]}
+            class={[
+              "ed-compose__grid",
+              "ed-album--#{album_cols(length(@media))}",
+              length(@media) == 1 && "ed-compose__grid--single"
+            ]}
           >
             <div :for={entry <- @media} class="ed-compose__tile">
               <.live_img_preview :if={image_entry?(entry)} entry={entry} class="ed-compose__img" />
-              <span :if={video_entry?(entry)} class="ed-compose__video" aria-hidden="true">
-                <.icon name="hero-film" class="size-7" />
-              </span>
+              <div :if={video_entry?(entry)} class="ed-compose__video-wrap">
+                <span class="ed-compose__video-fb" aria-hidden="true">
+                  <.icon name="hero-film" class="size-7" />
+                </span>
+                <%!-- Playable local preview (#117): the file is only reachable at
+                      selection, so the SendQueue hook stashes an object URL on
+                      #composer keyed name:size:lastModified and .VideoPreview wires it up.
+                      phx-update="ignore" so a caption keystroke's re-render can't
+                      clobber the JS-set src and reload the clip. --%>
+                <video
+                  id={"vp-#{entry.ref}"}
+                  phx-hook=".VideoPreview"
+                  phx-update="ignore"
+                  data-name={entry.client_name}
+                  data-size={entry.client_size}
+                  data-modified={entry.client_last_modified}
+                  aria-label={entry.client_name || gettext("Video")}
+                  class="ed-compose__video"
+                  controls
+                  playsinline
+                  preload="metadata"
+                >
+                </video>
+              </div>
               <button
                 type="button"
                 class="ed-compose__remove"
@@ -6309,7 +6517,7 @@ defmodule EdenWeb.ChatLive do
         <footer class="ed-compose__foot">
           <input
             type="text"
-            id="composer-body"
+            id="compose-caption"
             name="message[body]"
             value={@form[:body].value}
             class="ed-input"
@@ -6332,7 +6540,7 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
-  # Modal title: counts the media (the album) when present, else the files. A
+  # Preview title: counts the media (the album) when present, else the files. A
   # media-only set reads by its kind — "N videos" when there are no photos.
   defp compose_title(media, []) when media != [] do
     n = length(media)
@@ -6466,16 +6674,36 @@ defmodule EdenWeb.ChatLive do
 
   defp attachment_view(%{attachment: %{kind: "video"}} = assigns) do
     ~H"""
-    <video
-      controls
-      preload="metadata"
-      poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
-      aria-label={@attachment.filename || gettext("Video")}
-      class="ed-video mb-1"
-      style={video_ratio(@attachment)}
-    >
-      <source src={~p"/files/#{@attachment.id}"} type={@attachment.content_type} />
-    </video>
+    <%!-- The box is the positioning context for .StreamVideo's poster cover (#130),
+          which masks the player until it can actually play so a just-uploaded clip's
+          transient first-load error never flashes its "unsupported" icon. --%>
+    <div class="ed-video-box mb-1">
+      <video
+        id={"av-#{@attachment.id}"}
+        phx-hook=".StreamVideo"
+        controls
+        preload="metadata"
+        poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
+        aria-label={@attachment.filename || gettext("Video")}
+        class="ed-video"
+        style={video_ratio(@attachment)}
+      >
+        <source src={~p"/files/#{@attachment.id}"} type={@attachment.content_type} />
+      </video>
+      <%!-- Poster cover (#130): masks the player until it can actually play, so a
+            just-uploaded clip's transient first-load error never flashes its icon.
+            id + phx-update="ignore" so morphdom (this is a stream item, re-inserted on
+            {:thumbnail_ready}) never drops it or resets .StreamVideo's src/fade state
+            mid-load. The hook fills its src from the <video>'s poster and fades it on
+            canplay. --%>
+      <img
+        id={"avc-#{@attachment.id}"}
+        phx-update="ignore"
+        class="ed-video-cover"
+        aria-hidden="true"
+        alt=""
+      />
+    </div>
     """
   end
 
@@ -7767,11 +7995,14 @@ defmodule EdenWeb.ChatLive do
 
   defp human_size(_bytes), do: ""
 
-  # Reserve the player's box before metadata loads, when dimensions are known
-  # (the worker fills them in for video); avoids a layout jump.
+  # Reserve the player's box before any metadata loads (dimensions are known at
+  # create now — #117 reads them via ffprobe). Mirror img_box exactly: a DEFINITE
+  # width + aspect-ratio, not aspect-ratio alone — without the explicit width the
+  # <video> briefly painted its default box on insert (a ~60ms height dip) before
+  # the ratio settled, so the optimistic poster→real swap flickered.
   defp video_ratio(%{width: w, height: h})
        when is_integer(w) and is_integer(h) and w > 0 and h > 0,
-       do: "aspect-ratio: #{w} / #{h}"
+       do: img_box(%{width: w, height: h})
 
   defp video_ratio(_attachment), do: nil
 

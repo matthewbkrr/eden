@@ -12,7 +12,8 @@ defmodule EdenWeb.CSP do
   `'unsafe-inline'`** because the UI uses inline `style=""` attributes pervasively
   and nonces don't apply to attributes (style injection is far lower risk than
   script injection). `img-src` allows `data:` (heroicon CSS masks) and `blob:`
-  (`live_img_preview` upload previews); the LiveView socket rides `connect-src
+  (`live_img_preview` upload previews); `media-src` allows `blob:` too (the
+  playable staged-video preview, #117); the LiveView socket rides `connect-src
   'self'`.
   """
   @behaviour Plug
@@ -38,7 +39,7 @@ defmodule EdenWeb.CSP do
         "script-src 'self' 'nonce-#{nonce}'",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
-        "media-src 'self'",
+        "media-src 'self' blob:",
         "font-src 'self'",
         "connect-src 'self'",
         "base-uri 'self'",
