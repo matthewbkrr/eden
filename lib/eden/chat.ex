@@ -1457,6 +1457,24 @@ defmodule Eden.Chat do
     end
   end
 
+  @doc """
+  Like `create_reply/3`, but the reply carries an album of attachments (#104).
+  Same thread authorization as `create_reply` (the root must be a non-deleted,
+  threaded root the scoped user can see); the album is stored and delivered as a
+  thread reply via `deliver_reply`. `sources` mirror `create_album_message`.
+  """
+  def create_album_reply(%Scope{user: user} = scope, root_id, sources, opts \\ %{})
+      when is_list(sources) do
+    with {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id),
+         :ok <- ensure_album_size(sources),
+         {:ok, prepared} <- prepare_album(sources) do
+      persist_album(user, root.conversation_id, prepared, Map.put(opts, :root, root))
+    end
+  end
+
   defp ensure_album_size([]), do: {:error, :empty}
 
   defp ensure_album_size(sources) when length(sources) > @max_album_entries,
@@ -1510,10 +1528,21 @@ defmodule Eden.Chat do
   defp persist_album(user, conversation_id, prepared, opts) do
     message_attrs = %{"body" => Map.get(opts, :body, ""), "client_id" => opts[:client_id]}
     reply_to_id = valid_reply_to_id(opts[:reply_to_id], conversation_id, user.id)
+    # opts[:root] is a %Message{} for a thread-reply album (#104); nil for a
+    # top-level album. It decides the delivery path (thread vs main stream).
+    root = opts[:root]
 
-    case insert_album_message(user, conversation_id, message_attrs, prepared, reply_to_id) do
+    case insert_album_message(
+           user,
+           conversation_id,
+           message_attrs,
+           prepared,
+           reply_to_id,
+           root && root.id
+         ) do
       {:ok, message} ->
-        message = deliver(conversation_id, message)
+        message =
+          if root, do: deliver_reply(root, message), else: deliver(conversation_id, message)
 
         for attachment <- message.attachments,
             needs_media_processing?(attachment.kind),
@@ -2529,12 +2558,13 @@ defmodule Eden.Chat do
     )
   end
 
-  defp insert_album_message(user, conversation_id, message_attrs, prepared, reply_to_id) do
+  defp insert_album_message(user, conversation_id, message_attrs, prepared, reply_to_id, root_id) do
     Repo.transact(fn ->
       with {:ok, message} <-
              %Message{
                conversation_id: conversation_id,
                sender_id: user.id,
+               root_id: root_id,
                reply_to_id: reply_to_id
              }
              |> Message.photo_changeset(message_attrs)

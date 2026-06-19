@@ -404,6 +404,10 @@ html {
     display: flex;
     justify-content: center;
     margin: 0.5rem 0;
+    /* The separators are injected/dropped client-side on every patch (#83); never let the
+       browser pick one as the scroll anchor, or its churn shifts the viewport — the room
+       jumped on each thread keystroke in browsers with eager scroll-anchoring (#104). */
+    overflow-anchor: none;
   }
   .ed-date-sep > span,
   .ed-date-chip {
@@ -432,6 +436,14 @@ html {
   }
   .ed-date-chip.is-visible {
     opacity: 1;
+  }
+  /* On every LiveView patch morphdom resets the chip to its empty server-rendered
+     state. Labeled it's ≈1.4rem tall and the -1.4rem margin cancels it; empty it's
+     only ~5px, so the margin over-pulls ~17px and shrinks scrollHeight — that clamps
+     a bottom-pinned scroll and the list twitched on incidental updates (#104). Drop
+     the empty chip from layout so it contributes 0 in BOTH states. */
+  .ed-date-chip:empty {
+    display: none;
   }
   @media (prefers-reduced-motion: reduce) {
     .ed-date-chip {
@@ -1303,6 +1315,45 @@ html {
   .ed-attach-err {
     font-size: 0.75rem;
     color: var(--ed-danger);
+  }
+
+  /* Thread-reply album staging tray (#104): compact thumbnails above the reply input. */
+  .ed-thread-tray {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+  }
+  .ed-thread-tray__item {
+    position: relative;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: var(--ed-surface-2);
+  }
+  .ed-thread-tray__img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .ed-thread-tray__file {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    color: var(--ed-muted);
+  }
+  .ed-thread-tray__remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: grid;
+    place-items: center;
+    width: 1.05rem;
+    height: 1.05rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(0 0 0 / 0.55);
+    color: #fff;
   }
 
   /* Conversation list item --------------------------------------------- */

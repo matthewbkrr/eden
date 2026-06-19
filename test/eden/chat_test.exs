@@ -512,6 +512,76 @@ defmodule Eden.ChatTest do
       assert Chat.channel_unread_counts(scope(alice)) == %{}
     end
 
+    test "create_album_reply attaches an album to a thread reply, delivered as a reply (#104)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      Chat.subscribe(conv.id)
+
+      assert {:ok, reply} =
+               Chat.create_album_reply(
+                 scope(bob),
+                 root.id,
+                 [%{path: real_png(), filename: "a.png"}, %{path: real_png(), filename: "b.png"}],
+                 %{body: "look"}
+               )
+
+      assert reply.root_id == root.id
+      assert reply.body == "look"
+      assert length(reply.attachments) == 2
+
+      # Delivered as a thread reply (bumps the root), not into the main stream.
+      assert_receive {:thread_reply, fresh_root, ^reply}
+      assert fresh_root.reply_count == 1
+      {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
+      refute Enum.any?(messages, &(&1.id == reply.id))
+
+      # Same thread auth as create_reply: a non-member can't attach a reply.
+      outsider = user_fixture(%{username: "outsider_104"})
+
+      assert {:error, :not_found} =
+               Chat.create_album_reply(scope(outsider), root.id, [%{path: real_png()}], %{})
+    end
+
+    test "create_album_reply enforces the flat rule + rejects a tombstoned root (#104)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      # A reply can't itself root an album thread.
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "level 1"})
+
+      assert {:error, :not_a_root} =
+               Chat.create_album_reply(scope(alice), reply.id, [%{path: real_png()}], %{})
+
+      # A tombstoned root rejects album replies (ensure_not_deleted, before ensure_root).
+      {:ok, lone} = Chat.create_message(scope(alice), conv.id, %{"body" => "to delete"})
+      :ok = Chat.delete_message_for_both(scope(alice), lone.id)
+
+      assert {:error, :deleted} =
+               Chat.create_album_reply(scope(bob), lone.id, [%{path: real_png()}], %{})
+    end
+
+    test "create_album_reply rolls back every stored blob when one source is too large (#104)", %{
+      bob: bob,
+      root: root
+    } do
+      big = @png_signature <> :binary.copy("x", 8 * 1024 * 1024 + 1)
+
+      sources = [
+        %{path: image_path(@png_signature <> "ok"), filename: "ok.png"},
+        %{path: image_path(big), filename: "huge.png"}
+      ]
+
+      assert {:error, :too_large} = Chat.create_album_reply(scope(bob), root.id, sources, %{})
+      # prepare_album fails before delivery: no attachment row leaks, root unbumped.
+      assert Repo.aggregate(Attachment, :count) == 0
+      assert {:ok, %{reply_count: 0}, []} = Chat.list_thread(scope(bob), root.id)
+    end
+
     test "flat rule: a reply can't root another thread; tombstoned roots reject replies", %{
       alice: alice,
       bob: bob,

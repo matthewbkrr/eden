@@ -1005,6 +1005,71 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ".ed-thread .ed-typing-row__label", ctx.bob.display_name)
     end
 
+    test "attach media in a thread reply: stages a tray, sends as an album (#104)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrMedia"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      # The thread composer offers an attach control.
+      assert has_element?(view, ~s(#reply-composer input[type="file"]))
+
+      # Stage a photo → the thread tray appears.
+      file =
+        file_input(view, "#reply-composer", :thread_attachment, [
+          %{name: "t.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "t.png")
+      assert has_element?(view, ".ed-thread-tray")
+
+      # Submit with an empty caption (the album is the content) → it sends as a thread
+      # reply with an attachment, and the staging tray clears.
+      view |> form("#reply-composer", reply: %{body: ""}) |> render_submit()
+      refute has_element?(view, ".ed-thread-tray")
+      assert has_element?(view, "#thread-replies img")
+    end
+
+    test "a thread reply's ready thumbnail updates the thread, never the main stream (#104)",
+         ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrThumb"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      scope = Scope.for_user(ctx.alice)
+      {:ok, root} = Chat.create_message(scope, room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      # An album reply lands in the thread (the {:thread_reply} broadcast streams it in).
+      {:ok, reply} =
+        Chat.create_album_reply(
+          scope,
+          root.id,
+          [%{path: real_png_path(), filename: "t.png"}],
+          %{}
+        )
+
+      render(view)
+      assert has_element?(view, "#thread-#{reply.id}")
+      refute has_element?(view, "#messages-#{reply.id}")
+
+      # The async thumbnail finishes and re-broadcasts the message. It MUST update the
+      # thread row in place — never leak the reply into the room's main stream (the
+      # bug: {:thumbnail_ready} stream_insert'd every message into :messages).
+      send(view.pid, {:thumbnail_ready, reply})
+      render(view)
+      refute has_element?(view, "#messages-#{reply.id}")
+      assert has_element?(view, "#thread-#{reply.id}")
+    end
+
     test "paginating older messages keeps the compact run + stitches the seam (#105)", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Page105"})

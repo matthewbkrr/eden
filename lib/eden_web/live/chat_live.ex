@@ -25,6 +25,14 @@ defmodule EdenWeb.ChatLive do
   @typing_throttle_ms 2_000
   @typing_ttl_ms 4_000
 
+  # Uploads cancelable via the shared "cancel_upload" event. A closed map, so a
+  # crafted "upload" value can neither crash the LiveView (vs String.to_existing_atom)
+  # nor reach an unrelated upload (e.g. :channel_avatar). #104.
+  @cancelable_uploads %{
+    "attachment" => :attachment,
+    "thread_attachment" => :thread_attachment
+  }
+
   @impl true
   def mount(_params, _session, socket) do
     scope = socket.assigns.current_scope
@@ -164,6 +172,14 @@ defmodule EdenWeb.ChatLive do
         # Telegram-style, instead of an indeterminate spinner that can't show how
         # far a slow cross-border upload has gotten.
         progress: &handle_attachment_progress/3
+      )
+      # Thread-reply album (#104): same accept/caps as :attachment, a separate upload so
+      # the thread composer stages independently. No progress callback — a thread reply
+      # appears on the {:thread_reply} broadcast (no optimistic ring, like text replies).
+      |> allow_upload(:thread_attachment,
+        accept: :any,
+        max_entries: Chat.max_album_entries(),
+        max_file_size: Chat.max_attachment_bytes()
       )
       # Channel avatar (#70): a single image, processed server-side to a square.
       |> allow_upload(:channel_avatar,
@@ -444,8 +460,14 @@ defmodule EdenWeb.ChatLive do
   # Ignore malformed send payloads (e.g. a crafted event) instead of crashing.
   def handle_event("send", _params, socket), do: {:noreply, socket}
 
-  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :attachment, ref)}
+  def handle_event("cancel_upload", %{"ref" => ref} = params, socket) do
+    # Defaults to :attachment (the main composer); the thread tray passes
+    # phx-value-upload="thread_attachment" (#104). An unknown key (crafted event)
+    # is ignored rather than crashing the process.
+    case Map.fetch(@cancelable_uploads, Map.get(params, "upload", "attachment")) do
+      {:ok, upload} -> {:noreply, cancel_upload(socket, upload, ref)}
+      :error -> {:noreply, socket}
+    end
   end
 
   def handle_event("cancel_all_uploads", _params, socket) do
@@ -1171,7 +1193,11 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_thread", _params, socket) do
-    {:noreply, socket |> clear_thread_typing() |> assign(thread_root: nil, thread_reply_to: nil)}
+    {:noreply,
+     socket
+     |> cancel_staged_thread_attachments()
+     |> clear_thread_typing()
+     |> assign(thread_root: nil, thread_reply_to: nil)}
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
@@ -1298,31 +1324,21 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
     root = socket.assigns.thread_root
+    reply_to_id = reply["reply_to_id"]
 
-    if is_nil(root) or String.trim(body) == "" do
-      {:noreply, socket}
-    else
-      attrs = %{"body" => body, "reply_to_id" => reply["reply_to_id"]}
+    cond do
+      is_nil(root) ->
+        {:noreply, socket}
 
-      case Chat.create_reply(socket.assigns.current_scope, root.id, attrs) do
-        {:ok, _reply} ->
-          # The reply itself arrives via the {:thread_reply} broadcast.
-          {:noreply,
-           assign(socket,
-             reply_composer: to_form(%{"body" => ""}, as: "reply"),
-             thread_reply_to: nil,
-             last_thread_typing_at: nil
-           )}
+      # An album reply (#104): the attachments are the content, so an empty caption is OK.
+      socket.assigns.uploads.thread_attachment.entries != [] ->
+        send_thread_album(socket, root, body, reply_to_id)
 
-        {:error, %Ecto.Changeset{}} ->
-          {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
+      String.trim(body) == "" ->
+        {:noreply, socket}
 
-        {:error, _} ->
-          {:noreply,
-           socket
-           |> assign(thread_root: nil)
-           |> put_flash(:error, gettext("Thread not found."))}
-      end
+      true ->
+        send_thread_reply_text(socket, root, body, reply_to_id)
     end
   end
 
@@ -1509,13 +1525,14 @@ defmodule EdenWeb.ChatLive do
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
   end
 
-  # A thumbnail finished generating: swap the full image for it, in place. Guard
-  # against a late broadcast arriving after the user switched conversations.
+  # A thumbnail finished generating: swap the full image for it, in place. Routes by
+  # root_id so a thread reply's thumbnail (#104) updates the thread panel, not the main
+  # stream. Guard against a late broadcast arriving after the user switched away.
   def handle_info({:thumbnail_ready, message}, socket) do
     selected = socket.assigns.selected
 
     if selected && selected.id == message.conversation_id do
-      {:noreply, stream_insert(socket, :messages, restore_compact(socket, message))}
+      {:noreply, restream_message_in_place(socket, message, socket.assigns.thread_root)}
     else
       {:noreply, socket}
     end
@@ -1527,7 +1544,7 @@ defmodule EdenWeb.ChatLive do
     selected = socket.assigns.selected
 
     if selected && selected.id == message.conversation_id do
-      {:noreply, apply_reaction_change(socket, message, socket.assigns.thread_root)}
+      {:noreply, restream_message_in_place(socket, message, socket.assigns.thread_root)}
     else
       {:noreply, socket}
     end
@@ -2681,7 +2698,41 @@ defmodule EdenWeb.ChatLive do
               <.icon name="hero-x-mark-micro" class="size-4" />
             </button>
           </div>
+          <%!-- Staged thread-reply album (#104): a compact thumbnail tray; the reply
+                input below doubles as the caption. Sends as one album on submit. --%>
+          <div :if={@uploads.thread_attachment.entries != []} class="ed-thread-tray">
+            <div :for={entry <- @uploads.thread_attachment.entries} class="ed-thread-tray__item">
+              <.live_img_preview
+                :if={image_entry?(entry)}
+                entry={entry}
+                class="ed-thread-tray__img"
+              />
+              <span :if={video_entry?(entry)} class="ed-thread-tray__file" aria-hidden="true">
+                <.icon name="hero-film" class="size-5" />
+              </span>
+              <span :if={!media_entry?(entry)} class="ed-thread-tray__file" aria-hidden="true">
+                <.icon name={entry_icon(entry)} class="size-5" />
+              </span>
+              <button
+                type="button"
+                class="ed-thread-tray__remove"
+                phx-click="cancel_upload"
+                phx-value-ref={entry.ref}
+                phx-value-upload="thread_attachment"
+                aria-label={gettext("Remove %{name}", name: entry.client_name)}
+              >
+                <.icon name="hero-x-mark-micro" class="size-3" />
+              </button>
+            </div>
+          </div>
+          <p :for={{name, err} <- compose_errors(@uploads.thread_attachment)} class="ed-attach-err">
+            {name}: {upload_error_text(err)}
+          </p>
           <div class="flex items-center gap-2">
+            <label class="ed-btn--icon cursor-pointer shrink-0" aria-label={gettext("Attach a file")}>
+              <.icon name="hero-paper-clip-micro" class="size-5" />
+              <.live_file_input upload={@uploads.thread_attachment} class="sr-only" />
+            </label>
             <input
               type="text"
               id="reply-body"
@@ -2692,8 +2743,17 @@ defmodule EdenWeb.ChatLive do
               aria-label={gettext("Reply")}
               autocomplete="off"
               maxlength="4000"
+              phx-hook=".PasteUpload"
             />
-            <button type="submit" class="ed-btn ed-btn--primary" aria-label={gettext("Send")}>
+            <%!-- Fixed-width circle matching the main composer's send button, so the
+                  icon never reflows. (No phx-disable-with: on an icon-only button it
+                  swaps the glyph for text and the button visibly shrinks — #104.) --%>
+            <button
+              class="ed-btn ed-btn--primary shrink-0"
+              style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+              type="submit"
+              aria-label={gettext("Send")}
+            >
               <.icon name="hero-paper-airplane-micro" class="size-4" />
             </button>
           </div>
@@ -3041,18 +3101,25 @@ defmodule EdenWeb.ChatLive do
                   const row = node.matches?.(".ed-msg, .ed-flat") ? node
                     : node.querySelector?.(".ed-msg, .ed-flat")
                   if (!row) continue
+                  // An optimistic node sitting in #pending already animated itself
+                  // (addOptimistic / addOptimisticMedia); never re-animate it.
                   const inPending = !!row.closest("#pending-messages")
-                  if (row.dataset.clientId) {
-                    if (!inPending) {
-                      const twin = document.getElementById("pending-messages")
-                        ?.querySelector(`[data-client-id="${row.dataset.clientId}"]`)
-                      if (twin) twin.remove()
-                    }
-                    continue
-                  }
-                  // Optimistic nodes already animated themselves in SendQueue;
-                  // never re-animate one that's sitting in #pending.
                   if (inPending) continue
+                  if (row.dataset.clientId) {
+                    // My own message just streamed in. A media send still renders an
+                    // optimistic twin (local preview + progress ring) — drop it in this
+                    // same microtask, BEFORE paint, and don't animate: it already rose
+                    // in, so a second animation would double up. Text sends render no
+                    // optimistic node anymore, so there's no twin → fall through and
+                    // rise in like a thread reply (one smooth transition, shared by the
+                    // whole list — DMs, rooms, and threads alike).
+                    const twin = document.getElementById("pending-messages")
+                      ?.querySelector(`[data-client-id="${row.dataset.clientId}"]`)
+                    if (twin) {
+                      twin.remove()
+                      continue
+                    }
+                  }
                   row.classList.add("ed-msg--enter")
                   setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
                 }
@@ -3065,8 +3132,20 @@ defmodule EdenWeb.ChatLive do
             // Track "at the bottom" on every scroll so the ResizeObserver below can
             // re-pin after a viewport shrink. Start pinned — mount() just scrolled down.
             this.pinned = true
+            // `follow` is a STICKY "stay at the bottom" intent: unlike `pinned` (which
+            // beforeUpdate recomputes to false the instant content grows taller than the
+            // viewport), it survives content growing below — a late-decoding image, the
+            // real row swapping in for its optimistic twin. Cleared only when the user
+            // scrolls UP. The image-load re-pin honors it so a just-sent photo lands fully
+            // in view even when its grow exceeds the pinned threshold (#104).
+            this.follow = true
+            this.lastTop = this.el.scrollTop
             this.onScroll = () => {
-              this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
+              const top = this.el.scrollTop
+              this.pinned = this.el.scrollHeight - top - this.el.clientHeight < 48
+              if (this.pinned) this.follow = true
+              else if (top < this.lastTop - 2) this.follow = false
+              this.lastTop = top
               this.maybeLoadOlder()
             }
             this.el.addEventListener("scroll", this.onScroll, { passive: true })
@@ -3078,6 +3157,40 @@ defmodule EdenWeb.ChatLive do
               if (this.pinned) this.toBottom(false)
             })
             this.ro.observe(this.el)
+            // After a send the user always wants their message at the bottom, but the send
+            // settles in stages (optimistic node, modal→bar composer resize, the real row,
+            // late media decode) — each can leave it short, and `pinned`/`follow` are too
+            // fragile across those transients (esp. Firefox) (#104). So when SendQueue
+            // signals a send, glue to the bottom for a short window, then stop. This is
+            // send-only, so it never yanks someone scrolled up reading history.
+            this.onAfterSend = () => {
+              this.stickUntil = performance.now() + 1200
+              if (this._sticking) return
+              this._sticking = true
+              const tick = () => {
+                if (performance.now() > this.stickUntil) { this._sticking = false; return }
+                this.toBottom(false)
+                requestAnimationFrame(tick)
+              }
+              requestAnimationFrame(tick)
+            }
+            window.addEventListener("ed:after-send", this.onAfterSend)
+            // A just-sent (or received) photo/video/file row grows AFTER we scrolled — its
+            // media decodes late (no server dimensions yet) or its card lays out a frame
+            // later — leaving it below the fold (#104). The earlier per-image `load` re-pin
+            // was timing-fragile (worked in Chrome, missed Firefox; never covered files).
+            // Instead observe the message CONTENT's height and re-pin on ANY growth while
+            // `follow` (sticky-bottom) holds — covers images, video posters, and file cards
+            // uniformly, on every browser. The separator churn (#83) nets to zero before
+            // this fires (the MutationObserver re-adds it in the same task), so it doesn't
+            // trigger here.
+            this.content = this.el.querySelector("#messages")
+            if (this.content) {
+              this.contentRo = new ResizeObserver(() => {
+                if (this.follow) this.toBottom(false)
+              })
+              this.contentRo.observe(this.content)
+            }
           },
           maybeLoadOlder() {
             if (this.loadingMore || this.el.dataset.hasMore !== "true") return
@@ -3088,6 +3201,12 @@ defmodule EdenWeb.ChatLive do
           },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
+            // Snapshot the message-row count so updated() only re-pins on a genuinely NEW
+            // message — never on an incidental re-render (typing here or in a thread, a
+            // reaction, a read tick, a reply-count footer). Re-pinning on every patch made
+            // the list chase the transient separator height and twitch on every keystroke
+            // (#104). Sent messages scroll via SendQueue + the image-load re-pin, not here.
+            this.prevCount = this.el.querySelectorAll(".ed-msg, .ed-flat").length
           },
           // A new message while pinned: glide the list up to make room so it
           // eases in from the bottom instead of snapping (the "jerk"). Mount
@@ -3120,12 +3239,18 @@ defmodule EdenWeb.ChatLive do
               })
               return
             }
-            if (this.pinned) this.toBottom(true)
+            // Only re-pin when a new message actually arrived (row count grew). Incidental
+            // patches leave the count unchanged and must NOT move the list (#104).
+            if (this.pinned && this.el.querySelectorAll(".ed-msg, .ed-flat").length > this.prevCount) {
+              this.toBottom(true)
+            }
           },
           destroyed() {
             this.riser && this.riser.disconnect()
             this.ro && this.ro.disconnect()
+            this.contentRo && this.contentRo.disconnect()
             this.onScroll && this.el.removeEventListener("scroll", this.onScroll)
+            this.onAfterSend && window.removeEventListener("ed:after-send", this.onAfterSend)
           },
           toBottom(smooth) {
             const motion =
@@ -3568,10 +3693,19 @@ defmodule EdenWeb.ChatLive do
             this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
             this.reconcile()
             this.scheduleMidnight()
+            // Every LiveView patch makes morphdom drop our injected separators; the
+            // hook's updated() only re-adds them a frame later, so the 22px gap is
+            // painted and the list visibly twitches (worse in browsers with weak scroll
+            // anchoring, e.g. Firefox) (#104). This observer re-derives them in the SAME
+            // microtask the drop happens in — before the browser reflows/paints — so
+            // scrollHeight never visibly changes.
+            this.mo = new MutationObserver(() => this.reconcile())
+            this.mo.observe(this.el, { childList: true })
           },
           updated() { this.reconcile() },
           destroyed() {
             this.scroller && this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
+            this.mo && this.mo.disconnect()
             this._raf && cancelAnimationFrame(this._raf)
             clearTimeout(this._fade)
             clearTimeout(this._midnight)
@@ -3623,15 +3757,25 @@ defmodule EdenWeb.ChatLive do
             // the injected nodes, so we must re-add them even when the structure matches.
             if (sig === this._sig && existing.length === desired.length) return
             this._sig = sig
+            // Suspend the observer around our own edits so re-adding doesn't re-enter
+            // reconcile in a loop.
+            this.mo && this.mo.disconnect()
             existing.forEach((s) => s.remove())
             for (const row of desired) {
               const sep = document.createElement("div")
               sep.className = "ed-date-sep"
+              // id + phx-update="ignore" so LiveView's stream patcher treats the separator
+              // as a managed node it must leave alone, instead of a phantom child it strips
+              // on every patch. The strip was shrinking scrollHeight and clamping a bottom-
+              // pinned scroll up by the separators' height (#104).
+              sep.id = "ds-" + row.id
+              sep.setAttribute("phx-update", "ignore")
               const span = document.createElement("span")
               span.textContent = this.dayLabel(Number(row.dataset.ts))
               sep.appendChild(span)
               this.el.insertBefore(sep, row)
             }
+            this.mo && this.mo.observe(this.el, { childList: true })
           },
           // Track the topmost visible row's day in the floating chip; fade when idle. The
           // rows are vertically ordered, so binary-search the first one still in view
@@ -3754,12 +3898,17 @@ defmodule EdenWeb.ChatLive do
               // none) so the in-flight upload bound to its file input isn't dropped;
               // the server render then swaps it for the normal composer.
               overlay.style.display = "none"
+              // Glue the room to the bottom through the multi-stage media settle (#104).
+              window.dispatchEvent(new CustomEvent("ed:after-send"))
               return
             }
             // A quote-reply (#71) also defers to the server path so the reply_to_id
             // rides along and the quote renders at the right height (no optimistic
             // node that would pop taller when the real row streams in).
-            if (this.el.querySelector("[data-reply-active]")) return
+            if (this.el.querySelector("[data-reply-active]")) {
+              window.dispatchEvent(new CustomEvent("ed:after-send"))
+              return
+            }
             // Take over text sends: stop the event reaching LiveView's delegated
             // phx-submit so the message isn't also sent without a client_id.
             e.preventDefault()
@@ -3773,7 +3922,13 @@ defmodule EdenWeb.ChatLive do
             // queued item (own client_id, optimistic node, dedup, resend).
             for (const part of this.split(body)) {
               const clientId = this.uuid()
-              this.addOptimistic(clientId, part)
+              // No optimistic node on the happy path (#130): the send is queued +
+              // dedup'd by client_id (so a flaky link still can't lose or duplicate
+              // it), but we DON'T draw a local twin. The real row streams in over the
+              // {:new_message} broadcast and rises in via the riser — one transition,
+              // identical to a thread reply, instead of the optimistic-then-swap that
+              // read as a jerk. A rejected send materializes a retry node lazily (see
+              // markFailed), so #68's retry UX survives without the happy-path twin.
               this.queue.push({ clientId, body: part, sent: false })
             }
             this.flush()
@@ -3829,7 +3984,7 @@ defmodule EdenWeb.ChatLive do
                 // real row pops in: the "jerk"). The rise-in observer removes it
                 // atomically the instant the real row streams in. Only a nack
                 // (rejected) needs handling, since no real row will arrive.
-                if (reply && reply.nack) this.markFailed(item.clientId)
+                if (reply && reply.nack) this.markFailed(item.clientId, item.body)
               })
             }
           },
@@ -4039,10 +4194,19 @@ defmodule EdenWeb.ChatLive do
             this.pending.appendChild(row)
             row.classList.add("ed-msg--enter")
             setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
-            if (this.scroller) {
+            // Pin to the just-sent photo. The preview image decodes async (no height yet),
+            // so an immediate scroll lands short; re-pin on each image's load too (#104). This
+            // keeps us glued to the bottom through the grow, so the photo never hides below
+            // the fold even when the grow exceeds the ScrollBottom pinned threshold.
+            const pin = () => {
+              if (!this.scroller) return
               const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
               this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" })
             }
+            pin()
+            row.querySelectorAll("img").forEach((img) => {
+              if (!img.complete) img.addEventListener("load", pin, { once: true })
+            })
           },
           // Drive the progress ring's fill arc (#95). The dasharray is fixed in CSS
           // (the circle's circumference, r=16); we only move the dashoffset, so 0%
@@ -4221,8 +4385,16 @@ defmodule EdenWeb.ChatLive do
             const rows = document.querySelectorAll("#messages .ed-flat")
             return rows[rows.length - 1] || null
           },
-          markFailed(clientId) {
-            const node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+          markFailed(clientId, body) {
+            let node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+            // The happy path renders no optimistic node (#130), so a rejected text
+            // send has nothing to mark — materialize the twin now (faded), then dress
+            // it as the tappable retry/dismiss node (#68). Media sends still render
+            // their own optimistic node, so this only fires for text nacks.
+            if (!node && body != null) {
+              this.addOptimistic(clientId, body)
+              node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+            }
             if (!node) return
             node.style.opacity = "1"
             const target = node.querySelector(".ed-bubble") || node.querySelector(".ed-flat__body")
@@ -6032,10 +6204,10 @@ defmodule EdenWeb.ChatLive do
   attr :upload, :any, required: true
   attr :form, :any, required: true
 
-  # Telegram-style attachment compose modal (#58): a lightbox overlay that opens
-  # the moment files are staged — a media grid (photos/videos) plus, separately,
-  # any non-media files (they send as their own messages, never inside the
-  # album). The caption + send live in the modal footer.
+  # Telegram-style attachment compose modal (#58): a lightbox-style overlay that opens
+  # the moment files are staged — a media grid (photos/videos) plus, separately, any
+  # non-media files (they send as their own messages, never inside the album). The
+  # caption + send live in the modal footer.
   defp compose_overlay(assigns) do
     entries = assigns.upload.entries
     media = Enum.filter(entries, &media_entry?/1)
@@ -6160,13 +6332,6 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
-  # Upload errors flattened to {entry_name, error} pairs for the modal footer.
-  defp compose_errors(upload) do
-    Enum.flat_map(upload.entries, fn entry ->
-      Enum.map(upload_errors(upload, entry), &{entry.client_name, &1})
-    end)
-  end
-
   # Modal title: counts the media (the album) when present, else the files. A
   # media-only set reads by its kind — "N videos" when there are no photos.
   defp compose_title(media, []) when media != [] do
@@ -6182,6 +6347,13 @@ defmodule EdenWeb.ChatLive do
 
   defp compose_title(media, files),
     do: ngettext("%{count} attachment", "%{count} attachments", length(media) + length(files))
+
+  # Upload errors flattened to {entry_name, error} pairs for the modal footer.
+  defp compose_errors(upload) do
+    Enum.flat_map(upload.entries, fn entry ->
+      Enum.map(upload_errors(upload, entry), &{entry.client_name, &1})
+    end)
+  end
 
   attr :attachments, :list, required: true
   attr :message_id, :any, required: true
@@ -6984,21 +7156,28 @@ defmodule EdenWeb.ChatLive do
   # root's thread is open); a reply lives only in the thread panel — re-rendered
   # only when its thread is the one open (matched by sharing root_id with the open
   # root), never the main stream. Any other reply is a no-op for this view.
-  # A tombstone reaching here (a reaction that raced a delete-for-both) must not
-  # be re-inserted — {:message_deleted} already removed the row.
-  defp apply_reaction_change(socket, %{deleted_at: deleted} = _message, _root)
+  # Re-stream a single message wherever it lives: a top-level message into the main
+  # stream, a thread reply into the open thread panel (and NEVER into the main stream
+  # — that was the #104 bug where a reply's ready thumbnail leaked into the room).
+  # Shared by reaction + thumbnail re-renders.
+  #
+  # A tombstone reaching here (a re-render racing a delete-for-both) must not be
+  # re-inserted — {:message_deleted} already removed the row.
+  defp restream_message_in_place(socket, %{deleted_at: deleted} = _message, _root)
        when not is_nil(deleted),
        do: socket
 
-  defp apply_reaction_change(socket, %{root_id: nil} = message, root) do
+  defp restream_message_in_place(socket, %{root_id: nil} = message, root) do
     socket = stream_insert(socket, :messages, restore_compact(socket, message))
     if root && root.id == message.id, do: assign(socket, thread_root: message), else: socket
   end
 
-  defp apply_reaction_change(socket, %{root_id: root_id} = message, %{id: root_id}),
+  defp restream_message_in_place(socket, %{root_id: root_id} = message, %{id: root_id}),
     do: stream_insert(socket, :thread, message)
 
-  defp apply_reaction_change(socket, _message, _root), do: socket
+  # A reply whose thread isn't open (or a message for another conversation): nothing
+  # on screen to update — crucially, do NOT fall back to the main stream.
+  defp restream_message_in_place(socket, _message, _root), do: socket
 
   defp facepiles(_scope, %{channel_id: nil}, _messages), do: %{}
 
@@ -7063,12 +7242,16 @@ defmodule EdenWeb.ChatLive do
         {replies, thread_last_flat} = mark_compact(replies, socket.assigns.selected)
 
         socket
+        |> cancel_staged_thread_attachments()
         |> assign(
           thread_root: root,
           thread_following: following,
           thread_unreads: Map.put(socket.assigns.thread_unreads, root.id, 0),
           thread_last_flat: thread_last_flat,
           reply_composer: to_form(%{"body" => ""}, as: "reply"),
+          # Fresh thread → clear a quote-reply staged in the previously-open one; without
+          # this it would silently carry over (same conversation, so it'd validate).
+          thread_reply_to: nil,
           # Fresh thread → no stale typers from a previously-open one (#103).
           thread_typing_users: %{},
           last_thread_typing_at: nil
@@ -7443,6 +7626,88 @@ defmodule EdenWeb.ChatLive do
              socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(client_id)}
         end
     end
+  end
+
+  # Consume the staged thread-reply album (#104) into ONE reply — mirrors
+  # send_attachment: copy each entry to a stable temp, persist them together via
+  # create_album_reply (delivered as a thread reply), then remove the temps.
+  #
+  # Same false positive as send_attachment: `path` is the LiveView upload temp,
+  # `stable` is tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp send_thread_album(socket, root, body, reply_to_id) do
+    sources =
+      consume_uploaded_entries(socket, :thread_attachment, fn %{path: path}, entry ->
+        stable = Path.join(System.tmp_dir!(), "eden-thread-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
+      end)
+
+    case sources do
+      # Nothing consumed (still uploading / failed client-side validation): drop any
+      # lingering staged entries so the tray clears, then keep a typed caption as a
+      # plain text reply (otherwise no-op).
+      [] ->
+        socket = cancel_staged_thread_attachments(socket)
+
+        if String.trim(body) == "",
+          do: {:noreply, socket},
+          else: send_thread_reply_text(socket, root, body, reply_to_id)
+
+      sources ->
+        # try/after: if create_album_reply raises, the stable temps still get removed
+        # (the stored blobs are reclaimed inside persist_album's error path).
+        try do
+          case Chat.create_album_reply(socket.assigns.current_scope, root.id, sources, %{
+                 body: body,
+                 reply_to_id: reply_to_id
+               }) do
+            {:ok, _reply} ->
+              {:noreply, reset_reply_composer(socket)}
+
+            {:error, _reason} ->
+              {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
+          end
+        after
+          Enum.each(sources, &File.rm(&1.path))
+        end
+    end
+  end
+
+  # A plain text thread reply. The reply itself arrives via the {:thread_reply}
+  # broadcast. Shared by send_reply and send_thread_album's "nothing uploaded but a
+  # caption was typed" fallback.
+  defp send_thread_reply_text(socket, root, body, reply_to_id) do
+    case Chat.create_reply(socket.assigns.current_scope, root.id, %{
+           "body" => body,
+           "reply_to_id" => reply_to_id
+         }) do
+      {:ok, _reply} ->
+        {:noreply, reset_reply_composer(socket)}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
+
+      {:error, _} ->
+        {:noreply,
+         socket |> assign(thread_root: nil) |> put_flash(:error, gettext("Thread not found."))}
+    end
+  end
+
+  defp reset_reply_composer(socket),
+    do:
+      assign(socket,
+        reply_composer: to_form(%{"body" => ""}, as: "reply"),
+        thread_reply_to: nil,
+        last_thread_typing_at: nil
+      )
+
+  # Drop any staged thread-reply attachments (#104) — on close, or when switching to a
+  # different thread, so they don't bleed into the next reply.
+  defp cancel_staged_thread_attachments(socket) do
+    Enum.reduce(socket.assigns.uploads.thread_attachment.entries, socket, fn entry, acc ->
+      cancel_upload(acc, :thread_attachment, entry.ref)
+    end)
   end
 
   # Consume a staged channel-avatar upload (#70), if any → {channel, error_or_nil}.
