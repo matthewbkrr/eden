@@ -268,6 +268,17 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "touch_last_active/1 (#102)" do
+    test "records the user's last-active time" do
+      user = user_fixture()
+      refute user.last_active_at
+
+      :ok = Accounts.touch_last_active(user.id)
+
+      assert %DateTime{} = Repo.get!(User, user.id).last_active_at
+    end
+  end
+
   describe "avatars" do
     test "set_avatar processes the image into a square JPEG and stores it" do
       assert {:ok, u} = Accounts.set_avatar(user_fixture(), real_png(1400, 500))

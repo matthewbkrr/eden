@@ -340,6 +340,72 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#rail-me .ed-avatar__dot--away")
     end
 
+    test "auto-away: idle shows away to others, activity restores online (#102)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      assert EdenWeb.Presence.statuses()[ctx.alice.id] == "online"
+
+      render_hook(view, "presence_idle", %{})
+      assert EdenWeb.Presence.statuses()[ctx.alice.id] == "away"
+      # The user's own rail dot reflects auto-away too.
+      assert has_element?(view, "#rail-me .ed-avatar__dot--away")
+
+      render_hook(view, "presence_active", %{})
+      assert EdenWeb.Presence.statuses()[ctx.alice.id] == "online"
+      refute has_element?(view, "#rail-me .ed-avatar__dot--away")
+    end
+
+    test "auto-away: a manual status is unaffected by idle (#102)", ctx do
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "dnd")
+      conn = log_in_user(ctx.conn, alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      assert EdenWeb.Presence.statuses()[alice.id] == "dnd"
+
+      render_hook(view, "presence_idle", %{})
+      assert EdenWeb.Presence.statuses()[alice.id] == "dnd"
+    end
+
+    test "the DM header shows 'last seen' for an offline peer (#102)", ctx do
+      # bob has a recorded last-active time and isn't connected → offline.
+      :ok = Eden.Accounts.touch_last_active(ctx.bob.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert render(view) =~ "last seen"
+      assert has_element?(view, ~s(time[phx-hook][datetime]))
+    end
+
+    test "the last-seen heartbeat keeps touching while online, even when idle (#102)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # Idle but still connected = still "в сети" (last seen tracks last ONLINE, not
+      # last active), so the heartbeat must keep updating last_active.
+      render_hook(view, "presence_idle", %{})
+      Eden.Repo.update_all(Eden.Accounts.User, set: [last_active_at: nil])
+      send(view.pid, :touch_active)
+      render(view)
+
+      assert %DateTime{} = Eden.Accounts.get_user!(ctx.alice.id).last_active_at
+    end
+
+    test "an invisible user's last_active is never touched — no recency leak (#102)", ctx do
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "invisible")
+      Eden.Repo.update_all(Eden.Accounts.User, set: [last_active_at: nil])
+
+      conn = log_in_user(ctx.conn, alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      # mount must not touch while invisible.
+      refute Eden.Accounts.get_user!(alice.id).last_active_at
+
+      # neither the heartbeat nor an idle/active transition.
+      send(view.pid, :touch_active)
+      render_hook(view, "presence_active", %{})
+      render(view)
+      refute Eden.Accounts.get_user!(alice.id).last_active_at
+    end
+
     test "a peer's away status colors their sidebar dot live (#102)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")

@@ -112,6 +112,17 @@ defmodule Eden.Accounts do
   end
 
   @doc """
+  Records that `user_id` was online now (#102), for the "last seen" shown to
+  offline peers. `update_all` so there's no struct load. Trusts the caller to pass
+  its own id (the LiveView heartbeat passes `current_scope.user.id`).
+  """
+  def touch_last_active(user_id) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    User |> where([u], u.id == ^user_id) |> Repo.update_all(set: [last_active_at: now])
+    :ok
+  end
+
+  @doc """
   Processes an uploaded image into a square avatar and stores it, swapping the
   user's `avatar_key` and deleting the previous blob. `source_path` is a local
   temp file. Returns `{:ok, user}` or `{:error, :too_large | :unprocessable | reason}`.
