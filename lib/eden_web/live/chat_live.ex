@@ -12,6 +12,7 @@ defmodule EdenWeb.ChatLive do
   on_mount EdenWeb.RailHook
 
   import EdenWeb.ShellComponents
+  import EdenWeb.PresenceHelpers, only: [status_label: 1, status_color_var: 1]
 
   alias Eden.{Accounts, Channels, Chat}
   alias EdenWeb.Markup
@@ -38,10 +39,14 @@ defmodule EdenWeb.ChatLive do
     scope = socket.assigns.current_scope
 
     if connected?(socket) do
-      EdenWeb.Presence.track_user(self(), scope.user.id)
+      # Track with the user's effective status; an invisible user isn't tracked at
+      # all (appears offline) but still subscribes to see others (#102).
+      eff = EdenWeb.Presence.manual_to_effective(scope.user.presence_status)
+      if eff != :invisible, do: EdenWeb.Presence.track_user(self(), scope.user.id, eff)
       Phoenix.PubSub.subscribe(Eden.PubSub, EdenWeb.Presence.topic())
       Chat.subscribe_user(scope)
       Accounts.subscribe_user_updates()
+      Accounts.subscribe_presence(scope)
     end
 
     socket =
@@ -59,7 +64,8 @@ defmodule EdenWeb.ChatLive do
         has_more: false,
         oldest_id: nil,
         other_read_at: nil,
-        online_ids: EdenWeb.Presence.online_ids(),
+        statuses: EdenWeb.Presence.statuses(),
+        my_status: scope.user.presence_status,
         # Typing indicator (#11): user_id => %{name, token} for everyone currently
         # typing in the open conversation; `last_typing_at` throttles our own
         # outgoing broadcasts (monotonic ms, nil until first keystroke).
@@ -538,6 +544,19 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("close_profile", _params, socket) do
     {:noreply, assign(socket, profile: nil)}
+  end
+
+  # The user picks a presence status (#102). Persist it; the per-user broadcast
+  # feeds this tab (and any other) back through {:presence_status_changed, ...},
+  # which mirrors it onto the tracked presence and the UI — one path for all
+  # sessions. An invalid value is rejected by the changeset and ignored.
+  def handle_event("set_status", %{"status" => status}, socket) do
+    case Accounts.set_presence_status(socket.assigns.current_scope.user, status) do
+      {:ok, _user} -> :ok
+      {:error, _changeset} -> :ok
+    end
+
+    {:noreply, socket}
   end
 
   def handle_event("show_members", _params, socket) do
@@ -1684,13 +1703,15 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: payload}, socket) do
-    # Header status + open profile read @online_ids (plain assigns) and refresh on
+    # Header status + open profile read @statuses (plain assigns) and refresh on
     # this update for free. The sidebar dots live in a `phx-update="stream"` list,
     # so they need a re-stream (#10) — but only when a conversation *peer's* status
     # actually changed; otherwise skip the per-diff DB re-query, since presence is
     # one global topic and every connect/nav by anyone fans a diff to all sessions
-    # (#94 review). No-op in channel mode (rooms show no presence dot).
-    socket = assign(socket, online_ids: EdenWeb.Presence.online_ids())
+    # (#94 review). A status-only change (away↔online) lands in the diff's
+    # joins+leaves keys too, so the same gate catches it. No-op in channel mode
+    # (rooms show no per-message presence dot).
+    socket = assign(socket, statuses: EdenWeb.Presence.statuses())
     changed = presence_changed_ids(payload)
     peers = socket.assigns.sidebar_peer_ids
 
@@ -1699,6 +1720,24 @@ defmodule EdenWeb.ChatLive do
     else
       {:noreply, stream_conversations(socket, [])}
     end
+  end
+
+  # The user changed their own status (this tab's set_status, another tab, or the
+  # Settings page) — all funnel through the per-user presence topic (#102). Mirror
+  # it onto this connection's tracked presence and own UI so every session agrees.
+  def handle_info({:presence_status_changed, status}, socket) do
+    scope = socket.assigns.current_scope
+    EdenWeb.Presence.set_status(self(), scope.user.id, status)
+    # Keep current_scope.user in step with the new status so nothing downstream
+    # re-derives presence from a stale struct (#102 review).
+    scope = %{scope | user: %{scope.user | presence_status: status}}
+
+    {:noreply,
+     assign(socket,
+       current_scope: scope,
+       my_status: status,
+       statuses: EdenWeb.Presence.statuses()
+     )}
   end
 
   # Someone is typing in the open conversation (#11). Ignore our own echo (incl.
@@ -1777,6 +1816,8 @@ defmodule EdenWeb.ChatLive do
         channels={@channels}
         active={(@channel && @channel.id) || :messenger}
         class={@selected && "hidden md:flex"}
+        me={@current_scope.user}
+        my_status={@my_status}
       />
 
       <aside
@@ -2105,7 +2146,7 @@ defmodule EdenWeb.ChatLive do
               id={dom_id}
               conversation={conversation}
               user={@current_scope.user}
-              online_ids={@online_ids}
+              statuses={@statuses}
               active={@selected && @selected.id == conversation.id}
             />
           </div>
@@ -2144,7 +2185,7 @@ defmodule EdenWeb.ChatLive do
             results={@search_results}
             query={@search}
             user={@current_scope.user}
-            online_ids={@online_ids}
+            statuses={@statuses}
           />
         </div>
       </aside>
@@ -2230,7 +2271,7 @@ defmodule EdenWeb.ChatLive do
               <.avatar
                 name={title(@selected, @current_scope.user)}
                 src={avatar_src(peer(@selected, @current_scope.user))}
-                online={online?(@selected, @current_scope.user, @online_ids)}
+                status={peer_status(@selected, @current_scope.user, @statuses)}
                 size={:sm}
               />
               <div class="min-w-0">
@@ -2239,11 +2280,9 @@ defmodule EdenWeb.ChatLive do
                 </div>
                 <div
                   :if={not @selected.is_group}
-                  style={"font-size:0.6875rem; color: var(#{if online?(@selected, @current_scope.user, @online_ids), do: "--ed-online", else: "--ed-muted"});"}
+                  style={"font-size:0.6875rem; color: var(#{status_color_var(peer_status(@selected, @current_scope.user, @statuses))});"}
                 >
-                  {if online?(@selected, @current_scope.user, @online_ids),
-                    do: gettext("online"),
-                    else: gettext("offline")}
+                  {status_label(peer_status(@selected, @current_scope.user, @statuses))}
                 </div>
                 <div
                   :if={@selected.is_group}
@@ -2368,6 +2407,7 @@ defmodule EdenWeb.ChatLive do
                     participants={Map.get(@thread_participants, message.id, [])}
                     thread_unread={Map.get(@thread_unreads, message.id, 0)}
                     admin={@channel && @channel.role in ~w(owner admin)}
+                    statuses={@statuses}
                   />
                 <% else %>
                   <.message_bubble
@@ -2385,6 +2425,19 @@ defmodule EdenWeb.ChatLive do
             </div>
             <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
             <div class="flex flex-col gap-2 mt-2" id="pending-messages" phx-update="ignore"></div>
+          </div>
+          <%!-- Live presence for the flat message list (#102): the rows live in a
+                `phx-update="stream"` container, so a server re-render never reaches
+                existing avatars' dots. This sibling carries the current statuses
+                map; the .RoomPresence hook re-applies dot classes by user id on
+                every change. Rooms only. --%>
+          <div
+            :if={@selected.channel_id}
+            id="room-presence"
+            phx-hook=".RoomPresence"
+            data-statuses={Jason.encode!(Map.take(@statuses, room_member_ids(@selected)))}
+            hidden
+          >
           </div>
 
           <%!-- Shared full-emoji grid (#72): ONE popover for the page, opened by a
@@ -2658,6 +2711,7 @@ defmodule EdenWeb.ChatLive do
             me={@current_scope.user.id}
             menu={false}
             in_thread
+            statuses={@statuses}
           />
           <div class="ed-thread__sep">
             {ngettext("%{count} reply", "%{count} replies", @thread_root.reply_count)}
@@ -2672,6 +2726,7 @@ defmodule EdenWeb.ChatLive do
               me={@current_scope.user.id}
               quick={@my_quick}
               in_thread
+              statuses={@statuses}
             />
           </div>
         </div>
@@ -2833,19 +2888,19 @@ defmodule EdenWeb.ChatLive do
         :if={@show_members && @selected}
         conversation={@selected}
         user={@current_scope.user}
-        online_ids={@online_ids}
+        statuses={@statuses}
       />
       <.profile_popover
         :if={@profile}
         user={@profile}
-        online={MapSet.member?(@online_ids, @profile.id)}
+        status={status_of(@profile.id, @statuses)}
         self={@profile.id == @current_scope.user.id}
       />
       <.forward_modal
         :if={@forward_id}
         targets={@forward_targets}
         user={@current_scope.user}
-        online_ids={@online_ids}
+        statuses={@statuses}
       />
       <.folder_modal :if={@folder_chat_id} folders={@folders} checked={@folder_checked} />
       <.channel_form_modal
@@ -2882,20 +2937,20 @@ defmodule EdenWeb.ChatLive do
         addable={@room_addable}
         selected={@room_add_selected}
         invite_url={@room_invite_url}
-        online_ids={@online_ids}
+        statuses={@statuses}
       />
       <.channel_members_modal
         :if={@members_open && @channel}
         members={@members}
         channel={@channel}
         me={@current_scope.user}
-        online_ids={@online_ids}
+        statuses={@statuses}
       />
       <.add_members_modal
         :if={@add_open && @channel}
         addable={@addable}
         selected={@add_selected}
-        online_ids={@online_ids}
+        statuses={@statuses}
       />
       <.invites_modal :if={@invites_open && @channel} invites={@invites} new_url={@new_invite_url} />
 
@@ -2927,6 +2982,30 @@ defmodule EdenWeb.ChatLive do
             ta.focus()
             ta.select()
             try { if (document.execCommand("copy")) done() } finally { ta.remove() }
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".RoomPresence">
+        // Live presence for the flat message list (#102). The rows sit in a
+        // phx-update="stream" container, so the server never re-renders an
+        // existing avatar's dot. This host carries data-statuses (a {uid: status}
+        // map) that DOES re-render on every change; on each update we re-apply the
+        // dot class to every managed dot ([data-presence-uid]) by user id. The
+        // initial server render already sets the right class, so there is no flash.
+        export default {
+          mounted() { this.apply() },
+          updated() { this.apply() },
+          apply() {
+            let map = {}
+            try { map = JSON.parse(this.el.dataset.statuses || "{}") } catch (e) { return }
+            document
+              .querySelectorAll("#messages [data-presence-uid], #thread-replies [data-presence-uid]")
+              .forEach((dot) => {
+                const s = map[dot.dataset.presenceUid] || null
+                dot.classList.toggle("ed-avatar__dot--hidden", !s)
+                dot.classList.toggle("ed-avatar__dot--away", s === "away")
+                dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
+              })
           }
         }
       </script>
@@ -3556,6 +3635,8 @@ defmodule EdenWeb.ChatLive do
             // Remember a focused trigger (keyboard open) to restore focus on Escape.
             this.opener = this.el.contains(document.activeElement) ? document.activeElement : null
             this.menu.hidden = false
+            const trigger = this.el.querySelector("[data-menu-trigger]")
+            if (trigger) trigger.setAttribute("aria-expanded", "true")
             this.position(x, y)
             const first = this.menu.querySelector("[role=menuitem]")
             first && first.focus()
@@ -3567,6 +3648,8 @@ defmodule EdenWeb.ChatLive do
           close() {
             if (active === this) active = null
             if (this.menu) this.menu.hidden = true
+            const trigger = this.el.querySelector("[data-menu-trigger]")
+            if (trigger) trigger.setAttribute("aria-expanded", "false")
             // removeEventListener is a no-op if not attached — safe to call always.
             document.removeEventListener("click", this.onDoc)
             document.removeEventListener("keydown", this.onKey)
@@ -4838,16 +4921,40 @@ defmodule EdenWeb.ChatLive do
 
   attr :name, :string, required: true
   attr :src, :string, default: nil
-  attr :online, :boolean, default: false
+  attr :status, :string, default: nil, values: [nil, "online", "away", "dnd"]
   attr :size, :atom, default: nil, values: [nil, :sm, :lg]
+  # When set (a user id), the dot is "managed": always rendered (hidden when
+  # offline) and tagged with `data-presence-uid` so the .RoomPresence hook can
+  # live-update it inside the streamed message list, where a server re-render
+  # never reaches existing rows (#102).
+  attr :dot_uid, :any, default: nil
+  # Set false where a visible status label already sits beside the avatar (the
+  # profile popover) so the screen-reader status isn't announced twice (#102).
+  attr :dot_label, :boolean, default: true
 
-  # Circular avatar: shows the user's image when present, initials otherwise.
+  # Circular avatar: shows the user's image when present, initials otherwise. A
+  # presence dot is shown when `status` is set, colored by it (#102).
   defp avatar(assigns) do
     ~H"""
     <span class={["ed-avatar", @size == :sm && "ed-avatar--sm", @size == :lg && "ed-avatar--lg"]}>
       <img :if={@src} src={@src} alt="" />
       <span :if={!@src}>{initials(@name)}</span>
-      <span :if={@online} class="ed-avatar__dot"></span>
+      <span
+        :if={@status || @dot_uid}
+        class={[
+          "ed-avatar__dot",
+          @status == "away" && "ed-avatar__dot--away",
+          @status == "dnd" && "ed-avatar__dot--dnd",
+          @dot_uid && !@status && "ed-avatar__dot--hidden"
+        ]}
+        data-presence-uid={@dot_uid}
+      >
+        <%!-- SR-only status only on non-managed dots (sidebar / member lists, which
+              carry no visible status text and re-render server-side, so the text
+              stays accurate). Managed room dots update live via JS that can't
+              localize, so their status reaches AT via the profile popover (#102). --%>
+        <span :if={@status && !@dot_uid && @dot_label} class="sr-only">{status_label(@status)}</span>
+      </span>
     </span>
     """
   end
@@ -4855,7 +4962,7 @@ defmodule EdenWeb.ChatLive do
   attr :id, :string, required: true
   attr :conversation, :map, required: true
   attr :user, :map, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
   attr :active, :boolean, default: false
 
   defp conversation_item(assigns) do
@@ -4869,7 +4976,7 @@ defmodule EdenWeb.ChatLive do
         <.avatar
           name={title(@conversation, @user)}
           src={avatar_src(peer(@conversation, @user))}
-          online={online?(@conversation, @user, @online_ids)}
+          status={peer_status(@conversation, @user, @statuses)}
         />
         <span class="ed-convo__body">
           <span class="ed-convo__top">
@@ -4948,7 +5055,7 @@ defmodule EdenWeb.ChatLive do
   attr :results, :map, required: true
   attr :query, :string, required: true
   attr :user, :map, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
 
   # Grouped search results: conversations (by participant/title) and messages
   # (by content). A message row opens its permalink — the existing scroll-to +
@@ -4974,7 +5081,7 @@ defmodule EdenWeb.ChatLive do
           <.avatar
             name={title(conversation, @user)}
             src={avatar_src(peer(conversation, @user))}
-            online={online?(conversation, @user, @online_ids)}
+            status={peer_status(conversation, @user, @statuses)}
           />
           <span class="ed-convo__body">
             <span class="ed-convo__name">
@@ -4994,7 +5101,7 @@ defmodule EdenWeb.ChatLive do
           <.avatar
             name={title(message.conversation, @user)}
             src={avatar_src(peer(message.conversation, @user))}
-            online={online?(message.conversation, @user, @online_ids)}
+            status={peer_status(message.conversation, @user, @statuses)}
           />
           <span class="ed-convo__body">
             <span class="ed-convo__top">
@@ -5291,7 +5398,7 @@ defmodule EdenWeb.ChatLive do
   attr :members, :list, required: true
   attr :channel, :map, required: true
   attr :me, :map, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
 
   # Channel members: roles, online dots, and the owner/admin action matrix
   # (the context re-checks every action).
@@ -5345,7 +5452,7 @@ defmodule EdenWeb.ChatLive do
                 <.avatar
                   name={user.display_name}
                   src={avatar_src(user)}
-                  online={MapSet.member?(@online_ids, user.id)}
+                  status={status_of(user.id, @statuses)}
                   size={:sm}
                 />
                 <span class="flex-1 min-w-0">
@@ -5436,7 +5543,7 @@ defmodule EdenWeb.ChatLive do
   attr :addable, :list, required: true
   attr :selected, :any, required: true
   attr :invite_url, :any, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
 
   # Add members to a ROOM (#42): a platform-wide picker (non-channel users get
   # general + the room per the #41 matrix); private rooms also offer a
@@ -5518,7 +5625,7 @@ defmodule EdenWeb.ChatLive do
               <.avatar
                 name={user.display_name}
                 src={avatar_src(user)}
-                online={MapSet.member?(@online_ids, user.id)}
+                status={status_of(user.id, @statuses)}
                 size={:sm}
               />
               <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
@@ -5545,7 +5652,7 @@ defmodule EdenWeb.ChatLive do
 
   attr :addable, :list, required: true
   attr :selected, :any, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
 
   defp add_members_modal(assigns) do
     ~H"""
@@ -5597,7 +5704,7 @@ defmodule EdenWeb.ChatLive do
               <.avatar
                 name={user.display_name}
                 src={avatar_src(user)}
-                online={MapSet.member?(@online_ids, user.id)}
+                status={status_of(user.id, @statuses)}
                 size={:sm}
               />
               <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
@@ -6006,6 +6113,7 @@ defmodule EdenWeb.ChatLive do
   attr :menu, :boolean, default: true
   attr :admin, :boolean, default: false
   attr :thread_unread, :integer, default: 0
+  attr :statuses, :map, default: %{}
 
   # A system message (no human sender) — a centered notice rendered from `meta`.
   # The join-request carries an inline «Add» for channel admins while pending.
@@ -6075,7 +6183,13 @@ defmodule EdenWeb.ChatLive do
           phx-value-id={@message.sender_id}
           aria-label={gettext("View profile")}
         >
-          <.avatar name={@message.sender.display_name} src={avatar_src(@message.sender)} size={:sm} />
+          <.avatar
+            name={@message.sender.display_name}
+            src={avatar_src(@message.sender)}
+            status={status_of(@message.sender_id, @statuses)}
+            dot_uid={@message.sender_id}
+            size={:sm}
+          />
         </button>
       </div>
       <div class="ed-flat__main">
@@ -6796,7 +6910,7 @@ defmodule EdenWeb.ChatLive do
 
   attr :targets, :list, required: true
   attr :user, :map, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
 
   # Pick a conversation to forward the pending message into.
   defp forward_modal(assigns) do
@@ -6840,7 +6954,7 @@ defmodule EdenWeb.ChatLive do
               <.avatar
                 name={title(c, @user)}
                 src={avatar_src(peer(c, @user))}
-                online={online?(c, @user, @online_ids)}
+                status={peer_status(c, @user, @statuses)}
                 size={:sm}
               />
               <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
@@ -6932,7 +7046,7 @@ defmodule EdenWeb.ChatLive do
   defp forwarded_label(_forwarded_from), do: gettext("Forwarded")
 
   attr :user, :map, required: true
-  attr :online, :boolean, required: true
+  attr :status, :string, default: nil
   attr :self, :boolean, default: false
 
   # A light profile popover anchored at the clicked avatar/name (a bottom sheet
@@ -6960,14 +7074,20 @@ defmodule EdenWeb.ChatLive do
         tabindex="-1"
       >
         <div class="flex flex-col items-center text-center">
-          <.avatar name={@user.display_name} src={avatar_src(@user)} online={@online} size={:lg} />
+          <.avatar
+            name={@user.display_name}
+            src={avatar_src(@user)}
+            status={@status}
+            dot_label={false}
+            size={:lg}
+          />
           <h2 class="mt-3 font-semibold" style="font-size:1.0625rem;">{@user.display_name}</h2>
           <p style="color: var(--ed-muted); font-size:0.8125rem;">@{@user.username}</p>
           <p
             class="mt-0.5"
-            style={"font-size:0.75rem; color: var(#{if @online, do: "--ed-online", else: "--ed-muted"});"}
+            style={"font-size:0.75rem; color: var(#{status_color_var(@status)});"}
           >
-            {if @online, do: gettext("online"), else: gettext("offline")}
+            {status_label(@status)}
           </p>
 
           <p
@@ -7001,7 +7121,7 @@ defmodule EdenWeb.ChatLive do
 
   attr :conversation, :map, required: true
   attr :user, :map, required: true
-  attr :online_ids, :any, required: true
+  attr :statuses, :any, required: true
 
   # Group member list: tap a member to open their profile (tapping yourself
   # routes to Settings, handled by show_profile).
@@ -7044,7 +7164,7 @@ defmodule EdenWeb.ChatLive do
               <.avatar
                 name={m.user.display_name}
                 src={avatar_src(m.user)}
-                online={MapSet.member?(@online_ids, m.user.id)}
+                status={status_of(m.user.id, @statuses)}
                 size={:sm}
               />
               <span class="flex-1 min-w-0">
@@ -7615,15 +7735,26 @@ defmodule EdenWeb.ChatLive do
 
   defp initials(name), do: name |> String.first() |> String.upcase()
 
-  # Online state is shown for 1:1s (the other participant); groups don't show a dot.
-  defp online?(%{is_group: true}, _user, _online_ids), do: false
+  # Presence status of a 1:1's other participant (nil for groups / offline), used
+  # to color the avatar dot + header label (#102).
+  defp peer_status(%{is_group: true}, _user, _statuses), do: nil
 
-  defp online?(conversation, user, online_ids) do
+  defp peer_status(conversation, user, statuses) do
     case others(conversation, user) do
-      [other | _] -> MapSet.member?(online_ids, other.id)
-      [] -> false
+      [other | _] -> Map.get(statuses, other.id)
+      [] -> nil
     end
   end
+
+  # Effective presence status of a specific user id (nil = offline/untracked).
+  defp status_of(user_id, statuses), do: Map.get(statuses, user_id)
+
+  # status_label/1 + status_color_var/1 are shared via EdenWeb.PresenceHelpers.
+
+  # Ids of a room's members, to scope the presence map exposed to its clients
+  # (#102 review): only the people in this room, never the global online set.
+  defp room_member_ids(%{memberships: m}) when is_list(m), do: Enum.map(m, & &1.user_id)
+  defp room_member_ids(_conversation), do: []
 
   # Read receipts: the other participant's last_read_at for a 1:1 (nil for groups).
   defp other_read_at(%{is_group: true}, _user), do: nil

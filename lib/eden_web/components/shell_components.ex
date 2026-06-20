@@ -9,6 +9,7 @@ defmodule EdenWeb.ShellComponents do
   use Gettext, backend: EdenWeb.Gettext
 
   import EdenWeb.CoreComponents
+  import EdenWeb.PresenceHelpers, only: [status_options: 0, me_dot_class: 1]
 
   use Phoenix.VerifiedRoutes,
     endpoint: EdenWeb.Endpoint,
@@ -20,6 +21,8 @@ defmodule EdenWeb.ShellComponents do
   attr :channels, :list, required: true
   attr :active, :any, required: true, doc: ":messenger or a channel id"
   attr :class, :any, default: nil
+  attr :me, :any, default: nil, doc: "the current user, for the status picker (#102)"
+  attr :my_status, :string, default: "auto", doc: "the user's manual presence status (#102)"
 
   @doc """
   The far-left rail. The messenger (DMs — the whole pre-corporate eden) is the
@@ -123,6 +126,45 @@ defmodule EdenWeb.ShellComponents do
       </div>
 
       <div class="ed-rail__bottom">
+        <%!-- Status picker (#102): the "me" avatar opens a left-click popover via
+              the shared ContextMenu hook (full name — colocated hooks resolve in
+              the compiling module; this template is ShellComponents, the hook lives
+              in ChatLive). The menu is viewport-clamped, so it opens upward here. --%>
+        <span
+          :if={@me}
+          id="rail-me"
+          class="ed-rail__slot"
+          phx-hook="EdenWeb.ChatLive.ContextMenu"
+        >
+          <button
+            type="button"
+            class="ed-rail__btn ed-rail__btn--me"
+            data-menu-trigger
+            title={gettext("Set status")}
+            aria-label={gettext("Set status")}
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            <img :if={me_avatar_src(@me)} src={me_avatar_src(@me)} alt="" class="ed-rail__img" />
+            <span :if={!me_avatar_src(@me)}>{me_initials(@me)}</span>
+            <span class={["ed-avatar__dot", me_dot_class(@my_status)]}></span>
+          </button>
+          <div class="ed-menu" id="status-menu" data-menu role="menu" hidden>
+            <button
+              :for={{value, label, _short, color} <- status_options()}
+              type="button"
+              class="ed-menu__item"
+              role="menuitem"
+              phx-click="set_status"
+              phx-value-status={value}
+            >
+              <span class="ed-status-dot" style={"background: var(#{color});"} aria-hidden="true">
+              </span>
+              <span class="flex-1">{label}</span>
+              <.icon :if={@my_status == value} name="hero-check-micro" class="size-4" />
+            </button>
+          </div>
+        </span>
         <.link
           navigate={~p"/settings"}
           class="ed-rail__btn ed-rail__btn--ghost"
@@ -285,6 +327,19 @@ defmodule EdenWeb.ShellComponents do
     do: ~p"/channels/#{id}/avatar?v=#{:erlang.phash2(key)}"
 
   def channel_avatar_src(_channel), do: nil
+
+  # The current user's avatar URL for the rail status button (#102), or nil.
+  defp me_avatar_src(%{id: id, avatar_key: key}) when is_binary(key),
+    do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"
+
+  defp me_avatar_src(_user), do: nil
+
+  defp me_initials(%{display_name: name}) when is_binary(name),
+    do: name |> String.first() |> String.upcase()
+
+  defp me_initials(_user), do: "?"
+
+  # status_options/0 + me_dot_class/1 are shared via EdenWeb.PresenceHelpers (#102).
 
   # A rejected channel-avatar upload (#70), in human terms.
   defp channel_avatar_error(:too_large), do: gettext("That image is too large (up to 5 MB).")

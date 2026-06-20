@@ -65,6 +65,16 @@ defmodule Eden.Accounts do
   """
   def subscribe_user_updates, do: Phoenix.PubSub.subscribe(@pubsub, @user_updates_topic)
 
+  @doc """
+  Subscribes the caller to a user's own presence-status changes (#102). Scoped
+  per user (not the global `user_updates` topic) so a status change fans only to
+  that user's own sessions — the multi-tab / Settings→chat sync path.
+  """
+  def subscribe_presence(%Scope{user: %User{id: id}}),
+    do: Phoenix.PubSub.subscribe(@pubsub, presence_topic(id))
+
+  defp presence_topic(id), do: "user:#{id}:presence"
+
   @doc "Changeset for the profile form (display name + bio)."
   def change_profile(%User{} = user, attrs \\ %{}), do: User.profile_changeset(user, attrs)
 
@@ -72,6 +82,32 @@ defmodule Eden.Accounts do
   def update_profile(%User{} = user, attrs) do
     with {:ok, updated} <- user |> User.profile_changeset(attrs) |> Repo.update() do
       {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  @doc """
+  Sets the user's manual presence status (#102) and notifies their own sessions
+  on the per-user presence topic. `status` is one of `User.presence_statuses/0`;
+  an invalid value returns the changeset error.
+  """
+  def set_presence_status(%User{} = user, status) do
+    # force_change so a stale caller struct can't turn a real change into a skipped
+    # no-op: ChatLive passes its `current_scope.user`, which isn't refreshed when the
+    # status changes, so e.g. resetting to "auto" (the struct's original value) would
+    # otherwise leave the DB on the previously-set status (#102).
+    changeset =
+      user
+      |> User.presence_status_changeset(%{presence_status: status})
+      |> Ecto.Changeset.force_change(:presence_status, status)
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        presence_topic(updated.id),
+        {:presence_status_changed, updated.presence_status}
+      )
+
+      {:ok, updated}
     end
   end
 

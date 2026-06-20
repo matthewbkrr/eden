@@ -9,17 +9,26 @@ defmodule Eden.Accounts.User do
 
   @max_bio 500
 
+  # The user's chosen presence status (#102). "auto" follows the connection
+  # (online when connected); "away"/"dnd" are manual; "invisible" appears offline
+  # to others while staying connected. Persisted so the choice survives reconnect.
+  @presence_statuses ~w(auto away dnd invisible)
+
   schema "users" do
     field :username, :string
     field :display_name, :string
     field :bio, :string
     # Storage key of the processed avatar (set by Accounts.set_avatar/2), or nil.
     field :avatar_key, :string
+    field :presence_status, :string, default: "auto"
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
 
     timestamps(type: :utc_datetime)
   end
+
+  @doc "The allowed manual presence statuses (#102)."
+  def presence_statuses, do: @presence_statuses
 
   @doc """
   Changeset for creating an account (used when accepting an invite).
@@ -45,6 +54,14 @@ defmodule Eden.Accounts.User do
     |> validate_display_name()
     |> update_change(:bio, &normalize_bio/1)
     |> validate_length(:bio, max: @max_bio, count: :codepoints)
+  end
+
+  @doc "Changeset for the user's manual presence status (#102); separate from the profile."
+  def presence_status_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:presence_status])
+    |> validate_required([:presence_status])
+    |> validate_inclusion(:presence_status, @presence_statuses)
   end
 
   # Strip NUL bytes (Postgres rejects them) and trim; a blank bio becomes nil.

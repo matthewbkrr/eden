@@ -315,6 +315,82 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#{slot} .ed-avatar__dot")
     end
 
+    test "picking a status updates your own rail dot and persists (#102)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # Default "auto" → a plain green self-dot (no away/dnd modifier).
+      assert has_element?(view, "#rail-me .ed-avatar__dot")
+      refute has_element?(view, "#rail-me .ed-avatar__dot--dnd")
+
+      view |> element(~s(#status-menu button[phx-value-status="dnd"])) |> render_click()
+
+      assert has_element?(view, "#rail-me .ed-avatar__dot--dnd")
+      assert Eden.Accounts.get_user!(ctx.alice.id).presence_status == "dnd"
+    end
+
+    test "a status change from another session updates this one live (#102 multi-tab)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      refute has_element?(view, "#rail-me .ed-avatar__dot--away")
+
+      # The per-user presence broadcast (another tab / the Settings page).
+      send(view.pid, {:presence_status_changed, "away"})
+
+      assert has_element?(view, "#rail-me .ed-avatar__dot--away")
+    end
+
+    test "a peer's away status colors their sidebar dot live (#102)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      slot = "#conversations-#{ctx.conversation.id}"
+
+      EdenWeb.Presence.track_user(self(), ctx.bob.id, "away")
+
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.topic(),
+        payload: %{joins: %{to_string(ctx.bob.id) => %{metas: [%{status: "away"}]}}, leaves: %{}}
+      })
+
+      assert has_element?(view, "#{slot} .ed-avatar__dot--away")
+    end
+
+    test "a peer's status-only change (online→away) re-streams the sidebar dot (#102)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+      slot = "#conversations-#{ctx.conversation.id}"
+
+      EdenWeb.Presence.track_user(self(), ctx.bob.id, "online")
+
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.topic(),
+        payload: %{
+          joins: %{to_string(ctx.bob.id) => %{metas: [%{status: "online"}]}},
+          leaves: %{}
+        }
+      })
+
+      assert has_element?(view, "#{slot} .ed-avatar__dot")
+      refute has_element?(view, "#{slot} .ed-avatar__dot--away")
+
+      # A meta update lands in the diff as a leave + join of the same key, so the
+      # same re-stream gate catches a status-only change.
+      EdenWeb.Presence.set_status(self(), ctx.bob.id, "away")
+
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.topic(),
+        payload: %{
+          joins: %{to_string(ctx.bob.id) => %{metas: [%{status: "away"}]}},
+          leaves: %{to_string(ctx.bob.id) => %{metas: [%{status: "online"}]}}
+        }
+      })
+
+      assert has_element?(view, "#{slot} .ed-avatar__dot--away")
+    end
+
     test "a peer typing shows the indicator (not self), survives a stale expiry, clears on send (#11/#94)",
          ctx do
       conn = log_in_user(ctx.conn, ctx.bob)
@@ -962,6 +1038,46 @@ defmodule EdenWeb.ChatLiveTest do
       # The composer advertises the room layout so the SendQueue hook renders
       # a flat optimistic node, not a DM bubble (regression for the flash bug).
       assert has_element?(view, ~s(#composer[data-layout="flat"]))
+    end
+
+    test "room message author avatars carry a presence status dot (#102)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "FlatStatus"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, _m} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "hi room"})
+
+      # alice is away → her LiveView tracks her as away on mount, so her own flat
+      # message avatar shows the away ring. The bug: rooms showed no status at all.
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "away")
+
+      conn = log_in_user(ctx.conn, alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      assert has_element?(view, ".ed-flat .ed-avatar__dot--away")
+    end
+
+    test "the room presence map is scoped to members, not the global online set (#102)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ScopeCh"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+
+      # An online user who is NOT a member of this room.
+      outsider = user_fixture(%{username: "outsider_sc", display_name: "Out"})
+      {:ok, _ref} = EdenWeb.Presence.track_user(self(), outsider.id, "online")
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "away")
+
+      conn = log_in_user(ctx.conn, alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # data-statuses is HTML-escaped JSON; each id appears as a quoted key
+      # (&quot;<id>&quot;), so the surrounding quotes make the match exact.
+      html = view |> element("#room-presence") |> render()
+
+      # The member's status is exposed; the outsider's is not (no cross-room leak).
+      assert html =~ ~s(&quot;#{alice.id}&quot;)
+      refute html =~ ~s(&quot;#{outsider.id}&quot;)
     end
 
     test "thread replies collapse consecutive same-author runs in the panel (#105)", ctx do
