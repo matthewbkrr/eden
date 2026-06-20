@@ -46,6 +46,10 @@ defmodule Eden.Chat do
   # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
   @thumbnail_max 800
   @thumbnail_quality 80
+  # HEIC originals are transcoded to JPEG (#123) at this longest-edge cap (matching
+  # the #97 client compression) and quality — never upscaled.
+  @heic_max 1920
+  @heic_quality 85
   # Reject decompression bombs before decoding: cap the source's *header* pixel
   # count, read from the lazy image without decoding. Generous enough for modern
   # high-MP phone cameras (~16000×12000), tight enough to stop absurd PNG bombs.
@@ -1506,9 +1510,48 @@ defmodule Eden.Chat do
 
   defp prepare_attachment(source, position) do
     with {:ok, kind, content_type, ext} <- classify(source.path, source[:filename]),
-         {:ok, byte_size} <- check_size(source.path, kind),
-         key = Storage.build_key("attachments", ext),
-         :ok <- Storage.put(key, source.path) do
+         {:ok, orig_size} <- check_size(source.path, kind),
+         {:ok, blob} <- store_attachment_blob(source, kind, content_type, ext, orig_size) do
+      {:ok, Map.put(blob, :position, position)}
+    end
+  end
+
+  # HEIC/HEIF images (#123): transcode the original to JPEG and store THAT — HEIC
+  # shares the mp4 `ftyp` magic and isn't web-renderable outside Safari, so we never
+  # keep the original. If the bundled libvips can't read it (no libheif / corrupt),
+  # fall back to storing it as an image (kind already `image` — never the broken
+  # video the classifier used to produce); the worker just won't thumbnail it.
+  defp store_attachment_blob(source, "image", "image/heic", _ext, orig_size) do
+    case heic_to_jpeg(source.path) do
+      {:ok, jpeg, width, height} ->
+        key = Storage.build_key("attachments", "jpg")
+
+        with :ok <- Storage.put_binary(key, jpeg) do
+          {:ok,
+           %{
+             kind: "image",
+             storage_key: key,
+             content_type: "image/jpeg",
+             byte_size: byte_size(jpeg),
+             filename: heic_jpeg_name(source[:filename]),
+             width: width,
+             height: height
+           }}
+        end
+
+      {:error, _} ->
+        store_attachment_blob(source, "image", "image/heic", "heic", orig_size, :as_is)
+    end
+  end
+
+  defp store_attachment_blob(source, kind, content_type, ext, orig_size) do
+    store_attachment_blob(source, kind, content_type, ext, orig_size, :as_is)
+  end
+
+  defp store_attachment_blob(source, kind, content_type, ext, orig_size, :as_is) do
+    key = Storage.build_key("attachments", ext)
+
+    with :ok <- Storage.put(key, source.path) do
       {width, height} = media_dimensions(kind, source.path)
 
       {:ok,
@@ -1516,14 +1559,16 @@ defmodule Eden.Chat do
          kind: kind,
          storage_key: key,
          content_type: content_type,
-         byte_size: byte_size,
+         byte_size: orig_size,
          filename: source[:filename],
          width: width,
-         height: height,
-         position: position
+         height: height
        }}
     end
   end
+
+  defp heic_jpeg_name(nil), do: nil
+  defp heic_jpeg_name(name), do: Path.rootname(name) <> ".jpg"
 
   defp persist_album(user, conversation_id, prepared, opts) do
     message_attrs = %{"body" => Map.get(opts, :body, ""), "client_id" => opts[:client_id]}
@@ -2754,8 +2799,17 @@ defmodule Eden.Chat do
   defp sniff(<<"RIFF", _::binary-size(4), "WEBP", _::binary>>, _f),
     do: {"image", "image/webp", "webp"}
 
-  # ISO base media (mp4 / m4v / mov): the "ftyp" box sits at offset 4.
-  defp sniff(<<_::binary-size(4), "ftyp", _::binary>>, _f), do: {"video", "video/mp4", "mp4"}
+  # ISO base media: the "ftyp" box sits at offset 4, the major brand at offset 8.
+  # HEIC/HEIF images share this container with mp4/m4v/mov video — disambiguate by
+  # the major brand so an iPhone .heic isn't stored as a (broken) video (#123).
+  # Anything not a known HEIC brand stays video (the prior default), so video can
+  # never be misread as an image.
+  defp sniff(<<_::binary-size(4), "ftyp", brand::binary-size(4), _::binary>>, _f) do
+    if brand in ~w(heic heix heim heis hevc hevx hevm hevs mif1 msf1 heif),
+      do: {"image", "image/heic", "heic"},
+      else: {"video", "video/mp4", "mp4"}
+  end
+
   # Matroska / WebM: the EBML header.
   defp sniff(<<0x1A, 0x45, 0xDF, 0xA3, _::binary>>, _f), do: {"video", "video/webm", "webm"}
   # Known document types — still served as generic downloads, type just informs the client.
@@ -2811,6 +2865,48 @@ defmodule Eden.Chat do
         store_video_preview(attachment, poster_frame(input), meta)
       end
     end)
+  end
+
+  # Transcode a HEIC/HEIF original to JPEG (#123). The bundled libvips reads the
+  # HEIF container but can't decode HEVC (no decoder ships with it), and the distro
+  # ffmpeg is too old — so we decode with `heif-convert` (libheif, in the image) to a
+  # PNG (libheif applies the irot/EXIF rotation), then scale + re-encode JPEG with
+  # the bundled libvips (it reads PNG fine): longest edge to #{@heic_max} (matching
+  # the #97 client compression, never upscaled) + metadata stripped. The decompression
+  # bomb is guarded on the decoded header, like make_thumbnail. Returns
+  # `{:ok, jpeg, width, height}` | `{:error, _}` — the caller then falls back to
+  # storing the original AS AN IMAGE (never the broken video the classifier produced).
+  # `path` is a server-assigned upload temp file, not user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp heic_to_jpeg(path) do
+    png = Path.join(System.tmp_dir!(), "heic-#{System.unique_integer([:positive])}.png")
+
+    try do
+      with {:ok, _} <- run_media_cmd("heif-convert", [path, png]),
+           {:ok, bytes} <- File.read(png),
+           {:ok, image} <- Image.from_binary(bytes),
+           :ok <- guard_dimensions(Image.width(image), Image.height(image)),
+           {:ok, thumb} <-
+             Vix.Vips.Operation.thumbnail_buffer(bytes, @heic_max,
+               height: @heic_max,
+               size: :VIPS_SIZE_DOWN
+             ),
+           {:ok, jpeg} <-
+             Image.write(thumb, :memory,
+               suffix: ".jpg",
+               quality: @heic_quality,
+               strip_metadata: true
+             ) do
+        {:ok, jpeg, Image.width(thumb), Image.height(thumb)}
+      else
+        # Normalize EVERY failure to {:error, _} (#123 review B1) so a partial result
+        # can't fall through as an unmatched value the caller's case crashes on. The
+        # caller then takes the image fallback (heif-convert missing, corrupt clip, …).
+        _ -> {:error, :unprocessable}
+      end
+    after
+      File.rm(png)
+    end
   end
 
   defp poster_frame(input) do
@@ -2933,7 +3029,7 @@ defmodule Eden.Chat do
 
   defp run_media_cmd(bin, args) do
     case System.find_executable(bin) do
-      nil -> {:error, {:unprocessable, :ffmpeg_unavailable}}
+      nil -> {:error, {:unprocessable, {:cmd_unavailable, bin}}}
       path -> run_with_timeout(bin, path, args)
     end
   end
