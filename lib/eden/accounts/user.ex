@@ -21,6 +21,8 @@ defmodule Eden.Accounts.User do
     # Storage key of the processed avatar (set by Accounts.set_avatar/2), or nil.
     field :avatar_key, :string
     field :presence_status, :string, default: "auto"
+    # When the user last fully disconnected (#102), for "last seen" on offline peers.
+    field :last_active_at, :utc_datetime
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
 

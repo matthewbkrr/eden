@@ -36,16 +36,21 @@ defmodule EdenWeb.Presence do
   end
 
   @doc """
-  Maps a user's *manual* status to the *effective* status others see, or the
-  `:invisible` sentinel (meaning "don't track" — appear offline).
+  The *effective* status others see for a `manual` choice and the user's current
+  idle state, or the `:invisible` sentinel (meaning "don't track" — appear offline).
+  Manual away/dnd/invisible ignore idle; "auto" is "away" when idle, else "online"
+  (auto-away, #102).
   """
-  def manual_to_effective("away"), do: "away"
-  def manual_to_effective("dnd"), do: "dnd"
-  def manual_to_effective("invisible"), do: :invisible
-  # "auto" and a legacy nil are both online; an unknown value too, but spelled out
-  # so a typo'd status isn't silently absorbed by a bare catch-all.
-  def manual_to_effective(status) when status in ["auto", nil], do: "online"
-  def manual_to_effective(_unknown), do: "online"
+  def effective(manual, idle? \\ false)
+  def effective("invisible", _idle), do: :invisible
+  def effective("dnd", _idle), do: "dnd"
+  def effective("away", _idle), do: "away"
+  def effective("auto", true), do: "away"
+  # "auto" + active, a legacy nil, or an unknown value → online.
+  def effective(_auto_or_nil, _idle), do: "online"
+
+  @doc "Effective status for a manual choice with no idle override (e.g. initial track)."
+  def manual_to_effective(manual), do: effective(manual, false)
 
   @doc """
   Effective status per currently-tracked user: `%{integer_id => "online" | "away"
@@ -67,21 +72,21 @@ defmodule EdenWeb.Presence do
   end
 
   @doc """
-  Applies a `manual` status change for `user_id` on `pid`: untracks for
-  "invisible", otherwise updates the meta — re-tracking if the process wasn't
-  tracked (e.g. returning from invisible, where `update/4` yields
-  `{:error, :nopresence}`).
+  Applies an already-resolved effective status (`"online" | "away" | "dnd"` or the
+  `:invisible` sentinel) to `user_id`'s tracking for `pid`: untracks for invisible,
+  otherwise updates the meta — re-tracking if the process wasn't tracked (returning
+  from invisible/untracked, where `update/4` yields `{:error, :nopresence}`).
   """
-  def set_status(pid, user_id, manual) do
-    case manual_to_effective(manual) do
-      :invisible ->
-        untrack(pid, @topic, to_string(user_id))
+  def apply_effective(pid, user_id, :invisible), do: untrack(pid, @topic, to_string(user_id))
 
-      effective ->
-        case update(pid, @topic, to_string(user_id), %{status: effective}) do
-          {:error, :nopresence} -> track_user(pid, user_id, effective)
-          ok -> ok
-        end
+  def apply_effective(pid, user_id, effective) do
+    case update(pid, @topic, to_string(user_id), %{status: effective}) do
+      {:error, :nopresence} -> track_user(pid, user_id, effective)
+      ok -> ok
     end
   end
+
+  @doc "Applies a manual status change for `user_id` on `pid` (no idle override)."
+  def set_status(pid, user_id, manual),
+    do: apply_effective(pid, user_id, effective(manual, false))
 end

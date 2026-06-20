@@ -23,6 +23,7 @@ defmodule EdenWeb.ShellComponents do
   attr :class, :any, default: nil
   attr :me, :any, default: nil, doc: "the current user, for the status picker (#102)"
   attr :my_status, :string, default: "auto", doc: "the user's manual presence status (#102)"
+  attr :my_dot, :string, default: "online", doc: "the user's effective self-dot status (#102)"
 
   @doc """
   The far-left rail. The messenger (DMs — the whole pre-corporate eden) is the
@@ -147,7 +148,7 @@ defmodule EdenWeb.ShellComponents do
           >
             <img :if={me_avatar_src(@me)} src={me_avatar_src(@me)} alt="" class="ed-rail__img" />
             <span :if={!me_avatar_src(@me)}>{me_initials(@me)}</span>
-            <span class={["ed-avatar__dot", me_dot_class(@my_status)]}></span>
+            <span class={["ed-avatar__dot", me_dot_class(@my_dot)]}></span>
           </button>
           <div class="ed-menu" id="status-menu" data-menu role="menu" hidden>
             <button

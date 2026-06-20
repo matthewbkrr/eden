@@ -58,6 +58,17 @@ defmodule EdenWeb.PresenceTest do
     assert Presence.statuses()[user.id] == "away"
   end
 
+  test "effective/2 folds the manual status with idle (auto-away, #102)" do
+    # auto follows idle; manual statuses ignore it.
+    assert Presence.effective("auto", false) == "online"
+    assert Presence.effective("auto", true) == "away"
+    assert Presence.effective("auto") == "online"
+    assert Presence.effective("away", true) == "away"
+    assert Presence.effective("dnd", true) == "dnd"
+    assert Presence.effective("invisible", true) == :invisible
+    assert Presence.effective(nil, true) == "online"
+  end
+
   test "a status-only update really emits a presence_diff naming the user (#102)" do
     # Guards the sidebar re-stream gate against being circular: confirms the REAL
     # Phoenix.Presence diff for an away→online change carries the key in joins/leaves

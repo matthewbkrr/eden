@@ -25,6 +25,10 @@ defmodule EdenWeb.ChatLive do
   # continuous typer never flickers off between broadcasts.
   @typing_throttle_ms 2_000
   @typing_ttl_ms 4_000
+  # "Last seen" heartbeat (#102): touch last_active_at on connect and periodically
+  # while active, from this (sandboxed) LiveView process. Frozen while idle. The
+  # idle/active transitions also touch, so this only needs coarse granularity.
+  @touch_active_ms 300_000
 
   # Uploads cancelable via the shared "cancel_upload" event. A closed map, so a
   # crafted "upload" value can neither crash the LiveView (vs String.to_existing_atom)
@@ -47,6 +51,10 @@ defmodule EdenWeb.ChatLive do
       Chat.subscribe_user(scope)
       Accounts.subscribe_user_updates()
       Accounts.subscribe_presence(scope)
+      # Start the "last seen" heartbeat (#102); the first touch happens below via
+      # touch_if_visible/1 (once assigns exist), so the invisible/online rule lives
+      # in one place.
+      Process.send_after(self(), :touch_active, @touch_active_ms)
     end
 
     socket =
@@ -66,6 +74,9 @@ defmodule EdenWeb.ChatLive do
         other_read_at: nil,
         statuses: EdenWeb.Presence.statuses(),
         my_status: scope.user.presence_status,
+        # Auto-away (#102): true while this session is idle. Effective status is
+        # recomputed from (my_status, idle?) — "auto" shows away when idle.
+        idle?: false,
         # Typing indicator (#11): user_id => %{name, token} for everyone currently
         # typing in the open conversation; `last_typing_at` throttles our own
         # outgoing broadcasts (monotonic ms, nil until first keystroke).
@@ -193,6 +204,10 @@ defmodule EdenWeb.ChatLive do
         max_entries: 1,
         max_file_size: 5_000_000
       )
+
+    # "Last seen" (#102): record now on connect, reusing the heartbeat's guard
+    # (skipped while invisible) so the rule lives in one place.
+    socket = if connected?(socket), do: touch_if_visible(socket), else: socket
 
     {:ok, socket}
   end
@@ -557,6 +572,20 @@ defmodule EdenWeb.ChatLive do
     end
 
     {:noreply, socket}
+  end
+
+  # Auto-away (#102): the .IdleTracker hook reports this session going idle/active.
+  # Only "auto" users change effective status on idle (manual statuses ignore it),
+  # so maybe_apply_idle skips the presence write otherwise; idle? is tracked
+  # regardless so switching to "auto" later picks up the current idle state. No
+  # last_active touch here — an idle user is still online, so the heartbeat keeps
+  # "last seen" fresh until they actually disconnect.
+  def handle_event("presence_idle", _params, socket) do
+    {:noreply, maybe_apply_idle(assign(socket, idle?: true))}
+  end
+
+  def handle_event("presence_active", _params, socket) do
+    {:noreply, maybe_apply_idle(assign(socket, idle?: false))}
   end
 
   def handle_event("show_members", _params, socket) do
@@ -1713,6 +1742,7 @@ defmodule EdenWeb.ChatLive do
     # (rooms show no per-message presence dot).
     socket = assign(socket, statuses: EdenWeb.Presence.statuses())
     changed = presence_changed_ids(payload)
+    socket = stamp_peer_offline(socket, changed)
     peers = socket.assigns.sidebar_peer_ids
 
     if socket.assigns.channel || Enum.all?(changed, &(&1 not in peers)) do
@@ -1727,17 +1757,24 @@ defmodule EdenWeb.ChatLive do
   # it onto this connection's tracked presence and own UI so every session agrees.
   def handle_info({:presence_status_changed, status}, socket) do
     scope = socket.assigns.current_scope
-    EdenWeb.Presence.set_status(self(), scope.user.id, status)
     # Keep current_scope.user in step with the new status so nothing downstream
     # re-derives presence from a stale struct (#102 review).
     scope = %{scope | user: %{scope.user | presence_status: status}}
 
-    {:noreply,
-     assign(socket,
-       current_scope: scope,
-       my_status: status,
-       statuses: EdenWeb.Presence.statuses()
-     )}
+    socket =
+      socket
+      |> assign(current_scope: scope, my_status: status)
+      |> apply_presence()
+
+    {:noreply, assign(socket, statuses: EdenWeb.Presence.statuses())}
+  end
+
+  # "Last seen" heartbeat (#102): refresh last_active_at while online (any non-
+  # invisible session, idle or not — they're still "в сети"), then reschedule.
+  def handle_info(:touch_active, socket) do
+    socket = touch_if_visible(socket)
+    Process.send_after(self(), :touch_active, @touch_active_ms)
+    {:noreply, socket}
   end
 
   # Someone is typing in the open conversation (#11). Ignore our own echo (incl.
@@ -1804,6 +1841,8 @@ defmodule EdenWeb.ChatLive do
   def render(assigns) do
     ~H"""
     <div class="ed-root h-screen flex overflow-hidden">
+      <%!-- Auto-away (#102): reports this session idle/active to the server. --%>
+      <div id="idle-tracker" phx-hook=".IdleTracker" hidden></div>
       <%!-- Below the header so it never covers the header buttons; the wrapper
             ignores pointer events so only the toast itself is interactive. --%>
       <div class="fixed top-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4 pointer-events-none">
@@ -1818,6 +1857,7 @@ defmodule EdenWeb.ChatLive do
         class={@selected && "hidden md:flex"}
         me={@current_scope.user}
         my_status={@my_status}
+        my_dot={rail_dot_status(@my_status, @idle?)}
       />
 
       <aside
@@ -2282,7 +2322,11 @@ defmodule EdenWeb.ChatLive do
                   :if={not @selected.is_group}
                   style={"font-size:0.6875rem; color: var(#{status_color_var(peer_status(@selected, @current_scope.user, @statuses))});"}
                 >
-                  {status_label(peer_status(@selected, @current_scope.user, @statuses))}
+                  <%= if status = peer_status(@selected, @current_scope.user, @statuses) do %>
+                    {status_label(status)}
+                  <% else %>
+                    <.last_seen peer={peer(@selected, @current_scope.user)} />
+                  <% end %>
                 </div>
                 <div
                   :if={@selected.is_group}
@@ -3006,6 +3050,48 @@ defmodule EdenWeb.ChatLive do
                 dot.classList.toggle("ed-avatar__dot--away", s === "away")
                 dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
               })
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".IdleTracker">
+        // Auto-away (#102): after IDLE_MS of no input this session reports idle;
+        // the next activity reports active. Only transitions are pushed (no spam),
+        // and the server only acts on it for "auto" users.
+        export default {
+          mounted() {
+            this.IDLE_MS = 10 * 60 * 1000
+            this.idle = false
+            this.events = ["mousemove", "keydown", "wheel", "touchstart", "click", "scroll"]
+            this.bump = () => {
+              clearTimeout(this.timer)
+              if (this.idle) { this.idle = false; this.pushEvent("presence_active", {}) }
+              this.timer = setTimeout(() => {
+                this.idle = true
+                this.pushEvent("presence_idle", {})
+              }, this.IDLE_MS)
+            }
+            this.events.forEach((e) => window.addEventListener(e, this.bump, { passive: true }))
+            this.bump()
+          },
+          destroyed() {
+            clearTimeout(this.timer)
+            this.events.forEach((e) => window.removeEventListener(e, this.bump))
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".LastSeen">
+        // "last seen" timestamp (#102), formatted in the viewer's locale: just the
+        // time when today, otherwise a short date + time so it's never ambiguous.
+        export default {
+          mounted() { this.fmt() },
+          updated() { this.fmt() },
+          fmt() {
+            const d = new Date(this.el.getAttribute("datetime"))
+            if (isNaN(d)) return
+            const sameDay = d.toDateString() === new Date().toDateString()
+            this.el.textContent = sameDay
+              ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              : d.toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
           }
         }
       </script>
@@ -7213,6 +7299,31 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
+  attr :peer, :map, default: nil
+
+  # The offline-header line for a 1:1 peer (#102): "last seen <time>" when we know
+  # when they were last active, else plain "offline" (group/unknown).
+  defp last_seen(%{peer: %{last_active_at: %DateTime{}}} = assigns) do
+    ~H"""
+    <span>
+      {gettext("last seen")}
+      <time
+        phx-hook=".LastSeen"
+        id={"ls-#{System.unique_integer([:positive])}"}
+        datetime={DateTime.to_iso8601(@peer.last_active_at)}
+      >
+        {Calendar.strftime(@peer.last_active_at, "%H:%M")}
+      </time>
+    </span>
+    """
+  end
+
+  defp last_seen(assigns) do
+    ~H"""
+    {gettext("offline")}
+    """
+  end
+
   ## Helpers
 
   defp select_conversation(socket, conversation) do
@@ -7755,6 +7866,63 @@ defmodule EdenWeb.ChatLive do
   # (#102 review): only the people in this room, never the global online set.
   defp room_member_ids(%{memberships: m}) when is_list(m), do: Enum.map(m, & &1.user_id)
   defp room_member_ids(_conversation), do: []
+
+  # Auto-away (#102): idle changes only affect "auto" users (manual statuses ignore
+  # idle), so skip the presence write — and the diff it fans — for the rest.
+  defp maybe_apply_idle(socket) do
+    if socket.assigns.my_status == "auto", do: apply_presence(socket), else: socket
+  end
+
+  # Push this session's effective status (from manual choice + idle) to presence.
+  defp apply_presence(%{assigns: %{current_scope: %{user: user}} = a} = socket) do
+    EdenWeb.Presence.apply_effective(
+      self(),
+      user.id,
+      EdenWeb.Presence.effective(a.my_status, a.idle?)
+    )
+
+    socket
+  end
+
+  # The rail self-dot status: keep "invisible" (a hollow dot you always see), else
+  # the effective status incl. auto-away — so your own dot matches how others see
+  # you while idle (#102).
+  defp rail_dot_status("invisible", _idle?), do: "invisible"
+  defp rail_dot_status(manual, idle?), do: EdenWeb.Presence.effective(manual, idle?)
+
+  # Record "last seen" whenever the user is online and not invisible. Idle doesn't
+  # matter — an idle-but-connected user is still "в сети", and "last seen" means
+  # last ONLINE, not last actively-used (#102 review). Invisible never touches, so
+  # it can't leak recent activity the user is hiding.
+  defp touch_if_visible(%{assigns: %{my_status: manual, current_scope: %{user: u}}} = socket) do
+    if manual != "invisible", do: Accounts.touch_last_active(u.id)
+    socket
+  end
+
+  # When the open 1:1's peer goes offline while we're watching, stamp their
+  # last_active_at to now in-memory so the header reads "last seen <now>" — without
+  # racing the DB write handle_metas does on the same leave (#102). Peers already
+  # offline at open use their persisted last_active_at instead.
+  defp stamp_peer_offline(socket, changed) do
+    selected = socket.assigns.selected
+    user = socket.assigns.current_scope.user
+
+    peer =
+      selected && not selected.is_group && is_nil(selected.channel_id) && peer(selected, user)
+
+    if peer && peer.id in changed && is_nil(Map.get(socket.assigns.statuses, peer.id)) do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      memberships = Enum.map(selected.memberships, &stamp_membership(&1, peer.id, now))
+      assign(socket, selected: %{selected | memberships: memberships})
+    else
+      socket
+    end
+  end
+
+  defp stamp_membership(%{user_id: id} = m, id, now),
+    do: %{m | user: %{m.user | last_active_at: now}}
+
+  defp stamp_membership(m, _peer_id, _now), do: m
 
   # Read receipts: the other participant's last_read_at for a 1:1 (nil for groups).
   defp other_read_at(%{is_group: true}, _user), do: nil
