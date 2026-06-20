@@ -9,6 +9,8 @@ defmodule EdenWeb.SettingsLive do
   """
   use EdenWeb, :live_view
 
+  import EdenWeb.PresenceHelpers, only: [status_options: 0]
+
   alias Eden.Accounts
   alias Eden.Accounts.User
   alias Eden.Chat
@@ -199,6 +201,31 @@ defmodule EdenWeb.SettingsLive do
                 <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
               </div>
             </.form>
+          </section>
+
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
+            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext("Sets the presence dot others see. Invisible appears offline to everyone.")}
+            </p>
+            <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <span style="font-size:0.875rem;">{gettext("Your status")}</span>
+              <div class="ed-seg" role="group" aria-label={gettext("Status")}>
+                <button
+                  :for={{value, _label, short, _color} <- status_options()}
+                  class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
+                  type="button"
+                  phx-click="set_status"
+                  phx-value-status={value}
+                >
+                  {short}
+                </button>
+              </div>
+            </div>
           </section>
 
           <section
@@ -507,6 +534,15 @@ defmodule EdenWeb.SettingsLive do
   def handle_event("remove_avatar", _params, socket) do
     {:ok, user} = Accounts.remove_avatar(socket.assigns.profile_user)
     {:noreply, assign(socket, profile_user: user)}
+  end
+
+  # Set the user's presence status (#102). The Accounts broadcast also reaches any
+  # open chat tab (per-user presence topic) so its dot/picker update live.
+  def handle_event("set_status", %{"status" => status}, socket) do
+    case Accounts.set_presence_status(socket.assigns.profile_user, status) do
+      {:ok, user} -> {:noreply, assign(socket, profile_user: user)}
+      {:error, _changeset} -> {:noreply, socket}
+    end
   end
 
   def handle_event("cancel_avatar", %{"ref" => ref}, socket) do

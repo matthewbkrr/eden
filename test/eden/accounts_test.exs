@@ -226,6 +226,48 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "set_presence_status/2 (#102)" do
+    test "defaults to auto and persists each allowed status" do
+      user = user_fixture()
+      assert user.presence_status == "auto"
+
+      # Reuse the same (now-stale) struct each time: force_change means even
+      # "auto" at the end (the struct's original value) still persists rather than
+      # being skipped as a no-op against the stale value.
+      for status <- ~w(away dnd invisible auto) do
+        assert {:ok, updated} = Accounts.set_presence_status(user, status)
+        assert updated.presence_status == status
+        assert Repo.get!(User, user.id).presence_status == status
+      end
+    end
+
+    test "persists with a stale caller struct (force_change) — reset to auto sticks" do
+      user = user_fixture()
+      {:ok, _} = Accounts.set_presence_status(user, "dnd")
+      # `user` is stale (still "auto"); resetting to "auto" must persist, not no-op.
+      {:ok, _} = Accounts.set_presence_status(user, "auto")
+      assert Repo.get!(User, user.id).presence_status == "auto"
+    end
+
+    test "rejects an unknown status" do
+      user = user_fixture()
+      assert {:error, %Ecto.Changeset{}} = Accounts.set_presence_status(user, "ghost")
+      assert Repo.get!(User, user.id).presence_status == "auto"
+    end
+
+    test "broadcasts on the user's own presence topic, not the global one" do
+      user = user_fixture()
+      scope = Eden.Accounts.Scope.for_user(user)
+      :ok = Accounts.subscribe_presence(scope)
+      :ok = Accounts.subscribe_user_updates()
+
+      {:ok, _updated} = Accounts.set_presence_status(user, "dnd")
+
+      assert_receive {:presence_status_changed, "dnd"}
+      refute_received {:user_updated, _user}
+    end
+  end
+
   describe "avatars" do
     test "set_avatar processes the image into a square JPEG and stores it" do
       assert {:ok, u} = Accounts.set_avatar(user_fixture(), real_png(1400, 500))
