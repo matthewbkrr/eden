@@ -134,10 +134,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
-      # ffmpeg/ffprobe back the video poster + duration tests (tagged :ffmpeg,
-      # skipped where the binary is absent — e.g. a dev machine without it).
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # ffmpeg/ffprobe back the video poster + duration tests (tagged :ffmpeg).
+      # libheif-examples (heif-convert) backs the HEIC→JPEG transcode test (tagged
+      # :heif, #123). Both are skipped where the binary is absent (e.g. a bare dev box).
+      - name: Install media tools (ffmpeg, libheif)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libheif-examples
 
       - run: mix deps.get
       # The `test` alias creates and migrates the test DB before running.

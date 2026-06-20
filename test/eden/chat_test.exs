@@ -37,6 +37,11 @@ defmodule Eden.ChatTest do
     image_path(bytes)
   end
 
+  # A committed real HEIC fixture (ISO-BMFF, ftyp + "heic" brand) — the format that
+  # used to be misclassified as video (#123). The bundled libvips decodes HEIC but
+  # can't encode it, so this is a checked-in file rather than generated in-test.
+  defp real_heic, do: Path.join([__DIR__, "..", "support", "fixtures", "sample.heic"])
+
   # A real 1-second 320x240 mp4 (only used by :ffmpeg-tagged tests).
   defp real_mp4 do
     path = Path.join(System.tmp_dir!(), "vid-#{System.unique_integer([:positive])}.mp4")
@@ -346,6 +351,48 @@ defmodule Eden.ChatTest do
       assert first.id == second.id
       assert Repo.aggregate(Message, :count) == 1
       assert Repo.aggregate(Attachment, :count) == 1
+    end
+
+    @tag :heif
+    test "a HEIC photo is stored as an image (transcoded to JPEG), never a video (#123)", %{
+      alice: alice,
+      conv: conv
+    } do
+      cid = "55555555-5555-5555-5555-555555555555"
+
+      {:ok, _msg} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: real_heic(), client_id: cid})
+
+      att = Repo.one(Attachment)
+      # The core bug: a HEIC's ftyp magic used to classify it as video/mp4.
+      assert att.kind == "image"
+      refute att.kind == "video"
+      # And it's transcoded to a universal JPEG (ffmpeg decodes HEVC), so it renders
+      # everywhere, not just Safari.
+      assert att.content_type == "image/jpeg"
+    end
+
+    test "a non-decodable heic-branded upload falls back to an image, never crashes (#123)", %{
+      alice: alice,
+      conv: conv
+    } do
+      # ftyp + "heic" brand but garbage content: ffprobe finds no decodable stream, so
+      # the transcode can't run. The send must NOT crash (review B1 — a partial ffprobe
+      # result used to fall through as an unmatched {:ok, map}) and must store an image,
+      # never a video. No ffmpeg needed — this is the fallback path.
+      fake = Path.join(System.tmp_dir!(), "fake-#{System.unique_integer([:positive])}.heic")
+      File.write!(fake, <<0, 0, 0, 24>> <> "ftyp" <> "heic" <> <<0, 0, 0, 0>> <> "garbagegarbage")
+      on_exit(fn -> File.rm(fake) end)
+
+      {:ok, _msg} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: fake,
+          client_id: "66666666-6666-6666-6666-666666666666"
+        })
+
+      att = Repo.one(Attachment)
+      assert att.kind == "image"
+      refute att.kind == "video"
     end
   end
 
