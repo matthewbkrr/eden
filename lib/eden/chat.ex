@@ -3029,7 +3029,7 @@ defmodule Eden.Chat do
 
   defp run_media_cmd(bin, args) do
     case System.find_executable(bin) do
-      nil -> {:error, {:unprocessable, :ffmpeg_unavailable}}
+      nil -> {:error, {:unprocessable, {:cmd_unavailable, bin}}}
       path -> run_with_timeout(bin, path, args)
     end
   end

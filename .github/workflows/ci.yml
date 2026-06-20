@@ -135,10 +135,14 @@ jobs:
             ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       # ffmpeg/ffprobe back the video poster + duration tests (tagged :ffmpeg).
-      # libheif-examples (heif-convert) backs the HEIC→JPEG transcode test (tagged
-      # :heif, #123). Both are skipped where the binary is absent (e.g. a bare dev box).
+      # heif-convert (libheif-examples) backs the HEIC→JPEG transcode test (tagged
+      # :heif, #123). Ubuntu 24.04's libheif (1.17+) uses the plugin model, so the
+      # libde265 HEVC *decoder* is a separate package — without it heif-convert
+      # exists but can't decode HEIC. (Prod is Debian bookworm, libheif 1.15 with
+      # the decoder compiled in — verified in the docker job.) Tests are skipped
+      # where the binary is absent (e.g. a bare dev box).
       - name: Install media tools (ffmpeg, libheif)
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg libheif-examples
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libheif-examples libheif-plugin-libde265
 
       - run: mix deps.get
       # The `test` alias creates and migrates the test DB before running.
@@ -197,6 +201,15 @@ jobs:
           # libvips (photo thumbnails) must work on the slim runtime image.
           docker exec eden /app/bin/eden eval \
             '{:ok, i} = Image.new(32, 32, color: [1, 2, 3]); {:ok, _} = Image.write(i, :memory, suffix: ".jpg"); IO.puts("vips ok")'
+
+          # heif-convert (libheif) must DECODE HEIC on the slim runtime image: the
+          # bundled libvips has no HEVC decoder and the distro ffmpeg can't either,
+          # so this is the only HEIC→JPEG path in prod (#123). The Ubuntu test job
+          # can't prove this (different libheif packaging), so verify it here on the
+          # actual Debian bookworm image with the committed fixture.
+          docker cp test/support/fixtures/sample.heic eden:/tmp/sample.heic
+          docker exec eden sh -c 'heif-convert /tmp/sample.heic /tmp/heic-out.png && test -s /tmp/heic-out.png'
+          echo "heif-convert ok"
 
       - name: Container logs
         if: always()

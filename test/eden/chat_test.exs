@@ -367,8 +367,8 @@ defmodule Eden.ChatTest do
       # The core bug: a HEIC's ftyp magic used to classify it as video/mp4.
       assert att.kind == "image"
       refute att.kind == "video"
-      # And it's transcoded to a universal JPEG (ffmpeg decodes HEVC), so it renders
-      # everywhere, not just Safari.
+      # And it's transcoded to a universal JPEG (heif-convert/libheif decodes HEVC),
+      # so it renders everywhere, not just Safari.
       assert att.content_type == "image/jpeg"
     end
 
@@ -376,10 +376,11 @@ defmodule Eden.ChatTest do
       alice: alice,
       conv: conv
     } do
-      # ftyp + "heic" brand but garbage content: ffprobe finds no decodable stream, so
-      # the transcode can't run. The send must NOT crash (review B1 — a partial ffprobe
-      # result used to fall through as an unmatched {:ok, map}) and must store an image,
-      # never a video. No ffmpeg needed — this is the fallback path.
+      # ftyp + "heic" brand but garbage content: heif-convert can't decode it, so the
+      # transcode can't run. The send must NOT crash (review B1 — heic_to_jpeg's `with`
+      # normalizes every failure to {:error, _}, so no partial result falls through as
+      # an unmatched value) and must store an image, never a video. heif-convert isn't
+      # needed here — this is the fallback path.
       fake = Path.join(System.tmp_dir!(), "fake-#{System.unique_integer([:positive])}.heic")
       File.write!(fake, <<0, 0, 0, 24>> <> "ftyp" <> "heic" <> <<0, 0, 0, 0>> <> "garbagegarbage")
       on_exit(fn -> File.rm(fake) end)
