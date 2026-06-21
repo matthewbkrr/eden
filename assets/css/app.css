@@ -1032,6 +1032,19 @@ html {
     width: 0;
     min-width: 100%;
   }
+  /* Caption + meta wrapper: a flow-root so it contains the floated meta. Same idea
+     as the quote rule above but for the body caption — in a media bubble the wrap
+     takes the media's width (width:0 contributes nothing to the fit-content bubble;
+     min-width:100% fills it), so a long caption wraps to the photo width instead of
+     stretching the bubble past it, while the meta still floats bottom-right with the
+     text wrapping before it (#108). */
+  .ed-bubble__cap {
+    display: flow-root;
+  }
+  .ed-bubble:has(img, video, .ed-file) .ed-bubble__cap {
+    width: 0;
+    min-width: 100%;
+  }
 
   /* Permalink target: briefly ring the message scrolled to. */
   @keyframes ed-msg-focus {

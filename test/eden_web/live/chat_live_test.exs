@@ -538,6 +538,10 @@ defmodule EdenWeb.ChatLiveTest do
       render_upload(file, "a.png")
       assert has_element?(view, "[data-upload-preview]")
 
+      # The caption rides its OWN field (message[caption]); composer_changed stashes it
+      # server-side so it survives the overlay close on send.
+      view |> form("#composer", %{message: %{caption: "look"}}) |> render_change()
+
       # The hook pushes media_sending{id} the instant the send is submitted: the
       # overlay closes at once (normal composer returns) even though the entry is
       # still staged, and the id is queued to stamp the real message.
@@ -549,13 +553,35 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#composer label.pointer-events-none")
 
       # Submit: the stashed id stamps the album so its optimistic twin swaps out
-      # client-side by data-client-id (no heuristic).
-      view |> form("#composer", %{message: %{body: "look"}}) |> render_submit()
+      # client-side by data-client-id (no heuristic). The stashed caption (read from the
+      # composer, robust to the overlay close) becomes the album's body.
+      render_submit(element(view, "#composer"))
 
       assert {:ok, [%{body: "look", client_id: "cid-7", attachments: [%{kind: "image"}]}]} =
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
 
       refute has_element?(view, "[data-upload-preview]")
+    end
+
+    test "the overlay caption is separate from the chat input — no mirroring", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, "#compose-caption")
+
+      # Typing a caption in the overlay must NOT appear in the chat input — they are
+      # separate fields (message[caption] vs message[body]).
+      view |> form("#composer", %{message: %{caption: "a caption"}}) |> render_change()
+
+      assert render(view) =~ "a caption"
+      assert view |> element("#compose-caption") |> render() =~ "a caption"
+      refute view |> element("#composer-body") |> render() =~ "a caption"
     end
 
     test "the stall-watchdog reset re-shows the overlay so a stuck send can be cancelled (#95)",

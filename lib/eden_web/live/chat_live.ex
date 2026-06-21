@@ -416,13 +416,16 @@ defmodule EdenWeb.ChatLive do
   end
 
   @impl true
-  def handle_event("composer_changed", %{"message" => %{"body" => body}}, socket) do
-    # Track the value server-side so resetting to "" after send produces a real
-    # diff that clears the input.
+  def handle_event("composer_changed", %{"message" => params}, socket) do
+    # Track the value server-side so resetting to "" after send produces a real diff
+    # that clears the input. Captures BOTH fields: the chat input (message[body]) and
+    # the media overlay's caption (message[caption]) — separate entities, so typing a
+    # caption never mirrors into the chat input. Typing broadcasts on the body only:
+    # a caption is not a message-in-progress to the peer.
     {:noreply,
      socket
-     |> assign(composer: to_form(%{"body" => body}, as: "message"))
-     |> maybe_broadcast_typing(body)}
+     |> assign(composer: to_form(params, as: "message"))
+     |> maybe_broadcast_typing(params["body"] || "")}
   end
 
   # Fired the instant a media send is submitted (#95): close the preview overlay
@@ -475,9 +478,15 @@ defmodule EdenWeb.ChatLive do
       entries != [] and Enum.all?(entries, & &1.done?) ->
         # The media client_id rode the socket (media_sending), not the form; pop the
         # oldest queued one to stamp this send so its optimistic twin swaps out (#95).
+        # The caption is its OWN field (message[caption]), separate from the chat input
+        # (message[body], left untouched for a later text send). Read it from the
+        # server-tracked composer, NOT the submit params: media_sending closes the
+        # overlay (removing #compose-caption) before the form serializes for the upload,
+        # so the param can arrive empty — but composer_changed already stashed it here.
         {cid, rest} = pop_media_client_id(socket.assigns.media_client_ids)
+        caption = socket.assigns.composer[:caption].value || ""
         socket = assign(socket, media_client_ids: rest)
-        send_attachment(socket, scope, conversation, body, reply_to_id, cid)
+        send_attachment(socket, scope, conversation, caption, reply_to_id, cid)
 
       String.trim(body) == "" ->
         {:noreply, assign(socket, composer: empty_composer())}
@@ -2563,8 +2572,13 @@ defmodule EdenWeb.ChatLive do
             </div>
             <%!-- Composer bar: attach + message + emoji + send. ALWAYS rendered (#130)
                   so it never vanishes/jumps — the compose modal (below) floats on top
-                  of it when files are staged, instead of replacing it. --%>
-            <div class="flex items-center gap-2">
+                  of it when files are staged, instead of replacing it. While that modal
+                  is open the bar goes `inert` (non-interactive + unfocusable, "second
+                  plane") so the caption is the only live input and nothing leaks here. --%>
+            <div
+              class="flex items-center gap-2"
+              inert={@uploads.attachment.entries != [] and not @sending_media}
+            >
               <%!-- While a media send is uploading, gate attach (and paste, in the
                     PasteUpload hook) so sends stay serialized — one in-flight set of
                     entries keeps the progress average exact and the FIFO swap
@@ -2642,9 +2656,9 @@ defmodule EdenWeb.ChatLive do
             </div>
             <%!-- Attachment compose modal (#58): floats on TOP of the always-present
                   bar when files are staged (#130) — no longer replaces it, so the bar
-                  never vanishes. Rendered LAST so its caption (name="message[body]")
-                  wins over the bar's input on submit. data-upload-preview routes the
-                  send through the SendQueue media path. --%>
+                  never vanishes. Its caption is a SEPARATE field (name="message[caption]"),
+                  so it never mirrors into the bar's chat input (name="message[body]").
+                  data-upload-preview routes the send through the SendQueue media path. --%>
             <.compose_overlay
               :if={@uploads.attachment.entries != [] and not @sending_media}
               upload={@uploads.attachment}
@@ -6460,19 +6474,30 @@ defmodule EdenWeb.ChatLive do
             attachments={@message.attachments}
             message_id={@message.id}
           />
-          <span :if={@message.body != ""} class="break-words">
-            {Markup.to_iodata(@message.body)}
-          </span>
-          <span class="ed-bubble__meta">
-            <.local_time at={@message.inserted_at} />
-            <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
-              <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
-              <span :if={@read} class="inline-flex items-center">
-                <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
-                <.icon name="hero-check-micro" class="size-3.5" />
+          <%!-- Caption + meta share a flow-root block so a long caption can't stretch
+                a media bubble wider than the photo (#135-twin): in a media bubble the
+                wrap is constrained to the media's width (CSS width:0/min-width:100%) and
+                the caption wraps to it — while the meta still floats bottom-right with the
+                text wrapping before it (#108). --%>
+          <div class="ed-bubble__cap">
+            <span :if={@message.body != ""} class="break-words">
+              {Markup.to_iodata(@message.body)}
+            </span>
+            <span class="ed-bubble__meta">
+              <.local_time at={@message.inserted_at} />
+              <span
+                :if={@mine and not @group}
+                class="inline-flex items-center"
+                style="margin-left:2px;"
+              >
+                <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
+                <span :if={@read} class="inline-flex items-center">
+                  <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
+                  <.icon name="hero-check-micro" class="size-3.5" />
+                </span>
               </span>
             </span>
-          </span>
+          </div>
           <%!-- No thread affordance in the personal messenger (#26): threads are
                 a corporate-room feature only. --%>
           <.message_menu
@@ -6615,10 +6640,11 @@ defmodule EdenWeb.ChatLive do
 
   # Attachment compose modal (#58): a Telegram-style centered overlay (media grid +
   # caption + send) opened when files are staged. The composer bar stays rendered
-  # behind the scrim (#130) so it never vanishes — the modal floats on top. Its
-  # caption uses a distinct id (compose-caption) so it doesn't collide with the
-  # always-present bar's #composer-body; both share name="message[body]", and the
-  # modal renders LAST so its value wins on submit.
+  # behind the scrim (#130) so it never vanishes — the modal floats on top and the
+  # bar goes `inert`. Its caption (#compose-caption) is a SEPARATE field
+  # (name="message[caption]") from the bar's chat input (#composer-body,
+  # name="message[body]"), so typing a caption never mirrors into the chat input;
+  # send_attachment reads message[caption] as the media's body.
   defp compose_overlay(assigns) do
     entries = assigns.upload.entries
     media = Enum.filter(entries, &media_entry?/1)
@@ -6743,11 +6769,15 @@ defmodule EdenWeb.ChatLive do
         </div>
 
         <footer class="ed-compose__foot">
+          <%!-- The caption is its OWN field (message[caption]), NOT message[body]:
+                the chat input behind the overlay keeps its own value, so typing here
+                never mirrors into the chat input. send_attachment reads message[caption]
+                as the media's body. --%>
           <input
             type="text"
             id="compose-caption"
-            name="message[body]"
-            value={@form[:body].value}
+            name="message[caption]"
+            value={@form[:caption].value}
             class="ed-input"
             placeholder={gettext("Add a caption…")}
             autocomplete="off"
@@ -7966,6 +7996,16 @@ defmodule EdenWeb.ChatLive do
 
   defp empty_composer, do: to_form(%{}, as: "message")
 
+  # After a media send (success OR failure), clear the overlay caption but KEEP the
+  # chat input (message[body]) — they're separate entities (the caption rides
+  # message[caption]). Dropping the caption key resets it; preserving body lets text
+  # typed before staging media survive for a later send, and stops a consumed-but-failed
+  # send from pre-filling the next media's caption.
+  defp clear_media_caption(socket) do
+    body = socket.assigns.composer[:body].value || ""
+    assign(socket, composer: to_form(%{"body" => body}, as: "message"))
+  end
+
   # Cancel every staged attachment upload (the composer tray). Used both by the
   # explicit "clear tray" action and on conversation switch so media staged in
   # one chat can't be sent into another (#89).
@@ -8169,16 +8209,23 @@ defmodule EdenWeb.ChatLive do
 
         case result do
           {:ok, _messages} ->
-            # Reset the typing throttle on send too, same as send_text (#94 review).
+            # Clear the caption but KEEP the chat input (message[body]) — separate
+            # entities, so text typed before staging media survives. Reset the typing
+            # throttle like send_text (#94).
             {:noreply,
-             assign(socket, composer: empty_composer(), reply_to: nil, last_typing_at: nil)}
+             socket |> clear_media_caption() |> assign(reply_to: nil, last_typing_at: nil)}
 
           {:error, reason} ->
             # No real row will stream in, so the optimistic media node would spin
-            # forever (and pin its preview data-URLs in memory) — tell the hook to
-            # drop that exact twin (#95). Text sends have nack/markFailed.
+            # forever (and pin its preview data-URLs in memory) — tell the hook to drop
+            # that exact twin (#95). Clear the caption too: the upload is already
+            # consumed, so a failed send must not leave it to pre-fill the next media's
+            # caption. Text sends have nack/markFailed.
             {:noreply,
-             socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(client_id)}
+             socket
+             |> clear_media_caption()
+             |> put_flash(:error, attachment_error(reason))
+             |> push_media_failed(client_id)}
         end
     end
   end
