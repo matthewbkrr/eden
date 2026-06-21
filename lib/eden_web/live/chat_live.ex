@@ -459,11 +459,20 @@ defmodule EdenWeb.ChatLive do
     client_id = msg["client_id"]
     reply_to_id = msg["reply_to_id"]
 
+    entries = socket.assigns.uploads.attachment.entries
+
     cond do
       is_nil(conversation) ->
         {:noreply, socket}
 
-      socket.assigns.uploads.attachment.entries != [] ->
+      # Consume ONLY once the upload has finished — the media's native form submit
+      # fires "send" after every entry is done. A TEXT send that arrives WHILE the
+      # video is still uploading (the SendQueue hook's queued "send") would otherwise
+      # hit consume_uploaded_entries here, which RAISES on an in-progress entry and
+      # crashes the LiveView — losing the upload + its optimistic node. Such a send
+      # falls through to the text path; the upload keeps going and lands on its own
+      # later "send" when every entry is done.
+      entries != [] and Enum.all?(entries, & &1.done?) ->
         # The media client_id rode the socket (media_sending), not the form; pop the
         # oldest queued one to stamp this send so its optimistic twin swaps out (#95).
         {cid, rest} = pop_media_client_id(socket.assigns.media_client_ids)
@@ -1373,13 +1382,19 @@ defmodule EdenWeb.ChatLive do
   def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
     root = socket.assigns.thread_root
     reply_to_id = reply["reply_to_id"]
+    entries = socket.assigns.uploads.thread_attachment.entries
 
     cond do
       is_nil(root) ->
         {:noreply, socket}
 
       # An album reply (#104): the attachments are the content, so an empty caption is OK.
-      socket.assigns.uploads.thread_attachment.entries != [] ->
+      # Mirror the main composer (P0): consume only once every entry is done. The thread
+      # composer submits normally (no optimistic typing during upload), so this is
+      # always true in normal use — but it stops a crafted "send_reply" sent while an
+      # attachment is still uploading from reaching consume_uploaded_entries, which
+      # raises on an in-progress entry and crashes the LiveView.
+      entries != [] and Enum.all?(entries, & &1.done?) ->
         send_thread_album(socket, root, body, reply_to_id)
 
       String.trim(body) == "" ->
