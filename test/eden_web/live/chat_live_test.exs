@@ -579,6 +579,37 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "[data-upload-preview]")
     end
 
+    test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "clip.mp4", content: File.read!(real_png_path()), type: "video/mp4"}
+        ])
+
+      # Upload only partway: the entry stays in progress (done? == false), as a slow
+      # video does while the user keeps typing.
+      render_upload(file, "clip.mp4", 30)
+      render_hook(view, "media_sending", %{"id" => "cid-vid"})
+
+      # A text message typed while the video still uploads rides the SendQueue hook's
+      # "send" with its own client_id. It must NOT reach consume_uploaded_entries,
+      # which raises on the in-progress entry — that crashed the LiveView, abandoning
+      # the upload and dropping its optimistic node (the reported bug).
+      render_hook(view, "send", %{"message" => %{"body" => "typed while uploading"}})
+
+      # The process survived and the text landed as its own message; the in-progress
+      # upload was left untouched (still staged, still uploading).
+      assert Process.alive?(view.pid)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.body == "typed while uploading"))
+
+      assert Enum.all?(msgs, &(&1.attachments == [])),
+             "the in-progress upload must not be consumed"
+    end
+
     test "a reaction from another user appears live (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "hi"})
@@ -1244,6 +1275,35 @@ defmodule EdenWeb.ChatLiveTest do
       view |> form("#reply-composer", reply: %{body: ""}) |> render_submit()
       refute has_element?(view, ".ed-thread-tray")
       assert has_element?(view, "#thread-replies img")
+    end
+
+    test "a send_reply while a thread attachment is still uploading doesn't crash (P0)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrRace"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      file =
+        file_input(view, "#reply-composer", :thread_attachment, [
+          %{name: "t.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      # Stage but leave in progress (done? == false), then a (crafted) send_reply
+      # arrives. It must NOT reach consume_uploaded_entries — that raises on the
+      # in-progress entry and crashes the LiveView.
+      render_upload(file, "t.png", 30)
+      render_hook(view, "send_reply", %{"reply" => %{"body" => "early"}})
+
+      assert Process.alive?(view.pid)
+      # The reply landed as text; the in-progress upload wasn't consumed.
+      assert {:ok, _root, replies} = Chat.list_thread(Scope.for_user(ctx.alice), root.id)
+      assert Enum.any?(replies, &(&1.body == "early"))
+      assert Enum.all?(replies, &(&1.attachments == []))
     end
 
     test "a thread reply's ready thumbnail updates the thread, never the main stream (#104)",
