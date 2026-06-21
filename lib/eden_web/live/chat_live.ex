@@ -6460,19 +6460,30 @@ defmodule EdenWeb.ChatLive do
             attachments={@message.attachments}
             message_id={@message.id}
           />
-          <span :if={@message.body != ""} class="break-words">
-            {Markup.to_iodata(@message.body)}
-          </span>
-          <span class="ed-bubble__meta">
-            <.local_time at={@message.inserted_at} />
-            <span :if={@mine and not @group} class="inline-flex items-center" style="margin-left:2px;">
-              <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
-              <span :if={@read} class="inline-flex items-center">
-                <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
-                <.icon name="hero-check-micro" class="size-3.5" />
+          <%!-- Caption + meta share a flow-root block so a long caption can't stretch
+                a media bubble wider than the photo (#135-twin): in a media bubble the
+                wrap is constrained to the media's width (CSS width:0/min-width:100%) and
+                the caption wraps to it — while the meta still floats bottom-right with the
+                text wrapping before it (#108). --%>
+          <div class="ed-bubble__cap">
+            <span :if={@message.body != ""} class="break-words">
+              {Markup.to_iodata(@message.body)}
+            </span>
+            <span class="ed-bubble__meta">
+              <.local_time at={@message.inserted_at} />
+              <span
+                :if={@mine and not @group}
+                class="inline-flex items-center"
+                style="margin-left:2px;"
+              >
+                <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
+                <span :if={@read} class="inline-flex items-center">
+                  <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
+                  <.icon name="hero-check-micro" class="size-3.5" />
+                </span>
               </span>
             </span>
-          </span>
+          </div>
           <%!-- No thread affordance in the personal messenger (#26): threads are
                 a corporate-room feature only. --%>
           <.message_menu
