@@ -213,7 +213,7 @@ defmodule EdenWeb.SettingsLive do
               {gettext("Sets the presence dot others see. Invisible appears offline to everyone.")}
             </p>
             <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-              <span style="font-size:0.875rem;">{gettext("Your status")}</span>
+              <span style="font-size:0.875rem; white-space: nowrap;">{gettext("Your status")}</span>
               <div class="ed-seg" role="group" aria-label={gettext("Status")}>
                 <button
                   :for={{value, _label, short, _color} <- status_options()}

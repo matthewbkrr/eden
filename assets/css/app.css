@@ -307,6 +307,8 @@ html {
     border-radius: var(--ed-radius-full);
     background: var(--ed-online);
     box-shadow: 0 0 0 2.5px var(--ed-bg);
+    /* Smooth the status recolor (online↔away↔dnd); a state change, not decoration (#102). */
+    transition: background-color 0.18s var(--ed-ease);
   }
   /* Presence-status dots (#102); base is a solid online-green disc. away/dnd add
      a SHAPE cue (ring / bar) on top of color so the state survives grayscale and
@@ -2172,7 +2174,7 @@ html {
     padding: 0 0.3125rem;
     border-radius: 999px;
     background: var(--ed-primary);
-    color: #fff;
+    color: var(--ed-on-primary);
     font: 600 0.6875rem/1 var(--ed-mono);
   }
 
@@ -2224,7 +2226,7 @@ html {
     height: 1.25rem;
     border-radius: var(--ed-radius-sm);
     border: 1.5px solid var(--ed-border);
-    color: #fff;
+    color: var(--ed-on-primary);
   }
   .ed-check--on {
     background: var(--ed-primary);
@@ -2380,6 +2382,10 @@ html {
   @media (min-width: 640px) {
     .ed-seg { display: inline-flex; width: auto; }
     .ed-seg__btn { flex: 0 0 auto; padding: 0 0.875rem; font-size: 0.8125rem; }
+  }
+  /* Comfortable 44px touch targets on coarse pointers (#102 review). */
+  @media (pointer: coarse) {
+    .ed-seg__btn { min-height: 2.75rem; }
   }
   .ed-seg__btn:hover { color: var(--ed-ink); }
   .ed-seg__btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
