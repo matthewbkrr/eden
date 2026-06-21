@@ -7996,6 +7996,16 @@ defmodule EdenWeb.ChatLive do
 
   defp empty_composer, do: to_form(%{}, as: "message")
 
+  # After a media send (success OR failure), clear the overlay caption but KEEP the
+  # chat input (message[body]) — they're separate entities (the caption rides
+  # message[caption]). Dropping the caption key resets it; preserving body lets text
+  # typed before staging media survive for a later send, and stops a consumed-but-failed
+  # send from pre-filling the next media's caption.
+  defp clear_media_caption(socket) do
+    body = socket.assigns.composer[:body].value || ""
+    assign(socket, composer: to_form(%{"body" => body}, as: "message"))
+  end
+
   # Cancel every staged attachment upload (the composer tray). Used both by the
   # explicit "clear tray" action and on conversation switch so media staged in
   # one chat can't be sent into another (#89).
@@ -8199,24 +8209,23 @@ defmodule EdenWeb.ChatLive do
 
         case result do
           {:ok, _messages} ->
-            # Clear only the caption — KEEP the chat input (message[body]): they're
-            # separate entities, so text typed before staging media survives the media
-            # send for a later send. Reset the typing throttle like send_text (#94).
-            body = socket.assigns.composer[:body].value || ""
-
+            # Clear the caption but KEEP the chat input (message[body]) — separate
+            # entities, so text typed before staging media survives. Reset the typing
+            # throttle like send_text (#94).
             {:noreply,
-             assign(socket,
-               composer: to_form(%{"body" => body}, as: "message"),
-               reply_to: nil,
-               last_typing_at: nil
-             )}
+             socket |> clear_media_caption() |> assign(reply_to: nil, last_typing_at: nil)}
 
           {:error, reason} ->
             # No real row will stream in, so the optimistic media node would spin
-            # forever (and pin its preview data-URLs in memory) — tell the hook to
-            # drop that exact twin (#95). Text sends have nack/markFailed.
+            # forever (and pin its preview data-URLs in memory) — tell the hook to drop
+            # that exact twin (#95). Clear the caption too: the upload is already
+            # consumed, so a failed send must not leave it to pre-fill the next media's
+            # caption. Text sends have nack/markFailed.
             {:noreply,
-             socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(client_id)}
+             socket
+             |> clear_media_caption()
+             |> put_flash(:error, attachment_error(reason))
+             |> push_media_failed(client_id)}
         end
     end
   end
