@@ -1002,6 +1002,11 @@ html {
     font-size: 0.75rem;
     font-weight: 600;
     line-height: 1.35;
+    /* One line, ellipsized — like __text below. A narrow media-reply bubble (#135)
+       would otherwise wrap a long author name to two lines above the photo. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .ed-quote__text {
     display: block;
@@ -1016,6 +1021,16 @@ html {
     .ed-quote {
       transition: none;
     }
+  }
+  /* A media reply (#135): the photo/video/file sets the bubble width, and the
+     quote ellipsizes to it instead of stretching the bubble wider than a narrow
+     photo (Telegram-style — empty space beside the media looked broken). The
+     bubble is width:fit-content, so a nowrap quote line otherwise drove its
+     width; width:0 stops the quote from contributing to that, and min-width:100%
+     (ignored for intrinsic sizing) then fills it to the media's width. */
+  .ed-bubble:has(img, video, .ed-file) .ed-quote {
+    width: 0;
+    min-width: 100%;
   }
 
   /* Permalink target: briefly ring the message scrolled to. */
