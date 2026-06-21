@@ -3875,9 +3875,22 @@ defmodule EdenWeb.ChatLive do
             // The floating chip is server-rendered (#date-chip) so a re-render can't drop
             // it — we only read/update it here, never inject it.
             this.chip = this.scroller.querySelector("#date-chip")
+            // The chip is a scroll-only affordance. A LiveView re-render (e.g. typing
+            // in the composer fires phx-change) reflows the streamed list and nudges
+            // scrollTop by a sub-pixel amount, emitting a "scroll" with no real motion —
+            // that flashed the chip on every keystroke (#134). Anchor the last position
+            // and ignore movement under a few px (well below a line), so only a genuine
+            // scroll updates the chip; the wobble (≤1px, nets to zero) is filtered out.
+            this._chipAnchor = this.scroller.scrollTop
             this.onScroll = () => {
               if (this._raf) return
-              this._raf = requestAnimationFrame(() => { this._raf = null; this.updateChip() })
+              this._raf = requestAnimationFrame(() => {
+                this._raf = null
+                const top = this.scroller.scrollTop
+                if (Math.abs(top - this._chipAnchor) < 4) return
+                this._chipAnchor = top
+                this.updateChip()
+              })
             }
             this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
             this.reconcile()
