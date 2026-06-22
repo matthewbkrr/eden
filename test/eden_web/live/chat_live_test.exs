@@ -583,6 +583,59 @@ defmodule EdenWeb.ChatLiveTest do
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
     end
 
+    test "an in-flight media send survives a conversation switch, landing in its original chat (#bug)",
+         ctx do
+      carol = user_fixture(%{username: "carol_pin", display_name: "Carol"})
+      {:ok, conv_b} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      # Send pressed: the upload is in flight, pinned to conversation A.
+      render_hook(view, "media_sending", %{"id" => "cid-pin", "caption" => "pinned"})
+
+      # The user switches to conversation B mid-upload (a live patch — the LiveView,
+      # and thus the upload, survives). The in-flight send must NOT be cancelled.
+      render_patch(view, ~p"/app/c/#{conv_b.id}")
+
+      # The upload completes; its send lands in the ORIGINAL conversation (A), not B.
+      render_submit(element(view, "#composer"))
+
+      assert {:ok, [%{body: "pinned", attachments: [%{kind: "image"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), conv_b.id)
+    end
+
+    test "staged (not-yet-sent) media is dropped on a conversation switch — no leak (#89)", ctx do
+      carol = user_fixture(%{username: "carol_drop", display_name: "Carol"})
+      {:ok, conv_b} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, "[data-upload-preview]")
+
+      # Still staged (no media_sending fired). Switching conversations drops it so it
+      # can't ride into the new chat.
+      render_patch(view, ~p"/app/c/#{conv_b.id}")
+      refute has_element?(view, "[data-upload-preview]")
+
+      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), conv_b.id)
+    end
+
     test "the overlay caption is separate from the chat input — no mirroring", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

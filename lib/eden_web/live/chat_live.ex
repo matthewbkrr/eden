@@ -439,7 +439,8 @@ defmodule EdenWeb.ChatLive do
     {:noreply,
      assign(socket,
        sending_media: true,
-       media_client_ids: stash_cid(socket, id, Map.get(params, "caption", ""))
+       media_client_ids:
+         stash_cid(socket, id, Map.get(params, "caption", ""), selected_id(socket))
      )}
   end
 
@@ -458,7 +459,7 @@ defmodule EdenWeb.ChatLive do
   # Safe to delete (this clause + the catch-all below) once no client can still be
   # serving cached pre-#95 JS — i.e. one asset-cache lifetime after the deploy.
   def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
-    {:noreply, assign(socket, media_client_ids: stash_cid(socket, id, ""))}
+    {:noreply, assign(socket, media_client_ids: stash_cid(socket, id, "", selected_id(socket)))}
   end
 
   def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
@@ -489,15 +490,19 @@ defmodule EdenWeb.ChatLive do
         # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
         # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
         # untouched for a later text send.
-        {{cid, caption}, rest} = pop_media_client_id(socket.assigns.media_client_ids)
+        {{cid, caption, conv_id}, rest} = pop_media_client_id(socket.assigns.media_client_ids)
         socket = assign(socket, media_client_ids: rest)
-        send_attachment(socket, scope, conversation, caption, reply_to_id, cid)
+        # Pinned conversation: the upload may have started in a chat the user has since
+        # left (a mid-upload switch). Send it to that ORIGINAL conversation, not the
+        # current one, so leaving doesn't lose the media or leak it into the new chat.
+        # Falls back to the current conversation when no id was stashed (legacy/edge).
+        send_attachment(socket, scope, conv_id || conversation.id, caption, reply_to_id, cid)
 
       String.trim(body) == "" ->
         {:noreply, assign(socket, composer: empty_composer())}
 
       true ->
-        send_text(socket, scope, conversation, body, client_id, reply_to_id)
+        send_text(socket, scope, conversation.id, body, client_id, reply_to_id)
     end
   end
 
@@ -7440,11 +7445,13 @@ defmodule EdenWeb.ChatLive do
     {messages, last_flat} = mark_compact(messages, conversation)
 
     socket
-    # Drop chat A's staged attachments before opening B — they belong to the
-    # conversation they were composed in; otherwise they ride into the new
-    # composer and a send would attach them to the wrong chat (#89, with the
-    # text-draft reset below).
-    |> cancel_staged_attachments()
+    # Drop chat A's STAGED attachments before opening B — they belong to the
+    # conversation they were composed in; otherwise they ride into the new composer
+    # and a send would attach them to the wrong chat (#89, with the text-draft reset
+    # below). An in-flight send (sending_media) is NOT dropped: it finishes in the
+    # background and lands in its pinned conversation, so leaving mid-upload doesn't
+    # lose the media.
+    |> drop_staged_on_switch()
     |> assign(
       selected: conversation,
       subscribed_id: conversation.id,
@@ -8054,6 +8061,12 @@ defmodule EdenWeb.ChatLive do
   # Cancel every staged attachment upload (the composer tray). Used both by the
   # explicit "clear tray" action and on conversation switch so media staged in
   # one chat can't be sent into another (#89).
+  # Conversation switch: drop only STAGED attachments (#89). An in-flight send
+  # (sending_media) is left running so it finishes in the background and lands in its
+  # pinned conversation — leaving mid-upload must not lose the media.
+  defp drop_staged_on_switch(%{assigns: %{sending_media: true}} = socket), do: socket
+  defp drop_staged_on_switch(socket), do: cancel_staged_attachments(socket)
+
   defp cancel_staged_attachments(socket) do
     socket
     |> then(fn s ->
@@ -8149,10 +8162,10 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  defp send_text(socket, scope, conversation, body, client_id, reply_to_id) do
+  defp send_text(socket, scope, conversation_id, body, client_id, reply_to_id) do
     attrs = %{"body" => body, "client_id" => client_id, "reply_to_id" => reply_to_id}
 
-    case Chat.create_message(scope, conversation.id, attrs) do
+    case Chat.create_message(scope, conversation_id, attrs) do
       {:ok, _message} ->
         # The form path clears the input via the composer assign; the hook path
         # (client_id present) already cleared it client-side, so leave the assign
@@ -8194,7 +8207,7 @@ defmodule EdenWeb.ChatLive do
 
       id =
         case List.first(socket.assigns.media_client_ids) do
-          {id, _caption} -> id
+          {id, _caption, _conv_id} -> id
           _ -> nil
         end
 
@@ -8207,13 +8220,17 @@ defmodule EdenWeb.ChatLive do
   defp overall_progress(%{attachment: %{entries: entries}}),
     do: ceil(Enum.sum(Enum.map(entries, & &1.progress)) / length(entries))
 
-  # Stash a media send's {client_id, caption} pair FIFO, bounded so a misbehaving client
-  # can't grow it unbounded (sends are serialized, so 1-2 is the real depth) (#95).
-  defp stash_cid(socket, id, caption),
-    do: Enum.take(socket.assigns.media_client_ids ++ [{id, caption}], 16)
+  defp selected_id(socket), do: socket.assigns.selected && socket.assigns.selected.id
+
+  # Stash a media send's {client_id, caption, conversation_id} FIFO, bounded so a
+  # misbehaving client can't grow it unbounded (sends are serialized, so 1-2 is the
+  # real depth) (#95). conversation_id pins the send to the chat it was started in, so
+  # an in-flight upload survives a conversation switch and lands in the right chat.
+  defp stash_cid(socket, id, caption, conv_id),
+    do: Enum.take(socket.assigns.media_client_ids ++ [{id, caption, conv_id}], 16)
 
   defp pop_media_client_id([entry | rest]), do: {entry, rest}
-  defp pop_media_client_id([]), do: {{nil, ""}, []}
+  defp pop_media_client_id([]), do: {{nil, "", nil}, []}
 
   # Tell the hook to drop the exact optimistic media node for a send that produced
   # no real row (server error or no consumed entry), so it doesn't spin forever and
@@ -8225,7 +8242,7 @@ defmodule EdenWeb.ChatLive do
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
-  defp send_attachment(socket, scope, conversation, body, reply_to_id, client_id) do
+  defp send_attachment(socket, scope, conversation_id, body, reply_to_id, client_id) do
     # consume_uploaded_entries cleans up each temp file as its callback returns,
     # so to build ONE album from several entries we copy each to a stable temp,
     # then persist them together (atomic) and remove the temps.
@@ -8250,13 +8267,13 @@ defmodule EdenWeb.ChatLive do
 
         if String.trim(body) == "",
           do: {:noreply, socket},
-          else: send_text(socket, scope, conversation, body, nil, reply_to_id)
+          else: send_text(socket, scope, conversation_id, body, nil, reply_to_id)
 
       sources ->
         # client_id correlates the real album message with the hook's optimistic node
         # so the data-client-id swap drops the exact twin when it streams in (#95).
         opts = %{body: body, reply_to_id: reply_to_id, client_id: client_id}
-        result = Chat.create_attachments(scope, conversation.id, sources, opts)
+        result = Chat.create_attachments(scope, conversation_id, sources, opts)
         Enum.each(sources, &File.rm(&1.path))
 
         case result do
