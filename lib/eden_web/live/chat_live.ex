@@ -428,13 +428,19 @@ defmodule EdenWeb.ChatLive do
      |> maybe_broadcast_typing(params["body"] || "")}
   end
 
-  # Fired the instant a media send is submitted (#95): close the preview overlay
-  # now (the in-stream node takes over) AND stash the send's client_id FIFO. The id
-  # rides this fire-and-forget push, which reaches us BEFORE the upload's "send"
-  # (same channel → ordered), so `send_attachment` can stamp the real message and
-  # its optimistic twin swaps out — without the old two-pass gating the upload.
-  def handle_event("media_sending", %{"id" => id}, socket) when is_binary(id) do
-    {:noreply, assign(socket, sending_media: true, media_client_ids: stash_cid(socket, id))}
+  # Fired the instant a media send is submitted (#95): close the preview overlay now
+  # (the in-stream node takes over) AND stash the send's client_id + caption FIFO. Both
+  # ride this fire-and-forget push, which reaches us BEFORE the upload's "send" (same
+  # channel → ordered), so send_attachment can stamp the real message with its caption
+  # and its optimistic twin swaps out. The caption rides HERE — captured by the hook at
+  # submit, while the overlay is still open — not in @composer, which a composer_changed
+  # during the (slow) upload (e.g. typing another message) could clobber, dropping it.
+  def handle_event("media_sending", %{"id" => id} = params, socket) when is_binary(id) do
+    {:noreply,
+     assign(socket,
+       sending_media: true,
+       media_client_ids: stash_cid(socket, id, Map.get(params, "caption", ""))
+     )}
   end
 
   def handle_event("media_sending", _params, socket),
@@ -452,7 +458,7 @@ defmodule EdenWeb.ChatLive do
   # Safe to delete (this clause + the catch-all below) once no client can still be
   # serving cached pre-#95 JS — i.e. one asset-cache lifetime after the deploy.
   def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
-    {:noreply, assign(socket, media_client_ids: stash_cid(socket, id))}
+    {:noreply, assign(socket, media_client_ids: stash_cid(socket, id, ""))}
   end
 
   def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
@@ -476,15 +482,14 @@ defmodule EdenWeb.ChatLive do
       # falls through to the text path; the upload keeps going and lands on its own
       # later "send" when every entry is done.
       entries != [] and Enum.all?(entries, & &1.done?) ->
-        # The media client_id rode the socket (media_sending), not the form; pop the
-        # oldest queued one to stamp this send so its optimistic twin swaps out (#95).
-        # The caption is its OWN field (message[caption]), separate from the chat input
-        # (message[body], left untouched for a later text send). Read it from the
-        # server-tracked composer, NOT the submit params: media_sending closes the
-        # overlay (removing #compose-caption) before the form serializes for the upload,
-        # so the param can arrive empty — but composer_changed already stashed it here.
-        {cid, rest} = pop_media_client_id(socket.assigns.media_client_ids)
-        caption = socket.assigns.composer[:caption].value || ""
+        # The client_id AND caption rode the socket (media_sending), captured by the hook
+        # at submit — NOT the form/@composer. media_sending closes the overlay (removing
+        # #compose-caption) before the form serializes, and a composer_changed during the
+        # (slow) upload could clobber @composer[:caption], so both would be lost; carrying
+        # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
+        # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
+        # untouched for a later text send.
+        {{cid, caption}, rest} = pop_media_client_id(socket.assigns.media_client_ids)
         socket = assign(socket, media_client_ids: rest)
         send_attachment(socket, scope, conversation, caption, reply_to_id, cid)
 
@@ -4158,8 +4163,13 @@ defmodule EdenWeb.ChatLive do
                 return
               }
               const clientId = this.uuid()
-              this.addOptimisticMedia(clientId, overlay)
-              this.pushEvent("media_sending", { id: clientId })
+              // Capture the caption NOW, while the overlay is still open: it rides the
+              // media_sending push (so it can't be lost if the upload is slow) and is
+              // drawn in the optimistic node (so it shows during upload, not only on the
+              // real row's arrival).
+              const caption = (this.el.querySelector("#compose-caption")?.value || "").trim()
+              this.addOptimisticMedia(clientId, overlay, caption)
+              this.pushEvent("media_sending", { id: clientId, caption })
               this.armStall(clientId)
               // Mark the send in flight (#130 polish): updated() then re-hides the
               // overlay on EVERY patch until a fresh pick. Without this, a re-render
@@ -4353,7 +4363,7 @@ defmodule EdenWeb.ChatLive do
           // revoked on consume. A files-only send (no image/video preview) gets NO
           // node — files render as cards with no meaningful local preview, and an
           // empty album box would just flash; their real rows rise in normally.
-          addOptimisticMedia(clientId, overlay) {
+          addOptimisticMedia(clientId, overlay, caption) {
             // Snapshot every staged tile's frame IN ORDER — a photo's <img> or a
             // loaded video's first frame (#117). So a sent clip rises in with its
             // poster at full size, not a blank square that the real video later
@@ -4439,21 +4449,36 @@ defmodule EdenWeb.ChatLive do
                 main.appendChild(head)
               }
               main.appendChild(media)
+              // Caption below the media, mirroring the real flat row's .ed-flat__body,
+              // so it shows during upload (not only when the real row arrives).
+              if (caption) {
+                const body = document.createElement("div")
+                body.className = "break-words ed-flat__body"
+                body.textContent = caption
+                main.appendChild(body)
+              }
               row.appendChild(main)
             } else {
               row.className = "ed-msg flex justify-end"
               const bubble = document.createElement("div")
               bubble.className = "ed-bubble ed-bubble--me"
-              // Mirror the REAL media bubble so the optimistic twin is the SAME
-              // height and the swap doesn't nudge the stream: the photo sits in a
-              // block (mb-1) wrapper with an .ed-bubble__meta time line beneath it
-              // (+ a 1:1 sending check), exactly like the text optimistic node
-              // above. Without it the real row was ~20px taller (the residual jump
-              // left after the image-box reservation fix).
+              // Mirror the REAL media bubble so the optimistic twin is the SAME height
+              // and the swap doesn't nudge the stream: the photo sits in a block (mb-1)
+              // wrapper, then a .ed-bubble__cap holds the optional caption + the
+              // .ed-bubble__meta time line (+ a 1:1 sending check) — exactly the real
+              // structure (the cap also width-constrains the caption to the media).
               const wrap = document.createElement("div")
               wrap.className = "mb-1"
               wrap.appendChild(media)
               bubble.appendChild(wrap)
+              const cap = document.createElement("div")
+              cap.className = "ed-bubble__cap"
+              if (caption) {
+                const capText = document.createElement("span")
+                capText.className = "break-words"
+                capText.textContent = caption
+                cap.appendChild(capText)
+              }
               const meta = document.createElement("span")
               meta.className = "ed-bubble__meta"
               const time = document.createElement("time")
@@ -4466,7 +4491,8 @@ defmodule EdenWeb.ChatLive do
                     '<span class="hero-check-micro size-3.5"></span></span>',
                 )
               }
-              bubble.appendChild(meta)
+              cap.appendChild(meta)
+              bubble.appendChild(cap)
               row.appendChild(bubble)
             }
             this.pending.appendChild(row)
@@ -8146,7 +8172,13 @@ defmodule EdenWeb.ChatLive do
       {:noreply, socket}
     else
       socket = assign(socket, last_media_pct: pct)
-      id = List.first(socket.assigns.media_client_ids)
+
+      id =
+        case List.first(socket.assigns.media_client_ids) do
+          {id, _caption} -> id
+          _ -> nil
+        end
+
       {:noreply, push_event(socket, "media_progress", %{percent: pct, id: id})}
     end
   end
@@ -8156,12 +8188,13 @@ defmodule EdenWeb.ChatLive do
   defp overall_progress(%{attachment: %{entries: entries}}),
     do: ceil(Enum.sum(Enum.map(entries, & &1.progress)) / length(entries))
 
-  # Stash a media send's client_id FIFO, bounded so a misbehaving client can't grow
-  # it unbounded (sends are serialized, so 1-2 is the real depth) (#95).
-  defp stash_cid(socket, id), do: Enum.take(socket.assigns.media_client_ids ++ [id], 16)
+  # Stash a media send's {client_id, caption} pair FIFO, bounded so a misbehaving client
+  # can't grow it unbounded (sends are serialized, so 1-2 is the real depth) (#95).
+  defp stash_cid(socket, id, caption),
+    do: Enum.take(socket.assigns.media_client_ids ++ [{id, caption}], 16)
 
-  defp pop_media_client_id([id | rest]), do: {id, rest}
-  defp pop_media_client_id([]), do: {nil, []}
+  defp pop_media_client_id([entry | rest]), do: {entry, rest}
+  defp pop_media_client_id([]), do: {{nil, ""}, []}
 
   # Tell the hook to drop the exact optimistic media node for a send that produced
   # no real row (server error or no consumed entry), so it doesn't spin forever and
