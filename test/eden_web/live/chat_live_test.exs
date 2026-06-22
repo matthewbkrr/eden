@@ -558,6 +558,29 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, "[data-upload-preview]")
     end
 
+    test "a file send stamps the file message with its own per-ref client_id (#149)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "one.txt", content: "first", type: "text/plain"}
+        ])
+
+      html = render_upload(file, "one.txt")
+
+      # The staged file carries its upload ref in the tray; the hook mints a client_id
+      # per file keyed by that ref and pushes them on media_sending (#149) — distinct
+      # from media's single album id, so each file message swaps its own card.
+      assert [[_, ref]] = Regex.scan(~r/phx-value-ref="([^"]+)"/, html)
+
+      render_hook(view, "media_sending", %{"caption" => "", "files" => %{ref => "file-cid-1"}})
+      render_submit(element(view, "#composer"))
+
+      assert {:ok, [%{client_id: "file-cid-1", attachments: [%{kind: "file"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+    end
+
     test "a media caption survives a chat-input change during the upload (#bug)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
