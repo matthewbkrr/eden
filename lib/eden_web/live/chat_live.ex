@@ -8734,11 +8734,24 @@ defmodule EdenWeb.ChatLive do
         do: List.delete_at(stash, idx),
         else: List.replace_at(stash, idx, {album_id, caption, conv_id, files, caption_id})
 
-    {:noreply,
-     assign(socket,
-       media_client_ids: stash,
-       last_file_pct: Map.delete(socket.assigns.last_file_pct, entry.ref)
-     )}
+    socket =
+      assign(socket,
+        media_client_ids: stash,
+        last_file_pct: Map.delete(socket.assigns.last_file_pct, entry.ref)
+      )
+
+    # When the LAST file of a files-only send lands, this progress path — not
+    # send_attachment — finished it, so clear the in-flight flag (re-enables the attach
+    # button; otherwise sending_media stuck true left the paperclip disabled) and the
+    # caption/reply/typing, mirroring send_attachment's success cleanup.
+    if done? do
+      {:noreply,
+       socket
+       |> clear_media_caption()
+       |> assign(sending_media: false, last_media_pct: nil, reply_to: nil, last_typing_at: nil)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable`
