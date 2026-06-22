@@ -538,29 +538,102 @@ defmodule EdenWeb.ChatLiveTest do
       render_upload(file, "a.png")
       assert has_element?(view, "[data-upload-preview]")
 
-      # The caption rides its OWN field (message[caption]); composer_changed stashes it
-      # server-side so it survives the overlay close on send.
-      view |> form("#composer", %{message: %{caption: "look"}}) |> render_change()
-
-      # The hook pushes media_sending{id} the instant the send is submitted: the
-      # overlay closes at once (normal composer returns) even though the entry is
-      # still staged, and the id is queued to stamp the real message.
-      render_hook(view, "media_sending", %{"id" => "cid-7"})
+      # The hook captures the caption at submit and pushes it WITH media_sending{id}:
+      # both ride the socket, so neither depends on @composer surviving the upload. The
+      # overlay closes at once (normal composer returns) even though the entry is staged.
+      render_hook(view, "media_sending", %{"id" => "cid-7", "caption" => "look"})
       refute has_element?(view, "[data-upload-preview]")
       assert has_element?(view, "#composer-body")
       # Sends are serialized while one is in flight: the attach affordance is gated
       # (pointer-events off) so a second media send can't overlap the first (#95).
       assert has_element?(view, "#composer label.pointer-events-none")
 
-      # Submit: the stashed id stamps the album so its optimistic twin swaps out
-      # client-side by data-client-id (no heuristic). The stashed caption (read from the
-      # composer, robust to the overlay close) becomes the album's body.
+      # Submit: the stashed {id, caption} stamps the album so its optimistic twin swaps
+      # out by data-client-id and the caption becomes the album's body.
       render_submit(element(view, "#composer"))
 
       assert {:ok, [%{body: "look", client_id: "cid-7", attachments: [%{kind: "image"}]}]} =
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
 
       refute has_element?(view, "[data-upload-preview]")
+    end
+
+    test "a media caption survives a chat-input change during the upload (#bug)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+
+      # The caption is captured at submit and stashed via media_sending (overlay closes).
+      render_hook(view, "media_sending", %{"id" => "cidc", "caption" => "the caption"})
+
+      # While the (slow) upload runs, the user types another message — a composer_changed
+      # with no caption key. This must NOT drop the stashed caption (the bug: it used to
+      # read @composer[:caption], which this change clobbered, losing the caption).
+      view |> form("#composer", %{message: %{body: "typed during upload"}}) |> render_change()
+
+      render_submit(element(view, "#composer"))
+
+      assert {:ok, [%{body: "the caption", attachments: [%{kind: "image"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+    end
+
+    test "an in-flight media send survives a conversation switch, landing in its original chat (#bug)",
+         ctx do
+      carol = user_fixture(%{username: "carol_pin", display_name: "Carol"})
+      {:ok, conv_b} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      # Send pressed: the upload is in flight, pinned to conversation A.
+      render_hook(view, "media_sending", %{"id" => "cid-pin", "caption" => "pinned"})
+
+      # The user switches to conversation B mid-upload (a live patch — the LiveView,
+      # and thus the upload, survives). The in-flight send must NOT be cancelled.
+      render_patch(view, ~p"/app/c/#{conv_b.id}")
+
+      # The upload completes; its send lands in the ORIGINAL conversation (A), not B.
+      render_submit(element(view, "#composer"))
+
+      assert {:ok, [%{body: "pinned", attachments: [%{kind: "image"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), conv_b.id)
+    end
+
+    test "staged (not-yet-sent) media is dropped on a conversation switch — no leak (#89)", ctx do
+      carol = user_fixture(%{username: "carol_drop", display_name: "Carol"})
+      {:ok, conv_b} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png")
+      assert has_element?(view, "[data-upload-preview]")
+
+      # Still staged (no media_sending fired). Switching conversations drops it so it
+      # can't ride into the new chat.
+      render_patch(view, ~p"/app/c/#{conv_b.id}")
+      refute has_element?(view, "[data-upload-preview]")
+
+      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), conv_b.id)
     end
 
     test "the overlay caption is separate from the chat input — no mirroring", ctx do
