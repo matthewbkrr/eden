@@ -2559,6 +2559,10 @@ defmodule EdenWeb.ChatLive do
             data-sender-name={@current_scope.user.display_name}
             data-max-body={Chat.Message.max_body()}
             data-sending-media={to_string(@sending_media)}
+            data-failed={gettext("Not delivered")}
+            data-resend={gettext("Resend")}
+            data-delete={gettext("Delete")}
+            data-resend-many={gettext("Resend {count} messages")}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -4067,6 +4071,13 @@ defmodule EdenWeb.ChatLive do
             this.connected = true
             this.convId = this.el.dataset.conversationId
             this.queue = []
+            // Per-send delivery watchdogs by client_id (#142): a clock shows while a
+            // send awaits ack; if none arrives in time the clock flips to a red ●!.
+            // ~20s when online (covers several LiveView reconnects on a flaky link);
+            // a window "offline" event shortens any pending wait to ~3s.
+            this.sendTimers = new Map()
+            this.onOffline = () => this.onWentOffline()
+            window.addEventListener("offline", this.onOffline)
             // True while a media send is in flight — gates the overlay re-hide (#130).
             this.sending = false
             // Object URLs for staged video previews (#117), keyed
@@ -4119,6 +4130,10 @@ defmodule EdenWeb.ChatLive do
               for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
               this.el.edenVideoUrls.clear()
             }
+            window.removeEventListener("offline", this.onOffline)
+            this.sendTimers.forEach((t) => clearTimeout(t))
+            this.sendTimers.clear()
+            this.closeFailMenu()
           },
           reconnected() {
             this.connected = true
@@ -4133,6 +4148,9 @@ defmodule EdenWeb.ChatLive do
               this.convId = this.el.dataset.conversationId
               this.queue = []
               this.sending = false
+              this.sendTimers.forEach((t) => clearTimeout(t))
+              this.sendTimers.clear()
+              this.closeFailMenu()
               if (this.pending) this.pending.replaceChildren()
               // Revoke any staged-clip object URLs from the old conversation (#117).
               for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
@@ -4216,13 +4234,15 @@ defmodule EdenWeb.ChatLive do
             // queued item (own client_id, optimistic node, dedup, resend).
             for (const part of this.split(body)) {
               const clientId = this.uuid()
-              // No optimistic node on the happy path (#130): the send is queued +
-              // dedup'd by client_id (so a flaky link still can't lose or duplicate
-              // it), but we DON'T draw a local twin. The real row streams in over the
-              // {:new_message} broadcast and rises in via the riser — one transition,
-              // identical to a thread reply, instead of the optimistic-then-swap that
-              // read as a jerk. A rejected send materializes a retry node lazily (see
-              // markFailed), so #68's retry UX survives without the happy-path twin.
+              // 1:1 DMs draw an optimistic node NOW so a "sending" clock shows
+              // immediately (#142) — valuable on a slow cross-border link; the real row
+              // carries data-client-id, so the riser swaps it in atomically (clock → ✓,
+              // then ✓✓ on read). GROUPS (no receipt) and ROOMS (flat) keep #130's
+              // no-node happy path — they render no delivery status; a rejected send in
+              // any surface still materializes a retry node lazily in markFailed.
+              if (this.el.dataset.layout !== "flat" && this.el.dataset.isGroup !== "true") {
+                this.addOptimistic(clientId, part)
+              }
               this.queue.push({ clientId, body: part, sent: false })
             }
             this.flush()
@@ -4264,23 +4284,50 @@ defmodule EdenWeb.ChatLive do
             return parts.filter((p) => p.length > 0)
           },
           flush() {
-            if (!this.connected) return
             // Items stay queued until acked; only then are they removed. An
             // in-flight item (sent) isn't re-sent until a reconnect re-arms it.
             for (const item of this.queue) {
               if (item.sent) continue
+              // Arm the delivery watchdog BEFORE the connection gate (#142): a send
+              // composed while offline can't go out now, but must still flip to a red
+              // ●! after the offline grace (navigator.onLine picks 20s online / 3s
+              // offline) instead of a clock stuck forever. Cleared on the reply.
+              this.armSendWatchdog(item.clientId, item.body)
+              if (!this.connected) continue
               item.sent = true
               this.pushEvent("send", { message: { body: item.body, client_id: item.clientId } }, (reply) => {
+                this.clearSendWatchdog(item.clientId)
                 this.queue = this.queue.filter((q) => q.clientId !== item.clientId)
                 // On success DON'T remove the optimistic node here — the ack
                 // races the {:new_message} broadcast, and removing first leaves
                 // a frame where the message vanishes (the list dips, then the
                 // real row pops in: the "jerk"). The rise-in observer removes it
-                // atomically the instant the real row streams in. Only a nack
-                // (rejected) needs handling, since no real row will arrive.
+                // atomically the instant the real row streams in. A nack (server
+                // rejection) drops the item from the queue and flags it failed.
                 if (reply && reply.nack) this.markFailed(item.clientId, item.body)
               })
             }
+          },
+          // Delivery watchdog (#142). Online → ~20s (spans several reconnects); offline
+          // → ~3s grace. Fires only if the item is still unacked (a reply clears it).
+          armSendWatchdog(clientId, body) {
+            this.clearSendWatchdog(clientId)
+            const ms = navigator.onLine ? 20000 : 3000
+            const timer = setTimeout(() => {
+              this.sendTimers.delete(clientId)
+              if (this.queue.some((q) => q.clientId === clientId)) this.markFailed(clientId, body)
+            }, ms)
+            this.sendTimers.set(clientId, timer)
+          },
+          clearSendWatchdog(clientId) {
+            const t = this.sendTimers.get(clientId)
+            if (t) { clearTimeout(t); this.sendTimers.delete(clientId) }
+          },
+          // The browser dropped its network: shorten every pending send's wait to the
+          // offline grace so a genuine outage surfaces the red ●! quickly (a momentary
+          // blip self-heals before the grace elapses).
+          onWentOffline() {
+            for (const item of this.queue) this.armSendWatchdog(item.clientId, item.body)
           },
           addOptimistic(clientId, body) {
             // Match the conversation's layout so the optimistic node doesn't
@@ -4327,22 +4374,23 @@ defmodule EdenWeb.ChatLive do
               const bubble = document.createElement("div")
               bubble.className = "ed-bubble ed-bubble--me"
               bubble.style.opacity = "0.55"
-              // Mirror the real bubble's body + meta structure so the optimistic
-              // node is the SAME height — without the meta line it was shorter,
-              // so the real (taller) replacement looked like it grew ("small to
-              // large"). A lone "sending" check stands in for the read receipt —
-              // but ONLY in 1:1s: group bubbles render no receipt (the real row
-              // hides it for groups), so showing one optimistically made the check
-              // flash then vanish as the real row swapped in (#89). Match that.
+              // Mirror the REAL bubble exactly — body + meta inside .ed-bubble__cap —
+              // so the optimistic node is the same height and the riser's swap doesn't
+              // nudge layout (#130). The status slot shows a "sending" clock in 1:1s
+              // (#142, clock → ✓ → ✓✓ once the real row swaps in); group bubbles render
+              // no receipt (the real row hides it for groups), so leave it empty there
+              // (#89) — markFailed overwrites whatever's here with the red ●! on a nack.
               const isGroup = this.el.dataset.isGroup === "true"
-              const check =
+              const status =
                 isGroup
                   ? ""
                   : '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                    '<span class="hero-check-micro size-3.5"></span></span>'
+                    '<span class="hero-clock-micro size-3.5"></span></span>'
               bubble.innerHTML =
+                '<div class="ed-bubble__cap">' +
                 '<span class="break-words"></span>' +
-                '<span class="ed-bubble__meta"><time></time>' + check + "</span>"
+                '<span class="ed-bubble__meta"><time></time>' + status + "</span>" +
+                "</div>"
               bubble.querySelector("span.break-words").textContent = body
               bubble.querySelector("time").textContent =
                 new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -4745,39 +4793,107 @@ defmodule EdenWeb.ChatLive do
           },
           markFailed(clientId, body) {
             let node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
-            // The happy path renders no optimistic node (#130), so a rejected text
-            // send has nothing to mark — materialize the twin now (faded), then dress
-            // it as the tappable retry/dismiss node (#68). Media sends still render
-            // their own optimistic node, so this only fires for text nacks.
+            // Rooms/groups draw no optimistic node on the happy path (#130/#142), so a
+            // rejected send has nothing to mark — materialize it now (faded), then flag
+            // it failed. Media nacks drop their node (push_media_failed), so this only
+            // fires for text nacks.
             if (!node && body != null) {
               this.addOptimistic(clientId, body)
               node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
             }
             if (!node) return
             node.style.opacity = "1"
-            const target = node.querySelector(".ed-bubble") || node.querySelector(".ed-flat__body")
-            if (target) target.style.border = "1px solid var(--ed-danger)"
-            // A failed node must not become a permanent ghost (#68): click it to
-            // retry the send (same client_id → idempotent), or ✕ to dismiss it.
             node.classList.add("ed-msg-failed")
-            node.title = "Failed to send — click to retry"
-            node.addEventListener("click", (e) => {
-              if (e.target.closest("[data-dismiss]")) return
-              const body = node.dataset.body || ""
-              node.remove()
-              if (!body) return
-              this.addOptimistic(clientId, body)
-              this.queue.push({ clientId, body, sent: false })
-              this.flush()
-            }, { once: true })
-            const x = document.createElement("button")
-            x.type = "button"
-            x.dataset.dismiss = ""
-            x.className = "ed-msg-failed__x"
-            x.setAttribute("aria-label", "Dismiss")
-            x.textContent = "✕"
-            x.addEventListener("click", () => node.remove())
-            ;(target || node).appendChild(x)
+            if (body != null) node.dataset.body = body
+            // Swap the status slot (clock, if any) for a tappable red ●! that opens a
+            // resend/delete menu (#142). Bubble: in .ed-bubble__meta; flat row: a
+            // trailing affordance on the row itself.
+            const meta = node.querySelector(".ed-bubble__meta")
+            const host = meta || node
+            host.querySelectorAll(".ed-msg-failed__bang").forEach((b) => b.remove())
+            if (meta) {
+              // Drop the "sending" clock span (the inline-flex after <time>).
+              meta.querySelectorAll(":scope > .inline-flex").forEach((s) => s.remove())
+            }
+            const bang = document.createElement("button")
+            bang.type = "button"
+            bang.className = "ed-msg-failed__bang"
+            bang.setAttribute("aria-label", this.el.dataset.failed || "Not delivered")
+            bang.innerHTML = '<span class="hero-exclamation-circle-micro size-3.5"></span>'
+            bang.addEventListener("click", (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              this.openFailMenu(node)
+            })
+            host.appendChild(bang)
+          },
+          failedNodes() {
+            return [...this.pending.querySelectorAll(".ed-msg-failed")]
+          },
+          // Re-send one failed node (same client_id → idempotent): drop it, redraw the
+          // optimistic node, re-queue, flush.
+          resendNode(node) {
+            const clientId = node.dataset.clientId
+            const body = node.dataset.body || ""
+            node.remove()
+            if (!body) return
+            this.addOptimistic(clientId, body)
+            this.queue.push({ clientId, body, sent: false })
+          },
+          openFailMenu(node) {
+            this.closeFailMenu()
+            const d = this.el.dataset
+            const failed = this.failedNodes()
+            const menu = document.createElement("div")
+            menu.className = "ed-menu ed-fail-menu"
+            menu.setAttribute("role", "menu")
+            const item = (label, onClick, danger) => {
+              const b = document.createElement("button")
+              b.type = "button"
+              b.className = "ed-menu__item" + (danger ? " ed-menu__item--danger" : "")
+              b.setAttribute("role", "menuitem")
+              b.textContent = label
+              b.addEventListener("click", () => { this.closeFailMenu(); onClick() })
+              menu.appendChild(b)
+            }
+            item(d.resend || "Resend", () => { this.resendNode(node); this.flush() })
+            // Batch: offer to re-send every failed message at once.
+            if (failed.length > 1) {
+              const label = (d.resendMany || "Resend {count} messages")
+                .replace("{count}", failed.length)
+              item(label, () => { failed.forEach((n) => this.resendNode(n)); this.flush() })
+            }
+            item(d.delete || "Delete", () => node.remove(), true)
+            document.body.appendChild(menu)
+            // Anchor to the ●!: the marker sits at the message's trailing (right) edge,
+            // so right-align the menu under it and grow from that corner; flip above the
+            // ! when there isn't room below. Clamped to the viewport.
+            const r = (node.querySelector(".ed-msg-failed__bang") || node).getBoundingClientRect()
+            const mw = menu.offsetWidth, mh = menu.offsetHeight
+            const left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8))
+            const fitsBelow = r.bottom + 4 + mh <= window.innerHeight - 8
+            const top = fitsBelow ? r.bottom + 4 : Math.max(8, r.top - mh - 4)
+            menu.style.left = left + "px"
+            menu.style.top = top + "px"
+            menu.style.transformOrigin = fitsBelow ? "top right" : "bottom right"
+            this.failMenu = menu
+            this.onFailDoc = (e) => { if (!menu.contains(e.target)) this.closeFailMenu() }
+            this.onFailKey = (e) => { if (e.key === "Escape") this.closeFailMenu() }
+            // Land focus on the first action (keyboard a11y), like .ContextMenu.
+            menu.querySelector("[role=menuitem]")?.focus({ preventScroll: true })
+            setTimeout(() => {
+              document.addEventListener("click", this.onFailDoc)
+              document.addEventListener("keydown", this.onFailKey)
+              document.addEventListener("scroll", this.onFailDoc, { capture: true, passive: true })
+            }, 0)
+          },
+          closeFailMenu() {
+            if (!this.failMenu) return
+            this.failMenu.remove()
+            this.failMenu = null
+            document.removeEventListener("click", this.onFailDoc)
+            document.removeEventListener("keydown", this.onFailKey)
+            document.removeEventListener("scroll", this.onFailDoc, { capture: true })
           },
         }
       </script>
