@@ -1,0 +1,13 @@
+{
+  "name": "eden-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright multi-user / multi-device audit harness for eden",
+  "scripts": {
+    "test": "playwright test --config playwright.config.js",
+    "report": "playwright show-report playwright-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0"
+  }
+}
