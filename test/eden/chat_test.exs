@@ -37,6 +37,15 @@ defmodule Eden.ChatTest do
     image_path(bytes)
   end
 
+  # A throwaway .txt file (classified as a `file`, not media) — for per-file
+  # attachment tests (#149). Cleaned up after the test.
+  defp tmp_text(content) do
+    path = Path.join(System.tmp_dir!(), "note-#{System.unique_integer([:positive])}.txt")
+    File.write!(path, content)
+    on_exit(fn -> File.rm(path) end)
+    path
+  end
+
   # A committed real HEIC fixture (ISO-BMFF, ftyp + "heic" brand) — the format that
   # used to be misclassified as video (#123). The bundled libvips decodes HEIC but
   # can't encode it, so this is a checked-in file rather than generated in-test.
@@ -1135,6 +1144,58 @@ defmodule Eden.ChatTest do
       assert [%{client_id: ^cid} | rest] = messages
       assert rest != []
       assert Enum.all?(rest, &is_nil(&1.client_id))
+    end
+
+    test "each file message is stamped with its source's own client_id (#149)", %{
+      alice: alice,
+      conv: conv
+    } do
+      album_cid = "a11ce000-0000-0000-0000-000000000aaa"
+      f1_cid = "f11e0001-0000-0000-0000-000000000001"
+      f2_cid = "f11e0002-0000-0000-0000-000000000002"
+      {file1, file2} = {tmp_text("one"), tmp_text("two")}
+
+      {:ok, messages} =
+        Chat.create_attachments(
+          scope(alice),
+          conv.id,
+          [
+            %{path: real_png()},
+            %{path: file1, client_id: f1_cid},
+            %{path: file2, client_id: f2_cid}
+          ],
+          %{client_id: album_cid}
+        )
+
+      # The media album carries the album-level id; EACH file message carries its
+      # OWN source client_id (keyed by upload ref upstream) so its in-stream
+      # optimistic card swaps per file, not just the first (#149).
+      assert [%{client_id: ^album_cid}, %{client_id: ^f1_cid}, %{client_id: ^f2_cid}] = messages
+    end
+
+    test "files-only: the caption rides the first file, each file keeps its own client_id (#149)",
+         %{
+           alice: alice,
+           conv: conv
+         } do
+      f1_cid = "f11e0001-0000-0000-0000-0000000000a1"
+      f2_cid = "f11e0002-0000-0000-0000-0000000000a2"
+      {file1, file2} = {tmp_text("one"), tmp_text("two")}
+
+      {:ok, messages} =
+        Chat.create_attachments(
+          scope(alice),
+          conv.id,
+          [%{path: file1, client_id: f1_cid}, %{path: file2, client_id: f2_cid}],
+          # No media: the album-level client_id is irrelevant; the first file's own
+          # id stamps it and the caption rides it (attachment_steps).
+          %{body: "the caption", client_id: "ignored-no-media"}
+        )
+
+      assert [
+               %{client_id: ^f1_cid, body: "the caption"},
+               %{client_id: ^f2_cid, body: ""}
+             ] = messages
     end
 
     test "get_message stages a visible target but not a deleted/hidden one", %{

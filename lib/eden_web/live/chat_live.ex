@@ -101,8 +101,10 @@ defmodule EdenWeb.ChatLive do
         # oldest to stamp the real message so its optimistic twin swaps out.
         media_client_ids: [],
         # Last upload percent pushed to the ring; gates redundant media_progress
-        # frames so a slow link isn't flooded with no-op diffs (#95).
+        # frames so a slow link isn't flooded with no-op diffs (#95). The album
+        # ring is a single percent; per-file rings (#149) gate by upload ref.
         last_media_pct: nil,
+        last_file_pct: %{},
         composer: empty_composer(),
         folders: [],
         folder_tabs: [],
@@ -438,15 +440,35 @@ defmodule EdenWeb.ChatLive do
   # and its optimistic twin swaps out. The caption rides HERE — captured by the hook at
   # submit, while the overlay is still open — not in @composer, which a composer_changed
   # during the (slow) upload (e.g. typing another message) could clobber, dropping it.
-  def handle_event("media_sending", %{"id" => id} = params, socket) when is_binary(id) do
-    {:noreply,
-     assign(socket,
-       sending_media: true,
-       media_client_ids:
-         stash_cid(socket, id, Map.get(params, "caption", ""), selected_id(socket))
-     )}
+  def handle_event("media_sending", params, socket) when is_map(params) do
+    # `id` is the media album's optimistic client_id (nil for a files-only send);
+    # `files` is a `%{upload_ref => client_id}` map so each file message gets its
+    # OWN id and its optimistic card swaps independently (#149). A send carrying
+    # neither (legacy/edge) just flips the flag without stashing junk.
+    id = if is_binary(params["id"]), do: params["id"], else: nil
+    files = sanitize_file_cids(params["files"])
+
+    if is_nil(id) and files == %{} do
+      {:noreply, assign(socket, sending_media: true)}
+    else
+      caption = if is_binary(params["caption"]), do: params["caption"], else: ""
+      # caption_id is the client_id of the optimistic text node a files-only send draws
+      # for its caption BELOW the pile (#149) — so the caption rides as its own trailing
+      # message, not under the first file. A photo+caption leaves this nil (the caption
+      # rides the album).
+      caption_id = if is_binary(params["caption_id"]), do: params["caption_id"], else: nil
+
+      {:noreply,
+       assign(socket,
+         sending_media: true,
+         media_client_ids: stash_cid(socket, id, caption, selected_id(socket), files, caption_id)
+       )}
+    end
   end
 
+  # A malformed (non-map) media_sending payload must not crash the LiveView — there is no
+  # global handle_event/3 fallback, so without this a crafted event raises FunctionClause.
+  # Mirror the legacy behaviour: just flip the in-flight flag.
   def handle_event("media_sending", _params, socket),
     do: {:noreply, assign(socket, sending_media: true)}
 
@@ -462,7 +484,8 @@ defmodule EdenWeb.ChatLive do
   # Safe to delete (this clause + the catch-all below) once no client can still be
   # serving cached pre-#95 JS — i.e. one asset-cache lifetime after the deploy.
   def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
-    {:noreply, assign(socket, media_client_ids: stash_cid(socket, id, "", selected_id(socket)))}
+    {:noreply,
+     assign(socket, media_client_ids: stash_cid(socket, id, "", selected_id(socket), %{}, nil))}
   end
 
   def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
@@ -493,13 +516,26 @@ defmodule EdenWeb.ChatLive do
         # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
         # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
         # untouched for a later text send.
-        {{cid, caption, conv_id}, rest} = pop_media_client_id(socket.assigns.media_client_ids)
+        {{cid, caption, conv_id, file_cids, caption_id}, rest} =
+          pop_media_client_id(socket.assigns.media_client_ids)
+
         socket = assign(socket, media_client_ids: rest)
         # Pinned conversation: the upload may have started in a chat the user has since
         # left (a mid-upload switch). Send it to that ORIGINAL conversation, not the
         # current one, so leaving doesn't lose the media or leak it into the new chat.
         # Falls back to the current conversation when no id was stashed (legacy/edge).
-        send_attachment(socket, scope, conv_id || conversation.id, caption, reply_to_id, cid)
+        # file_cids maps each file's upload ref to its own client_id; caption_id rides the
+        # files-only fallback so the caption lands trailing, not on the first file (#149).
+        send_attachment(
+          socket,
+          scope,
+          conv_id || conversation.id,
+          caption,
+          reply_to_id,
+          cid,
+          file_cids,
+          caption_id
+        )
 
       String.trim(body) == "" ->
         {:noreply, assign(socket, composer: empty_composer())}
@@ -2564,6 +2600,7 @@ defmodule EdenWeb.ChatLive do
             data-resend={gettext("Resend")}
             data-delete={gettext("Delete")}
             data-resend-many={gettext("Resend {count} messages")}
+            data-sending-label={gettext("Sending {name}")}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -4127,12 +4164,16 @@ defmodule EdenWeb.ChatLive do
             this.handleEvent("media_failed", ({ id }) => {
               this.dropPending(id)
             })
-            // Determinate upload progress for the in-flight media send (#95): the
-            // server averages the album's entries and pushes {percent, id}; we drive
-            // the ring on that exact optimistic node.
-            this.handleEvent("media_progress", ({ id, percent }) => {
-              this.setRing(this.pending?.querySelector(`[data-client-id="${id}"]`), percent)
-              this.armStall(id)
+            // Determinate upload progress for an in-flight send. The server addresses
+            // the album's averaged ring by its client_id (#95) and each file's ring by
+            // its upload ref (#149); we drive whichever node it names and re-arm that
+            // node's stall watchdog.
+            this.handleEvent("media_progress", ({ id, ref, percent }) => {
+              const node = ref
+                ? this.pending?.querySelector(`[data-upload-ref="${ref}"]`)
+                : this.pending?.querySelector(`[data-client-id="${id}"]`)
+              this.setRing(node, percent)
+              this.armStall(node && node.closest(".ed-msg, .ed-flat"))
             })
           },
           disconnected() { this.connected = false },
@@ -4203,15 +4244,35 @@ defmodule EdenWeb.ChatLive do
                 e.preventDefault()
                 return
               }
-              const clientId = this.uuid()
               // Capture the caption NOW, while the overlay is still open: it rides the
               // media_sending push (so it can't be lost if the upload is slow) and is
               // drawn in the optimistic node (so it shows during upload, not only on the
               // real row's arrival).
               const caption = (this.el.querySelector("#compose-caption")?.value || "").trim()
-              this.addOptimisticMedia(clientId, overlay, caption)
-              this.pushEvent("media_sending", { id: clientId, caption })
-              this.armStall(clientId)
+              // Media tiles (image/video) coalesce into ONE album with a single id; files
+              // post one message PER file, so each gets its own optimistic card + id keyed
+              // by upload ref (#149). The caption rides the album, or — files only — the
+              // first file (mirrors the server's attachment_steps).
+              const hasMedia = !!overlay.querySelector(".ed-compose__tile")
+              const albumId = hasMedia ? this.uuid() : null
+              if (albumId) this.armStall(this.addOptimisticMedia(albumId, overlay, caption))
+              const files = {}
+              ;[...overlay.querySelectorAll(".ed-attach-file[data-ref]")].forEach((fe) => {
+                const cid = this.uuid()
+                files[fe.dataset.ref] = cid
+                this.armStall(
+                  this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size),
+                )
+              })
+              // A files-only caption rides BELOW the whole pile as its own trailing message
+              // (#149) — draw its optimistic text node after the file cards. A photo+caption
+              // keeps the caption on the album (drawn above).
+              let captionId = null
+              if (!hasMedia && caption && Object.keys(files).length > 0) {
+                captionId = this.uuid()
+                this.addOptimistic(captionId, caption)
+              }
+              this.pushEvent("media_sending", { id: albumId, caption, files, caption_id: captionId })
               // Mark the send in flight (#130 polish): updated() then re-hides the
               // overlay on EVERY patch until a fresh pick. Without this, a re-render
               // that beats the media_sending round-trip — or morphdom resetting the
@@ -4499,19 +4560,65 @@ defmodule EdenWeb.ChatLive do
                 media.appendChild(tile)
               }
             }
-            // Determinate ring (#95): a track + a fill arc the server drives via
-            // media_progress. Two SVG circles; the fill's stroke-dashoffset is set
-            // in setRing. Rotated -90deg in CSS so it grows from 12 o'clock.
+            // Determinate ring (#95): the server drives its fill arc via media_progress
+            // (setRing moves the dashoffset). White on the photo scrim (rotated -90deg in
+            // CSS so it grows from 12 o'clock).
+            media.appendChild(this.buildRing("ed-media-sending__ring"))
+
+            return this.wrapAndAppendOptimistic(media, clientId, caption)
+          },
+          // Build the determinate progress ring (#95/#149): a faint track + a fill arc.
+          // `cls` styles/sizes the container per context (media = white-on-scrim overlay;
+          // file = currentColor, sized to the icon slot). The fill/track circle classes
+          // stay shared so setRing drives either one unchanged (same r=16 geometry).
+          buildRing(cls) {
             const ring = document.createElement("span")
-            ring.className = "ed-media-sending__ring"
+            ring.className = cls
             ring.setAttribute("aria-hidden", "true")
             ring.innerHTML =
               '<svg viewBox="0 0 36 36">' +
               '<circle class="ed-media-sending__ring-track" cx="18" cy="18" r="16"></circle>' +
               '<circle class="ed-media-sending__ring-fill" cx="18" cy="18" r="16"></circle>' +
               "</svg>"
-            media.appendChild(ring)
-
+            return ring
+          },
+          // Optimistic card for a file/doc send (#149): files post one message PER file, so
+          // each gets its own card + client_id and a determinate ring IN the icon slot
+          // (data-upload-ref → the server's per-file media_progress drives it). Mirrors the
+          // real .ed-file card so the riser's data-client-id swap doesn't reflow.
+          addOptimisticFile(clientId, ref, name, size) {
+            const card = document.createElement("div")
+            card.className = "ed-file ed-file--sending"
+            card.dataset.uploadRef = ref
+            const label = this.el.dataset.sendingLabel
+            // Function replacement so a filename with $-patterns ($&, $1) isn't interpreted.
+            if (label) card.setAttribute("aria-label", label.replace("{name}", () => name || ""))
+            const icon = document.createElement("span")
+            icon.className = "ed-file__icon"
+            icon.appendChild(this.buildRing("ed-file__ring"))
+            card.appendChild(icon)
+            const meta = document.createElement("span")
+            meta.className = "ed-file__meta"
+            const nm = document.createElement("span")
+            nm.className = "ed-file__name"
+            // The raw client filename; the real card shows the server-sanitized name, so a
+            // name with stripped chars may shift by a frame on swap (cosmetic, #149).
+            nm.textContent = name || ""
+            const sz = document.createElement("span")
+            sz.className = "ed-file__size"
+            sz.textContent = size || ""
+            meta.appendChild(nm)
+            meta.appendChild(sz)
+            card.appendChild(meta)
+            // No caption on a file card — a files-only caption rides as its own trailing
+            // message below the pile (#149).
+            return this.wrapAndAppendOptimistic(card, clientId)
+          },
+          // Wrap an optimistic content node (a media node OR a file card) into a bubble/flat
+          // row tagged with its client_id, append it to #pending, animate it in, pin to the
+          // bottom, and return the row. One shared seam for every kind (#149), so the riser
+          // swap + the stall watchdog treat media and files identically.
+          wrapAndAppendOptimistic(content, clientId, caption) {
             const row = document.createElement("div")
             row.dataset.clientId = clientId
             if (this.el.dataset.layout === "flat") {
@@ -4543,8 +4650,8 @@ defmodule EdenWeb.ChatLive do
                 head.querySelector(".ed-flat__name").textContent = name
                 main.appendChild(head)
               }
-              main.appendChild(media)
-              // Caption below the media, mirroring the real flat row's .ed-flat__body,
+              main.appendChild(content)
+              // Caption below the content, mirroring the real flat row's .ed-flat__body,
               // so it shows during upload (not only when the real row arrives).
               if (caption) {
                 const body = document.createElement("div")
@@ -4564,7 +4671,7 @@ defmodule EdenWeb.ChatLive do
               // structure (the cap also width-constrains the caption to the media).
               const wrap = document.createElement("div")
               wrap.className = "mb-1"
-              wrap.appendChild(media)
+              wrap.appendChild(content)
               bubble.appendChild(wrap)
               const cap = document.createElement("div")
               cap.className = "ed-bubble__cap"
@@ -4606,6 +4713,7 @@ defmodule EdenWeb.ChatLive do
             row.querySelectorAll("img").forEach((img) => {
               if (!img.complete) img.addEventListener("load", pin, { once: true })
             })
+            return row
           },
           // Drive the progress ring's fill arc (#95). The dasharray is fixed in CSS
           // (the circle's circumference, r=16); we only move the dashoffset, so 0%
@@ -4625,15 +4733,14 @@ defmodule EdenWeb.ChatLive do
             if (node._stall) clearTimeout(node._stall)
             node.remove()
           },
-          // Stall watchdog (#95): if an upload makes NO progress for 30s — the link
-          // died after the optimistic node + media_sending, so "send" never fires —
-          // drop the stuck preview and ask the server to clear sending_media, which
-          // re-shows the overlay (the entry is still staged) so the user can retry or
-          // cancel. Every media_progress tick re-arms it, so a merely-slow upload is
-          // never killed; a node removed by the swap leaves a harmless dead timer
-          // (the callback no-ops once the node is disconnected).
-          armStall(clientId) {
-            const node = this.pending?.querySelector(`[data-client-id="${clientId}"]`)
+          // Stall watchdog (#95/#149): if an upload makes NO progress for 30s — the link
+          // died after the optimistic node + media_sending, so "send" never fires — drop
+          // the stuck preview row and ask the server to clear sending_media, which re-shows
+          // the overlay (the entry is still staged) so the user can retry or cancel. Takes
+          // the optimistic ROW (album or file card's row) directly; every media_progress
+          // tick re-arms it, so a merely-slow upload is never killed; a row removed by the
+          // swap leaves a harmless dead timer (the callback no-ops once disconnected).
+          armStall(node) {
             if (!node) return
             if (node._stall) clearTimeout(node._stall)
             node._stall = setTimeout(() => {
@@ -7112,7 +7219,13 @@ defmodule EdenWeb.ChatLive do
             <p class="ed-compose__files-note">
               {gettext("Files send as separate messages.")}
             </p>
-            <div :for={entry <- @files} class="ed-attach-file">
+            <div
+              :for={entry <- @files}
+              class="ed-attach-file"
+              data-ref={entry.ref}
+              data-name={entry.client_name}
+              data-size={human_size(entry.client_size)}
+            >
               <span class="ed-file-chip shrink-0" aria-hidden="true">
                 <.icon name={entry_icon(entry)} class="size-5" />
               </span>
@@ -8400,7 +8513,7 @@ defmodule EdenWeb.ChatLive do
     # sending flag + any queued client_ids + the progress gate (#95) — else a stale
     # `true` hides the overlay next staging, or a stranded id mis-stamps a later
     # send. Runs on cancel_all_uploads + select_conversation.
-    |> assign(sending_media: false, media_client_ids: [], last_media_pct: nil)
+    |> assign(sending_media: false, media_client_ids: [], last_media_pct: nil, last_file_pct: %{})
   end
 
   ## Typing indicator (#11)
@@ -8514,12 +8627,28 @@ defmodule EdenWeb.ChatLive do
   defp nack(socket, nil), do: {:noreply, socket}
   defp nack(socket, client_id), do: {:reply, %{"nack" => client_id}, socket}
 
-  # Push the album's overall upload progress to the optimistic node's ring (#95),
-  # addressed to the send's client_id (the oldest queued — media sends are serialized
-  # client-side, so that's the in-flight one). Fires per entry as chunks arrive, so
-  # we gate on the integer percent CHANGING — else a 10-photo album floods a slow
-  # link with no-op frames. `ceil` lets the arc actually reach 100%.
-  defp handle_attachment_progress(:attachment, _entry, socket) do
+  # Drive the in-flight ring(s) as upload chunks arrive (#95/#149). Two kinds of
+  # entry fire here:
+  #   * a media entry (image/video) feeds the album's SINGLE averaged ring,
+  #     addressed by the album's client_id (the oldest queued — media sends are
+  #     serialized, so that's the in-flight one);
+  #   * a file entry (anything else) feeds its OWN per-file ring, addressed by the
+  #     upload ref so each file card fills independently.
+  # Each gates on the integer percent CHANGING (the album by its single percent,
+  # files by a per-ref map) so a fat album/batch can't flood a slow link with
+  # no-op frames. `ceil` lets each arc actually reach 100%.
+  defp handle_attachment_progress(:attachment, entry, socket) do
+    cond do
+      media_entry?(entry) -> media_album_progress(socket)
+      # A file is sent the MOMENT its own upload finishes (#149), independent of the rest
+      # of the batch — no waiting for the slowest doc before it becomes a real, clickable
+      # card. consume_uploaded_entry only requires THIS entry to be done.
+      entry.done? -> send_ready_file(socket, entry)
+      true -> file_progress(socket, entry)
+    end
+  end
+
+  defp media_album_progress(socket) do
     pct = overall_progress(socket.assigns.uploads)
 
     if pct == socket.assigns.last_media_pct do
@@ -8529,7 +8658,7 @@ defmodule EdenWeb.ChatLive do
 
       id =
         case List.first(socket.assigns.media_client_ids) do
-          {id, _caption, _conv_id} -> id
+          {id, _caption, _conv_id, _files, _caption_id} -> id
           _ -> nil
         end
 
@@ -8537,22 +8666,155 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  defp overall_progress(%{attachment: %{entries: []}}), do: 0
+  defp file_progress(socket, entry) do
+    pct = ceil(entry.progress)
 
-  defp overall_progress(%{attachment: %{entries: entries}}),
-    do: ceil(Enum.sum(Enum.map(entries, & &1.progress)) / length(entries))
+    if pct == Map.get(socket.assigns.last_file_pct, entry.ref) do
+      {:noreply, socket}
+    else
+      socket =
+        assign(socket, last_file_pct: Map.put(socket.assigns.last_file_pct, entry.ref, pct))
+
+      {:noreply, push_event(socket, "media_progress", %{percent: pct, ref: entry.ref})}
+    end
+  end
+
+  # Send a single file the instant ITS upload completes (#149): find the in-flight send
+  # that owns this entry's ref, consume just this entry, and post it as its own message so
+  # its optimistic card swaps to a real, clickable one without waiting for the rest of the
+  # batch. When the send is files-only and this was its LAST file, the caption follows as a
+  # trailing message below the pile (not under the first file). If no stash owns the ref
+  # yet (media_sending hasn't landed — an instant upload racing the push), leave the entry
+  # for the form-submit path.
+  #
+  # By design (#149) files land in COMPLETION order, which may differ from staging order
+  # (entries upload concurrently) — the explicit ask was "don't wait for the slowest", so a
+  # quick doc surfaces before a slow one even if staged after it.
+  defp send_ready_file(socket, entry) do
+    case Enum.find_index(socket.assigns.media_client_ids, fn {_id, _cap, _conv, files, _cid} ->
+           Map.has_key?(files, entry.ref)
+         end) do
+      nil ->
+        {:noreply, socket}
+
+      idx ->
+        # Independent per-file completion applies ONLY to a files-only send. When a media
+        # album rides the same batch (album_id set), leave the file for the form-submit
+        # batch so the album stays FIRST — sending the file eagerly here would land it
+        # above the album, which is consumed only after every entry is done (#149).
+        case Enum.at(socket.assigns.media_client_ids, idx) do
+          {nil, _cap, _conv, _files, _cid} -> settle_ready_file(socket, entry, idx)
+          _album_present -> {:noreply, socket}
+        end
+    end
+  end
+
+  defp settle_ready_file(socket, entry, idx) do
+    stash = socket.assigns.media_client_ids
+    {album_id, caption, conv_id, files, caption_id} = Enum.at(stash, idx)
+    scope = socket.assigns.current_scope
+    conversation_id = conv_id || selected_id(socket)
+
+    socket = consume_one_file(socket, scope, conversation_id, entry, Map.get(files, entry.ref))
+    files = Map.delete(files, entry.ref)
+    done? = files == %{} and is_nil(album_id)
+
+    # The last file of a files-only send pulls its caption down as a trailing message.
+    {socket, caption, caption_id} =
+      if done? and caption != "" and caption_id do
+        {send_trailing_caption(socket, scope, conversation_id, caption, caption_id), "", nil}
+      else
+        {socket, caption, caption_id}
+      end
+
+    # Drop the stash entry once nothing's left to send; else keep it (a remaining media
+    # album still rides the form submit).
+    stash =
+      if done?,
+        do: List.delete_at(stash, idx),
+        else: List.replace_at(stash, idx, {album_id, caption, conv_id, files, caption_id})
+
+    {:noreply,
+     assign(socket,
+       media_client_ids: stash,
+       last_file_pct: Map.delete(socket.assigns.last_file_pct, entry.ref)
+     )}
+  end
+
+  # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable`
+  # is tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp consume_one_file(socket, scope, conversation_id, entry, cid) do
+    source =
+      consume_uploaded_entry(socket, entry, fn %{path: path} ->
+        stable = Path.join(System.tmp_dir!(), "eden-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name, client_id: cid}}
+      end)
+
+    result = Chat.create_attachments(scope, conversation_id, [source], %{client_id: cid})
+    File.rm(source.path)
+
+    case result do
+      {:ok, _messages} ->
+        socket
+
+      {:error, reason} ->
+        socket
+        |> put_flash(:error, attachment_error(reason))
+        |> push_media_failed(cid)
+    end
+  end
+
+  defp send_trailing_caption(socket, scope, conversation_id, caption, caption_id) do
+    case Chat.create_message(scope, conversation_id, %{
+           "body" => caption,
+           "client_id" => caption_id
+         }) do
+      {:ok, _message} -> socket
+      {:error, _changeset} -> push_media_failed(socket, caption_id)
+    end
+  end
+
+  # The album ring averages only the MEDIA entries (#149): files now drive their
+  # own per-file rings, so a slow doc no longer drags the photo album's percent.
+  defp overall_progress(%{attachment: %{entries: entries}}) do
+    case Enum.filter(entries, &media_entry?/1) do
+      [] -> 0
+      media -> ceil(Enum.sum(Enum.map(media, & &1.progress)) / length(media))
+    end
+  end
 
   defp selected_id(socket), do: socket.assigns.selected && socket.assigns.selected.id
 
-  # Stash a media send's {client_id, caption, conversation_id} FIFO, bounded so a
-  # misbehaving client can't grow it unbounded (sends are serialized, so 1-2 is the
-  # real depth) (#95). conversation_id pins the send to the chat it was started in, so
-  # an in-flight upload survives a conversation switch and lands in the right chat.
-  defp stash_cid(socket, id, caption, conv_id),
-    do: Enum.take(socket.assigns.media_client_ids ++ [{id, caption, conv_id}], 16)
+  # Stash a media send's {album_client_id, caption, conversation_id, file_cids, caption_id}
+  # FIFO, bounded so a misbehaving client can't grow it unbounded (sends are serialized,
+  # so 1-2 is the real depth) (#95). conversation_id pins the send to the chat it was
+  # started in, so an in-flight upload survives a conversation switch and lands in the
+  # right chat. file_cids maps each file's upload ref to its own client_id; caption_id is
+  # the trailing files-only caption's optimistic node (#149).
+  defp stash_cid(socket, id, caption, conv_id, file_cids, caption_id),
+    do:
+      Enum.take(
+        socket.assigns.media_client_ids ++ [{id, caption, conv_id, file_cids, caption_id}],
+        16
+      )
 
   defp pop_media_client_id([entry | rest]), do: {entry, rest}
-  defp pop_media_client_id([]), do: {{nil, "", nil}, []}
+  defp pop_media_client_id([]), do: {{nil, "", nil, %{}, nil}, []}
+
+  # Keep only string→string pairs from the client's {ref => client_id} files map so a
+  # crafted payload can't smuggle non-binaries into the source maps / progress events,
+  # and cap it at the upload entry limit so a fat map can't grow the stash unbounded.
+  defp sanitize_file_cids(files) when is_map(files) do
+    for {ref, cid} <- Enum.take(files, Chat.max_album_entries()),
+        is_binary(ref),
+        is_binary(cid),
+        into: %{},
+        do: {ref, cid}
+  end
+
+  defp sanitize_file_cids(_files), do: %{}
 
   # Tell the hook to drop the exact optimistic media node for a send that produced
   # no real row (server error or no consumed entry), so it doesn't spin forever and
@@ -8560,65 +8822,116 @@ defmodule EdenWeb.ChatLive do
   defp push_media_failed(socket, nil), do: socket
   defp push_media_failed(socket, id), do: push_event(socket, "media_failed", %{id: id})
 
+  # Drop every optimistic node of a failed send (#149): the media album (client_id)
+  # AND each per-file card (the file_cids values). Nil/absent ids are no-ops.
+  defp push_all_failed(socket, client_id, file_cids) do
+    [client_id | Map.values(file_cids)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.reduce(socket, &push_media_failed(&2, &1))
+  end
+
   # Both paths are framework/app-generated, never user input: `path` is the
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
-  defp send_attachment(socket, scope, conversation_id, body, reply_to_id, client_id) do
+  defp send_attachment(
+         socket,
+         scope,
+         conversation_id,
+         body,
+         reply_to_id,
+         client_id,
+         file_cids,
+         caption_id
+       ) do
+    # A caption rides a media album inline, but a files-only send carries it as a TRAILING
+    # message below the pile (#149) — decide by the staged entries before they're consumed
+    # (client-type is advisory but matches the caption-placement intent). This keeps the
+    # form-submit fallback consistent with the per-file progress path: no caption-on-the-
+    # first-file and no orphaned optimistic caption node.
+    has_media? = Enum.any?(socket.assigns.uploads.attachment.entries, &media_entry?/1)
+
     # consume_uploaded_entries cleans up each temp file as its callback returns,
     # so to build ONE album from several entries we copy each to a stable temp,
-    # then persist them together (atomic) and remove the temps.
+    # then persist them together (atomic) and remove the temps. Each source also
+    # carries the file's own optimistic client_id keyed by upload ref (#149) — read
+    # by Chat.create_attachments to stamp each per-file message so its in-stream
+    # card swaps; media tiles carry nil here (the album uses `client_id`).
     sources =
       consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
         stable = Path.join(System.tmp_dir!(), "eden-upload-" <> entry.uuid)
         File.cp!(path, stable)
-        {:ok, %{path: stable, filename: entry.client_name}}
+
+        {:ok,
+         %{path: stable, filename: entry.client_name, client_id: Map.get(file_cids, entry.ref)}}
       end)
 
     # The upload has been consumed (entries are now []), so the normal composer
-    # returns regardless; clear the flag (+ progress gate) so the next staging
-    # shows the overlay and a fresh ring starts from 0.
-    socket = assign(socket, sending_media: false, last_media_pct: nil)
+    # returns regardless; clear the flag (+ progress gates) so the next staging
+    # shows the overlay and fresh rings start from 0.
+    socket = assign(socket, sending_media: false, last_media_pct: nil, last_file_pct: %{})
 
     case sources do
       # No entry was consumed (still uploading or failed client-side validation).
       # The media never sends, so drop its optimistic ghost (#95); keep a caption
-      # the user typed as a plain text message (the twin is a photo, not the text).
+      # the user typed as a plain text message — reusing caption_id (files-only) so its
+      # optimistic node swaps instead of orphaning.
       [] ->
-        socket = push_media_failed(socket, client_id)
+        socket = push_all_failed(socket, client_id, file_cids)
 
         if String.trim(body) == "",
           do: {:noreply, socket},
-          else: send_text(socket, scope, conversation_id, body, nil, reply_to_id)
+          else: send_text(socket, scope, conversation_id, body, caption_id, reply_to_id)
 
       sources ->
-        # client_id correlates the real album message with the hook's optimistic node
-        # so the data-client-id swap drops the exact twin when it streams in (#95).
-        opts = %{body: body, reply_to_id: reply_to_id, client_id: client_id}
+        # The album carries the caption only when media is present; a files-only send sends
+        # the files plain and the caption follows as its own trailing message below.
+        album_body = if has_media?, do: body, else: ""
+        opts = %{body: album_body, reply_to_id: reply_to_id, client_id: client_id}
         result = Chat.create_attachments(scope, conversation_id, sources, opts)
         Enum.each(sources, &File.rm(&1.path))
 
-        case result do
-          {:ok, _messages} ->
-            # Clear the caption but KEEP the chat input (message[body]) — separate
-            # entities, so text typed before staging media survives. Reset the typing
-            # throttle like send_text (#94).
-            {:noreply,
-             socket |> clear_media_caption() |> assign(reply_to: nil, last_typing_at: nil)}
-
-          {:error, reason} ->
-            # No real row will stream in, so the optimistic media node would spin
-            # forever (and pin its preview data-URLs in memory) — tell the hook to drop
-            # that exact twin (#95). Clear the caption too: the upload is already
-            # consumed, so a failed send must not leave it to pre-fill the next media's
-            # caption. Text sends have nack/markFailed.
-            {:noreply,
-             socket
-             |> clear_media_caption()
-             |> put_flash(:error, attachment_error(reason))
-             |> push_media_failed(client_id)}
-        end
+        finish_attachment(
+          socket,
+          result,
+          {scope, conversation_id, body, has_media?},
+          {client_id, file_cids, caption_id}
+        )
     end
+  end
+
+  # On success, a files-only send's caption follows as its own trailing message (optimistic
+  # node tagged caption_id) below the pile; clear the caption field but KEEP the chat input
+  # (separate entities) and reset the typing throttle (#94/#149).
+  defp finish_attachment(
+         socket,
+         {:ok, _messages},
+         {scope, conversation_id, body, has_media?},
+         {_client_id, _file_cids, caption_id}
+       ) do
+    socket =
+      if (not has_media? and caption_id) && String.trim(body) != "",
+        do: send_trailing_caption(socket, scope, conversation_id, body, caption_id),
+        else: socket
+
+    {:noreply, socket |> clear_media_caption() |> assign(reply_to: nil, last_typing_at: nil)}
+  end
+
+  # On failure no real row streams in, so the optimistic nodes would spin forever (and pin
+  # their preview data-URLs) — drop every twin: the album, each per-file card, AND the
+  # trailing-caption node. Clear the caption so a failed send can't pre-fill the next one.
+  defp finish_attachment(
+         socket,
+         {:error, reason},
+         {_scope, _conversation_id, _body, _has_media?},
+         {client_id, file_cids, caption_id}
+       ) do
+    {:noreply,
+     socket
+     |> clear_media_caption()
+     |> put_flash(:error, attachment_error(reason))
+     |> push_all_failed(client_id, file_cids)
+     |> push_media_failed(caption_id)}
   end
 
   # Consume the staged thread-reply album (#104) into ONE reply — mirrors

@@ -1365,8 +1365,15 @@ defmodule Eden.Chat do
       {media, files} =
         Enum.split_with(classified, fn {_source, kind} -> kind in ~w(image video) end)
 
-      steps = attachment_steps(sources_of(media), sources_of(files), Map.get(opts, :body, ""))
-      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id], opts[:client_id])
+      steps =
+        attachment_steps(
+          sources_of(media),
+          sources_of(files),
+          Map.get(opts, :body, ""),
+          opts[:client_id]
+        )
+
+      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id])
     else
       false -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -1399,24 +1406,30 @@ defmodule Eden.Chat do
 
   # Plan the messages: one album for media (caption attached), one message per
   # file. With files only, the caption rides the first file; the rest are plain.
-  defp attachment_steps([], [], _body), do: []
+  # Each step carries its own optimistic client_id (#149): the media album gets
+  # the album-level id (`album_cid`), each file message its OWN id — minted per
+  # file and carried on the source map by upload ref (`:client_id`) — so the
+  # in-stream optimistic card swaps per file, not just for the first message.
+  defp attachment_steps([], [], _body, _album_cid), do: []
 
-  defp attachment_steps([], [first | rest], body),
-    do: [{[first], body} | Enum.map(rest, &{[&1], ""})]
+  defp attachment_steps([], [first | rest], body, _album_cid),
+    do: [{[first], body, source_cid(first)} | Enum.map(rest, &{[&1], "", source_cid(&1)})]
 
-  defp attachment_steps(media, files, body),
-    do: [{media, body} | Enum.map(files, &{[&1], ""})]
+  defp attachment_steps(media, files, body, album_cid),
+    do: [{media, body, album_cid} | Enum.map(files, &{[&1], "", source_cid(&1)})]
+
+  defp source_cid(%{client_id: cid}), do: cid
+  defp source_cid(_source), do: nil
 
   # A quote-reply with attachments rides only the FIRST sent message (the album,
-  # or the first file); the rest are plain.
-  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id, client_id) do
+  # or the first file); the rest are plain. The client_id is per-step (#149).
+  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id) do
     steps
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {{srcs, body}, i}, {:ok, acc} ->
-      # reply_to and the optimistic client_id (#95) belong to the first message
-      # (the media album with the caption), not the trailing per-file messages.
+    |> Enum.reduce_while({:ok, []}, fn {{srcs, body, cid}, i}, {:ok, acc} ->
+      # reply_to belongs to the first message (the album with the caption, or the
+      # first file), not the trailing per-file messages.
       reply = if i == 0, do: reply_to_id, else: nil
-      cid = if i == 0, do: client_id, else: nil
 
       case create_album_message(scope, conversation_id, srcs, %{
              body: body,
