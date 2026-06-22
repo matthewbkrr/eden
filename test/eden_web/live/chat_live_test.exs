@@ -602,6 +602,11 @@ defmodule EdenWeb.ChatLiveTest do
 
       assert {:ok, [%{client_id: "file-cid-1", attachments: [%{kind: "file"}]}]} =
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      # Regression (#149): the progress path — not send_attachment — finished this files-only
+      # send, so it must clear sending_media; otherwise the attach button (gated on
+      # @sending_media) stays disabled forever. The composer mirrors the flag in data-*.
+      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
     end
 
     test "a files-only caption rides as its own trailing message below the pile (#149)", ctx do
