@@ -4369,9 +4369,16 @@ defmodule EdenWeb.ChatLive do
             // poster at full size, not a blank square that the real video later
             // pops into. A tile whose frame can't be grabbed yet falls back to a
             // fill so the album's tile count still matches the real row.
-            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")].map((tile) =>
-              this.snapshot(tile.querySelector(".ed-compose__img, .ed-compose__video"))
-            )
+            // Snapshot each tile's frame AND its source pixel dimensions — the dims let
+            // the lone-image case reserve its display box exactly like the real row.
+            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")].map((tile) => {
+              const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
+              return {
+                url: this.snapshot(el),
+                w: (el && (el.naturalWidth || el.videoWidth)) || 0,
+                h: (el && (el.naturalHeight || el.videoHeight)) || 0,
+              }
+            })
             const n = tiles.length
             if (n === 0) return
 
@@ -4379,23 +4386,35 @@ defmodule EdenWeb.ChatLive do
             // item renders via attachment_view (natural aspect, NOT a square album
             // tile); 2+ use the .ed-album grid. Only a dim + ring mark it sending.
             let media
-            if (n === 1 && tiles[0]) {
+            if (n === 1 && tiles[0].url) {
               media = document.createElement("div")
               media.className = "ed-media-sending ed-media-sending--single"
               const img = document.createElement("img")
-              img.src = tiles[0]
+              img.src = tiles[0].url
               img.alt = ""
+              // Reserve the display box exactly like img_box/1 on the real <img>: an
+              // explicit width + aspect-ratio. Without it the data-URL's natural size
+              // (up to 800px) drove the bubble to its max while the img capped at 320,
+              // leaving empty space to the right — and the box collapsed-then-grew.
+              const { w, h } = tiles[0]
+              if (w > 0 && h > 0) {
+                const scale = Math.min(320 / w, 320 / h, 1)
+                img.style.width = Math.round(w * scale) + "px"
+                img.style.maxWidth = "100%"
+                img.style.aspectRatio = w + " / " + h
+                img.style.height = "auto"
+              }
               media.appendChild(img)
             } else {
               const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
               media = document.createElement("div")
               media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
-              for (const src of tiles) {
+              for (const t of tiles) {
                 const tile = document.createElement("span")
                 tile.className = "ed-album__tile"
-                if (src) {
+                if (t.url) {
                   const img = document.createElement("img")
-                  img.src = src
+                  img.src = t.url
                   img.alt = ""
                   tile.appendChild(img)
                 } else {
