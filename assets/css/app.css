@@ -770,28 +770,37 @@ html {
     animation: ed-msg-in 0.14s var(--ed-ease);
   }
 
-  /* A send that the server rejected (#68): the node stays, click to retry, with
-     a ✕ to dismiss — never a permanent grey ghost. */
-  .ed-msg-failed {
+  /* "Not delivered" marker (#142): a tappable red ●! in the message's status slot
+     that opens a resend/delete menu (replaced the #68 border + ✕ retry node). */
+  .ed-msg-failed__bang {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.25rem;
+    padding: 0;
+    color: var(--ed-danger);
     cursor: pointer;
+    transition: opacity 0.14s var(--ed-ease);
   }
-  .ed-bubble,
-  .ed-flat__body {
-    position: relative;
+  .ed-msg-failed__bang:hover {
+    opacity: 0.75;
   }
-  .ed-msg-failed__x {
-    position: absolute;
-    top: -0.5rem;
-    right: -0.5rem;
-    display: grid;
-    place-items: center;
-    width: 1.25rem;
-    height: 1.25rem;
+  .ed-msg-failed__bang:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
     border-radius: var(--ed-radius-full);
-    background: var(--ed-danger);
-    color: oklch(0.99 0 0);
-    font-size: 0.6875rem;
-    line-height: 1;
+  }
+  /* Flat (room) rows have no meta status slot — pin the ●! to the row's trailing
+     edge, vertically centered. */
+  .ed-flat.ed-msg-failed .ed-msg-failed__bang {
+    margin-left: auto;
+    align-self: center;
+    padding: 0 0.5rem;
+  }
+  /* A comfortable tap target on touch — the micro icon alone is too small. */
+  @media (pointer: coarse) {
+    .ed-msg-failed__bang {
+      padding: 0.25rem;
+    }
   }
 
   /* Reactions (#67): chips under a message + a hover smiley + the shared bar. */
