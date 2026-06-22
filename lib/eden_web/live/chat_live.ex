@@ -418,14 +418,17 @@ defmodule EdenWeb.ChatLive do
   @impl true
   def handle_event("composer_changed", %{"message" => params}, socket) do
     # Track the value server-side so resetting to "" after send produces a real diff
-    # that clears the input. Captures BOTH fields: the chat input (message[body]) and
-    # the media overlay's caption (message[caption]) — separate entities, so typing a
-    # caption never mirrors into the chat input. Typing broadcasts on the body only:
-    # a caption is not a message-in-progress to the peer.
+    # that clears the input. Whitelist the two real fields — the chat input
+    # (message[body]) and the media overlay's caption (message[caption]) — so a crafted
+    # or extra key can't ride into @composer. Separate entities: typing a caption never
+    # mirrors into the chat input. Typing broadcasts on the body only — a caption is not
+    # a message-in-progress to the peer.
+    fields = Map.take(params, ["body", "caption"])
+
     {:noreply,
      socket
-     |> assign(composer: to_form(params, as: "message"))
-     |> maybe_broadcast_typing(params["body"] || "")}
+     |> assign(composer: to_form(fields, as: "message"))
+     |> maybe_broadcast_typing(fields["body"] || "")}
   end
 
   # Fired the instant a media send is submitted (#95): close the preview overlay now
@@ -4402,12 +4405,17 @@ defmodule EdenWeb.ChatLive do
               // (up to 800px) drove the bubble to its max while the img capped at 320,
               // leaving empty space to the right — and the box collapsed-then-grew.
               const { w, h } = tiles[0]
+              img.style.maxWidth = "100%"
+              img.style.height = "auto"
               if (w > 0 && h > 0) {
                 const scale = Math.min(320 / w, 320 / h, 1)
                 img.style.width = Math.round(w * scale) + "px"
-                img.style.maxWidth = "100%"
                 img.style.aspectRatio = w + " / " + h
-                img.style.height = "auto"
+              } else {
+                // A video sent before its metadata loaded (videoWidth === 0): no exact
+                // box yet, but cap the width so the data-URL's natural size can't blow
+                // the bubble to its max (the empty-space bug) while it settles.
+                img.style.width = "min(20rem, 100%)"
               }
               media.appendChild(img)
             } else {
@@ -8058,15 +8066,16 @@ defmodule EdenWeb.ChatLive do
     assign(socket, composer: to_form(%{"body" => body}, as: "message"))
   end
 
-  # Cancel every staged attachment upload (the composer tray). Used both by the
-  # explicit "clear tray" action and on conversation switch so media staged in
-  # one chat can't be sent into another (#89).
-  # Conversation switch: drop only STAGED attachments (#89). An in-flight send
-  # (sending_media) is left running so it finishes in the background and lands in its
-  # pinned conversation — leaving mid-upload must not lose the media.
+  # Conversation switch: drop only STAGED attachments (#89) — they belong to the chat
+  # they were composed in. An in-flight send (sending_media) is left running so it
+  # finishes in the background and lands in its pinned conversation; leaving mid-upload
+  # must not lose the media.
   defp drop_staged_on_switch(%{assigns: %{sending_media: true}} = socket), do: socket
   defp drop_staged_on_switch(socket), do: cancel_staged_attachments(socket)
 
+  # Cancel every staged attachment upload (the composer tray) + reset the send flags.
+  # Used by the explicit "clear tray"/Escape action and, via drop_staged_on_switch,
+  # on a conversation switch when nothing is in flight.
   defp cancel_staged_attachments(socket) do
     socket
     |> then(fn s ->
