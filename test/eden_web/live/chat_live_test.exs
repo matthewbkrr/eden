@@ -571,7 +571,8 @@ defmodule EdenWeb.ChatLiveTest do
 
       # The staged file carries its upload ref in the tray; the hook mints a client_id
       # per file keyed by that ref and pushes them on media_sending (#149) — distinct
-      # from media's single album id, so each file message swaps its own card.
+      # from media's single album id, so each file message swaps its own card. Here the
+      # upload finished before media_sending, so the form-submit path sends it (fallback).
       assert [[_, ref]] = Regex.scan(~r/phx-value-ref="([^"]+)"/, html)
 
       render_hook(view, "media_sending", %{"caption" => "", "files" => %{ref => "file-cid-1"}})
@@ -579,6 +580,110 @@ defmodule EdenWeb.ChatLiveTest do
 
       assert {:ok, [%{client_id: "file-cid-1", attachments: [%{kind: "file"}]}]} =
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+    end
+
+    test "a file is sent the moment ITS upload finishes, not on the form submit (#149)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "one.txt", content: "first", type: "text/plain"}
+        ])
+
+      # Real-usage order: media_sending (the stash) lands BEFORE the upload finishes (the ref
+      # is known at stage time), so the progress callback consumes + sends the file the instant
+      # it's done — independently of any batch, with NO form submit. A fast doc swaps to its
+      # real card without waiting for the slowest.
+      [%{"ref" => ref}] = file.entries
+      render_hook(view, "media_sending", %{"caption" => "", "files" => %{ref => "file-cid-1"}})
+
+      render_upload(file, "one.txt")
+
+      assert {:ok, [%{client_id: "file-cid-1", attachments: [%{kind: "file"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+    end
+
+    test "a files-only caption rides as its own trailing message below the pile (#149)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "one.txt", content: "first", type: "text/plain"}
+        ])
+
+      [%{"ref" => ref}] = file.entries
+
+      render_hook(view, "media_sending", %{
+        "caption" => "below the pile",
+        "files" => %{ref => "file-cid-1"},
+        "caption_id" => "cap-cid-1"
+      })
+
+      render_upload(file, "one.txt")
+
+      # The last file lands → the caption follows as its OWN message (its own client_id, no
+      # attachment), ordered AFTER the file — not attached under the first file.
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      assert [
+               %{client_id: "file-cid-1", body: "", attachments: [%{kind: "file"}]},
+               %{client_id: "cap-cid-1", body: "below the pile", attachments: []}
+             ] = msgs
+    end
+
+    test "a file in a mixed (media+files) send waits for the batch, not progress (#149 review A)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "one.txt", content: "first", type: "text/plain"}
+        ])
+
+      [%{"ref" => ref}] = file.entries
+
+      # A media album rides the same send (album id present). The file must NOT be sent the
+      # moment it finishes — that would land it ABOVE the album (consumed only on the form
+      # submit). So on completion nothing is sent yet; it waits for the batch.
+      render_hook(view, "media_sending", %{"id" => "album-x", "files" => %{ref => "file-cid-1"}})
+      render_upload(file, "one.txt")
+
+      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+    end
+
+    test "the files-only fallback sends the caption trailing, not on the first file (#149 review C)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "one.txt", content: "first", type: "text/plain"}
+        ])
+
+      # Upload finishes BEFORE media_sending → the progress path can't claim it, so the
+      # form-submit fallback sends it. The fallback must still place the caption as its own
+      # trailing message (not on the file) so the optimistic caption node swaps, not orphans.
+      render_upload(file, "one.txt")
+      [%{"ref" => ref}] = file.entries
+
+      render_hook(view, "media_sending", %{
+        "caption" => "below the pile",
+        "files" => %{ref => "file-cid-1"},
+        "caption_id" => "cap-cid-1"
+      })
+
+      render_submit(element(view, "#composer"))
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      assert [
+               %{client_id: "file-cid-1", body: "", attachments: [%{kind: "file"}]},
+               %{client_id: "cap-cid-1", body: "below the pile", attachments: []}
+             ] = msgs
     end
 
     test "a media caption survives a chat-input change during the upload (#bug)", ctx do

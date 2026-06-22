@@ -2366,6 +2366,39 @@ html {
     max-height: 20rem;
   }
 
+  /* Optimistic file/doc card while its upload is in flight (#149): the icon slot
+     turns into a determinate ring. Reuses the ring geometry but in currentColor
+     (not the media ring's white-on-scrim) so it reads in BOTH a cobalt me-bubble
+     and a flat room row — matching how the real document icon already reads there.
+     The card isn't a link yet, so it stays calm (no hover lift). */
+  .ed-file--sending {
+    cursor: default;
+  }
+  .ed-file--sending:hover {
+    background: color-mix(in oklch, currentColor 10%, transparent);
+  }
+  .ed-file--sending .ed-file__icon {
+    position: relative;
+  }
+  .ed-file__ring {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .ed-file__ring svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+  /* currentColor track + fill, overriding the media ring's white. The 2.25rem icon
+     slot renders the r=16 / viewBox-36 ring at ~32px with a tidy inset. */
+  .ed-file__ring .ed-media-sending__ring-track {
+    stroke: color-mix(in oklch, currentColor 28%, transparent);
+  }
+  .ed-file__ring .ed-media-sending__ring-fill {
+    stroke: currentColor;
+  }
+
   /* Toasts -------------------------------------------------------------- */
   .ed-toast {
     display: flex;
