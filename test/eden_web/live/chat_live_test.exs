@@ -1376,6 +1376,28 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, "#thread-replies img")
     end
 
+    test "a thread reply carries its client_id — enables the failed-! flag (#142 PR-2)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrCid"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      # The .ThreadSendQueue hook sends a text reply over the socket with a client_id;
+      # it must ride through to the persisted reply (correlates the real row with the
+      # optimistic failed node so the riser can swap/dedupe it).
+      render_hook(view, "send_reply", %{
+        "reply" => %{"body" => "hi thread", "client_id" => "trc-1"}
+      })
+
+      assert {:ok, _root, replies} = Chat.list_thread(Scope.for_user(ctx.alice), root.id)
+      assert Enum.any?(replies, &(&1.body == "hi thread" and &1.client_id == "trc-1"))
+    end
+
     test "a send_reply while a thread attachment is still uploading doesn't crash (P0)", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThrRace"})

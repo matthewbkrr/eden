@@ -1404,6 +1404,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
     root = socket.assigns.thread_root
     reply_to_id = reply["reply_to_id"]
+    client_id = reply["client_id"]
     entries = socket.assigns.uploads.thread_attachment.entries
 
     cond do
@@ -1423,7 +1424,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply, socket}
 
       true ->
-        send_thread_reply_text(socket, root, body, reply_to_id)
+        send_thread_reply_text(socket, root, body, reply_to_id, client_id)
     end
   end
 
@@ -2790,6 +2791,7 @@ defmodule EdenWeb.ChatLive do
           class="flex-1 overflow-y-auto overscroll-x-contain p-4"
           id="thread-scroll"
           phx-hook=".ScrollBottom"
+          data-pending-id="thread-pending"
         >
           <%!-- in_thread: the "N replies" separator right below makes the
                 root's own footer pill redundant. --%>
@@ -2819,6 +2821,10 @@ defmodule EdenWeb.ChatLive do
               statuses={@statuses}
             />
           </div>
+          <%!-- Optimistic "not delivered" thread replies live here (#142, JS-managed by
+                .ThreadSendQueue). The .ScrollBottom riser (data-pending-id above) drops a
+                node from here when its real reply streams into #thread-replies. --%>
+          <div class="flex flex-col ed-flat-list" id="thread-pending" phx-update="ignore"></div>
         </div>
 
         <%!-- Thread typing indicator (#103): only peers typing IN THIS thread. --%>
@@ -2827,6 +2833,12 @@ defmodule EdenWeb.ChatLive do
         <.form
           for={@reply_composer}
           id="reply-composer"
+          phx-hook=".ThreadSendQueue"
+          data-thread-root={@thread_root && @thread_root.id}
+          data-failed={gettext("Not delivered")}
+          data-resend={gettext("Resend")}
+          data-delete={gettext("Delete")}
+          data-resend-many={gettext("Resend {count} messages")}
           phx-change="reply_changed"
           phx-submit="send_reply"
           class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -3312,6 +3324,9 @@ defmodule EdenWeb.ChatLive do
             //      form), so one precise id-keyed swap covers both — no heuristic.
             //   2. Rise-in for everyone else's messages.
             this.riser = new MutationObserver((muts) => {
+              // Which optimistic-node container this scroller owns (#142): the main
+              // pane uses #pending-messages; the thread panel passes data-pending-id.
+              const pendingId = this.el.dataset.pendingId || "pending-messages"
               for (const mut of muts) {
                 for (const node of mut.addedNodes) {
                   if (node.nodeType !== 1) continue
@@ -3320,7 +3335,7 @@ defmodule EdenWeb.ChatLive do
                   if (!row) continue
                   // An optimistic node sitting in #pending already animated itself
                   // (addOptimistic / addOptimisticMedia); never re-animate it.
-                  const inPending = !!row.closest("#pending-messages")
+                  const inPending = !!row.closest("#" + pendingId)
                   if (inPending) continue
                   if (row.dataset.clientId) {
                     // My own message just streamed in. A media send still renders an
@@ -3330,7 +3345,7 @@ defmodule EdenWeb.ChatLive do
                     // optimistic node anymore, so there's no twin → fall through and
                     // rise in like a thread reply (one smooth transition, shared by the
                     // whole list — DMs, rooms, and threads alike).
-                    const twin = document.getElementById("pending-messages")
+                    const twin = document.getElementById(pendingId)
                       ?.querySelector(`[data-client-id="${row.dataset.clientId}"]`)
                     if (twin) {
                       // Carry the local poster frame(s) onto the real <video>(s) so a
@@ -4894,6 +4909,188 @@ defmodule EdenWeb.ChatLive do
             document.removeEventListener("click", this.onFailDoc)
             document.removeEventListener("keydown", this.onFailKey)
             document.removeEventListener("scroll", this.onFailDoc, { capture: true })
+          },
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ThreadSendQueue">
+        // Failed-send (●!) for thread replies (#142 PR-2). Threads are flat and stream in
+        // via {:thread_reply}, so — like rooms — there's NO happy-path optimistic node and
+        // NO clock/✓/✓✓; only a "not delivered" ●! on failure. A focused, self-contained
+        // hook (colocated hooks can't share .SendQueue's helpers): mint a client_id, send
+        // over the socket, and on a nack / timeout / offline-grace materialize a faded
+        // failed row in #thread-pending with the same Resend/Delete(/Resend N) menu. The
+        // .ScrollBottom riser (data-pending-id="thread-pending") removes the failed node
+        // when its real reply streams in (e.g. an offline send that lands on reconnect).
+        export default {
+          mounted() {
+            this.threadRoot = this.el.dataset.threadRoot
+            this.queue = []
+            this.connected = true
+            this.sendTimers = new Map()
+            this.input = this.el.querySelector('input[name="reply[body]"]')
+            this.pending = document.getElementById("thread-pending")
+            this.onOffline = () => { for (const i of this.queue) this.armWatchdog(i.clientId, i.body) }
+            window.addEventListener("offline", this.onOffline)
+            this.el.addEventListener("submit", (e) => this.onSubmit(e))
+          },
+          disconnected() { this.connected = false },
+          reconnected() {
+            this.connected = true
+            for (const i of this.queue) i.sent = false
+            this.flush()
+          },
+          updated() {
+            // A different thread opened in the same room (open_thread on another root):
+            // the room id is unchanged, so key the reset on the thread ROOT — otherwise
+            // thread A's failed ●! nodes linger in thread B's panel (#thread-pending is
+            // phx-update="ignore", so the server never clears it).
+            if (this.el.dataset.threadRoot !== this.threadRoot) {
+              this.threadRoot = this.el.dataset.threadRoot
+              this.queue = []
+              this.sendTimers.forEach((t) => clearTimeout(t))
+              this.sendTimers.clear()
+              this.closeMenu()
+              if (this.pending) this.pending.replaceChildren()
+            }
+          },
+          destroyed() {
+            window.removeEventListener("offline", this.onOffline)
+            this.sendTimers.forEach((t) => clearTimeout(t))
+            this.sendTimers.clear()
+            this.closeMenu()
+          },
+          onSubmit(e) {
+            // A staged album (.ed-thread-tray) or a quote-reply (.ed-reply-bar) rides the
+            // normal form submit (their own server paths); only plain text gets the
+            // client_id + failed-! treatment.
+            if (this.el.querySelector(".ed-thread-tray, .ed-reply-bar")) return
+            e.preventDefault()
+            e.stopPropagation()
+            const body = (this.input.value || "").trim()
+            if (!body) return
+            this.input.value = ""
+            const clientId = this.uuid()
+            this.queue.push({ clientId, body, sent: false })
+            this.flush()
+          },
+          uuid() {
+            if (crypto.randomUUID) return crypto.randomUUID()
+            const b = crypto.getRandomValues(new Uint8Array(16))
+            b[6] = (b[6] & 0x0f) | 0x40
+            b[8] = (b[8] & 0x3f) | 0x80
+            const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("")
+            return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+          },
+          flush() {
+            for (const item of this.queue) {
+              if (item.sent) continue
+              this.armWatchdog(item.clientId, item.body)
+              if (!this.connected) continue
+              item.sent = true
+              this.pushEvent("send_reply", { reply: { body: item.body, client_id: item.clientId } }, (reply) => {
+                this.clearWatchdog(item.clientId)
+                this.queue = this.queue.filter((q) => q.clientId !== item.clientId)
+                if (reply && reply.nack) this.markFailed(item.clientId, item.body)
+              })
+            }
+          },
+          armWatchdog(clientId, body) {
+            this.clearWatchdog(clientId)
+            const ms = navigator.onLine ? 20000 : 3000
+            const timer = setTimeout(() => {
+              this.sendTimers.delete(clientId)
+              if (this.queue.some((q) => q.clientId === clientId)) this.markFailed(clientId, body)
+            }, ms)
+            this.sendTimers.set(clientId, timer)
+          },
+          clearWatchdog(clientId) {
+            const t = this.sendTimers.get(clientId)
+            if (t) { clearTimeout(t); this.sendTimers.delete(clientId) }
+          },
+          markFailed(clientId, body) {
+            if (!this.pending) return
+            let node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+            if (!node) {
+              node = document.createElement("div")
+              node.className = "ed-flat ed-msg-failed"
+              node.dataset.clientId = clientId
+              node.innerHTML =
+                '<div class="ed-flat__gutter"></div>' +
+                '<div class="ed-flat__main"><div class="break-words ed-flat__body"></div></div>'
+              node.querySelector(".ed-flat__body").textContent = body
+              this.pending.appendChild(node)
+            }
+            node.dataset.body = body
+            node.querySelectorAll(".ed-msg-failed__bang").forEach((b) => b.remove())
+            const bang = document.createElement("button")
+            bang.type = "button"
+            bang.className = "ed-msg-failed__bang"
+            bang.setAttribute("aria-label", this.el.dataset.failed || "Not delivered")
+            bang.innerHTML = '<span class="hero-exclamation-circle-micro size-3.5"></span>'
+            bang.addEventListener("click", (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              this.openMenu(node)
+            })
+            node.appendChild(bang)
+          },
+          failedNodes() {
+            return [...this.pending.querySelectorAll(".ed-msg-failed")]
+          },
+          resendNode(node) {
+            const clientId = node.dataset.clientId
+            const body = node.dataset.body || ""
+            node.remove()
+            if (!body) return
+            this.queue.push({ clientId, body, sent: false })
+          },
+          openMenu(node) {
+            this.closeMenu()
+            const d = this.el.dataset
+            const failed = this.failedNodes()
+            const menu = document.createElement("div")
+            menu.className = "ed-menu ed-fail-menu"
+            menu.setAttribute("role", "menu")
+            const item = (label, onClick, danger) => {
+              const b = document.createElement("button")
+              b.type = "button"
+              b.className = "ed-menu__item" + (danger ? " ed-menu__item--danger" : "")
+              b.setAttribute("role", "menuitem")
+              b.textContent = label
+              b.addEventListener("click", () => { this.closeMenu(); onClick() })
+              menu.appendChild(b)
+            }
+            item(d.resend || "Resend", () => { this.resendNode(node); this.flush() })
+            if (failed.length > 1) {
+              const label = (d.resendMany || "Resend {count} messages").replace("{count}", failed.length)
+              item(label, () => { failed.forEach((n) => this.resendNode(n)); this.flush() })
+            }
+            item(d.delete || "Delete", () => node.remove(), true)
+            document.body.appendChild(menu)
+            const r = (node.querySelector(".ed-msg-failed__bang") || node).getBoundingClientRect()
+            const mw = menu.offsetWidth, mh = menu.offsetHeight
+            const left = Math.max(8, Math.min(r.right - mw, window.innerWidth - mw - 8))
+            const fitsBelow = r.bottom + 4 + mh <= window.innerHeight - 8
+            menu.style.left = left + "px"
+            menu.style.top = (fitsBelow ? r.bottom + 4 : Math.max(8, r.top - mh - 4)) + "px"
+            menu.style.transformOrigin = fitsBelow ? "top right" : "bottom right"
+            this.failMenu = menu
+            this.onMenuDoc = (e) => { if (!menu.contains(e.target)) this.closeMenu() }
+            this.onMenuKey = (e) => { if (e.key === "Escape") this.closeMenu() }
+            menu.querySelector("[role=menuitem]")?.focus({ preventScroll: true })
+            setTimeout(() => {
+              document.addEventListener("click", this.onMenuDoc)
+              document.addEventListener("keydown", this.onMenuKey)
+              document.addEventListener("scroll", this.onMenuDoc, { capture: true, passive: true })
+            }, 0)
+          },
+          closeMenu() {
+            if (!this.failMenu) return
+            this.failMenu.remove()
+            this.failMenu = null
+            document.removeEventListener("click", this.onMenuDoc)
+            document.removeEventListener("keydown", this.onMenuKey)
+            document.removeEventListener("scroll", this.onMenuDoc, { capture: true })
           },
         }
       </script>
@@ -8473,20 +8670,26 @@ defmodule EdenWeb.ChatLive do
   # A plain text thread reply. The reply itself arrives via the {:thread_reply}
   # broadcast. Shared by send_reply and send_thread_album's "nothing uploaded but a
   # caption was typed" fallback.
-  defp send_thread_reply_text(socket, root, body, reply_to_id) do
+  defp send_thread_reply_text(socket, root, body, reply_to_id, client_id \\ nil) do
     case Chat.create_reply(socket.assigns.current_scope, root.id, %{
            "body" => body,
+           "client_id" => client_id,
            "reply_to_id" => reply_to_id
          }) do
       {:ok, _reply} ->
-        {:noreply, reset_reply_composer(socket)}
+        # The hook path (client_id present) cleared its input client-side; the form
+        # path resets the composer here. The reply itself arrives via {:thread_reply}.
+        socket = if client_id, do: socket, else: reset_reply_composer(socket)
+        ack(socket, client_id)
 
       {:error, %Ecto.Changeset{}} ->
-        {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
+        socket |> put_flash(:error, gettext("That reply can't be sent.")) |> nack(client_id)
 
       {:error, _} ->
-        {:noreply,
-         socket |> assign(thread_root: nil) |> put_flash(:error, gettext("Thread not found."))}
+        socket
+        |> assign(thread_root: nil)
+        |> put_flash(:error, gettext("Thread not found."))
+        |> nack(client_id)
     end
   end
 
