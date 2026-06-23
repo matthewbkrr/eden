@@ -634,6 +634,93 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#composer[data-sending-media="false"]))
     end
 
+    test "a partial-batch cancel leaves the paperclip live once the rest upload (#158)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      keep =
+        file_input(view, "#composer", :attachment, [
+          %{name: "keep.txt", content: "a", type: "text/plain"}
+        ])
+
+      # The cancelled file rides a SEPARATE file_input so aborting it mid-flight tears down
+      # only its own client process, not the keeper's — big enough to actually hold at 40%
+      # (a tiny file jumps to 100%, gets consumed+sent, and can't be cancelled).
+      drop =
+        file_input(view, "#composer", :attachment, [
+          %{name: "drop.txt", content: String.duplicate("b", 100_000), type: "text/plain"}
+        ])
+
+      [keep_ref] = Enum.map(keep.entries, & &1["ref"])
+      [drop_ref] = Enum.map(drop.entries, & &1["ref"])
+
+      render_hook(view, "media_sending", %{
+        "caption" => "",
+        "files" => %{keep_ref => "fcid-1", drop_ref => "fcid-2"}
+      })
+
+      # Cancel one file mid-upload. Phoenix keeps it in `entries` as a `cancelled?` ghost
+      # (it only drops when the upload channel dies, which for a mid-batch cancel can be
+      # never). That ghost used to wedge the composer bar `inert` and swap the file input
+      # out after the rest landed — leaving the paperclip dead (#158).
+      render_upload(drop, "drop.txt", 40)
+      render_hook(view, "cancel_upload", %{"ref" => drop_ref})
+
+      # The keeper finishes via the per-file progress path.
+      render_upload(keep, "keep.txt")
+
+      # Only the kept file was sent; the cancelled one was not.
+      assert {:ok, [%{attachments: [%{kind: "file"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      # Paperclip is live again: sending_media cleared AND the file input re-renders (the
+      # lingering cancelled ghost must not keep it swapped out / the bar inert).
+      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
+      assert has_element?(view, ~s(#composer input[type="file"]))
+    end
+
+    test "a mixed batch with a cancelled file still sends the rest, never wedges (#158)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      keep =
+        file_input(view, "#composer", :attachment, [
+          %{name: "keep.txt", content: "a", type: "text/plain"}
+        ])
+
+      # Separate file_input so the in-flight cancel tears down only its own process.
+      drop =
+        file_input(view, "#composer", :attachment, [
+          %{name: "drop.txt", content: String.duplicate("b", 100_000), type: "text/plain"}
+        ])
+
+      [keep_ref] = Enum.map(keep.entries, & &1["ref"])
+      [drop_ref] = Enum.map(drop.entries, & &1["ref"])
+
+      # An album id present makes this a BATCH: the files defer to the form submit
+      # (send_attachment), not the per-file progress path.
+      render_hook(view, "media_sending", %{
+        "id" => "album-x",
+        "caption" => "",
+        "files" => %{keep_ref => "fcid-1", drop_ref => "fcid-2"}
+      })
+
+      render_upload(drop, "drop.txt", 40)
+      render_hook(view, "cancel_upload", %{"ref" => drop_ref})
+      render_upload(keep, "keep.txt")
+
+      # The batch submits with a `cancelled?` ghost still in `entries`: send_attachment must
+      # consume only the DONE entry (not consume_uploaded_entries/3, which would raise) and
+      # send it — instead of crashing or silently dropping the whole send (data loss) (#158).
+      render_submit(element(view, "#composer"))
+
+      assert {:ok, [%{attachments: [%{kind: "file"}]}]} =
+               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+
+      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
+      assert has_element?(view, ~s(#composer input[type="file"]))
+    end
+
     test "a files-only caption rides as its own trailing message below the pile (#149)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
