@@ -2607,6 +2607,7 @@ defmodule EdenWeb.ChatLive do
             data-resend-many={gettext("Resend {count} messages")}
             data-sending-label={gettext("Sending {name}")}
             data-cancel-label={gettext("Cancel upload")}
+            data-queued-label={gettext("In queue")}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -2640,18 +2641,15 @@ defmodule EdenWeb.ChatLive do
               class="flex items-center gap-2"
               inert={live_entries(@uploads.attachment) != [] and not @sending_media}
             >
-              <%!-- While a media send is uploading, gate attach (and paste, in the
-                    PasteUpload hook) so sends stay serialized — one in-flight set of
-                    entries keeps the progress average exact and the FIFO swap
-                    unambiguous (#95). pointer-events only: the live_file_input stays
-                    enabled so the in-flight upload it's bound to isn't dropped. --%>
+              <%!-- Attach stays live while a send uploads (#119): picking the next batch
+                    queues it client-side (the SendQueue hook intercepts the pick, holds the
+                    Files off the shared :attachment config, and feeds them in once the
+                    in-flight send frees the config). Only ONE batch is ever in the config,
+                    so the #95 single-in-flight invariant (exact progress average + FIFO
+                    swap) still holds — only the visible block is gone. --%>
               <label
-                class={[
-                  "ed-btn--icon",
-                  (@sending_media && "opacity-40 pointer-events-none") || "cursor-pointer"
-                ]}
+                class="ed-btn--icon cursor-pointer"
                 aria-label={gettext("Attach a file")}
-                aria-disabled={@sending_media}
               >
                 <.icon name="hero-paper-clip-micro" class="size-5" />
                 <%!-- sr-only (not hidden) keeps the input focusable / keyboard-reachable.
@@ -4129,6 +4127,21 @@ defmodule EdenWeb.ChatLive do
             this.connected = true
             this.convId = this.el.dataset.conversationId
             this.queue = []
+            // Upload queue (#119): File batches picked WHILE a media send is uploading.
+            // They can't enter the shared :attachment config (would merge into the in-flight
+            // album), so they wait here and are fed in one at a time as the config frees
+            // (config-free edge in updated()). prevSm/prevComposeOpen track that edge: the
+            // shared config is occupied while EITHER a send uploads (sm) OR a batch is staged
+            // in the compose overlay; the queue feeds the next batch the moment it frees.
+            this.mediaQueue = []
+            this.prevSm = this.el.dataset.sendingMedia === "true"
+            this.prevComposeOpen = !!this.el.querySelector("[data-upload-preview]")
+            // Client-side "a media send is occupying the config" flag (#119). Set the instant
+            // Send is pressed (synchronously, before the media_sending round-trip) and cleared
+            // once the config is free again (in updated()). The server's data-sending-media
+            // lags by a round-trip — on a slow link that lag is seconds, so a pick made right
+            // after Send would otherwise miss the gate and merge into the in-flight album.
+            this.mediaInFlight = this.prevSm
             // Per-send delivery watchdogs by client_id (#142): a clock shows while a
             // send awaits ack; if none arrives in time the clock flips to a red ●!.
             // ~20s when online (covers several LiveView reconnects on a flaky link);
@@ -4154,12 +4167,29 @@ defmodule EdenWeb.ChatLive do
             // PasteUpload set-files+dispatch path, which is proven to stage). Paste
             // flows through the same handler, so pasted images compress too.
             this.onPick = (e) => {
-              // A fresh file pick starts a new staging cycle — clear the
-              // send-in-flight guard so its preview overlay shows again (#130).
-              if (e.target instanceof HTMLInputElement && e.target.type === "file") {
-                this.sending = false
-              }
+              const input = e.target
+              const isFile = input instanceof HTMLInputElement && input.type === "file"
+              // Capture video object URLs for previews wherever the batch ends up.
               this.captureVideoUrls(e)
+              // #119: a pick WHILE a media send is uploading can't enter the shared
+              // :attachment config (it would merge into the in-flight album). Hold its
+              // Files in the queue and stop the native stage; updated() feeds the next
+              // batch once the config frees. Paste routes here too (it dispatches `input`).
+              // mediaInFlight is the immediate client truth (set at Send); the server flag
+              // is the fallback. Checked BEFORE the this.sending reset below so the pick
+              // can't clear the very signal it's testing.
+              const busy = this.mediaInFlight || this.el.dataset.sendingMedia === "true"
+              if (isFile && input.files?.length && busy) {
+                e.stopImmediatePropagation()
+                e.preventDefault()
+                this.mediaQueue.push([...input.files])
+                input.value = ""
+                this.updateQueueHint()
+                return
+              }
+              // A fresh (non-queued) pick starts a new staging cycle — clear the
+              // send-in-flight guard so its preview overlay shows again (#130).
+              if (isFile) this.sending = false
               this.compressPicked(e)
             }
             this.el.addEventListener("input", this.onPick, true)
@@ -4210,6 +4240,10 @@ defmodule EdenWeb.ChatLive do
             if (this.el.dataset.conversationId !== this.convId) {
               this.convId = this.el.dataset.conversationId
               this.queue = []
+              // Queued batches (#119) belong to the chat they were picked in; drop them on
+              // a switch (they were never sent) so they can't feed into the new chat.
+              this.mediaQueue = []
+              this.updateQueueHint()
               this.sending = false
               this.sendTimers.forEach((t) => clearTimeout(t))
               this.sendTimers.clear()
@@ -4254,6 +4288,21 @@ defmodule EdenWeb.ChatLive do
               const ov = this.el.querySelector("[data-upload-preview]")
               if (ov) ov.style.display = "none"
             }
+            // #119: feed the next queued batch the moment the shared config FREES — covers a
+            // send completing (sm→false) AND a surfaced batch being cancelled (the compose
+            // overlay closes). The config is free only when nothing uploads AND nothing is
+            // staged, so this also naturally waits out the just-finished entry lingering a
+            // beat (it only fires once the overlay is gone). One guarded path, sequential.
+            const sm = this.el.dataset.sendingMedia === "true"
+            const composeOpen = !!this.el.querySelector("[data-upload-preview]")
+            const configFree = !sm && !composeOpen
+            // Never stay gated once the config is genuinely free (else a lost media_sending
+            // would leave mediaInFlight stuck true and silently queue every later pick).
+            if (configFree) this.mediaInFlight = false
+            const justFreed = configFree && (this.prevSm || this.prevComposeOpen)
+            if (justFreed && this.mediaQueue.length) this.dequeueNext()
+            this.prevSm = sm
+            this.prevComposeOpen = composeOpen
           },
           onSubmit(e) {
             // Media (#95 redesign): mint a client_id, render the local-preview node
@@ -4317,6 +4366,9 @@ defmodule EdenWeb.ChatLive do
               // preview back for a frame after Send (visible under screen-recording
               // load, where transients stretch to several frames).
               this.sending = true
+              // #119: this batch now occupies the shared config until it completes — gate
+              // further picks into the queue from this instant (not after the round-trip).
+              this.mediaInFlight = true
               // Close the preview INSTANTLY (#111) instead of waiting for the
               // media_sending round-trip to re-render — on a slow link the overlay
               // lingered ~seconds after Send. The element stays in the DOM (display
@@ -4918,6 +4970,57 @@ defmodule EdenWeb.ChatLive do
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
             input._edenCompressed = false
+          },
+          // Feed the next queued batch (#119) into the now-free :attachment config. Only ever
+          // called by updated() on the config-FREE edge, so the config is already clear (no
+          // lingering entry to pile onto). Compress images first (the pick was intercepted
+          // before compressPicked, so the stashed Files are raw), then feedInput stages them
+          // and the server re-opens the compose overlay — the user captions + Sends normally,
+          // exactly like a first batch. _dequeuing guards the async compress window against a
+          // re-entrant call (belt-and-suspenders; the edge trigger already won't re-fire).
+          async dequeueNext() {
+            if (this._dequeuing) return
+            if (this.el.dataset.sendingMedia === "true") return
+            if (this.el.querySelector("[data-upload-preview]")) return
+            if (!this.mediaQueue.length) return
+            const input = this.el.querySelector('input[type="file"]')
+            // No input to feed (composer gone) — leave the batch queued, don't lose it.
+            if (!input) return
+            this._dequeuing = true
+            try {
+              const batch = this.mediaQueue.shift()
+              this.updateQueueHint()
+              if (!batch.length) return
+              const out = []
+              for (const f of batch) {
+                out.push((f.type || "").startsWith("image/") ? await this.compressImage(f) : f)
+              }
+              if (input.isConnected) this.feedInput(input, out)
+            } finally {
+              this._dequeuing = false
+            }
+          },
+          // Foot-of-list pill (#119) showing how many batches wait behind the in-flight
+          // send, so a pick made while uploading isn't invisible (it matters most on a slow
+          // link, where the wait is real). Lives in #pending (phx-update="ignore", stable);
+          // untagged, so a conversation switch's cleanup drops it along with the queue.
+          updateQueueHint() {
+            const n = this.mediaQueue.length
+            if (!n) {
+              this.queuePill?.remove()
+              this.queuePill = null
+              return
+            }
+            if (!this.queuePill || !this.queuePill.isConnected) {
+              this.queuePill = document.createElement("div")
+              this.queuePill.className = "ed-queued"
+              this.queuePill.innerHTML =
+                '<span class="hero-clock-micro size-3.5"></span><span></span>'
+            }
+            const label = this.el.dataset.queuedLabel || "In queue"
+            this.queuePill.lastElementChild.textContent = label + ": " + n
+            // Re-append so it stays at the foot, below any optimistic nodes.
+            this.pending?.appendChild(this.queuePill)
           },
           // Downscale + re-encode one image to a JPEG File (#97). Returns the original
           // untouched for animated GIFs, undecodable images, or when it wouldn't
@@ -5536,9 +5639,9 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("paste", (e) => {
               const files = [...(e.clipboardData?.files || [])]
               if (!files.length) return
-              // Serialize media sends (#95): ignore a paste while one is uploading,
-              // matching the gated attach button — keeps a single send in flight.
-              if (this.el.closest("#composer")?.dataset.sendingMedia === "true") return
+              // A paste while a send is uploading is fine now (#119): it sets the input +
+              // dispatches `input`, which the SendQueue hook's pick interceptor catches and
+              // routes into the upload queue instead of merging into the in-flight config.
               const input = this.el.closest("form")?.querySelector('input[type="file"]')
               if (!input) return
               e.preventDefault()

@@ -1499,6 +1499,11 @@ msgstr "Отменить ответ"
 msgid "Cancel upload"
 msgstr "Отменить загрузку"
 
+#: lib/eden_web/live/chat_live.ex:2610
+#, elixir-autogen, elixir-format
+msgid "In queue"
+msgstr "В очереди"
+
 #: lib/eden_web/live/chat_live.ex:6246
 #, elixir-autogen, elixir-format
 msgid "Message deleted"

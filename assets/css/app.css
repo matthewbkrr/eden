@@ -2402,6 +2402,22 @@ html {
     stroke: currentColor;
   }
 
+  /* Queued-upload hint (#119): a calm, right-aligned pill at the foot of the pending list
+     showing how many batches are waiting behind the in-flight send, so a pick made while
+     uploading isn't invisible (matters most on a slow link where the wait is real). */
+  .ed-queued {
+    align-self: flex-end;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+    line-height: 1;
+  }
+
   /* In-flight cancel-X on an optimistic upload node (#137): a calm dark badge that reads on
      a photo AND on the file card. Top-right over media; vertically centered on the file row. */
   .ed-sending-cancel {
