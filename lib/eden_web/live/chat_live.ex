@@ -495,7 +495,9 @@ defmodule EdenWeb.ChatLive do
     client_id = msg["client_id"]
     reply_to_id = msg["reply_to_id"]
 
-    entries = socket.assigns.uploads.attachment.entries
+    # Cancelled-but-lingering ghosts (a file X'd mid-batch) are never "done?", so a
+    # naive `Enum.all?(done?)` would wedge the send forever; ignore them (#158).
+    entries = live_entries(socket.assigns.uploads.attachment)
 
     cond do
       is_nil(conversation) ->
@@ -2636,7 +2638,7 @@ defmodule EdenWeb.ChatLive do
                   plane") so the caption is the only live input and nothing leaks here. --%>
             <div
               class="flex items-center gap-2"
-              inert={@uploads.attachment.entries != [] and not @sending_media}
+              inert={live_entries(@uploads.attachment) != [] and not @sending_media}
             >
               <%!-- While a media send is uploading, gate attach (and paste, in the
                     PasteUpload hook) so sends stay serialized — one in-flight set of
@@ -2657,7 +2659,7 @@ defmodule EdenWeb.ChatLive do
                       compose modal is open it owns "Add more", so the bar's drops out
                       (#130). The bar is behind the scrim then anyway. --%>
                 <.live_file_input
-                  :if={@uploads.attachment.entries == [] or @sending_media}
+                  :if={live_entries(@uploads.attachment) == [] or @sending_media}
                   upload={@uploads.attachment}
                   class="sr-only"
                 />
@@ -2719,7 +2721,7 @@ defmodule EdenWeb.ChatLive do
                   so it never mirrors into the bar's chat input (name="message[body]").
                   data-upload-preview routes the send through the SendQueue media path. --%>
             <.compose_overlay
-              :if={@uploads.attachment.entries != [] and not @sending_media}
+              :if={live_entries(@uploads.attachment) != [] and not @sending_media}
               upload={@uploads.attachment}
               form={@composer}
             />
@@ -7161,7 +7163,7 @@ defmodule EdenWeb.ChatLive do
   # name="message[body]"), so typing a caption never mirrors into the chat input;
   # send_attachment reads message[caption] as the media's body.
   defp compose_overlay(assigns) do
-    entries = assigns.upload.entries
+    entries = live_entries(assigns.upload)
     media = Enum.filter(entries, &media_entry?/1)
     files = Enum.reject(entries, &media_entry?/1)
 
@@ -8536,6 +8538,14 @@ defmodule EdenWeb.ChatLive do
   defp drop_staged_on_switch(%{assigns: %{sending_media: true}} = socket), do: socket
   defp drop_staged_on_switch(socket), do: cancel_staged_attachments(socket)
 
+  # Entries that still count as "staged content" for the composer. A cancelled
+  # in-flight upload does NOT leave `entries`: Phoenix marks it `cancelled?: true`
+  # and keeps it until the upload channel terminates (which, for a file cancelled
+  # mid-batch, can be never). So every "is anything staged?" check must skip
+  # cancelled entries — otherwise the lingering ghost keeps the composer bar
+  # `inert`, leaving the paperclip dead after a partial-batch cancel (#158).
+  defp live_entries(%{entries: entries}), do: Enum.reject(entries, & &1.cancelled?)
+
   # Cancel every staged attachment upload (the composer tray) + reset the send flags.
   # Used by the explicit "clear tray"/Escape action and, via drop_staged_on_switch,
   # on a conversation switch when nothing is in flight.
@@ -8576,7 +8586,10 @@ defmodule EdenWeb.ChatLive do
       )
 
     cond do
-      socket.assigns.uploads.attachment.entries != [] ->
+      # Other live entries are still uploading — the completion path (settle_ready_file
+      # / send_attachment) resets the flags when the last one lands. Cancelled ghosts
+      # are excluded so the LAST active cancel still falls through to the reset (#158).
+      live_entries(socket.assigns.uploads.attachment) != [] ->
         socket
 
       in_flight? ->
@@ -8952,21 +8965,28 @@ defmodule EdenWeb.ChatLive do
     # (client-type is advisory but matches the caption-placement intent). This keeps the
     # form-submit fallback consistent with the per-file progress path: no caption-on-the-
     # first-file and no orphaned optimistic caption node.
-    has_media? = Enum.any?(socket.assigns.uploads.attachment.entries, &media_entry?/1)
+    has_media? = Enum.any?(live_entries(socket.assigns.uploads.attachment), &media_entry?/1)
 
-    # consume_uploaded_entries cleans up each temp file as its callback returns,
-    # so to build ONE album from several entries we copy each to a stable temp,
-    # then persist them together (atomic) and remove the temps. Each source also
-    # carries the file's own optimistic client_id keyed by upload ref (#149) — read
-    # by Chat.create_attachments to stamp each per-file message so its in-stream
-    # card swaps; media tiles carry nil here (the album uses `client_id`).
+    # Build ONE album from several entries: copy each to a stable temp (the consume
+    # callback removes the original as it returns), then persist them together
+    # (atomic) and remove the temps. Each source carries the file's own optimistic
+    # client_id keyed by upload ref (#149) — read by Chat.create_attachments to stamp
+    # each per-file message so its in-stream card swaps; media tiles carry nil here
+    # (the album uses `client_id`). Consume the DONE entries INDIVIDUALLY rather than
+    # consume_uploaded_entries/3, which raises on ANY not-done entry: a file the user
+    # cancelled mid-batch lingers as a `cancelled?` (not-done) ghost, and the album
+    # must still send the rest instead of crashing or silently dropping it (#158).
     sources =
-      consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
-        stable = Path.join(System.tmp_dir!(), "eden-upload-" <> entry.uuid)
-        File.cp!(path, stable)
+      socket.assigns.uploads.attachment.entries
+      |> Enum.filter(& &1.done?)
+      |> Enum.map(fn entry ->
+        consume_uploaded_entry(socket, entry, fn %{path: path} ->
+          stable = Path.join(System.tmp_dir!(), "eden-upload-" <> entry.uuid)
+          File.cp!(path, stable)
 
-        {:ok,
-         %{path: stable, filename: entry.client_name, client_id: Map.get(file_cids, entry.ref)}}
+          {:ok,
+           %{path: stable, filename: entry.client_name, client_id: Map.get(file_cids, entry.ref)}}
+        end)
       end)
 
     # The upload has been consumed (entries are now []), so the normal composer
