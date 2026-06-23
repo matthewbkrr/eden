@@ -4205,7 +4205,8 @@ defmodule EdenWeb.ChatLive do
             this.flush()
           },
           updated() {
-            // Switched conversation: drop the old thread's optimistic UI + queue.
+            // Switched conversation: reset the text send queue/timers, and hide (not wipe)
+            // this chat's in-flight media nodes so background-upload progress survives (#144).
             if (this.el.dataset.conversationId !== this.convId) {
               this.convId = this.el.dataset.conversationId
               this.queue = []
@@ -4213,7 +4214,33 @@ defmodule EdenWeb.ChatLive do
               this.sendTimers.forEach((t) => clearTimeout(t))
               this.sendTimers.clear()
               this.closeFailMenu()
-              if (this.pending) this.pending.replaceChildren()
+              // #144: a media send keeps uploading after you leave its chat, so don't wipe
+              // its optimistic node — only the text twins (untagged; their delivery is
+              // queue/timer-bound to this chat, as before). Media/file nodes carry their
+              // owning conversation (data-conv-id): hide other chats', re-show this chat's.
+              // On re-show, dedup against the just-reset stream — if the real row already
+              // arrived while we were away, drop the twin so node + real row never double up.
+              if (this.pending) {
+                // The main composer's stream is #messages (paired with this.pending =
+                // #pending-messages, set in mounted()); the thread composer is a separate
+                // hook with its own containers, so this pairing is fixed here.
+                const stream = document.getElementById("messages")
+                for (const node of [...this.pending.children]) {
+                  const conv = node.dataset.convId
+                  if (!conv) {
+                    node.remove()
+                  } else if (conv !== this.convId) {
+                    node.style.display = "none"
+                  } else if (
+                    node.dataset.clientId &&
+                    stream?.querySelector(`[data-client-id="${node.dataset.clientId}"]`)
+                  ) {
+                    node.remove()
+                  } else {
+                    node.style.display = ""
+                  }
+                }
+              }
               // Revoke any staged-clip object URLs from the old conversation (#117).
               for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
               this.el.edenVideoUrls.clear()
@@ -4276,7 +4303,11 @@ defmodule EdenWeb.ChatLive do
               let captionId = null
               if (!hasMedia && caption && Object.keys(files).length > 0) {
                 captionId = this.uuid()
-                this.addOptimistic(captionId, caption)
+                // Tag the caption's node with the conversation too (#144), so it survives a
+                // switch alongside its file cards instead of vanishing until the real
+                // trailing message (sent server-side after the last file) lands.
+                const capNode = this.addOptimistic(captionId, caption)
+                if (capNode) capNode.dataset.convId = this.convId
               }
               this.pushEvent("media_sending", { id: albumId, caption, files, caption_id: captionId })
               // Mark the send in flight (#130 polish): updated() then re-hides the
@@ -4493,6 +4524,7 @@ defmodule EdenWeb.ChatLive do
                 behavior: smooth ? "smooth" : "auto",
               })
             }
+            return row
           },
           // Optimistic media node (#95): a local preview of the staged photos with a
           // determinate progress ring, tagged with the send's client_id so the riser
@@ -4660,6 +4692,12 @@ defmodule EdenWeb.ChatLive do
           wrapAndAppendOptimistic(content, clientId, caption) {
             const row = document.createElement("div")
             row.dataset.clientId = clientId
+            // Tag the conversation that owns this in-flight media/file node (#144): the
+            // upload keeps running after you leave (it's pinned to its conversation), so
+            // a switch HIDES this node instead of wiping it, and re-shows it on return —
+            // background-upload progress survives leaving the chat. Text optimistic twins
+            // are intentionally NOT tagged (they stay queue/timer-bound to this chat).
+            row.dataset.convId = this.convId
             if (this.el.dataset.layout === "flat") {
               // Mirror the real flat row incl. the compact rule (#95 review): a
               // continuation (same author within 5 min) drops the avatar + name
@@ -4785,7 +4823,12 @@ defmodule EdenWeb.ChatLive do
             node._stall = setTimeout(() => {
               if (!node.isConnected) return
               node.remove()
-              this.pushEvent("media_send_reset", {})
+              // The #95 recovery (re-show the overlay so a stuck send can be cancelled) only
+              // makes sense for the send the user is LOOKING at. Since #144 a node survives
+              // in the background (hidden, in another conversation), so guard the reset to
+              // the current conversation — else a backgrounded node's watchdog would flip
+              // sending_media false out from under an unrelated send in the open chat.
+              if (node.dataset.convId === this.convId) this.pushEvent("media_send_reset", {})
             }, 30000)
           },
           // Snapshot a loaded preview <img> to a persistent JPEG data-URL. Returns
