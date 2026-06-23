@@ -609,6 +609,31 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#composer[data-sending-media="false"]))
     end
 
+    test "the tray cancel (before send) keeps an active reply (#137 review)", ctx do
+      {:ok, target} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "reply me"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Reply, then stage a file, then change your mind and remove it in the tray (no send).
+      render_hook(view, "reply", %{"id" => to_string(target.id)})
+      assert has_element?(view, "[data-reply-active]")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "doc.txt", content: "x", type: "text/plain"}
+        ])
+
+      [%{"ref" => ref}] = file.entries
+      render_upload(file, "doc.txt")
+      render_hook(view, "cancel_upload", %{"ref" => ref})
+
+      # The reply must survive a tray cancel (only an in-flight cancel clears it); nothing sent.
+      assert has_element?(view, "[data-reply-active]")
+      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
+    end
+
     test "a files-only caption rides as its own trailing message below the pile (#149)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

@@ -2436,19 +2436,22 @@ html {
     transform: translateY(-50%);
   }
 
-  /* ≥44px tap targets on touch for the small remove/cancel badges (#137): expand the hit
-     area with a centered invisible ::before, leaving the visible badge size unchanged. */
+  /* Touch targets (#137): enlarge the badges on coarse pointers — a ::before hit-area
+     expansion would be clipped by the tile/photo's overflow:hidden. The in-flight cancel
+     (file card / full photo) goes to the full 44px; the smaller compose tiles + thread
+     thumbs get a comfortable bump that still fits a multi-tile grid. */
   @media (pointer: coarse) {
-    .ed-compose__remove::before,
-    .ed-thread-tray__remove::before,
-    .ed-sending-cancel::before {
-      content: "";
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 44px;
-      height: 44px;
-      transform: translate(-50%, -50%);
+    .ed-sending-cancel {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+    .ed-compose__remove {
+      width: 2.25rem;
+      height: 2.25rem;
+    }
+    .ed-thread-tray__remove {
+      width: 2rem;
+      height: 2rem;
     }
   }
 

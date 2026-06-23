@@ -4638,7 +4638,9 @@ defmodule EdenWeb.ChatLive do
             meta.appendChild(sz)
             card.appendChild(meta)
             // In-flight cancel (#137): the X aborts THIS file (by upload ref) and drops its
-            // row — the rest of the batch keeps going.
+            // row — the rest of the batch keeps going. If the upload already finished (a late
+            // tap), cancel_upload is a server no-op and the card has swapped to the real row
+            // (closest() → null), so the sent file simply stays — a safe race.
             card.appendChild(
               this.buildCancel(() => {
                 this.pushEvent("cancel_upload", { ref })
@@ -8553,9 +8555,18 @@ defmodule EdenWeb.ChatLive do
 
   # Cancel ONE attachment entry (#137) — the tray X (before send) and the in-flight X on the
   # optimistic card share this. Abort the entry, drop its ref from the in-flight stash + the
-  # progress gate, and — when nothing is uploading anymore — clear sending_media (re-enables
-  # the attach button) + the caption/reply/typing, so a cancelled send leaves no stuck state.
+  # progress gate. When that empties the upload, the cleanup depends on which X it was:
+  # in-flight (a real send) clears sending_media + caption/reply/typing + the orphaned caption
+  # node; a tray cancel keeps the reply (the user may still send a text reply).
   defp cancel_attachment_entry(socket, ref) do
+    in_flight? = socket.assigns.sending_media
+    # The trailing-caption node id of the files-only send that owns this ref, so cancelling
+    # its LAST file can drop the now-orphaned caption node (#137 review P3-3).
+    caption_id =
+      Enum.find_value(socket.assigns.media_client_ids, fn {_a, _c, _conv, files, cid} ->
+        Map.has_key?(files, ref) && cid
+      end)
+
     socket =
       socket
       |> cancel_upload(:attachment, ref)
@@ -8564,12 +8575,22 @@ defmodule EdenWeb.ChatLive do
         last_file_pct: Map.delete(socket.assigns.last_file_pct, ref)
       )
 
-    if socket.assigns.uploads.attachment.entries == [] do
-      socket
-      |> clear_media_caption()
-      |> assign(sending_media: false, last_media_pct: nil, reply_to: nil, last_typing_at: nil)
-    else
-      socket
+    cond do
+      socket.assigns.uploads.attachment.entries != [] ->
+        socket
+
+      in_flight? ->
+        # A real send was cancelled: re-enable the composer (sending_media), clear the
+        # caption/reply/typing it carried, and drop the orphaned trailing-caption node.
+        socket
+        |> push_media_failed(caption_id)
+        |> clear_media_caption()
+        |> assign(sending_media: false, last_media_pct: nil, reply_to: nil, last_typing_at: nil)
+
+      true ->
+        # Tray cancel BEFORE send: the overlay closes (no media left) — clear only the
+        # caption field; KEEP the reply (the user may still send a text reply) (#137 review P2-1).
+        clear_media_caption(socket)
     end
   end
 
