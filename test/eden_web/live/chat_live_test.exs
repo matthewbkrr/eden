@@ -544,9 +544,10 @@ defmodule EdenWeb.ChatLiveTest do
       render_hook(view, "media_sending", %{"id" => "cid-7", "caption" => "look"})
       refute has_element?(view, "[data-upload-preview]")
       assert has_element?(view, "#composer-body")
-      # Sends are serialized while one is in flight: the attach affordance is gated
-      # (pointer-events off) so a second media send can't overlap the first (#95).
-      assert has_element?(view, "#composer label.pointer-events-none")
+      # The attach affordance is NO LONGER gated during a send (#119): picking the next
+      # batch is allowed and queues client-side. Serialization is kept on the shared upload
+      # config (one batch consumed at a time), not by blocking the button (#95 invariant holds).
+      refute has_element?(view, "#composer label.pointer-events-none")
 
       # Submit: the stashed {id, caption} stamps the album so its optimistic twin swaps
       # out by data-client-id and the caption becomes the album's body.
