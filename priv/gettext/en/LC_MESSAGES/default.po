@@ -1487,6 +1487,11 @@ msgstr ""
 msgid "Cancel reply"
 msgstr ""
 
+#: lib/eden_web/live/chat_live.ex:2607
+#, elixir-autogen, elixir-format
+msgid "Cancel upload"
+msgstr ""
+
 #: lib/eden_web/live/chat_live.ex:6246
 #, elixir-autogen, elixir-format
 msgid "Message deleted"
