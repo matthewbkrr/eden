@@ -2373,6 +2373,9 @@ html {
      The card isn't a link yet, so it stays calm (no hover lift). */
   .ed-file--sending {
     cursor: default;
+    position: relative;
+    /* room for the cancel-X so a long filename doesn't run under it */
+    padding-right: 2.25rem;
   }
   .ed-file--sending:hover {
     background: color-mix(in oklch, currentColor 10%, transparent);
@@ -2397,6 +2400,59 @@ html {
   }
   .ed-file__ring .ed-media-sending__ring-fill {
     stroke: currentColor;
+  }
+
+  /* In-flight cancel-X on an optimistic upload node (#137): a calm dark badge that reads on
+     a photo AND on the file card. Top-right over media; vertically centered on the file row. */
+  .ed-sending-cancel {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.3rem;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: none;
+    border-radius: var(--ed-radius-full);
+    background: oklch(0 0 0 / 0.6);
+    color: oklch(0.99 0 0);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-sending-cancel > * {
+    pointer-events: none;
+  }
+  .ed-sending-cancel:hover {
+    background: oklch(0 0 0 / 0.8);
+  }
+  .ed-sending-cancel:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
+  }
+  .ed-file--sending .ed-sending-cancel {
+    top: 50%;
+    right: 0.5rem;
+    transform: translateY(-50%);
+  }
+
+  /* Touch targets (#137): enlarge the badges on coarse pointers — a ::before hit-area
+     expansion would be clipped by the tile/photo's overflow:hidden. The in-flight cancel
+     (file card / full photo) goes to the full 44px; the smaller compose tiles + thread
+     thumbs get a comfortable bump that still fits a multi-tile grid. */
+  @media (pointer: coarse) {
+    .ed-sending-cancel {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+    .ed-compose__remove {
+      width: 2.25rem;
+      height: 2.25rem;
+    }
+    .ed-thread-tray__remove {
+      width: 2rem;
+      height: 2rem;
+    }
   }
 
   /* Toasts -------------------------------------------------------------- */

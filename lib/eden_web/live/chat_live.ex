@@ -553,6 +553,9 @@ defmodule EdenWeb.ChatLive do
     # phx-value-upload="thread_attachment" (#104). An unknown key (crafted event)
     # is ignored rather than crashing the process.
     case Map.fetch(@cancelable_uploads, Map.get(params, "upload", "attachment")) do
+      # The main composer cancel handles both the tray (before send) and the in-flight
+      # cancel (#137): aborting the last entry of a send must also clear sending_media.
+      {:ok, :attachment} -> {:noreply, cancel_attachment_entry(socket, ref)}
       {:ok, upload} -> {:noreply, cancel_upload(socket, upload, ref)}
       :error -> {:noreply, socket}
     end
@@ -2601,6 +2604,7 @@ defmodule EdenWeb.ChatLive do
             data-delete={gettext("Delete")}
             data-resend-many={gettext("Resend {count} messages")}
             data-sending-label={gettext("Sending {name}")}
+            data-cancel-label={gettext("Cancel upload")}
             phx-submit="send"
             phx-change="composer_changed"
             class="flex flex-col gap-2 p-3 border-t shrink-0"
@@ -4564,6 +4568,14 @@ defmodule EdenWeb.ChatLive do
             // (setRing moves the dashoffset). White on the photo scrim (rotated -90deg in
             // CSS so it grows from 12 o'clock).
             media.appendChild(this.buildRing("ed-media-sending__ring"))
+            // In-flight cancel (#137, variant A): one X on the album aborts the whole send
+            // (the optimistic node holds no per-entry refs) and clears every pending node.
+            media.appendChild(
+              this.buildCancel(() => {
+                this.pushEvent("cancel_all_uploads", {})
+                if (this.pending) this.pending.replaceChildren()
+              }),
+            )
 
             return this.wrapAndAppendOptimistic(media, clientId, caption)
           },
@@ -4581,6 +4593,21 @@ defmodule EdenWeb.ChatLive do
               '<circle class="ed-media-sending__ring-fill" cx="18" cy="18" r="16"></circle>' +
               "</svg>"
             return ring
+          },
+          // An in-flight cancel-X for an optimistic upload node (#137): runs onClick (which
+          // aborts the upload + removes the node). Reused on the file card and the media node.
+          buildCancel(onClick) {
+            const btn = document.createElement("button")
+            btn.type = "button"
+            btn.className = "ed-sending-cancel"
+            btn.setAttribute("aria-label", this.el.dataset.cancelLabel || "Cancel")
+            btn.innerHTML = '<span class="hero-x-mark-micro size-3.5" aria-hidden="true"></span>'
+            btn.addEventListener("click", (e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              onClick()
+            })
+            return btn
           },
           // Optimistic card for a file/doc send (#149): files post one message PER file, so
           // each gets its own card + client_id and a determinate ring IN the icon slot
@@ -4610,6 +4637,16 @@ defmodule EdenWeb.ChatLive do
             meta.appendChild(nm)
             meta.appendChild(sz)
             card.appendChild(meta)
+            // In-flight cancel (#137): the X aborts THIS file (by upload ref) and drops its
+            // row — the rest of the batch keeps going. If the upload already finished (a late
+            // tap), cancel_upload is a server no-op and the card has swapped to the real row
+            // (closest() → null), so the sent file simply stays — a safe race.
+            card.appendChild(
+              this.buildCancel(() => {
+                this.pushEvent("cancel_upload", { ref })
+                card.closest(".ed-msg, .ed-flat")?.remove()
+              }),
+            )
             // No caption on a file card — a files-only caption rides as its own trailing
             // message below the pile (#149).
             return this.wrapAndAppendOptimistic(card, clientId)
@@ -8514,6 +8551,59 @@ defmodule EdenWeb.ChatLive do
     # `true` hides the overlay next staging, or a stranded id mis-stamps a later
     # send. Runs on cancel_all_uploads + select_conversation.
     |> assign(sending_media: false, media_client_ids: [], last_media_pct: nil, last_file_pct: %{})
+  end
+
+  # Cancel ONE attachment entry (#137) — the tray X (before send) and the in-flight X on the
+  # optimistic card share this. Abort the entry, drop its ref from the in-flight stash + the
+  # progress gate. When that empties the upload, the cleanup depends on which X it was:
+  # in-flight (a real send) clears sending_media + caption/reply/typing + the orphaned caption
+  # node; a tray cancel keeps the reply (the user may still send a text reply).
+  defp cancel_attachment_entry(socket, ref) do
+    in_flight? = socket.assigns.sending_media
+    # The trailing-caption node id of the files-only send that owns this ref, so cancelling
+    # its LAST file can drop the now-orphaned caption node (#137 review P3-3).
+    caption_id =
+      Enum.find_value(socket.assigns.media_client_ids, fn {_a, _c, _conv, files, cid} ->
+        Map.has_key?(files, ref) && cid
+      end)
+
+    socket =
+      socket
+      |> cancel_upload(:attachment, ref)
+      |> assign(
+        media_client_ids: drop_ref_from_stash(socket.assigns.media_client_ids, ref),
+        last_file_pct: Map.delete(socket.assigns.last_file_pct, ref)
+      )
+
+    cond do
+      socket.assigns.uploads.attachment.entries != [] ->
+        socket
+
+      in_flight? ->
+        # A real send was cancelled: re-enable the composer (sending_media), clear the
+        # caption/reply/typing it carried, and drop the orphaned trailing-caption node.
+        socket
+        |> push_media_failed(caption_id)
+        |> clear_media_caption()
+        |> assign(sending_media: false, last_media_pct: nil, reply_to: nil, last_typing_at: nil)
+
+      true ->
+        # Tray cancel BEFORE send: the overlay closes (no media left) — clear only the
+        # caption field; KEEP the reply (the user may still send a text reply) (#137 review P2-1).
+        clear_media_caption(socket)
+    end
+  end
+
+  # Remove an upload ref from whichever in-flight send owns it, dropping a stash entry that's
+  # left with no files and no album.
+  defp drop_ref_from_stash(stash, ref) do
+    stash
+    |> Enum.map(fn {album_id, caption, conv_id, files, caption_id} ->
+      {album_id, caption, conv_id, Map.delete(files, ref), caption_id}
+    end)
+    |> Enum.reject(fn {album_id, _caption, _conv, files, _cid} ->
+      files == %{} and is_nil(album_id)
+    end)
   end
 
   ## Typing indicator (#11)

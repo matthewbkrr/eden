@@ -1494,6 +1494,11 @@ msgstr "Аудио"
 msgid "Cancel reply"
 msgstr "Отменить ответ"
 
+#: lib/eden_web/live/chat_live.ex:2607
+#, elixir-autogen, elixir-format
+msgid "Cancel upload"
+msgstr "Отменить загрузку"
+
 #: lib/eden_web/live/chat_live.ex:6246
 #, elixir-autogen, elixir-format
 msgid "Message deleted"
