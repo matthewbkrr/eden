@@ -37,6 +37,15 @@ defmodule Eden.ChatTest do
     image_path(bytes)
   end
 
+  # A large, CONTENT-ful photo (gaussian noise → JPEG) so #122 compression actually shrinks
+  # it ≥10% — a solid-colour image wouldn't, and the win-check would keep the original.
+  defp big_photo(width, height) do
+    {:ok, noise} = Vix.Vips.Operation.gaussnoise(width, height)
+    {:ok, u8} = Vix.Vips.Operation.cast(noise, :VIPS_FORMAT_UCHAR)
+    {:ok, bytes} = Image.write(u8, :memory, suffix: ".jpg", quality: 90)
+    image_path(bytes)
+  end
+
   # A throwaway .txt file (classified as a `file`, not media) — for per-file
   # attachment tests (#149). Cleaned up after the test.
   defp tmp_text(content) do
@@ -403,6 +412,55 @@ defmodule Eden.ChatTest do
       att = Repo.one(Attachment)
       assert att.kind == "image"
       refute att.kind == "video"
+    end
+  end
+
+  describe "photo compression (#122)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "compress_photo downscales a large image + re-encodes a JPEG" do
+      # huge orig_size forces the win-check to accept, isolating the downscale/encode logic.
+      assert {:ok, jpeg, w, h} = Eden.Images.compress_photo(big_photo(2400, 1600), 100_000_000)
+      assert max(w, h) == 1600 and min(w, h) <= 1600
+      assert {:ok, _img} = Image.from_binary(jpeg)
+    end
+
+    test "compress_photo keeps the original when a re-encode wouldn't meaningfully shrink it" do
+      # orig_size = 1 byte → no JPEG can be ≤90% of it → keep the original as-is.
+      assert :keep = Eden.Images.compress_photo(big_photo(400, 300), 1)
+    end
+
+    test "a photo is compressed for weight by default (downscaled, stored as JPEG)", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, _} =
+        Chat.create_attachments(scope(alice), conv.id, [
+          %{path: big_photo(2400, 1600), filename: "p.png"}
+        ])
+
+      att = Repo.one(Attachment)
+      assert att.kind == "image"
+      assert att.content_type == "image/jpeg"
+      # downscaled to the cap (the win-check passed for this large noisy photo)
+      assert att.width <= 1600 and att.height <= 1600
+    end
+
+    test "the Original flag stores the photo as-is, uncompressed", %{alice: alice, conv: conv} do
+      {:ok, _} =
+        Chat.create_attachments(
+          scope(alice),
+          conv.id,
+          [%{path: big_photo(2400, 1600), filename: "p.jpg"}],
+          %{original: true}
+        )
+
+      att = Repo.one(Attachment)
+      # full original dimensions kept (NOT downscaled to 1600) → compression was skipped.
+      assert att.width == 2400 and att.height == 1600
     end
   end
 
