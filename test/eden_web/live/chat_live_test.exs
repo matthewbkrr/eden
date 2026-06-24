@@ -26,6 +26,15 @@ defmodule EdenWeb.ChatLiveTest do
     path
   end
 
+  # A noisy JPEG big enough that #122 server compression would downscale it (> @photo_max),
+  # so a stored width of 2400 proves the photo was kept uncompressed. Returns raw bytes.
+  defp big_jpeg(width, height) do
+    {:ok, noise} = Vix.Vips.Operation.gaussnoise(width, height)
+    {:ok, u8} = Vix.Vips.Operation.cast(noise, :VIPS_FORMAT_UCHAR)
+    {:ok, bytes} = Image.write(u8, :memory, suffix: ".jpg", quality: 90)
+    bytes
+  end
+
   test "shows the empty state when nothing is selected", %{conn: conn} do
     conn = log_in_user(conn, user_fixture())
     {:ok, _view, html} = live(conn, ~p"/app")
@@ -557,6 +566,36 @@ defmodule EdenWeb.ChatLiveTest do
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
 
       refute has_element?(view, "[data-upload-preview]")
+    end
+
+    test "Send as file (#122) stores the photo uncompressed and renders a document card", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      scope = Scope.for_user(ctx.alice)
+
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "p.jpg", content: big_jpeg(2400, 1600), type: "image/jpeg"}
+        ])
+
+      render_upload(file, "p.jpg")
+      # The "Send as file" button rides as_file:true on media_sending (the hook reads
+      # e.submitter); the server stores the photo as-is and flags it.
+      render_hook(view, "media_sending", %{"id" => "cid-asfile", "as_file" => true})
+      render_submit(element(view, "#composer"))
+
+      {:ok, msgs} = Chat.list_messages(scope, ctx.conversation.id)
+      msg = Enum.find(msgs, &(&1.client_id == "cid-asfile"))
+      assert %{attachments: [att]} = msg
+      assert att.as_file and att.kind == "image"
+      assert att.width == 2400 and att.height == 1600
+
+      # A fresh mount renders the stored message as a downloadable document card with a
+      # thumbnail (ed-file--photo), never an inline album tile.
+      {:ok, _view2, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert html =~ "ed-file--photo"
+      refute html =~ "ed-album__tile"
     end
 
     test "a file send stamps the file message with its own per-ref client_id (#149)", ctx do

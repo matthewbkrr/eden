@@ -563,6 +563,21 @@ html {
     border-radius: 0.5rem;
     background: color-mix(in oklch, currentColor 16%, transparent);
   }
+  /* "Send as file" photo card (#122): the leading glyph is a cropped mini photo preview
+     instead of the document icon — same footprint as .ed-file__icon. */
+  .ed-file__thumb {
+    width: 2.25rem;
+    height: 2.25rem;
+    flex-shrink: 0;
+    border-radius: 0.5rem;
+    overflow: hidden;
+  }
+  .ed-file__thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
   .ed-file__meta {
     min-width: 0;
     display: flex;
@@ -2382,6 +2397,19 @@ html {
   }
   .ed-file--sending .ed-file__icon {
     position: relative;
+  }
+  /* "Send as file" optimistic node (#122): stacked document cards, each card's photo
+     thumbnail dimmed under the progress ring (which overlays the thumb slot). */
+  .ed-asfile-sending {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .ed-file--sending .ed-file__thumb {
+    position: relative;
+  }
+  .ed-file--sending .ed-file__thumb img {
+    opacity: 0.55;
   }
   .ed-file__ring {
     position: absolute;

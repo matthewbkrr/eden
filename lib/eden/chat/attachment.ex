@@ -26,6 +26,9 @@ defmodule Eden.Chat.Attachment do
     field :thumbnail_key, :string
     # Order within an album (#58); 0 for a lone attachment.
     field :position, :integer, default: 0
+    # "Send as file" (#122): an uncompressed image rendered as a downloadable document
+    # (with a thumbnail) rather than an inline photo.
+    field :as_file, :boolean, default: false
 
     belongs_to :message, Eden.Chat.Message
 
@@ -47,7 +50,8 @@ defmodule Eden.Chat.Attachment do
       :height,
       :duration,
       :thumbnail_key,
-      :position
+      :position,
+      :as_file
     ])
     |> validate_required([:kind, :storage_key, :content_type, :byte_size])
     |> validate_inclusion(:kind, @kinds)

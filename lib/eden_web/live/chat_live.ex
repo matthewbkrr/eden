@@ -457,11 +457,15 @@ defmodule EdenWeb.ChatLive do
       # message, not under the first file. A photo+caption leaves this nil (the caption
       # rides the album).
       caption_id = if is_binary(params["caption_id"]), do: params["caption_id"], else: nil
+      # #122: "Send as file" rides here (captured by the hook at submit, while the overlay
+      # is open) so each queued batch keeps its own choice — same reason caption does.
+      as_file = params["as_file"] == true
 
       {:noreply,
        assign(socket,
          sending_media: true,
-         media_client_ids: stash_cid(socket, id, caption, selected_id(socket), files, caption_id)
+         media_client_ids:
+           stash_cid(socket, id, caption, selected_id(socket), files, caption_id, as_file)
        )}
     end
   end
@@ -485,7 +489,9 @@ defmodule EdenWeb.ChatLive do
   # serving cached pre-#95 JS — i.e. one asset-cache lifetime after the deploy.
   def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
     {:noreply,
-     assign(socket, media_client_ids: stash_cid(socket, id, "", selected_id(socket), %{}, nil))}
+     assign(socket,
+       media_client_ids: stash_cid(socket, id, "", selected_id(socket), %{}, nil, false)
+     )}
   end
 
   def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
@@ -518,7 +524,7 @@ defmodule EdenWeb.ChatLive do
         # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
         # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
         # untouched for a later text send.
-        {{cid, caption, conv_id, file_cids, caption_id}, rest} =
+        {{cid, caption, conv_id, file_cids, caption_id, as_file}, rest} =
           pop_media_client_id(socket.assigns.media_client_ids)
 
         socket = assign(socket, media_client_ids: rest)
@@ -526,17 +532,17 @@ defmodule EdenWeb.ChatLive do
         # left (a mid-upload switch). Send it to that ORIGINAL conversation, not the
         # current one, so leaving doesn't lose the media or leak it into the new chat.
         # Falls back to the current conversation when no id was stashed (legacy/edge).
-        # file_cids maps each file's upload ref to its own client_id; caption_id rides the
-        # files-only fallback so the caption lands trailing, not on the first file (#149).
+        # The id-triple (album client_id + per-file cids + the files-only caption node)
+        # travels as one `ids` tuple — finish_attachment already treats it as a unit — to
+        # keep send_attachment within the arity budget once `as_file` (#122) is added.
         send_attachment(
           socket,
           scope,
           conv_id || conversation.id,
           caption,
           reply_to_id,
-          cid,
-          file_cids,
-          caption_id
+          {cid, file_cids, caption_id},
+          as_file
         )
 
       String.trim(body) == "" ->
@@ -4160,12 +4166,20 @@ defmodule EdenWeb.ChatLive do
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
-            // Compress images client-side BEFORE they upload (#97): smaller transfer
-            // on a slow cross-border link + smaller storage. We intercept the file
-            // input's own input/change in capture, downscale/re-encode each image,
-            // then re-feed the input so LiveView stages the COMPRESSED file (the
-            // PasteUpload set-files+dispatch path, which is proven to stage). Paste
-            // flows through the same handler, so pasted images compress too.
+            // "Send as file" (#122): a type="button" so it's never the implicit Enter
+            // submitter. On click, flag the next submit as uncompressed-document and
+            // requestSubmit() through the normal media path (onSubmit reads the flag).
+            this._asFile = false
+            this.el.addEventListener("click", (e) => {
+              if (!e.target.closest("[data-send-as-file]")) return
+              this._asFile = true
+              this.el.requestSubmit()
+            })
+            // Observe file picks (in capture) for two reasons: the #119 upload queue
+            // (hold a batch picked while another uploads) and the video-preview URLs.
+            // Photos are NO LONGER shrunk client-side — the server compresses every
+            // photo for storage (#122), and "Send as file" (#122) needs the untouched
+            // original — so a normal pick just stages natively (no intercept/re-encode).
             this.onPick = (e) => {
               const input = e.target
               const isFile = input instanceof HTMLInputElement && input.type === "file"
@@ -4188,9 +4202,9 @@ defmodule EdenWeb.ChatLive do
                 return
               }
               // A fresh (non-queued) pick starts a new staging cycle — clear the
-              // send-in-flight guard so its preview overlay shows again (#130).
+              // send-in-flight guard so its preview overlay shows again (#130). The
+              // event is left to propagate so LiveView stages the file natively.
               if (isFile) this.sending = false
-              this.compressPicked(e)
             }
             this.el.addEventListener("input", this.onPick, true)
             this.el.addEventListener("change", this.onPick, true)
@@ -4305,6 +4319,10 @@ defmodule EdenWeb.ChatLive do
             this.prevComposeOpen = composeOpen
           },
           onSubmit(e) {
+            // #122: "Send as file" sets this flag (then requestSubmit()s) — read + reset it
+            // unconditionally so an aborted/error submit can't leak it into the next send.
+            const asFile = this._asFile === true
+            this._asFile = false
             // Media (#95 redesign): mint a client_id, render the local-preview node
             // (tagged with it) + a progress ring, push it fire-and-forget on
             // media_sending (which also closes the overlay), and let the live upload
@@ -4337,7 +4355,18 @@ defmodule EdenWeb.ChatLive do
               // first file (mirrors the server's attachment_steps).
               const hasMedia = !!overlay.querySelector(".ed-compose__tile")
               const albumId = hasMedia ? this.uuid() : null
-              if (albumId) this.armStall(this.addOptimisticMedia(albumId, overlay, caption))
+              // #122: a photos-only "Send as file" lands as document cards — draw the
+              // optimistic node the same way so a slow upload doesn't show an album that
+              // then reshapes. A mixed batch (a video present) keeps the album node (the
+              // video still renders inline), so fall back to it there.
+              if (albumId) {
+                const asFileDocs = asFile && !overlay.querySelector(".ed-compose__video")
+                this.armStall(
+                  asFileDocs
+                    ? this.addOptimisticAsFile(albumId, overlay, caption)
+                    : this.addOptimisticMedia(albumId, overlay, caption),
+                )
+              }
               const files = {}
               ;[...overlay.querySelectorAll(".ed-attach-file[data-ref]")].forEach((fe) => {
                 const cid = this.uuid()
@@ -4358,7 +4387,15 @@ defmodule EdenWeb.ChatLive do
                 const capNode = this.addOptimistic(captionId, caption)
                 if (capNode) capNode.dataset.convId = this.convId
               }
-              this.pushEvent("media_sending", { id: albumId, caption, files, caption_id: captionId })
+              // #122: asFile (read at the top from the "Send as file" click) → store the
+              // photo uncompressed and render it as a document instead of an inline image.
+              this.pushEvent("media_sending", {
+                id: albumId,
+                caption,
+                files,
+                caption_id: captionId,
+                as_file: asFile,
+              })
               // Mark the send in flight (#130 polish): updated() then re-hides the
               // overlay on EVERY patch until a fresh pick. Without this, a re-render
               // that beats the media_sending round-trip — or morphdom resetting the
@@ -4665,6 +4702,55 @@ defmodule EdenWeb.ChatLive do
 
             return this.wrapAndAppendOptimistic(media, clientId, caption)
           },
+          // Optimistic node for a photos-only "Send as file" album (#122): mirror the real
+          // render — each photo as a document card (snapshot thumb + name + size), never an
+          // inline album — so a slow upload doesn't show an album that reshapes into cards on
+          // swap. One ring + one cancel for the whole album (its single client_id), matching
+          // addOptimisticMedia's model. data-name/size ride the staged tiles.
+          addOptimisticAsFile(clientId, overlay, caption) {
+            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")]
+            if (tiles.length === 0) return null
+            const wrap = document.createElement("div")
+            wrap.className = "ed-asfile-sending"
+            tiles.forEach((tile, i) => {
+              const card = document.createElement("div")
+              card.className = "ed-file ed-file--photo ed-file--sending"
+              const thumb = document.createElement("span")
+              thumb.className = "ed-file__thumb"
+              const url = this.snapshot(tile.querySelector(".ed-compose__img"))
+              if (url) {
+                const img = document.createElement("img")
+                img.src = url
+                img.alt = ""
+                thumb.appendChild(img)
+              }
+              // One progress ring drives the whole album (server addresses it by client_id);
+              // put it on the first card's thumb.
+              if (i === 0) thumb.appendChild(this.buildRing("ed-file__ring"))
+              card.appendChild(thumb)
+              const meta = document.createElement("span")
+              meta.className = "ed-file__meta"
+              const nm = document.createElement("span")
+              nm.className = "ed-file__name"
+              nm.textContent = tile.dataset.name || ""
+              const sz = document.createElement("span")
+              sz.className = "ed-file__size"
+              sz.textContent = tile.dataset.size || ""
+              meta.appendChild(nm)
+              meta.appendChild(sz)
+              card.appendChild(meta)
+              wrap.appendChild(card)
+            })
+            // One album-level cancel (cancel_all), on the first card — the node holds no
+            // per-entry refs, so aborting drops the whole send (mirrors addOptimisticMedia).
+            wrap.firstChild.appendChild(
+              this.buildCancel(() => {
+                this.pushEvent("cancel_all_uploads", {})
+                if (this.pending) this.pending.replaceChildren()
+              }),
+            )
+            return this.wrapAndAppendOptimistic(wrap, clientId, caption)
+          },
           // Build the determinate progress ring (#95/#149): a faint track + a fill arc.
           // `cls` styles/sizes the container per context (media = white-on-scrim overlay;
           // file = currentColor, sized to the icon slot). The fill/track circle classes
@@ -4930,55 +5016,23 @@ defmodule EdenWeb.ChatLive do
               }
             }
           },
-          // Intercept a file selection (#97): compress images, then re-feed the input
-          // so LiveView stages the COMPRESSED file, never the original. A native pick
-          // fires BOTH `input` and `change`; we must stop EACH (else the unstopped one
-          // stages the original → a duplicate). `_picking` then ignores the second of
-          // the pair; `_edenCompressed` lets our re-dispatched events through.
-          async compressPicked(e) {
-            const input = e.target
-            if (!(input instanceof HTMLInputElement) || input.type !== "file") return
-            if (input._edenCompressed) return
-            const files = [...input.files]
-            if (!files.length) return
-            if (!files.some((f) => (f.type || "").startsWith("image/"))) return
-            // Stop FIRST so neither event of the pair stages the original. A pick that
-            // arrives while an earlier compress is still running is then dropped (rare,
-            // bounded by compressImage's timeout) rather than staged uncompressed.
-            e.stopImmediatePropagation()
-            e.preventDefault()
-            if (this._picking) return
-            this._picking = true
-            try {
-              const out = []
-              for (const f of files) {
-                out.push((f.type || "").startsWith("image/") ? await this.compressImage(f) : f)
-              }
-              this.feedInput(input, out)
-            } finally {
-              this._picking = false
-            }
-          },
-          // Re-feed an input with an exact File set so LiveView stages it (the
-          // PasteUpload set-files + dispatch path). _edenCompressed short-circuits
-          // compressPicked so these files aren't re-processed.
+          // Re-feed an input with an exact File set so LiveView stages it (set files +
+          // dispatch input/change — the proven PasteUpload path). Used to flush a queued
+          // batch (#119) into the freed config.
           feedInput(input, files) {
             const dt = new DataTransfer()
             files.forEach((f) => dt.items.add(f))
             input.files = dt.files
-            input._edenCompressed = true
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
-            input._edenCompressed = false
           },
           // Feed the next queued batch (#119) into the now-free :attachment config. Only ever
           // called by updated() on the config-FREE edge, so the config is already clear (no
-          // lingering entry to pile onto). Compress images first (the pick was intercepted
-          // before compressPicked, so the stashed Files are raw), then feedInput stages them
-          // and the server re-opens the compose overlay — the user captions + Sends normally,
-          // exactly like a first batch. _dequeuing guards the async compress window against a
-          // re-entrant call (belt-and-suspenders; the edge trigger already won't re-fire).
-          async dequeueNext() {
+          // lingering entry to pile onto). feedInput stages the batch and the server re-opens
+          // the compose overlay — the user captions + Sends normally, exactly like a first
+          // batch. _dequeuing guards against a re-entrant call (belt-and-suspenders; the edge
+          // trigger already won't re-fire).
+          dequeueNext() {
             if (this._dequeuing) return
             if (this.el.dataset.sendingMedia === "true") return
             if (this.el.querySelector("[data-upload-preview]")) return
@@ -4990,12 +5044,7 @@ defmodule EdenWeb.ChatLive do
             try {
               const batch = this.mediaQueue.shift()
               this.updateQueueHint()
-              if (!batch.length) return
-              const out = []
-              for (const f of batch) {
-                out.push((f.type || "").startsWith("image/") ? await this.compressImage(f) : f)
-              }
-              if (input.isConnected) this.feedInput(input, out)
+              if (batch.length && input.isConnected) this.feedInput(input, batch)
             } finally {
               this._dequeuing = false
             }
@@ -5021,72 +5070,6 @@ defmodule EdenWeb.ChatLive do
             this.queuePill.lastElementChild.textContent = label + ": " + n
             // Re-append so it stays at the foot, below any optimistic nodes.
             this.pending?.appendChild(this.queuePill)
-          },
-          // Downscale + re-encode one image to a JPEG File (#97). Returns the original
-          // untouched for animated GIFs, undecodable images, or when it wouldn't
-          // meaningfully shrink. createImageBitmap honors EXIF orientation (so phone
-          // portraits aren't baked sideways) and decodes off the main thread; the
-          // timeout guarantees the promise always settles so the pick loop can't hang.
-          compressImage(file) {
-            if (file.type === "image/gif") return Promise.resolve(file)
-            return new Promise((resolve) => {
-              // done() is the single settle point — it clears the timer, so the 8s
-              // safety net covers EVERY async step (createImageBitmap AND toBlob); the
-              // `settled` guard makes a late callback after the timeout a no-op.
-              let settled = false
-              const done = (out) => {
-                if (settled) return
-                settled = true
-                clearTimeout(timer)
-                resolve(out || file)
-              }
-              const timer = setTimeout(() => done(file), 8000)
-              createImageBitmap(file, { imageOrientation: "from-image" })
-                .then((bmp) => {
-                  const w0 = bmp.width
-                  const h0 = bmp.height
-                  const max = 1920
-                  // Only re-encode when the image actually needs downscaling. One
-                  // already within bounds is kept UNTOUCHED — no lossy JPEG round-trip
-                  // on screenshots (crisp text), small images, animated WebP/APNG, or
-                  // transparent art. Large phone photos (the real win) still downscale.
-                  if (!w0 || !h0 || (w0 <= max && h0 <= max)) {
-                    bmp.close && bmp.close()
-                    return done(file)
-                  }
-                  const s = max / Math.max(w0, h0)
-                  const w = Math.round(w0 * s)
-                  const h = Math.round(h0 * s)
-                  const c = document.createElement("canvas")
-                  c.width = w
-                  c.height = h
-                  const ctx = c.getContext("2d")
-                  if (!ctx) {
-                    bmp.close && bmp.close()
-                    return done(file)
-                  }
-                  // JPEG has no alpha — flatten any transparency (png/webp/avif/…) onto
-                  // white. Harmless for opaque images (drawImage covers the fill).
-                  ctx.fillStyle = "#fff"
-                  ctx.fillRect(0, 0, w, h)
-                  ctx.drawImage(bmp, 0, 0, w, h)
-                  bmp.close && bmp.close()
-                  c.toBlob(
-                    (blob) => {
-                      // Only accept a meaningful win, else keep the original.
-                      if (!blob || blob.size > file.size * 0.9) return done(file)
-                      done(
-                        new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", {
-                          type: "image/jpeg",
-                        })
-                      )
-                    },
-                    "image/jpeg",
-                    0.82
-                  )
-                })
-                .catch(() => done(file))
-            })
           },
           // The last flat row to compare against for the compact rule: a queued
           // optimistic node wins (rapid double-send), else the last streamed
@@ -7356,7 +7339,14 @@ defmodule EdenWeb.ChatLive do
               length(@media) == 1 && "ed-compose__grid--single"
             ]}
           >
-            <div :for={entry <- @media} class="ed-compose__tile">
+            <%!-- data-name/size let the "Send as file" optimistic node (#122) render a
+                  document card that mirrors the real one (name + size), not an album. --%>
+            <div
+              :for={entry <- @media}
+              class="ed-compose__tile"
+              data-name={entry.client_name}
+              data-size={human_size(entry.client_size)}
+            >
               <.live_img_preview :if={image_entry?(entry)} entry={entry} class="ed-compose__img" />
               <div :if={video_entry?(entry)} class="ed-compose__video-wrap">
                 <span class="ed-compose__video-fb" aria-hidden="true">
@@ -7453,6 +7443,21 @@ defmodule EdenWeb.ChatLive do
             phx-hook=".PasteUpload"
             phx-mounted={JS.focus()}
           />
+          <%!-- "Send as file" (#122): type="button" (NOT submit) so it's never the form's
+                implicit submitter — Enter in the caption must do a normal send, not this. The
+                SendQueue hook's click handler sets a flag and requestSubmit()s, so the photo is
+                stored uncompressed and shown as a document. Only offered when a photo is staged
+                (video/file are never compressed). --%>
+          <button
+            :if={Enum.any?(@media, &image_entry?/1)}
+            class="ed-btn--icon shrink-0"
+            type="button"
+            data-send-as-file
+            aria-label={gettext("Send as file")}
+            title={gettext("Send as an uncompressed file")}
+          >
+            <.icon name="hero-document-arrow-up-micro" class="size-5" />
+          </button>
           <button
             class="ed-btn ed-btn--primary shrink-0"
             style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
@@ -7505,7 +7510,8 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp album_view(assigns) do
-    media = Enum.filter(assigns.attachments, &(&1.kind in ~w(image video)))
+    # as_file photos (#122) leave the media grid for the document-card list below.
+    media = Enum.filter(assigns.attachments, &(&1.kind in ~w(image video) and not &1.as_file))
 
     assigns =
       assigns
@@ -7574,6 +7580,34 @@ defmodule EdenWeb.ChatLive do
 
   # Renders an attachment by kind: a lightbox-able image, an in-app video player,
   # or a download card for a generic file.
+  # "Send as file" image (#122): a downloadable document card, but the leading glyph is a
+  # mini photo preview (the thumbnail) instead of the generic document icon. Matches before
+  # the inline-image clause so an as_file photo never renders in the grid/lightbox.
+  defp attachment_view(%{attachment: %{as_file: true}} = assigns) do
+    ~H"""
+    <a
+      href={~p"/files/#{@attachment.id}"}
+      download
+      class="ed-file ed-file--photo mb-1"
+      aria-label={gettext("Download %{name}", name: @attachment.filename || gettext("photo"))}
+    >
+      <span :if={as_file_previewable?(@attachment)} class="ed-file__thumb" aria-hidden="true">
+        <img src={thumb_src(@attachment)} loading="lazy" alt="" />
+      </span>
+      <%!-- A not-yet-rendered original (HEIC before the worker's thumbnail lands) shows the
+            document icon rather than a broken <img>; the {:thumbnail_ready} re-render swaps in
+            the preview once libvips has made it. --%>
+      <span :if={not as_file_previewable?(@attachment)} class="ed-file__icon" aria-hidden="true">
+        <.icon name="hero-document-arrow-down-micro" class="size-5" />
+      </span>
+      <span class="ed-file__meta">
+        <span class="ed-file__name">{@attachment.filename || gettext("Photo")}</span>
+        <span class="ed-file__size">{human_size(@attachment.byte_size)}</span>
+      </span>
+    </a>
+    """
+  end
+
   defp attachment_view(%{attachment: %{kind: "image"}} = assigns) do
     ~H"""
     <a
@@ -7652,6 +7686,14 @@ defmodule EdenWeb.ChatLive do
     </a>
     """
   end
+
+  # Whether an as_file photo (#122) can be shown inline in its document card: a generated
+  # thumbnail always works; otherwise only a browser-renderable original (a raw HEIC, say,
+  # would be a broken <img> until the worker's thumbnail lands → show the document icon).
+  defp as_file_previewable?(%{thumbnail_key: key}) when is_binary(key), do: true
+
+  defp as_file_previewable?(%{content_type: type}),
+    do: type in ~w(image/jpeg image/png image/gif image/webp image/avif)
 
   attr :people, :list, required: true
 
@@ -8719,7 +8761,7 @@ defmodule EdenWeb.ChatLive do
     # The trailing-caption node id of the files-only send that owns this ref, so cancelling
     # its LAST file can drop the now-orphaned caption node (#137 review P3-3).
     caption_id =
-      Enum.find_value(socket.assigns.media_client_ids, fn {_a, _c, _conv, files, cid} ->
+      Enum.find_value(socket.assigns.media_client_ids, fn {_a, _c, _conv, files, cid, _af} ->
         Map.has_key?(files, ref) && cid
       end)
 
@@ -8757,10 +8799,10 @@ defmodule EdenWeb.ChatLive do
   # left with no files and no album.
   defp drop_ref_from_stash(stash, ref) do
     stash
-    |> Enum.map(fn {album_id, caption, conv_id, files, caption_id} ->
-      {album_id, caption, conv_id, Map.delete(files, ref), caption_id}
+    |> Enum.map(fn {album_id, caption, conv_id, files, caption_id, as_file} ->
+      {album_id, caption, conv_id, Map.delete(files, ref), caption_id, as_file}
     end)
-    |> Enum.reject(fn {album_id, _caption, _conv, files, _cid} ->
+    |> Enum.reject(fn {album_id, _caption, _conv, files, _cid, _af} ->
       files == %{} and is_nil(album_id)
     end)
   end
@@ -8907,7 +8949,7 @@ defmodule EdenWeb.ChatLive do
 
       id =
         case List.first(socket.assigns.media_client_ids) do
-          {id, _caption, _conv_id, _files, _caption_id} -> id
+          {id, _caption, _conv_id, _files, _caption_id, _af} -> id
           _ -> nil
         end
 
@@ -8940,7 +8982,7 @@ defmodule EdenWeb.ChatLive do
   # (entries upload concurrently) — the explicit ask was "don't wait for the slowest", so a
   # quick doc surfaces before a slow one even if staged after it.
   defp send_ready_file(socket, entry) do
-    case Enum.find_index(socket.assigns.media_client_ids, fn {_id, _cap, _conv, files, _cid} ->
+    case Enum.find_index(socket.assigns.media_client_ids, fn {_id, _cap, _conv, files, _cid, _af} ->
            Map.has_key?(files, entry.ref)
          end) do
       nil ->
@@ -8952,7 +8994,7 @@ defmodule EdenWeb.ChatLive do
         # batch so the album stays FIRST — sending the file eagerly here would land it
         # above the album, which is consumed only after every entry is done (#149).
         case Enum.at(socket.assigns.media_client_ids, idx) do
-          {nil, _cap, _conv, _files, _cid} -> settle_ready_file(socket, entry, idx)
+          {nil, _cap, _conv, _files, _cid, _af} -> settle_ready_file(socket, entry, idx)
           _album_present -> {:noreply, socket}
         end
     end
@@ -8960,7 +9002,7 @@ defmodule EdenWeb.ChatLive do
 
   defp settle_ready_file(socket, entry, idx) do
     stash = socket.assigns.media_client_ids
-    {album_id, caption, conv_id, files, caption_id} = Enum.at(stash, idx)
+    {album_id, caption, conv_id, files, caption_id, as_file} = Enum.at(stash, idx)
     scope = socket.assigns.current_scope
     conversation_id = conv_id || selected_id(socket)
 
@@ -8981,7 +9023,8 @@ defmodule EdenWeb.ChatLive do
     stash =
       if done?,
         do: List.delete_at(stash, idx),
-        else: List.replace_at(stash, idx, {album_id, caption, conv_id, files, caption_id})
+        else:
+          List.replace_at(stash, idx, {album_id, caption, conv_id, files, caption_id, as_file})
 
     socket =
       assign(socket,
@@ -9055,15 +9098,16 @@ defmodule EdenWeb.ChatLive do
   # started in, so an in-flight upload survives a conversation switch and lands in the
   # right chat. file_cids maps each file's upload ref to its own client_id; caption_id is
   # the trailing files-only caption's optimistic node (#149).
-  defp stash_cid(socket, id, caption, conv_id, file_cids, caption_id),
+  defp stash_cid(socket, id, caption, conv_id, file_cids, caption_id, as_file),
     do:
       Enum.take(
-        socket.assigns.media_client_ids ++ [{id, caption, conv_id, file_cids, caption_id}],
+        socket.assigns.media_client_ids ++
+          [{id, caption, conv_id, file_cids, caption_id, as_file}],
         16
       )
 
   defp pop_media_client_id([entry | rest]), do: {entry, rest}
-  defp pop_media_client_id([]), do: {{nil, "", nil, %{}, nil}, []}
+  defp pop_media_client_id([]), do: {{nil, "", nil, %{}, nil, false}, []}
 
   # Keep only string→string pairs from the client's {ref => client_id} files map so a
   # crafted payload can't smuggle non-binaries into the source maps / progress events,
@@ -9096,16 +9140,11 @@ defmodule EdenWeb.ChatLive do
   # LiveView upload temp file, `stable` is tmp_dir + the entry's server-side
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
-  defp send_attachment(
-         socket,
-         scope,
-         conversation_id,
-         body,
-         reply_to_id,
-         client_id,
-         file_cids,
-         caption_id
-       ) do
+  defp send_attachment(socket, scope, conversation_id, body, reply_to_id, ids, as_file) do
+    # ids bundles the optimistic client_ids that move together: the album's id, the
+    # per-file ref→id map, and a files-only trailing-caption node id (#149). `as_file`
+    # (#122) sends photos as uncompressed downloadable documents.
+    {client_id, file_cids, caption_id} = ids
     # A caption rides a media album inline, but a files-only send carries it as a TRAILING
     # message below the pile (#149) — decide by the staged entries before they're consumed
     # (client-type is advisory but matches the caption-placement intent). This keeps the
@@ -9156,7 +9195,14 @@ defmodule EdenWeb.ChatLive do
         # The album carries the caption only when media is present; a files-only send sends
         # the files plain and the caption follows as its own trailing message below.
         album_body = if has_media?, do: body, else: ""
-        opts = %{body: album_body, reply_to_id: reply_to_id, client_id: client_id}
+
+        opts = %{
+          body: album_body,
+          reply_to_id: reply_to_id,
+          client_id: client_id,
+          as_file: as_file
+        }
+
         result = Chat.create_attachments(scope, conversation_id, sources, opts)
         Enum.each(sources, &File.rm(&1.path))
 
@@ -9164,7 +9210,7 @@ defmodule EdenWeb.ChatLive do
           socket,
           result,
           {scope, conversation_id, body, has_media?},
-          {client_id, file_cids, caption_id}
+          ids
         )
     end
   end
