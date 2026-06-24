@@ -27,6 +27,7 @@ defmodule Eden.Chat do
   }
 
   alias Eden.Ids
+  alias Eden.Images
   alias Eden.Repo
   alias Eden.Storage
 
@@ -1360,6 +1361,10 @@ defmodule Eden.Chat do
   and optional `:filename`.
   """
   def create_attachments(%Scope{} = scope, conversation_id, sources, opts \\ %{}) do
+    # Tag every source with the per-send "Original" preference (#122) so it rides down to
+    # store_attachment_blob without threading opts through each layer; default = compress.
+    sources = Enum.map(sources, &Map.put(&1, :original, opts[:original] == true))
+
     with true <- member?(scope, conversation_id),
          {:ok, classified} <- preflight(sources) do
       {media, files} =
@@ -1546,7 +1551,7 @@ defmodule Eden.Chat do
              storage_key: key,
              content_type: "image/jpeg",
              byte_size: byte_size(jpeg),
-             filename: heic_jpeg_name(source[:filename]),
+             filename: jpeg_filename(source[:filename]),
              width: width,
              height: height
            }}
@@ -1554,6 +1559,43 @@ defmodule Eden.Chat do
 
       {:error, _} ->
         store_attachment_blob(source, "image", "image/heic", "heic", orig_size, :as_is)
+    end
+  end
+
+  # GIFs are stored as-is (#122): compressing would flatten an animated GIF to a single
+  # static JPEG frame, losing the animation.
+  defp store_attachment_blob(source, "image", "image/gif", ext, orig_size) do
+    store_attachment_blob(source, "image", "image/gif", ext, orig_size, :as_is)
+  end
+
+  # Photos (#122): compress for weight (vix → ≤1600px JPEG q82, metadata stripped) and store
+  # THAT, unless the sender chose Original. compress_photo returns `:keep` when the re-encode
+  # wouldn't meaningfully shrink (or on any libvips hiccup) → store the original as-is, so a
+  # send never breaks over compression and already-small images aren't bloated.
+  defp store_attachment_blob(%{original: true} = source, "image", content_type, ext, orig_size) do
+    store_attachment_blob(source, "image", content_type, ext, orig_size, :as_is)
+  end
+
+  defp store_attachment_blob(source, "image", content_type, ext, orig_size) do
+    case Images.compress_photo(source.path, orig_size) do
+      {:ok, jpeg, width, height} ->
+        key = Storage.build_key("attachments", "jpg")
+
+        with :ok <- Storage.put_binary(key, jpeg) do
+          {:ok,
+           %{
+             kind: "image",
+             storage_key: key,
+             content_type: "image/jpeg",
+             byte_size: byte_size(jpeg),
+             filename: jpeg_filename(source[:filename]),
+             width: width,
+             height: height
+           }}
+        end
+
+      :keep ->
+        store_attachment_blob(source, "image", content_type, ext, orig_size, :as_is)
     end
   end
 
@@ -1580,8 +1622,8 @@ defmodule Eden.Chat do
     end
   end
 
-  defp heic_jpeg_name(nil), do: nil
-  defp heic_jpeg_name(name), do: Path.rootname(name) <> ".jpg"
+  defp jpeg_filename(nil), do: nil
+  defp jpeg_filename(name), do: Path.rootname(name) <> ".jpg"
 
   defp persist_album(user, conversation_id, prepared, opts) do
     message_attrs = %{"body" => Map.get(opts, :body, ""), "client_id" => opts[:client_id]}
