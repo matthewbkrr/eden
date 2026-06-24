@@ -1363,7 +1363,14 @@ defmodule Eden.Chat do
   def create_attachments(%Scope{} = scope, conversation_id, sources, opts \\ %{}) do
     # Tag every source with the per-send "Original" preference (#122) so it rides down to
     # store_attachment_blob without threading opts through each layer; default = compress.
-    sources = Enum.map(sources, &Map.put(&1, :original, opts[:original] == true))
+    # `as_file` (#122) is the "Send as file" choice: keep the image uncompressed and render
+    # it as a downloadable document instead of an inline photo.
+    sources =
+      Enum.map(sources, fn source ->
+        source
+        |> Map.put(:original, opts[:original] == true)
+        |> Map.put(:as_file, opts[:as_file] == true)
+      end)
 
     with true <- member?(scope, conversation_id),
          {:ok, classified} <- preflight(sources) do
@@ -1531,6 +1538,17 @@ defmodule Eden.Chat do
          {:ok, orig_size} <- check_size(source.path, kind),
          {:ok, blob} <- store_attachment_blob(source, kind, content_type, ext, orig_size) do
       {:ok, Map.put(blob, :position, position)}
+    end
+  end
+
+  # "Send as file" (#122): keep the photo uncompressed (original bytes) and flag it so it
+  # renders as a downloadable document with a thumbnail instead of an inline photo. kind
+  # stays "image", so the worker still generates the preview thumbnail. Takes precedence
+  # over the compress/HEIC/GIF clauses — the sender explicitly asked for the original.
+  defp store_attachment_blob(%{as_file: true} = source, "image", content_type, ext, orig_size) do
+    with {:ok, blob} <-
+           store_attachment_blob(source, "image", content_type, ext, orig_size, :as_is) do
+      {:ok, Map.put(blob, :as_file, true)}
     end
   end
 
@@ -2406,7 +2424,9 @@ defmodule Eden.Chat do
         :width,
         :height,
         :duration,
-        :thumbnail_key
+        :thumbnail_key,
+        # #122: keep a forwarded "send as file" photo rendering as a document, not inline.
+        :as_file
       ])
       |> Map.put(:position, position)
 

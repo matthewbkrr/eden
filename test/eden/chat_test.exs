@@ -462,6 +462,26 @@ defmodule Eden.ChatTest do
       # full original dimensions kept (NOT downscaled to 1600) → compression was skipped.
       assert att.width == 2400 and att.height == 1600
     end
+
+    test "Send as file stores the photo uncompressed and flags it as_file", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, _} =
+        Chat.create_attachments(
+          scope(alice),
+          conv.id,
+          [%{path: big_photo(2400, 1600), filename: "p.jpg"}],
+          %{as_file: true}
+        )
+
+      att = Repo.one(Attachment)
+      # kind stays image (so the worker still thumbnails it), but it's stored uncompressed
+      # (full dimensions) and flagged to render as a downloadable document (#122).
+      assert att.as_file
+      assert att.kind == "image"
+      assert att.width == 2400 and att.height == 1600
+    end
   end
 
   describe "delete_message_for_me/2" do
@@ -1321,6 +1341,23 @@ defmodule Eden.ChatTest do
       assert hd(forwarded.attachments).id != hd(original.attachments).id
       assert hd(forwarded.attachments).storage_key == hd(original.attachments).storage_key
       assert Repo.aggregate(Attachment, :count) == 2
+    end
+
+    test "preserves the as_file flag on a forwarded photo (#122)", ctx do
+      %{alice: alice, source_conv: src, target_conv: tgt} = ctx
+
+      {:ok, [original]} =
+        Chat.create_attachments(
+          scope(alice),
+          src.id,
+          [%{path: real_png(), filename: "p.png"}],
+          %{as_file: true}
+        )
+
+      assert {:ok, forwarded} = Chat.forward_message(scope(alice), original.id, tgt.id)
+      forwarded = Repo.preload(forwarded, :attachments)
+      # The forwarded copy must still render as a document, not an inline photo.
+      assert hd(forwarded.attachments).as_file
     end
 
     test "keeps the shared blob until the last referencing message is deleted", ctx do
