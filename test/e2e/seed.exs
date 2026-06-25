@@ -45,6 +45,26 @@ as = Scope.for_user(alice)
 # 1:1 DM (find_or_create_direct → idempotent).
 {:ok, dm} = Chat.create_conversation(as, [bob.id])
 
+# A seed photo in the DM so the per-dialog media gallery (#136) always has content.
+# Idempotent: only added when the DM has no image attachment yet.
+has_dm_photo? =
+  Repo.exists?(
+    from(a in Eden.Chat.Attachment,
+      join: m in Eden.Chat.Message,
+      on: m.id == a.message_id,
+      where: m.conversation_id == ^dm.id and a.kind == "image"
+    )
+  )
+
+unless has_dm_photo? do
+  {:ok, img} = Image.new(800, 600, color: [70, 110, 200])
+  {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+  png = Path.join(System.tmp_dir!(), "e2e-seed-photo.png")
+  File.write!(png, bytes)
+  {:ok, _} = Chat.create_attachments(as, dm.id, [%{path: png, filename: "seed-photo.png"}])
+  File.rm(png)
+end
+
 # Group (alice + bob + carol) — match by title before creating so re-runs don't pile up.
 group =
   case Repo.one(from(c in Conversation, where: c.is_group and c.title == "E2E Group", limit: 1)) do

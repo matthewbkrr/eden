@@ -18,6 +18,8 @@ defmodule EdenWeb.ChatLive do
   alias EdenWeb.Markup
 
   @page 50
+  # Per-page size for the profile media gallery (#136); a "Load more" fetches the next page.
+  @gallery_page 30
 
   # Typing indicator (#11): throttle outgoing "typing" broadcasts to at most one
   # per this window while composing; each received broadcast keeps the indicator
@@ -64,8 +66,16 @@ defmodule EdenWeb.ChatLive do
         selected: nil,
         subscribed_id: nil,
         show_new: false,
-        show_members: false,
         profile: nil,
+        # #136: the expanded conversation-profile panel (DM peer card OR group card + members)
+        # with a per-dialog media gallery. profile_open gates the panel; profile_peer is the
+        # loaded peer User for a DM (nil for a group, which renders from @selected). The
+        # gallery holds the active tab kind, the loaded page, and whether more exist.
+        profile_open: false,
+        profile_peer: nil,
+        gallery_tab: "image",
+        gallery_media: [],
+        gallery_more: false,
         forward_id: nil,
         forward_targets: [],
         people: [],
@@ -639,6 +649,43 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, profile: nil)}
   end
 
+  # Expanded conversation profile (#136): a full panel with the DM peer's card OR the group's
+  # card + member list, plus the per-dialog media gallery. DM + groups; a room (channel_id set)
+  # or a missing conversation no-ops. The peer is derived from @selected — never a client-sent
+  # id — so the card and the gallery always describe the same conversation (P2-A).
+  def handle_event("open_profile", _params, socket) do
+    %{current_scope: scope, selected: selected} = socket.assigns
+
+    with %{channel_id: nil} <- selected,
+         {:ok, peer} <- panel_peer(scope, selected) do
+      {:noreply,
+       socket |> assign(profile_open: true, profile_peer: peer) |> load_gallery("image")}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_profile_panel", _params, socket) do
+    {:noreply,
+     assign(socket,
+       profile_open: false,
+       profile_peer: nil,
+       gallery_media: [],
+       gallery_more: false
+     )}
+  end
+
+  # Switch gallery tab; the kind is client-supplied, so validate against the closed set.
+  def handle_event("gallery_tab", %{"tab" => tab}, socket)
+      when tab in ~w(image video file audio) do
+    {:noreply, load_gallery(socket, tab)}
+  end
+
+  def handle_event("gallery_tab", _params, socket), do: {:noreply, socket}
+
+  # Append the next page of the active gallery tab (#136 pagination).
+  def handle_event("gallery_more", _params, socket), do: {:noreply, load_more_gallery(socket)}
+
   # The user picks a presence status (#102). Persist it; the per-user broadcast
   # feeds this tab (and any other) back through {:presence_status_changed, ...},
   # which mirrors it onto the tracked presence and the UI — one path for all
@@ -664,14 +711,6 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("presence_active", _params, socket) do
     {:noreply, maybe_apply_idle(assign(socket, idle?: false))}
-  end
-
-  def handle_event("show_members", _params, socket) do
-    {:noreply, assign(socket, show_members: true)}
-  end
-
-  def handle_event("close_members", _params, socket) do
-    {:noreply, assign(socket, show_members: false)}
   end
 
   # --- Message actions -------------------------------------------------------
@@ -1486,7 +1525,7 @@ defmodule EdenWeb.ChatLive do
 
     with {:ok, user} <- Chat.get_shared_user(scope, id),
          {:ok, conversation} <- Chat.create_conversation(scope, [user.id]) do
-      socket = assign(socket, profile: nil, show_members: false)
+      socket = assign(socket, profile: nil)
 
       # From a channel/room the messenger is a different route — navigate (a
       # full remount). Within the messenger, a lighter patch + sidebar refresh.
@@ -1552,7 +1591,9 @@ defmodule EdenWeb.ChatLive do
      # than waiting out the TTL (#11).
      |> drop_typing(:typing_users, message.sender_id)
      |> assign(compacts: Map.put(socket.assigns.compacts, message.id, message.compact))
-     |> stream_insert(:messages, message)}
+     |> stream_insert(:messages, message)
+     # #136: keep an open profile gallery live — surface the message's matching-kind media.
+     |> maybe_prepend_gallery(message)}
   end
 
   # A reply landed in a thread of the open conversation: refresh the root's
@@ -1625,6 +1666,8 @@ defmodule EdenWeb.ChatLive do
        |> stream_delete_by_dom_id(:thread, "thread-#{message.id}")
        |> close_thread_if_root_gone(message.id)
        |> assign(:thread_unreads, Map.delete(socket.assigns.thread_unreads, message.id))
+       # #136: drop the deleted message's media from an open profile gallery.
+       |> maybe_drop_gallery(message)
        |> refresh_thread_list()}
     else
       {:noreply, socket}
@@ -2389,8 +2432,7 @@ defmodule EdenWeb.ChatLive do
               type="button"
               class="flex items-center gap-3 min-w-0 flex-1 text-left -ml-1.5 px-1.5 py-1 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface)]"
               data-profile-trigger
-              phx-click={if @selected.is_group, do: "show_members", else: "show_profile"}
-              phx-value-id={peer_id(@selected, @current_scope.user)}
+              phx-click="open_profile"
               aria-label={gettext("View profile")}
             >
               <.avatar
@@ -2970,6 +3012,21 @@ defmodule EdenWeb.ChatLive do
         </.form>
       </aside>
 
+      <%!-- Conversation profile (#136): the DM peer's card OR the group's card + members,
+            plus a per-dialog media gallery. DM + groups (never rooms — channel_id guards the
+            header), so it never collides with the rooms-only thread panels above; shares the
+            RHS aside slot (full-screen on mobile). --%>
+      <.conv_profile_panel
+        :if={@profile_open && @selected}
+        conversation={@selected}
+        peer={@profile_peer}
+        user={@current_scope.user}
+        statuses={@statuses}
+        tab={@gallery_tab}
+        media={@gallery_media}
+        more={@gallery_more}
+      />
+
       <%!-- Threads list (#57): the room's followed threads, drill into any one.
             Shares the RHS aside; a single thread (above) takes precedence, so
             closing it falls back here. --%>
@@ -3033,12 +3090,6 @@ defmodule EdenWeb.ChatLive do
       </aside>
 
       <.new_conversation_modal :if={@show_new} people={@people} />
-      <.members_modal
-        :if={@show_members && @selected}
-        conversation={@selected}
-        user={@current_scope.user}
-        statuses={@statuses}
-      />
       <.profile_popover
         :if={@profile}
         user={@profile}
@@ -3340,6 +3391,86 @@ defmodule EdenWeb.ChatLive do
               // Flush so the first real selection animates from the right spot.
               void this.indicator.offsetWidth
               this.indicator.style.transition = ""
+            }
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".GalleryTabs">
+        // Profile media-gallery tabs (#136): slide a cobalt underline under the active tab
+        // (the panel persists across tab clicks, so it transitions rather than teleports) and
+        // wire ←/→ keyboard navigation per the APG tabs pattern (roving tabindex on the server).
+        export default {
+          mounted() {
+            this.indicator = this.el.querySelector("[data-gallery-indicator]")
+            this.place(false)
+            this.ro = new ResizeObserver(() => this.place(false))
+            this.ro.observe(this.el)
+            this.onKeyBound = (e) => this.onKey(e)
+            this.el.addEventListener("keydown", this.onKeyBound)
+          },
+          updated() { this.place(true) },
+          destroyed() {
+            this.ro && this.ro.disconnect()
+            this.el.removeEventListener("keydown", this.onKeyBound)
+          },
+          onKey(e) {
+            if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return
+            const tabs = [...this.el.querySelectorAll('[role="tab"]')]
+            const i = tabs.findIndex((t) => t.getAttribute("aria-selected") === "true")
+            if (i < 0) return
+            e.preventDefault()
+            const n = tabs.length
+            const next = e.key === "ArrowRight" ? (i + 1) % n : (i - 1 + n) % n
+            tabs[next].focus()
+            tabs[next].click()
+          },
+          place(animate) {
+            const active = this.el.querySelector(".ed-gallery-tab--on")
+            if (!active || !this.indicator) return
+            // offsetLeft is relative to the sticky tab bar (its offsetParent), so the
+            // underline tracks the active tab even when the bar scrolls horizontally.
+            this.indicator.style.transition = animate ? "" : "none"
+            this.indicator.style.width = `${active.offsetWidth}px`
+            this.indicator.style.transform = `translateX(${active.offsetLeft}px)`
+            this.indicator.style.opacity = "1"
+            if (!animate) {
+              void this.indicator.offsetWidth
+              this.indicator.style.transition = ""
+            }
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".GalleryMonths">
+        // Profile gallery month dividers (#136): groups the photo/video grid by month in the
+        // viewer's LOCAL timezone from each tile's data-ts (UTC unix), like the message
+        // DateRail (#83) — so a busy gallery stays scannable. Re-derived on every patch
+        // (pagination append, live prepend, tab switch) since morphdom drops injected nodes.
+        export default {
+          mounted() {
+            this.locale = this.el.dataset.locale || undefined
+            this.reconcile()
+          },
+          updated() { this.reconcile() },
+          reconcile() {
+            this.el.querySelectorAll(".ed-gallery-month").forEach((h) => h.remove())
+            const thisYear = new Date().getFullYear()
+            let last = null
+            for (const tile of [...this.el.querySelectorAll("[data-ts]")]) {
+              const d = new Date(Number(tile.dataset.ts) * 1000)
+              const key = `${d.getFullYear()}-${d.getMonth()}`
+              if (key === last) continue
+              last = key
+              const opts = d.getFullYear() === thisYear
+                ? { month: "long" }
+                : { month: "long", year: "numeric" }
+              let label = d.toLocaleDateString(this.locale, opts)
+              label = label.charAt(0).toUpperCase() + label.slice(1)
+              const h = document.createElement("div")
+              h.className = "ed-gallery-month"
+              h.setAttribute("role", "heading")
+              h.setAttribute("aria-level", "3")
+              h.textContent = label
+              this.el.insertBefore(h, tile)
             }
           }
         }
@@ -7521,47 +7652,15 @@ defmodule EdenWeb.ChatLive do
 
     ~H"""
     <div :if={@media != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@media))}"]}>
-      <%!-- Image tiles share a gallery so the lightbox pages them together. The
-            phx-hook must be a LITERAL string — a dynamic value skips the
-            compile-time colocated-hook rewrite (client: "unknown hook"). --%>
-      <%= for item <- @media do %>
-        <a
-          :if={item.kind == "image"}
-          id={"att-#{item.id}"}
-          phx-hook=".Lightbox"
-          data-full={~p"/files/#{item.id}"}
-          data-gallery={@gallery}
-          href={~p"/files/#{item.id}"}
-          target="_blank"
-          rel="noopener"
-          class="ed-album__tile cursor-zoom-in"
-        >
-          <img src={thumb_src(item)} loading="lazy" alt={item.filename || gettext("Photo")} />
-        </a>
-        <%!-- A video is a poster tile with a play badge that opens the clip; no
-              poster yet (worker pending) gets a neutral fill, never the raw
-              bytes piped into an <img>. --%>
-        <a
-          :if={item.kind == "video"}
-          id={"att-#{item.id}"}
-          href={~p"/files/#{item.id}"}
-          target="_blank"
-          rel="noopener"
-          aria-label={item.filename || gettext("Video")}
-          class="ed-album__tile"
-        >
-          <img
-            :if={item.thumbnail_key}
-            src={thumb_src(item)}
-            loading="lazy"
-            alt={item.filename || gettext("Video")}
-          />
-          <span :if={is_nil(item.thumbnail_key)} class="ed-album__tile-fill" />
-          <span class="ed-album__play" aria-hidden="true">
-            <.icon name="hero-play-solid" class="size-6" />
-          </span>
-        </a>
-      <% end %>
+      <%!-- Image tiles share a gallery so the lightbox pages them; videos are posters with a
+            play badge. Shared with the profile gallery (#136) via media_tile. --%>
+      <.media_tile
+        :for={item <- @media}
+        item={item}
+        dom_id={"att-#{item.id}"}
+        class="ed-album__tile"
+        gallery={@gallery}
+      />
     </div>
     <.attachment_view :for={attachment <- @rest} attachment={attachment} />
     """
@@ -7673,6 +7772,7 @@ defmodule EdenWeb.ChatLive do
     <a
       href={~p"/files/#{@attachment.id}"}
       download
+      data-ts={DateTime.to_unix(@attachment.inserted_at)}
       class="ed-file mb-1"
       aria-label={gettext("Download %{name}", name: @attachment.filename || gettext("file"))}
     >
@@ -7975,43 +8075,94 @@ defmodule EdenWeb.ChatLive do
   end
 
   attr :conversation, :map, required: true
+  attr :peer, :map, default: nil
   attr :user, :map, required: true
   attr :statuses, :any, required: true
+  attr :tab, :string, required: true
+  attr :media, :list, required: true
+  attr :more, :boolean, default: false
 
-  # Group member list: tap a member to open their profile (tapping yourself
-  # routes to Settings, handled by show_profile).
-  defp members_modal(assigns) do
+  # Conversation profile panel (#136): the DM peer's card OR the group's card + member list,
+  # plus a tabbed per-dialog media gallery. Mirrors the thread panel's aside (RHS on desktop,
+  # full-screen overlay on mobile). `peer` is the loaded peer User for a DM, nil for a group.
+  defp conv_profile_panel(assigns) do
+    assigns =
+      assign(assigns, :peer_status, assigns.peer && status_of(assigns.peer.id, assigns.statuses))
+
     ~H"""
-    <div class="fixed inset-0 z-30">
-      <button
-        class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
-        phx-click="close_members"
-        aria-label={gettext("Close")}
-        tabindex="-1"
+    <aside class="ed-thread ed-profile" aria-label={gettext("Profile")}>
+      <header
+        class="flex items-center gap-2 px-4 h-14 border-b shrink-0"
+        style="border-color: var(--ed-border);"
       >
-      </button>
-      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
-        <div
-          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
-          style="background: var(--ed-surface); border-color: var(--ed-border);"
-          phx-window-keydown="close_members"
-          phx-key="Escape"
-          role="dialog"
-          aria-modal="true"
+        <button
+          type="button"
+          class="ed-btn--icon md:hidden"
+          phx-click="close_profile_panel"
+          aria-label={gettext("Back")}
         >
-          <div class="flex items-center justify-between">
-            <h2 style="font-weight:600;">{gettext("Members")}</h2>
-            <button class="ed-btn--icon" phx-click="close_members" aria-label={gettext("Close")}>
-              <.icon name="hero-x-mark-mini" class="size-5" />
-            </button>
-          </div>
+          <.icon name="hero-arrow-left-mini" class="size-5" />
+        </button>
+        <div class="min-w-0 flex-1 font-semibold" style="font-size:0.9375rem;">
+          {gettext("Profile")}
+        </div>
+        <button
+          type="button"
+          class="ed-btn--icon hidden md:inline-flex"
+          phx-click="close_profile_panel"
+          aria-label={gettext("Close")}
+        >
+          <.icon name="hero-x-mark-mini" class="size-5" />
+        </button>
+      </header>
 
-          <div class="max-h-72 overflow-y-auto space-y-0.5">
+      <div class="ed-profile__scroll">
+        <%!-- DM: the peer's card. --%>
+        <div :if={@peer} class="flex flex-col items-center text-center px-4 pt-5 pb-5">
+          <.avatar
+            name={@peer.display_name}
+            src={avatar_src(@peer)}
+            status={@peer_status}
+            dot_label={false}
+            size={:lg}
+          />
+          <h2 class="mt-3 font-semibold" style="font-size:1.125rem;">{@peer.display_name}</h2>
+          <p style="color: var(--ed-muted); font-size:0.8125rem;">@{@peer.username}</p>
+          <p
+            :if={@peer_status}
+            class="mt-0.5"
+            style={"font-size:0.75rem; color: var(#{status_color_var(@peer_status)});"}
+          >
+            {status_label(@peer_status)}
+          </p>
+          <p
+            :if={@peer.bio}
+            class="mt-3 whitespace-pre-line break-words text-left w-full"
+            style="font-size:0.875rem; color: var(--ed-ink);"
+          >
+            {@peer.bio}
+          </p>
+        </div>
+
+        <%!-- Group: the group's card + the member list (tap a member for their profile). --%>
+        <div :if={is_nil(@peer)} class="flex flex-col items-center text-center px-4 pt-5 pb-4">
+          <.avatar name={title(@conversation, @user)} size={:lg} />
+          <h2 class="mt-3 font-semibold" style="font-size:1.125rem;">
+            {title(@conversation, @user)}
+          </h2>
+          <p style="color: var(--ed-muted); font-size:0.8125rem;">
+            {ngettext("%{count} member", "%{count} members", member_count(@conversation))}
+          </p>
+        </div>
+        <%!-- No "Members" heading: the card's "N members" subtitle above already labels it
+              (a tiny uppercase eyebrow would just restate it — impeccable). Capped +
+              scrollable so a large roster doesn't bury the gallery below it. --%>
+        <div :if={is_nil(@peer)} class="ed-members">
+          <div class="ed-members__list" aria-label={gettext("Members")} role="group">
             <button
               :for={m <- @conversation.memberships}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="ed-member-row"
               data-profile-trigger
               phx-click="show_profile"
               phx-value-id={m.user.id}
@@ -8023,20 +8174,189 @@ defmodule EdenWeb.ChatLive do
                 size={:sm}
               />
               <span class="flex-1 min-w-0">
-                <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
+                <span class="ed-member-row__name">
                   {m.user.display_name}{if m.user.id == @user.id, do: " " <> gettext("(you)")}
                 </span>
-                <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
-                  @{m.user.username}
-                </span>
+                <span class="ed-member-row__handle">@{m.user.username}</span>
               </span>
             </button>
           </div>
         </div>
+
+        <div
+          id="gallery-tabs"
+          class="ed-gallery-tabs"
+          role="tablist"
+          aria-label={gettext("Shared media")}
+          phx-hook=".GalleryTabs"
+        >
+          <%!-- The .GalleryTabs hook slides this cobalt underline under the active tab and
+                wires ←/→ keyboard navigation (APG tabs). --%>
+          <span
+            id="gallery-indicator"
+            class="ed-gallery-indicator"
+            phx-update="ignore"
+            data-gallery-indicator
+            aria-hidden="true"
+          >
+          </span>
+          <button
+            :for={{kind, label} <- gallery_tabs()}
+            id={"gtab-#{kind}"}
+            type="button"
+            role="tab"
+            aria-controls="gallery-panel"
+            tabindex={if @tab == kind, do: "0", else: "-1"}
+            class={["ed-gallery-tab", @tab == kind && "ed-gallery-tab--on"]}
+            aria-selected={to_string(@tab == kind)}
+            phx-click="gallery_tab"
+            phx-value-tab={kind}
+          >
+            {label}
+          </button>
+        </div>
+
+        <div id="gallery-panel" role="tabpanel" aria-labelledby={"gtab-#{@tab}"}>
+          <.gallery_content tab={@tab} media={@media} />
+          <button
+            :if={@more}
+            type="button"
+            class="ed-gallery-more"
+            phx-click="gallery_more"
+          >
+            {gettext("Load more")}
+          </button>
+        </div>
       </div>
+    </aside>
+    """
+  end
+
+  attr :tab, :string, required: true
+  attr :media, :list, required: true
+
+  defp gallery_content(%{media: []} = assigns) do
+    ~H"""
+    <div class="ed-gallery-empty">
+      <.icon name={gallery_empty_icon(@tab)} class="size-8" />
+      <p>{gallery_empty_text(@tab)}</p>
     </div>
     """
   end
+
+  # Photos + videos render as a square thumbnail grid (shared media_tile); photos open the
+  # lightbox, paging the conversation gallery together.
+  defp gallery_content(%{tab: tab} = assigns) when tab in ~w(image video) do
+    ~H"""
+    <%!-- The .GalleryMonths hook inserts month dividers between tiles, grouped in the
+          viewer's LOCAL timezone from each tile's data-ts (like the message DateRail #83) —
+          so a busy gallery stays scannable by month. --%>
+    <div
+      id="gallery-grid"
+      class="ed-gallery-grid"
+      phx-hook=".GalleryMonths"
+      data-locale={Gettext.get_locale()}
+    >
+      <.media_tile
+        :for={item <- @media}
+        item={item}
+        dom_id={"g-#{item.id}"}
+        class="ed-gallery-tile"
+        gallery="conv-gallery"
+      />
+    </div>
+    """
+  end
+
+  # Files + audio render as a stacked list of download cards (reusing attachment_view),
+  # month-grouped by the same .GalleryMonths hook as the grids.
+  defp gallery_content(assigns) do
+    ~H"""
+    <div
+      id="gallery-list"
+      class="ed-gallery-list"
+      phx-hook=".GalleryMonths"
+      data-locale={Gettext.get_locale()}
+    >
+      <.attachment_view :for={att <- @media} attachment={att} />
+    </div>
+    """
+  end
+
+  attr :item, :map, required: true
+  attr :dom_id, :string, required: true
+  attr :class, :string, required: true
+  attr :gallery, :string, required: true
+
+  # Shared media grid tile (#136): an image opens the lightbox (paging its `gallery`); a video
+  # is a poster with a play badge. Used by the message album (album_view) AND the profile
+  # gallery, so the lightbox/poster behaviour lives in ONE place. The phx-hook must be a
+  # LITERAL string — a dynamic value skips the compile-time colocated-hook rewrite.
+  defp media_tile(%{item: %{kind: "image"}} = assigns) do
+    ~H"""
+    <a
+      id={@dom_id}
+      phx-hook=".Lightbox"
+      data-full={~p"/files/#{@item.id}"}
+      data-gallery={@gallery}
+      data-ts={DateTime.to_unix(@item.inserted_at)}
+      href={~p"/files/#{@item.id}"}
+      target="_blank"
+      rel="noopener"
+      class={[@class, "cursor-zoom-in"]}
+    >
+      <img
+        src={thumb_src(@item)}
+        loading="lazy"
+        decoding="async"
+        alt={@item.filename || gettext("Photo")}
+      />
+    </a>
+    """
+  end
+
+  defp media_tile(%{item: %{kind: "video"}} = assigns) do
+    ~H"""
+    <a
+      id={@dom_id}
+      href={~p"/files/#{@item.id}"}
+      data-ts={DateTime.to_unix(@item.inserted_at)}
+      target="_blank"
+      rel="noopener"
+      class={@class}
+      aria-label={@item.filename || gettext("Video")}
+    >
+      <img :if={@item.thumbnail_key} src={thumb_src(@item)} loading="lazy" decoding="async" alt="" />
+      <span :if={is_nil(@item.thumbnail_key)} class="ed-album__tile-fill" />
+      <span class="ed-album__play" aria-hidden="true">
+        <.icon name="hero-play-solid" class="size-6" />
+      </span>
+    </a>
+    """
+  end
+
+  # Belt-and-suspenders: callers only pass image/video, but an unexpected kind renders
+  # nothing rather than crashing the whole stream/gallery render.
+  defp media_tile(assigns), do: ~H""
+
+  defp gallery_tabs do
+    [
+      {"image", gettext("Photo")},
+      {"video", gettext("Video")},
+      {"file", gettext("Files")},
+      {"audio", gettext("Audio")}
+    ]
+  end
+
+  defp gallery_empty_text("image"), do: gettext("No photos in this chat yet")
+  defp gallery_empty_text("video"), do: gettext("No videos in this chat yet")
+  defp gallery_empty_text("file"), do: gettext("No files in this chat yet")
+  defp gallery_empty_text("audio"), do: gettext("No audio in this chat yet")
+
+  defp gallery_empty_icon("image"), do: "hero-photo"
+  defp gallery_empty_icon("video"), do: "hero-film"
+  defp gallery_empty_icon("file"), do: "hero-document"
+  defp gallery_empty_icon("audio"), do: "hero-musical-note"
 
   attr :typers, :map, required: true
 
@@ -8121,6 +8441,12 @@ defmodule EdenWeb.ChatLive do
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       oldest_msg: List.first(messages),
       thread_root: nil,
+      # Close the conversation-profile panel (#136) when switching chats — it belongs to the
+      # conversation you were viewing, not the new one.
+      profile_open: false,
+      profile_peer: nil,
+      gallery_media: [],
+      gallery_more: false,
       # The composer is per-conversation: reset it so a draft/last-sent body from
       # the previous chat doesn't reappear in this one's input (#89). The input
       # binds to @composer[:body].value, which otherwise keeps the stale text.
@@ -8603,9 +8929,100 @@ defmodule EdenWeb.ChatLive do
   defp peer(%{is_group: true}, _user), do: nil
   defp peer(conversation, user), do: conversation |> others(user) |> List.first()
 
-  # The peer's id for the header click target (nil for groups, which open the
-  # member list rather than a single profile).
-  defp peer_id(conversation, user), do: conversation |> peer(user) |> then(&(&1 && &1.id))
+  # The panel's "peer" (#136): the full User (with bio) for a DM, nil for a group (rendered
+  # from @selected's memberships). Derived from the OPEN conversation, so a client-sent id
+  # can't make the card describe someone other than this chat (P2-A).
+  defp panel_peer(_scope, %{is_group: true}), do: {:ok, nil}
+
+  defp panel_peer(scope, conversation) do
+    case peer(conversation, scope.user) do
+      %{id: peer_id} -> Chat.get_shared_user(scope, peer_id)
+      _ -> {:error, :no_peer}
+    end
+  end
+
+  # Load the first page of the per-dialog gallery (#136) for one tab kind into the panel; a
+  # non-member/foreign conversation yields an empty list → the panel shows its empty state.
+  defp load_gallery(%{assigns: %{selected: %{id: conv_id}, current_scope: scope}} = socket, kind) do
+    media = fetch_gallery(scope, conv_id, kind, nil)
+    assign(socket, gallery_tab: kind, gallery_media: media, gallery_more: full_page?(media))
+  end
+
+  defp load_gallery(socket, kind),
+    do: assign(socket, gallery_tab: kind, gallery_media: [], gallery_more: false)
+
+  # Append the next page below the oldest loaded item (cursor = its attachment id).
+  defp load_more_gallery(
+         %{
+           assigns: %{
+             selected: %{id: conv_id},
+             current_scope: scope,
+             gallery_tab: kind,
+             gallery_media: media
+           }
+         } =
+           socket
+       ) do
+    case media |> List.last() |> then(&(&1 && &1.id)) do
+      nil ->
+        socket
+
+      cursor ->
+        page = fetch_gallery(scope, conv_id, kind, cursor)
+        assign(socket, gallery_media: media ++ page, gallery_more: full_page?(page))
+    end
+  end
+
+  defp load_more_gallery(socket), do: socket
+
+  defp fetch_gallery(scope, conv_id, kind, before) do
+    opts = if before, do: [limit: @gallery_page, before: before], else: [limit: @gallery_page]
+
+    case Chat.list_conversation_media(scope, conv_id, kind, opts) do
+      {:ok, list} -> list
+      _ -> []
+    end
+  end
+
+  # A full page means there MAY be more — drives the "Load more" affordance.
+  defp full_page?(list), do: length(list) == @gallery_page
+
+  # Live-update the open gallery (#136): prepend a new message's attachments of the active
+  # tab kind (newest first, deduped). Only for the conversation the panel is open for.
+  defp maybe_prepend_gallery(
+         %{
+           assigns: %{
+             profile_open: true,
+             selected: %{id: cid},
+             gallery_tab: kind,
+             gallery_media: media
+           }
+         } =
+           socket,
+         %{conversation_id: cid} = message
+       ) do
+    atts = if is_list(message.attachments), do: message.attachments, else: []
+    seen = MapSet.new(media, & &1.id)
+
+    fresh =
+      atts
+      |> Enum.filter(&(&1.kind == kind and not MapSet.member?(seen, &1.id)))
+      |> Enum.sort_by(& &1.id, :desc)
+
+    if fresh == [], do: socket, else: assign(socket, gallery_media: fresh ++ media)
+  end
+
+  defp maybe_prepend_gallery(socket, _message), do: socket
+
+  # Live-update the open gallery (#136): drop a deleted message's attachments.
+  defp maybe_drop_gallery(
+         %{assigns: %{profile_open: true, gallery_media: media}} = socket,
+         message
+       ) do
+    assign(socket, gallery_media: Enum.reject(media, &(&1.message_id == message.id)))
+  end
+
+  defp maybe_drop_gallery(socket, _message), do: socket
 
   defp member_count(conversation), do: length(conversation.memberships)
 

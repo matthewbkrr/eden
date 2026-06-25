@@ -1276,6 +1276,47 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Lists a conversation's attachments of one `kind` (`image | video | file | audio`) for the
+  per-dialog media gallery (#136), newest first, paginated by attachment id.
+
+  Honors the same visibility rules as `list_messages/3`: membership-gated, with thread
+  replies and deleted / per-user-hidden messages excluded. `opts[:before]` is an attachment-id
+  cursor (rows strictly older than it); `opts[:limit]` sizes the page (default #{@default_page}).
+  Returns `{:error, :not_found}` when the scoped user isn't a member.
+  """
+  def list_conversation_media(%Scope{user: user} = scope, conversation_id, kind, opts \\ [])
+      when kind in ~w(image video file audio) do
+    if member?(scope, conversation_id) do
+      limit = Keyword.get(opts, :limit, @default_page)
+
+      attachments =
+        Attachment
+        |> join(:inner, [a], m in Message, on: m.id == a.message_id)
+        |> where([a, m], m.conversation_id == ^conversation_id)
+        # Mirror list_messages visibility: no thread replies, no tombstones.
+        |> where([_a, m], is_nil(m.root_id) and is_nil(m.deleted_at))
+        |> join(:left, [a, m], d in MessageDeletion,
+          on: d.message_id == m.id and d.user_id == ^user.id
+        )
+        |> where([_a, _m, d], is_nil(d.id))
+        |> where([a], a.kind == ^kind)
+        |> media_before(opts[:before])
+        # Attachment ids are monotonic with message creation, so this is newest-media-first
+        # and keeps the cursor stable even within an album.
+        |> order_by([a], desc: a.id)
+        |> limit(^limit)
+        |> Repo.all()
+
+      {:ok, attachments}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp media_before(query, nil), do: query
+  defp media_before(query, before_id), do: where(query, [a], a.id < ^before_id)
+
+  @doc """
   Posts a message from the scoped user. `sender_id`/`conversation_id` are set
   programmatically (never cast). Updates the conversation sort key and broadcasts
   `{:new_message, message}`. `{:error, :not_found}` if not a member.
