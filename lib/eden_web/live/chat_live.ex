@@ -81,6 +81,11 @@ defmodule EdenWeb.ChatLive do
         people: [],
         has_more: false,
         oldest_id: nil,
+        # "Jump to message" target for the main stream (#jump): the .ScrollBottom hook reads
+        # these off #message-scroll and scrolls to messages-<focus_id> instead of the bottom.
+        # focus_nonce is monotonic so re-jumping the SAME message still re-fires.
+        focus_id: nil,
+        focus_nonce: 0,
         other_read_at: nil,
         statuses: EdenWeb.Presence.statuses(),
         my_status: scope.user.presence_status,
@@ -1473,7 +1478,10 @@ defmodule EdenWeb.ChatLive do
          # Close BOTH the thread and the Threads-list panel — otherwise nulling
          # thread_root re-reveals the list aside over the message we jumped to.
          |> assign(thread_root: nil, thread_list_open: false)
-         |> push_event("focus_message", %{domId: "messages-#{id}"})}
+         # Load a window around the root: in a long room the root sits above the loaded
+         # page, so without this the client has no row to scroll to (jump silently fails).
+         |> load_messages_around(socket.assigns.selected, id)
+         |> assign_focus(id)}
 
       _ ->
         {:noreply, socket}
@@ -2532,6 +2540,8 @@ defmodule EdenWeb.ChatLive do
             phx-hook=".ScrollBottom"
             data-conversation-id={@selected.id}
             data-has-more={to_string(@has_more)}
+            data-focus-id={@focus_id}
+            data-focus-nonce={@focus_nonce}
             data-lb-close={gettext("Close")}
             data-lb-prev={gettext("Previous")}
             data-lb-next={gettext("Next")}
@@ -3481,35 +3491,16 @@ defmodule EdenWeb.ChatLive do
             // Remember which conversation we're pinned to; a switch is a patch (no
             // remount), so updated() must re-pin instantly rather than mounted (#109).
             this.convId = this.el.dataset.conversationId
-            this.toBottom()
-            // Permalink / "jump to root": scroll to and briefly highlight a message, or
-            // report it's gone. Robust on a busy room (prod): (1) the jump often rides the
-            // SAME patch that closes the thread panel, so wait a frame for that reflow before
-            // scrolling — else scrollIntoView lands on the pre-reflow layout and the row ends
-            // up off-screen ("no highlight"); (2) retry briefly if the row isn't in the DOM
-            // yet; (3) keep a window + re-apply the class in updated(), since a re-render of
-            // the row (reaction/read/thread-reply) would strip the JS-added class mid-flash.
-            this.handleEvent("focus_message", ({ domId }) => {
-              this.focusId = domId
-              let tries = 0
-              const go = () => {
-                const el = document.getElementById(domId)
-                if (!el) {
-                  if (tries++ < 8) return setTimeout(go, 60)
-                  this.focusId = null
-                  return this.pushEvent("message_unavailable")
-                }
-                el.scrollIntoView({ block: "center", behavior: "smooth" })
-                el.classList.add("ed-msg--focus")
-                this.focusUntil = Date.now() + 2200
-                setTimeout(() => {
-                  this.focusUntil = 0
-                  this.focusId = null
-                  document.getElementById(domId)?.classList.remove("ed-msg--focus")
-                }, 2200)
-              }
-              requestAnimationFrame(go)
-            })
+            // Permalink / "jump to root": the server marks a main-stream focus target via
+            // data-focus-* (and, for the long-history case, loads a window AROUND it so it's
+            // even IN the DOM — #jump). On a fresh load, scroll to that target instead of the
+            // bottom; otherwise land at the latest as usual.
+            const focus = this.checkFocus()
+            if (focus) this.focusOn(focus)
+            else this.toBottom()
+            // Thread-reply targets (`thread-<id>`, a different container with no
+            // scroll-to-bottom of its own) arrive as an event rather than via data-focus-*.
+            this.handleEvent("focus_message", ({ domId }) => this.focusOn(domId))
             // Runs for nodes added AFTER mount only — the initial list is already
             // in the DOM when the observer starts, so it never animates (no
             // page-load choreography). Two jobs:
@@ -3598,7 +3589,7 @@ defmodule EdenWeb.ChatLive do
             // catches the viewport shrinking and keeps the last message visible above the
             // composer instead of letting it hide behind the reply bar.
             this.ro = new ResizeObserver(() => {
-              if (this.pinned) this.toBottom(false)
+              if (this.pinned && !this._focusing()) this.toBottom(false)
             })
             this.ro.observe(this.el)
             // After a send the user always wants their message at the bottom, but the send
@@ -3631,7 +3622,7 @@ defmodule EdenWeb.ChatLive do
             this.content = this.el.querySelector("#messages")
             if (this.content) {
               this.contentRo = new ResizeObserver(() => {
-                if (this.follow) this.toBottom(false)
+                if (this.follow && !this._focusing()) this.toBottom(false)
               })
               this.contentRo.observe(this.content)
             }
@@ -3642,6 +3633,63 @@ defmodule EdenWeb.ChatLive do
             this.loadingMore = true
             this.prevHeight = this.el.scrollHeight
             this.pushEvent("load_more", {})
+          },
+          // True while a jump highlight is in its dwell window — used to suppress every
+          // auto-scroll-to-bottom path (mount, conv re-pin, ResizeObservers) so they can't
+          // yank the view off the message we just jumped to.
+          _focusing() {
+            return this.focusUntil && Date.now() < this.focusUntil
+          },
+          // The server flags a main-stream jump target on #message-scroll as
+          // data-focus-id (+ a monotonic data-focus-nonce so re-jumping the SAME message
+          // re-fires). Returns the dom id to focus, or null when there's nothing new.
+          checkFocus() {
+            const nonce = this.el.dataset.focusNonce
+            const id = this.el.dataset.focusId
+            if (!id || nonce === this.lastFocusNonce) return null
+            this.lastFocusNonce = nonce
+            return "messages-" + id
+          },
+          // Scroll a message into view and briefly highlight it (permalink / jump-to-root /
+          // tapped quote). Robust on a long, busy chat where the server just loaded a window
+          // AROUND an older target:
+          //   - retry until the row is actually in the DOM,
+          //   - stop the auto-follow so a late image-decode can't yank back to the bottom,
+          //   - center INSTANTLY (a far jump teleports — a smooth scroll across thousands of
+          //     px onto still-settling layout was landing in "random" spots), then
+          //   - HOLD it centered for a short window: re-center every frame while images in the
+          //     fresh window decode and grow (each grow shifts the target; holding pins it),
+          //   - keep a longer dwell so updated() can re-apply the highlight class a re-render
+          //     would otherwise strip.
+          focusOn(domId) {
+            this.follow = false
+            this.pinned = false
+            this.focusId = domId
+            let tries = 0
+            const go = () => {
+              const el = document.getElementById(domId)
+              if (!el) {
+                if (tries++ < 12) return setTimeout(go, 50)
+                this.focusId = null
+                return this.pushEvent("message_unavailable")
+              }
+              el.classList.add("ed-msg--focus")
+              this.focusUntil = Date.now() + 2200
+              const holdUntil = Date.now() + 800
+              const hold = () => {
+                const node = document.getElementById(domId)
+                if (!node) return
+                node.scrollIntoView({ block: "center", behavior: "auto" })
+                if (Date.now() < holdUntil) requestAnimationFrame(hold)
+              }
+              hold()
+              setTimeout(() => {
+                this.focusUntil = 0
+                this.focusId = null
+                document.getElementById(domId)?.classList.remove("ed-msg--focus")
+              }, 2200)
+            }
+            requestAnimationFrame(go)
           },
           beforeUpdate() {
             this.pinned = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight < 48
@@ -3659,8 +3707,18 @@ defmodule EdenWeb.ChatLive do
             // Re-apply the jump highlight if this patch re-rendered the focused row and
             // morphdom stripped the JS-added class (active rooms re-render rows often). A
             // gone/other-conversation row resolves to null → harmless no-op.
-            if (this.focusUntil && Date.now() < this.focusUntil) {
+            if (this._focusing()) {
               document.getElementById(this.focusId)?.classList.add("ed-msg--focus")
+            }
+            // A jump target landed in this patch (the server loaded a window AROUND an older
+            // message and bumped data-focus-nonce): scroll to it instead of re-pinning to the
+            // bottom. Checked before the conv-switch/re-pin paths so neither fights the jump.
+            const focus = this.checkFocus()
+            if (focus) {
+              this.convId = this.el.dataset.conversationId
+              this.loadingMore = false
+              this.focusOn(focus)
+              return
             }
             // Switched conversation (a patch, so mounted() didn't re-run): jump
             // INSTANTLY to the latest message instead of smooth-scrolling from the
@@ -3690,8 +3748,13 @@ defmodule EdenWeb.ChatLive do
               return
             }
             // Only re-pin when a new message actually arrived (row count grew). Incidental
-            // patches leave the count unchanged and must NOT move the list (#104).
-            if (this.pinned && this.el.querySelectorAll(".ed-msg, .ed-flat").length > this.prevCount) {
+            // patches leave the count unchanged and must NOT move the list (#104). Never
+            // while a jump is settling — that would steal the view back to the bottom.
+            if (
+              this.pinned &&
+              !this._focusing() &&
+              this.el.querySelectorAll(".ed-msg, .ed-flat").length > this.prevCount
+            ) {
               this.toBottom(true)
             }
           },
@@ -8466,6 +8529,9 @@ defmodule EdenWeb.ChatLive do
       has_more: length(messages) == @page,
       oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
       oldest_msg: List.first(messages),
+      # Clear any prior jump target — it belonged to the chat we're leaving (the nonce
+      # gates re-firing, but don't render a stale id for the new conversation).
+      focus_id: nil,
       thread_root: nil,
       # Close the conversation-profile panel (#136) when switching chats — it belongs to the
       # conversation you were viewing, not the new one.
@@ -8510,6 +8576,49 @@ defmodule EdenWeb.ChatLive do
     |> refresh_rooms()
     # Reading a room clears its unread, which lowers the channel's rail badge.
     |> then(fn s -> if conversation.channel_id, do: refresh_rail(s), else: s end)
+  end
+
+  # Reload the message stream to a window that INCLUDES `anchor_id` (a permalink / jump
+  # target), mirroring select_conversation's per-stream assigns. Without this, a jump to
+  # a message older than the loaded page can't scroll/highlight — the row was never
+  # rendered. The newest-anchored window keeps the stream bottom at the real latest, so
+  # the .ScrollBottom follow/live-update behavior is unchanged.
+  defp load_messages_around(socket, conversation, anchor_id) do
+    scope = socket.assigns.current_scope
+    {:ok, messages, has_more} = Chat.list_messages_around(scope, conversation.id, anchor_id)
+    {messages, last_flat} = mark_compact(messages, conversation)
+
+    socket
+    |> assign(
+      has_more: has_more,
+      oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
+      oldest_msg: List.first(messages),
+      last_flat: last_flat,
+      compacts: Map.new(messages, &{&1.id, &1.compact}),
+      thread_participants: facepiles(scope, conversation, messages)
+    )
+    |> stream(:messages, messages, reset: true)
+  end
+
+  # Load a window around `message_id` only when it's a live, visible main-stream message
+  # of the open conversation — so a jump to an older message actually renders the row.
+  # A deleted / foreign / unknown id falls through unchanged to the "message unavailable"
+  # path (the client finds no row and reports back).
+  defp maybe_load_around(socket, message_id) do
+    conv = socket.assigns.selected
+    scope = socket.assigns.current_scope
+
+    if conv && Chat.main_stream_message?(scope, conv.id, message_id) do
+      load_messages_around(socket, conv, message_id)
+    else
+      socket
+    end
+  end
+
+  # Flag a main-stream jump target for the .ScrollBottom hook (data-focus-* on
+  # #message-scroll). The bumped nonce makes re-jumping the same message re-fire.
+  defp assign_focus(socket, message_id) do
+    assign(socket, focus_id: to_string(message_id), focus_nonce: socket.assigns.focus_nonce + 1)
   end
 
   defp refresh_sidebar(socket), do: stream_conversations(socket, reset: true)
@@ -8806,7 +8915,12 @@ defmodule EdenWeb.ChatLive do
         |> push_event("focus_message", %{domId: "thread-#{message_id}"})
 
       _ ->
-        push_event(socket, "focus_message", %{domId: "messages-#{message_id}"})
+        # Main-stream target: load a window around it first so an OLDER message (past the
+        # loaded page) is actually rendered, then mark it for the hook to scroll to (the
+        # data-focus-* path keeps the hook from re-pinning to the bottom over the jump).
+        socket
+        |> maybe_load_around(message_id)
+        |> assign_focus(message_id)
     end
   end
 
