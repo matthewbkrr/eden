@@ -1229,23 +1229,98 @@ defmodule EdenWeb.ChatLiveTest do
   describe "viewing a profile" do
     setup [:setup_conversation]
 
-    test "the 1:1 header opens the other participant's profile", ctx do
-      {:ok, bob} =
+    test "the 1:1 header opens the conversation profile panel (#136)", ctx do
+      {:ok, _bob} =
         Eden.Accounts.update_profile(ctx.bob, %{display_name: "Bob", bio: "Likes tea."})
 
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      html =
-        view
-        |> element(~s(button[phx-click="show_profile"][phx-value-id="#{bob.id}"]))
-        |> render_click()
+      html = view |> element(~s(button[phx-click="open_profile"])) |> render_click()
 
+      # The expanded panel (#136): the peer's card + the per-dialog media gallery tabs.
       assert html =~ "@bob"
       assert html =~ "Likes tea."
-      # The popover offers a Message button (the DM bridge), not the old modal.
-      assert has_element?(view, ".ed-popover")
-      assert has_element?(view, ~s(.ed-popover button[phx-click="message_user"]))
+      assert has_element?(view, ".ed-profile")
+      assert has_element?(view, ~s(.ed-gallery-tab[phx-value-tab="image"]))
+      refute has_element?(view, ".ed-popover")
+    end
+
+    test "the profile panel loads the gallery and switches tabs (#136)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      {:ok, _} =
+        Chat.create_attachments(Scope.for_user(ctx.alice), ctx.conversation.id, [
+          %{path: real_png_path(), filename: "p.png"}
+        ])
+
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      render_click(view, "open_profile", %{})
+
+      # Default tab = Photo → the image tile shows; no empty state.
+      assert has_element?(view, ".ed-gallery-grid .ed-gallery-tile")
+      refute has_element?(view, ".ed-gallery-empty")
+
+      # Switch to Files → no files in this chat → the empty state, no photo grid.
+      render_click(view, "gallery_tab", %{"tab" => "file"})
+      assert has_element?(view, ".ed-gallery-empty")
+      refute has_element?(view, ".ed-gallery-grid")
+
+      # A crafted/unknown tab is ignored (no crash).
+      render_click(view, "gallery_tab", %{"tab" => "evil"})
+      assert has_element?(view, ".ed-profile")
+    end
+
+    test "open_profile derives the peer from the open chat, ignoring any sent id (#136 P2-A)",
+         ctx do
+      other = user_fixture(%{username: "mallory", display_name: "Mallory"})
+      {:ok, _shared_elsewhere} = Chat.create_conversation(Scope.for_user(ctx.alice), [other.id])
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # A crafted id for someone shared via ANOTHER chat must NOT spoof this chat's card.
+      render_click(view, "open_profile", %{"id" => to_string(other.id)})
+      html = render(view)
+      assert html =~ "@#{ctx.bob.username}"
+      refute html =~ "mallory"
+    end
+
+    test "the gallery paginates with Load more (#136 P2-B)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      for n <- 1..31 do
+        {:ok, _} =
+          Chat.create_attachments(Scope.for_user(ctx.alice), ctx.conversation.id, [
+            %{path: real_png_path(), filename: "p#{n}.png"}
+          ])
+      end
+
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      render_click(view, "open_profile", %{})
+
+      tiles = fn -> render(view) |> then(&length(Regex.scan(~r/ed-gallery-tile/, &1))) end
+      assert tiles.() == 30
+      assert has_element?(view, ".ed-gallery-more")
+
+      render_click(view, "gallery_more", %{})
+      assert tiles.() == 31
+      refute has_element?(view, ".ed-gallery-more")
+    end
+
+    test "the gallery surfaces new media live (#136 P2-C)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      render_click(view, "open_profile", %{})
+      assert has_element?(view, ".ed-gallery-empty")
+
+      # Bob sends a photo → the {:new_message} broadcast reaches alice's open panel.
+      {:ok, _} =
+        Chat.create_attachments(Scope.for_user(ctx.bob), ctx.conversation.id, [
+          %{path: real_png_path(), filename: "live.png"}
+        ])
+
+      assert render(view) =~ "ed-gallery-tile"
+      refute has_element?(view, ".ed-gallery-empty")
     end
 
     test "your own card shows Edit profile, not a Message button", ctx do
@@ -1269,24 +1344,28 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ "Profile unavailable."
     end
 
-    test "a group header opens the member list, then a member's profile", ctx do
+    test "a group header opens the panel with members + gallery, then a member's profile (#136)",
+         ctx do
       carol = user_fixture(%{username: "carol", display_name: "Carol"})
       {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{group.id}")
 
-      members = view |> element(~s(button[phx-click="show_members"])) |> render_click()
-      assert members =~ "Members"
-      assert members =~ "Carol"
-      assert members =~ "(you)"
+      panel = view |> element(~s(button[phx-click="open_profile"])) |> render_click()
+      assert has_element?(view, ".ed-profile")
+      assert panel =~ "Carol"
+      assert panel =~ "(you)"
+      # The group gallery is wired (per-dialog shared media).
+      assert has_element?(view, ~s(.ed-gallery-tab[phx-value-tab="image"]))
 
+      # Tapping a member opens their profile popover over the panel.
       profile =
         view
-        |> element(~s(button[phx-click="show_profile"][phx-value-id="#{carol.id}"]))
+        |> element(~s(.ed-member-row[phx-value-id="#{carol.id}"]))
         |> render_click()
 
       assert profile =~ "@carol"
-      assert profile =~ "Message"
+      assert has_element?(view, ".ed-popover")
     end
 
     test "Message from a profile opens a 1:1", ctx do

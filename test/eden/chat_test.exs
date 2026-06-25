@@ -484,6 +484,87 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "list_conversation_media/4 (#136)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "returns attachments of the kind, newest first", %{alice: alice, conv: conv} do
+      {:ok, _} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png(), filename: "a.png"}])
+
+      {:ok, _} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png(), filename: "b.png"}])
+
+      {:ok, images} = Chat.list_conversation_media(scope(alice), conv.id, "image")
+      assert [%{filename: "b.png"}, %{filename: "a.png"}] = images
+    end
+
+    test "filters by kind (image vs file)", %{alice: alice, conv: conv} do
+      {:ok, _} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png(), filename: "a.png"}])
+
+      {:ok, _} =
+        Chat.create_attachments(scope(alice), conv.id, [
+          %{path: tmp_text("hi"), filename: "n.txt"}
+        ])
+
+      assert {:ok, [%{kind: "image"}]} =
+               Chat.list_conversation_media(scope(alice), conv.id, "image")
+
+      assert {:ok, [%{kind: "file"}]} =
+               Chat.list_conversation_media(scope(alice), conv.id, "file")
+    end
+
+    test "excludes deleted-for-both and per-user-hidden messages", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      {:ok, _} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png(), filename: "keep.png"}])
+
+      {:ok, [gone]} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png(), filename: "gone.png"}])
+
+      {:ok, [hide]} =
+        Chat.create_attachments(scope(alice), conv.id, [%{path: real_png(), filename: "hide.png"}])
+
+      :ok = Chat.delete_message_for_both(scope(alice), gone.id)
+      :ok = Chat.delete_message_for_me(scope(alice), hide.id)
+
+      # Alice: tombstone gone for everyone, hide hidden only for her → just keep.
+      assert {:ok, [%{filename: "keep.png"}]} =
+               Chat.list_conversation_media(scope(alice), conv.id, "image")
+
+      # Bob still sees hide (her per-user hide doesn't affect him); gone is gone for both.
+      {:ok, bob_imgs} = Chat.list_conversation_media(scope(bob), conv.id, "image")
+      assert Enum.map(bob_imgs, & &1.filename) == ["hide.png", "keep.png"]
+    end
+
+    test "non-member gets :not_found", %{conv: conv} do
+      carol = user_fixture(%{username: "carol_g"})
+      assert {:error, :not_found} = Chat.list_conversation_media(scope(carol), conv.id, "image")
+    end
+
+    test "paginates with :before and :limit", %{alice: alice, conv: conv} do
+      for n <- 1..3 do
+        {:ok, _} =
+          Chat.create_attachments(scope(alice), conv.id, [
+            %{path: real_png(), filename: "p#{n}.png"}
+          ])
+      end
+
+      {:ok, [first]} = Chat.list_conversation_media(scope(alice), conv.id, "image", limit: 1)
+
+      {:ok, [next]} =
+        Chat.list_conversation_media(scope(alice), conv.id, "image", before: first.id, limit: 1)
+
+      assert next.id < first.id
+    end
+  end
+
   describe "delete_message_for_me/2" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
