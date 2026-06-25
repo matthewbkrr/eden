@@ -33,6 +33,19 @@ defmodule Eden.Chat do
 
   @pubsub Eden.PubSub
   @default_page 50
+  # Upper bound for a "jump to message" window load (#permalink/jump-to-root): when the
+  # target sits far above the latest message, we still cap how many rows we render so a
+  # deep jump in a long history can't load thousands of messages into the stream at once.
+  @jump_window 300
+  # Associations preloaded with every main-stream message (shared by list_messages/3 and
+  # list_messages_around/3 so a window load renders identically to a page load).
+  @message_preloads [
+    :sender,
+    :attachments,
+    reactions: :user,
+    reply_to: [:sender, :attachments],
+    forwarded_from: :sender
+  ]
   # Per-kind upload caps (bytes). The client-side cap is the largest of these;
   # the server enforces the precise per-kind limit on every upload.
   @max_image_bytes 8 * 1024 * 1024
@@ -1246,26 +1259,11 @@ defmodule Eden.Chat do
       limit = Keyword.get(opts, :limit, @default_page)
 
       messages =
-        Message
-        |> where([m], m.conversation_id == ^conversation_id)
-        # Replies live only inside their thread panel, never the main stream.
-        |> where([m], is_nil(m.root_id))
-        # Drop "deleted for everyone" rows entirely, and ones this user hid.
-        |> where([m], is_nil(m.deleted_at))
-        |> join(:left, [m], d in MessageDeletion,
-          on: d.message_id == m.id and d.user_id == ^user.id
-        )
-        |> where([_m, d], is_nil(d.id))
+        visible_messages(user, conversation_id)
         |> before_cursor(opts[:before])
         |> order_by([m], desc: m.id)
         |> limit(^limit)
-        |> preload([
-          :sender,
-          :attachments,
-          reactions: :user,
-          reply_to: [:sender, :attachments],
-          forwarded_from: :sender
-        ])
+        |> preload(^@message_preloads)
         |> Repo.all()
         |> Enum.reverse()
 
@@ -1273,6 +1271,85 @@ defmodule Eden.Chat do
     else
       {:error, :not_found}
     end
+  end
+
+  @doc """
+  Loads a window of main-stream messages that **includes** `anchor_id`, for a
+  "jump to message" (permalink / jump-to-root). The default `list_messages/3` only
+  loads the newest page, so a target older than that page is never rendered and the
+  client can't scroll to it (the symptom: jump/highlight works on small chats but
+  fails on long ones). This anchors the window so the target is always present.
+
+  The window is newest-anchored — it loads every message from the anchor down to the
+  latest (so the stream bottom stays the real latest and live-update keeps working),
+  with a floor of `#{@default_page}` rows for context. Only when the anchor sits more
+  than `#{@jump_window}` messages above the latest does it fall back to an
+  anchor-anchored window (`#{@jump_window}` rows starting at the anchor) to bound the
+  render; in that rare case the stream bottom isn't the latest.
+
+  Returns `{:ok, messages, has_more?}` where `has_more?` says whether older messages
+  exist before the window (drives the "load older" affordance). `{:error, :not_found}`
+  if the user is not a member.
+  """
+  def list_messages_around(%Scope{user: user} = scope, conversation_id, anchor_id) do
+    if member?(scope, conversation_id) do
+      base = visible_messages(user, conversation_id)
+      at_or_after = base |> where([m], m.id >= ^anchor_id) |> Repo.aggregate(:count)
+      limit = at_or_after |> max(@default_page) |> min(@jump_window)
+
+      query =
+        if at_or_after <= @jump_window do
+          # Common case: the anchor is within @jump_window of the latest. Load the
+          # `limit` newest rows (which include the anchor) so the bottom is the latest.
+          base |> order_by([m], desc: m.id) |> limit(^limit)
+        else
+          # Deep jump: load @jump_window rows starting AT the anchor instead, so the
+          # anchor is guaranteed present even though the bottom won't be the latest.
+          base
+          |> where([m], m.id >= ^anchor_id)
+          |> order_by([m], asc: m.id)
+          |> limit(^@jump_window)
+        end
+
+      messages = query |> preload(^@message_preloads) |> Repo.all()
+
+      # Newest-anchored loads come back desc — normalize to oldest-first like list_messages/3.
+      messages = if at_or_after <= @jump_window, do: Enum.reverse(messages), else: messages
+
+      has_more =
+        case messages do
+          [oldest | _] -> Repo.exists?(where(base, [m], m.id < ^oldest.id))
+          [] -> false
+        end
+
+      {:ok, messages, has_more}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  @doc """
+  True when `message_id` is a live, visible main-stream message of `conversation_id`
+  for the scoped user (exists, not a thread reply, not hard-deleted, not hidden by
+  this user). Used to decide whether a "jump to message" should load a window around
+  it — a deleted/foreign id falls through to the normal "message unavailable" path.
+  """
+  def main_stream_message?(%Scope{user: user} = scope, conversation_id, message_id) do
+    member?(scope, conversation_id) and
+      Repo.exists?(visible_messages(user, conversation_id) |> where([m], m.id == ^message_id))
+  end
+
+  # Shared base query for a conversation's main-stream messages visible to `user`:
+  # excludes thread replies, hard-deleted rows, and ones this user hid (delete-for-me).
+  defp visible_messages(user, conversation_id) do
+    Message
+    |> where([m], m.conversation_id == ^conversation_id)
+    # Replies live only inside their thread panel, never the main stream.
+    |> where([m], is_nil(m.root_id))
+    # Drop "deleted for everyone" rows entirely, and ones this user hid.
+    |> where([m], is_nil(m.deleted_at))
+    |> join(:left, [m], d in MessageDeletion, on: d.message_id == m.id and d.user_id == ^user.id)
+    |> where([_m, d], is_nil(d.id))
   end
 
   @doc """

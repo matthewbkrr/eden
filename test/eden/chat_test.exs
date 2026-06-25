@@ -2060,6 +2060,94 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "list_messages_around/3 (#jump)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      # More than the default page (50) so the oldest rows fall OUTSIDE the page
+      # the stream loads by default — the exact condition the window load exists for.
+      msgs =
+        for n <- 1..55 do
+          {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "m#{n}"})
+          m
+        end
+
+      %{conv: conv, msgs: msgs}
+    end
+
+    test "loads a window that includes an anchor older than the default page", %{
+      alice: alice,
+      conv: conv,
+      msgs: msgs
+    } do
+      oldest = hd(msgs)
+
+      # The default page is the 50 newest, so the oldest message is NOT in it.
+      {:ok, page} = Chat.list_messages(scope(alice), conv.id)
+      refute Enum.any?(page, &(&1.id == oldest.id))
+
+      # The window around it includes it, oldest-first, sender preloaded.
+      {:ok, around, _has_more} = Chat.list_messages_around(scope(alice), conv.id, oldest.id)
+      assert Enum.any?(around, &(&1.id == oldest.id))
+      assert hd(around).id == oldest.id
+      assert hd(around).sender.display_name == "Alice"
+    end
+
+    test "has_more reflects whether older messages exist before the window", %{
+      alice: alice,
+      conv: conv,
+      msgs: msgs
+    } do
+      # Anchor near the newest → the 50-row newest window leaves the oldest 5 behind.
+      recent = Enum.at(msgs, 52)
+      {:ok, _window, has_more} = Chat.list_messages_around(scope(alice), conv.id, recent.id)
+      assert has_more
+
+      # Anchor at the very oldest → the window reaches it, nothing older remains.
+      {:ok, _all, has_more2} = Chat.list_messages_around(scope(alice), conv.id, hd(msgs).id)
+      refute has_more2
+    end
+
+    test "non-members cannot read", %{conv: conv} do
+      dave = user_fixture(%{username: "dave_jump"})
+      assert {:error, :not_found} = Chat.list_messages_around(scope(dave), conv.id, 1)
+    end
+  end
+
+  describe "main_stream_message?/3 (#jump)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      %{conv: conv, m: m}
+    end
+
+    test "true for a live, visible main-stream message", %{alice: alice, conv: conv, m: m} do
+      assert Chat.main_stream_message?(scope(alice), conv.id, m.id)
+    end
+
+    test "false for a message the viewer hid (delete for me)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      m: m
+    } do
+      :ok = Chat.delete_message_for_me(scope(bob), m.id)
+      refute Chat.main_stream_message?(scope(bob), conv.id, m.id)
+      # Still visible to the other member, who didn't hide it.
+      assert Chat.main_stream_message?(scope(alice), conv.id, m.id)
+    end
+
+    test "false once soft-deleted for everyone", %{alice: alice, conv: conv, m: m} do
+      :ok = Chat.delete_message_for_both(scope(alice), m.id)
+      refute Chat.main_stream_message?(scope(alice), conv.id, m.id)
+    end
+
+    test "false for an unknown id and for non-members", %{alice: alice, conv: conv} do
+      refute Chat.main_stream_message?(scope(alice), conv.id, 9_999_999)
+      dave = user_fixture(%{username: "dave_msg"})
+      refute Chat.main_stream_message?(scope(dave), conv.id, 1)
+    end
+  end
+
   describe "list_conversations/1 enrichment" do
     test "fills last_message_body and per-user unread_count", %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

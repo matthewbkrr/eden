@@ -1070,11 +1070,16 @@ html {
     min-width: 100%;
   }
 
-  /* Permalink target: briefly ring the message scrolled to. */
+  /* Permalink / jump target: briefly ring (DM bubble) or tint (flat row) the message
+     scrolled to. The translucent cobalt is written as oklch(... / a) on purpose, NOT
+     color-mix(var(--ed-primary) …): Tailwind/lightningcss gate color-mix behind
+     @supports and emit a FULL-OPACITY var(--ed-primary) fallback, which some Firefox
+     builds take — making the flash bright instead of subtle. oklch's fallback keeps the
+     alpha, so the flash stays soft everywhere. */
   @keyframes ed-msg-focus {
     0%,
     65% {
-      box-shadow: 0 0 0 2px color-mix(in oklab, var(--ed-primary) 55%, transparent);
+      box-shadow: 0 0 0 2px oklch(0.62 0.16 261 / 0.4);
     }
     100% {
       box-shadow: 0 0 0 2px transparent;
@@ -1086,7 +1091,7 @@ html {
   @media (prefers-reduced-motion: reduce) {
     .ed-msg--focus .ed-bubble {
       animation: none;
-      box-shadow: 0 0 0 2px color-mix(in oklab, var(--ed-primary) 55%, transparent);
+      box-shadow: 0 0 0 2px oklch(0.62 0.16 261 / 0.4);
     }
   }
   /* Flat rows (rooms + thread panel) carry the focus class on the row itself,
@@ -1095,7 +1100,7 @@ html {
   @keyframes ed-flat-focus {
     0%,
     65% {
-      background: color-mix(in oklab, var(--ed-primary) 10%, transparent);
+      background: oklch(0.62 0.16 261 / 0.08);
     }
     100% {
       background: transparent;
@@ -1107,7 +1112,7 @@ html {
   @media (prefers-reduced-motion: reduce) {
     .ed-flat.ed-msg--focus {
       animation: none;
-      background: color-mix(in oklab, var(--ed-primary) 10%, transparent);
+      background: oklch(0.62 0.16 261 / 0.08);
     }
   }
 
