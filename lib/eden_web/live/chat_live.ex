@@ -8504,6 +8504,15 @@ defmodule EdenWeb.ChatLive do
 
   ## Helpers
 
+  # Re-selecting the conversation that's already open (clicking it again in the sidebar /
+  # room list — a push_patch to the same id) is a no-op. Re-running the full selection
+  # re-streamed every message with reset: true, which made the DateRail pills churn and the
+  # scroll jump to a "random" spot (#166). Live updates keep the open thread fresh, and a
+  # permalink to a message in the open chat still jumps via focus_message_target, which runs
+  # after this and loads its own window. The same-id match relies on the repeated `id`
+  # binding; on the connected mount `selected` is still nil, so the first load falls through.
+  defp select_conversation(%{assigns: %{selected: %{id: id}}} = socket, %{id: id}), do: socket
+
   defp select_conversation(socket, conversation) do
     scope = socket.assigns.current_scope
     socket = unsubscribe(socket)
@@ -8585,19 +8594,27 @@ defmodule EdenWeb.ChatLive do
   # the .ScrollBottom follow/live-update behavior is unchanged.
   defp load_messages_around(socket, conversation, anchor_id) do
     scope = socket.assigns.current_scope
-    {:ok, messages, has_more} = Chat.list_messages_around(scope, conversation.id, anchor_id)
-    {messages, last_flat} = mark_compact(messages, conversation)
 
-    socket
-    |> assign(
-      has_more: has_more,
-      oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
-      oldest_msg: List.first(messages),
-      last_flat: last_flat,
-      compacts: Map.new(messages, &{&1.id, &1.compact}),
-      thread_participants: facepiles(scope, conversation, messages)
-    )
-    |> stream(:messages, messages, reset: true)
+    case Chat.list_messages_around(scope, conversation.id, anchor_id) do
+      {:ok, messages, has_more} ->
+        {messages, last_flat} = mark_compact(messages, conversation)
+
+        socket
+        |> assign(
+          has_more: has_more,
+          oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
+          oldest_msg: List.first(messages),
+          last_flat: last_flat,
+          compacts: Map.new(messages, &{&1.id, &1.compact}),
+          thread_participants: facepiles(scope, conversation, messages)
+        )
+        |> stream(:messages, messages, reset: true)
+
+      # Anchor vanished between the guard and here (a concurrent delete), or a bad id:
+      # leave the current window untouched; the client reports the message unavailable.
+      _ ->
+        socket
+    end
   end
 
   # Load a window around `message_id` only when it's a live, visible main-stream message

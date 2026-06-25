@@ -1292,9 +1292,12 @@ defmodule Eden.Chat do
   if the user is not a member.
   """
   def list_messages_around(%Scope{user: user} = scope, conversation_id, anchor_id) do
-    if member?(scope, conversation_id) do
+    # safe_id first: anchor_id can be a raw URL/event string ("abc"), which would
+    # otherwise raise Ecto.Query.CastError on the m.id comparisons below.
+    with id when is_integer(id) <- safe_id(anchor_id),
+         true <- member?(scope, conversation_id) do
       base = visible_messages(user, conversation_id)
-      at_or_after = base |> where([m], m.id >= ^anchor_id) |> Repo.aggregate(:count)
+      at_or_after = base |> where([m], m.id >= ^id) |> Repo.aggregate(:count)
       limit = at_or_after |> max(@default_page) |> min(@jump_window)
 
       query =
@@ -1306,7 +1309,7 @@ defmodule Eden.Chat do
           # Deep jump: load @jump_window rows starting AT the anchor instead, so the
           # anchor is guaranteed present even though the bottom won't be the latest.
           base
-          |> where([m], m.id >= ^anchor_id)
+          |> where([m], m.id >= ^id)
           |> order_by([m], asc: m.id)
           |> limit(^@jump_window)
         end
@@ -1324,7 +1327,7 @@ defmodule Eden.Chat do
 
       {:ok, messages, has_more}
     else
-      {:error, :not_found}
+      _ -> {:error, :not_found}
     end
   end
 
@@ -1335,8 +1338,16 @@ defmodule Eden.Chat do
   it — a deleted/foreign id falls through to the normal "message unavailable" path.
   """
   def main_stream_message?(%Scope{user: user} = scope, conversation_id, message_id) do
-    member?(scope, conversation_id) and
-      Repo.exists?(visible_messages(user, conversation_id) |> where([m], m.id == ^message_id))
+    # safe_id first: message_id can be a raw URL/event string; an un-cast "abc" in the
+    # m.id comparison would raise Ecto.Query.CastError and crash the LiveView.
+    case safe_id(message_id) do
+      id when is_integer(id) ->
+        member?(scope, conversation_id) and
+          Repo.exists?(visible_messages(user, conversation_id) |> where([m], m.id == ^id))
+
+      _ ->
+        false
+    end
   end
 
   # Shared base query for a conversation's main-stream messages visible to `user`:

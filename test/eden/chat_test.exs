@@ -2111,6 +2111,51 @@ defmodule Eden.ChatTest do
       dave = user_fixture(%{username: "dave_jump"})
       assert {:error, :not_found} = Chat.list_messages_around(scope(dave), conv.id, 1)
     end
+
+    test "a non-numeric anchor returns :not_found instead of raising (#168 regression)", %{
+      alice: alice,
+      conv: conv
+    } do
+      assert {:error, :not_found} = Chat.list_messages_around(scope(alice), conv.id, "abc")
+      assert {:error, :not_found} = Chat.list_messages_around(scope(alice), conv.id, nil)
+    end
+
+    test "a deep jump (> the window cap above latest) loads an anchor-anchored window", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      # Cross the @jump_window cap (300) so the anchor-anchored branch runs. insert_all to
+      # keep it cheap; ids are serial so the natural order matches list_messages_around's.
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      rows =
+        for n <- 1..320 do
+          %{
+            body: "b#{n}",
+            kind: "user",
+            meta: %{},
+            reply_count: 0,
+            conversation_id: conv.id,
+            sender_id: alice.id,
+            inserted_at: now,
+            updated_at: now
+          }
+        end
+
+      {320, inserted} = Eden.Repo.insert_all(Message, rows, returning: [:id])
+      ids = inserted |> Enum.map(& &1.id) |> Enum.sort()
+      # 2nd-oldest: > 300 messages at-or-after it (deep branch) AND one older remains.
+      anchor = Enum.at(ids, 1)
+
+      {:ok, window, has_more} = Chat.list_messages_around(scope(alice), conv.id, anchor)
+
+      window_ids = Enum.map(window, & &1.id)
+      assert length(window) == 300, "window is capped at @jump_window"
+      assert hd(window).id == anchor, "anchor-anchored: it's the oldest loaded row"
+      assert window_ids == Enum.sort(window_ids), "oldest-first"
+      assert has_more, "the one older message still exists before the window"
+    end
   end
 
   describe "main_stream_message?/3 (#jump)" do
@@ -2143,6 +2188,10 @@ defmodule Eden.ChatTest do
 
     test "false for an unknown id and for non-members", %{alice: alice, conv: conv} do
       refute Chat.main_stream_message?(scope(alice), conv.id, 9_999_999)
+      # A non-numeric id (raw URL / crafted event string) must degrade to false, not raise
+      # Ecto.Query.CastError and crash the LiveView (#168 jump regression).
+      refute Chat.main_stream_message?(scope(alice), conv.id, "abc")
+      refute Chat.main_stream_message?(scope(alice), conv.id, nil)
       dave = user_fixture(%{username: "dave_msg"})
       refute Chat.main_stream_message?(scope(dave), conv.id, 1)
     end
