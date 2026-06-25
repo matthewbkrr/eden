@@ -4210,6 +4210,21 @@ defmodule EdenWeb.ChatLive do
             // and ignore movement under a few px (well below a line), so only a genuine
             // scroll updates the chip; the wobble (≤1px, nets to zero) is filtered out.
             this._chipAnchor = this.scroller.scrollTop
+            // #150: the chip is a USER-scroll affordance only. Programmatic scrolls move the
+            // list too — scroll-to-bottom on send / new message, jump-to-message, the
+            // load-older restore, the mount scroll — and must NOT flash the day pill. Track a
+            // short "user is scrolling" window opened by wheel / touch-drag / scroll keys and
+            // kept alive by the scroll events they produce (trackpad & flick momentum fire no
+            // further input events but keep scrolling); a scroll outside it is programmatic.
+            this._userScrollUntil = 0
+            const scrollKeys = new Set([
+              "PageUp", "PageDown", "ArrowUp", "ArrowDown", "Home", "End", " ", "Spacebar"
+            ])
+            this._markUser = () => { this._userScrollUntil = Date.now() + 150 }
+            this._onUserKey = (e) => { if (scrollKeys.has(e.key)) this._markUser() }
+            this.scroller.addEventListener("wheel", this._markUser, { passive: true })
+            this.scroller.addEventListener("touchmove", this._markUser, { passive: true })
+            this.scroller.addEventListener("keydown", this._onUserKey)
             this.onScroll = () => {
               if (this._raf) return
               this._raf = requestAnimationFrame(() => {
@@ -4217,6 +4232,11 @@ defmodule EdenWeb.ChatLive do
                 const top = this.scroller.scrollTop
                 if (Math.abs(top - this._chipAnchor) < 4) return
                 this._chipAnchor = top
+                // Programmatic scroll (no recent user intent) → re-anchor but don't reveal.
+                if (Date.now() >= this._userScrollUntil) return
+                // Momentum keeps firing scroll with no input events — extend the window so the
+                // chip stays through the glide, then lapses ~150ms after motion stops.
+                this._userScrollUntil = Date.now() + 150
                 this.updateChip()
               })
             }
@@ -4234,7 +4254,12 @@ defmodule EdenWeb.ChatLive do
           },
           updated() { this.reconcile() },
           destroyed() {
-            this.scroller && this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
+            if (this.scroller) {
+              this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
+              this._markUser && this.scroller.removeEventListener("wheel", this._markUser)
+              this._markUser && this.scroller.removeEventListener("touchmove", this._markUser)
+              this._onUserKey && this.scroller.removeEventListener("keydown", this._onUserKey)
+            }
             this.mo && this.mo.disconnect()
             this._raf && cancelAnimationFrame(this._raf)
             clearTimeout(this._fade)
