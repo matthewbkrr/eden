@@ -3482,13 +3482,33 @@ defmodule EdenWeb.ChatLive do
             // remount), so updated() must re-pin instantly rather than mounted (#109).
             this.convId = this.el.dataset.conversationId
             this.toBottom()
-            // Permalink: scroll to and briefly highlight a message, or report it's gone.
+            // Permalink / "jump to root": scroll to and briefly highlight a message, or
+            // report it's gone. Robust on a busy room (prod): (1) the jump often rides the
+            // SAME patch that closes the thread panel, so wait a frame for that reflow before
+            // scrolling — else scrollIntoView lands on the pre-reflow layout and the row ends
+            // up off-screen ("no highlight"); (2) retry briefly if the row isn't in the DOM
+            // yet; (3) keep a window + re-apply the class in updated(), since a re-render of
+            // the row (reaction/read/thread-reply) would strip the JS-added class mid-flash.
             this.handleEvent("focus_message", ({ domId }) => {
-              const el = document.getElementById(domId)
-              if (!el) { this.pushEvent("message_unavailable"); return }
-              el.scrollIntoView({ block: "center", behavior: "smooth" })
-              el.classList.add("ed-msg--focus")
-              setTimeout(() => el.classList.remove("ed-msg--focus"), 2200)
+              this.focusId = domId
+              let tries = 0
+              const go = () => {
+                const el = document.getElementById(domId)
+                if (!el) {
+                  if (tries++ < 8) return setTimeout(go, 60)
+                  this.focusId = null
+                  return this.pushEvent("message_unavailable")
+                }
+                el.scrollIntoView({ block: "center", behavior: "smooth" })
+                el.classList.add("ed-msg--focus")
+                this.focusUntil = Date.now() + 2200
+                setTimeout(() => {
+                  this.focusUntil = 0
+                  this.focusId = null
+                  document.getElementById(domId)?.classList.remove("ed-msg--focus")
+                }, 2200)
+              }
+              requestAnimationFrame(go)
             })
             // Runs for nodes added AFTER mount only — the initial list is already
             // in the DOM when the observer starts, so it never animates (no
@@ -3636,6 +3656,12 @@ defmodule EdenWeb.ChatLive do
           // eases in from the bottom instead of snapping (the "jerk"). Mount
           // stays instant — no page-load scroll choreography.
           updated() {
+            // Re-apply the jump highlight if this patch re-rendered the focused row and
+            // morphdom stripped the JS-added class (active rooms re-render rows often). A
+            // gone/other-conversation row resolves to null → harmless no-op.
+            if (this.focusUntil && Date.now() < this.focusUntil) {
+              document.getElementById(this.focusId)?.classList.add("ed-msg--focus")
+            }
             // Switched conversation (a patch, so mounted() didn't re-run): jump
             // INSTANTLY to the latest message instead of smooth-scrolling from the
             // previous chat's scroll position — that glide was the #109 bug. Checked
