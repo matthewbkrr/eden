@@ -251,6 +251,20 @@ defmodule EdenWeb.ChatLiveTest do
       refute render(view) =~ "leaky draft"
     end
 
+    test "re-selecting the already-open conversation is a no-op, keeping the draft (#166)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_change(view, "composer_changed", %{"message" => %{"body" => "kept draft"}})
+      assert render(view) =~ "kept draft"
+
+      # Clicking the open conversation again (push_patch to the same id) used to re-run
+      # the full selection — resetting the stream (scroll jump + date-pill churn) and the
+      # composer. The guard makes it a no-op, so the draft survives as proof of the no-reset.
+      render_patch(view, ~p"/app/c/#{ctx.conversation.id}")
+      assert render(view) =~ "kept draft"
+    end
+
     test "switching conversations also drops staged attachments, not just text (#89)", ctx do
       carol = user_fixture(%{username: "carol_up", display_name: "Carol"})
       {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
