@@ -7,6 +7,11 @@ defmodule EdenWeb.AuthLiveTest do
     test "renders the login form", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/login")
       assert html =~ "Log in to eden"
+      # #153: the native-post form is phx-update="ignore" so the connect re-render can't
+      # wipe credentials typed before the socket connects. (The timing race itself is only
+      # reproducible in the e2e harness, which isn't in CI — this guards the mechanism.)
+      assert html =~ ~s(phx-update="ignore")
+      assert html =~ "_csrf_token"
     end
 
     test "redirects already-authenticated users to /app", %{conn: conn} do

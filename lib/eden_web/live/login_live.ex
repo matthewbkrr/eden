@@ -17,7 +17,17 @@ defmodule EdenWeb.LoginLive do
 
         <.ed_flash flash={@flash} />
 
-        <.form for={@form} action={~p"/users/log_in"} class="space-y-4">
+        <%!-- phx-update="ignore": the form posts natively (no phx-submit/phx-change), so the
+              connect re-render has no reason to touch it — and must not. Without this, anything
+              typed during the dead render is wiped when the socket connects and re-renders the
+              empty form (#153). --%>
+        <.form
+          for={@form}
+          action={~p"/users/log_in"}
+          id="login-form"
+          phx-update="ignore"
+          class="space-y-4"
+        >
           <.ed_field
             field={@form[:username]}
             label={gettext("Username")}
