@@ -59,8 +59,9 @@ document.addEventListener(
   true
 )
 
-// Show progress bar on live navigation and form submits
-topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
+// Show progress bar on live navigation and form submits (cobalt --ed-primary, not the topbar default sky-blue)
+const __edPrimary = getComputedStyle(document.documentElement).getPropertyValue("--ed-primary").trim() || "#3b6fd6"
+topbar.config({barColors: {0: __edPrimary}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 

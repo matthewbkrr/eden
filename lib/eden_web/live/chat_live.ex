@@ -2148,7 +2148,7 @@ defmodule EdenWeb.ChatLive do
           "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
           @selected && "hidden md:flex"
         ]}
-        style="border-color: var(--ed-border);"
+        style="background: var(--ed-surface); border-color: var(--ed-border);"
       >
         <header
           class="flex items-center justify-between gap-2 px-4 h-14 border-b"
@@ -2350,7 +2350,7 @@ defmodule EdenWeb.ChatLive do
           "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
           @selected && "hidden md:flex"
         ]}
-        style="border-color: var(--ed-border);"
+        style="background: var(--ed-surface); border-color: var(--ed-border);"
       >
         <header
           class="flex items-center justify-between gap-2 px-4 h-14 border-b"
@@ -2909,8 +2909,7 @@ defmodule EdenWeb.ChatLive do
                 </div>
               </div>
               <button
-                class="ed-btn ed-btn--primary shrink-0"
-                style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+                class="ed-btn ed-btn--primary ed-btn--send shrink-0"
                 type="submit"
                 aria-label={gettext("Send")}
               >
@@ -3157,8 +3156,7 @@ defmodule EdenWeb.ChatLive do
                   icon never reflows. (No phx-disable-with: on an icon-only button it
                   swaps the glyph for text and the button visibly shrinks — #104.) --%>
             <button
-              class="ed-btn ed-btn--primary shrink-0"
-              style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+              class="ed-btn ed-btn--primary ed-btn--send shrink-0"
               type="submit"
               aria-label={gettext("Send")}
             >
@@ -3515,6 +3513,35 @@ defmodule EdenWeb.ChatLive do
             this.el.style.left = `${left}px`
             this.el.style.top = `${top}px`
             this.el.style.visibility = "visible"
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".FocusTrap">
+        // Modal a11y: move focus into the dialog on open, keep Tab cycling within
+        // it, and restore focus to the trigger on close. For role=dialog panels.
+        export default {
+          mounted() {
+            this._prev = document.activeElement
+            const f = this._focusables()
+            ;(f[0] || this.el).focus()
+            this._onKey = (e) => {
+              if (e.key !== "Tab") return
+              const els = this._focusables()
+              if (!els.length) { e.preventDefault(); this.el.focus(); return }
+              const first = els[0], last = els[els.length - 1], a = document.activeElement
+              if (e.shiftKey && (a === first || a === this.el)) { e.preventDefault(); last.focus() }
+              else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus() }
+            }
+            this.el.addEventListener("keydown", this._onKey)
+          },
+          destroyed() {
+            this.el.removeEventListener("keydown", this._onKey)
+            if (this._prev && this._prev.focus) this._prev.focus()
+          },
+          _focusables() {
+            return [...this.el.querySelectorAll(
+              'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+            )].filter((el) => el.offsetParent !== null)
           }
         }
       </script>
@@ -6458,7 +6485,7 @@ defmodule EdenWeb.ChatLive do
         <.room_glyph room={@room} />
         <span class="ed-convo__name flex-1 truncate">
           {@room.name}
-          <span :if={@room.favorite} class="ed-convo__muted" title={gettext("Favorite")}>
+          <span :if={@room.favorite} class="ed-convo__muted ed-convo__fav" title={gettext("Favorite")}>
             <.icon name="hero-star-micro" class="size-3.5" />
             <span class="sr-only">{gettext("Favorite")}</span>
           </span>
@@ -6573,7 +6600,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_channel_members"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -6587,6 +6614,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Members")}
+          id="dlg-channel-members"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">
@@ -6605,11 +6636,11 @@ defmodule EdenWeb.ChatLive do
           <div class="max-h-80 overflow-y-auto space-y-0.5">
             <div
               :for={%{user: user, role: role} <- @members}
-              class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)]"
+              class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface-2)]"
             >
               <button
                 type="button"
-                class="flex items-center gap-3 flex-1 min-w-0 text-left rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-bg)]"
+                class="flex items-center gap-3 flex-1 min-w-0 text-left"
                 data-profile-trigger
                 phx-click="show_profile"
                 phx-value-id={user.id}
@@ -6773,7 +6804,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_room_add"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -6787,6 +6818,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Add to %{room}", room: @room.name)}
+          id="dlg-room-add"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">
@@ -6830,7 +6865,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={user <- @addable}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="toggle_room_add_user"
               phx-value-id={user.id}
               aria-pressed={to_string(MapSet.member?(@selected, user.id))}
@@ -6884,7 +6919,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_add_members"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -6898,6 +6933,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Add members")}
+          id="dlg-add-members"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Add members")}</h2>
@@ -6914,7 +6953,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={user <- @addable}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="toggle_add_user"
               phx-value-id={user.id}
               aria-pressed={to_string(MapSet.member?(@selected, user.id))}
@@ -6967,7 +7006,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_invites"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -6981,6 +7020,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Invite links")}
+          id="dlg-invites"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Invite links")}</h2>
@@ -7065,7 +7108,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30" id="room-modal">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_room_modal"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -7079,6 +7122,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={@title}
+          id="dlg-room-form"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{@title}</h2>
@@ -7545,6 +7592,15 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp message_bubble(assigns) do
+    # A photo/video message renders Telegram-style: no frame, the media fills the
+    # bubble, the time overlays it. Files keep the normal padded bubble.
+    assigns =
+      assign(
+        assigns,
+        :media?,
+        Enum.any?(assigns.message.attachments, &(&1.kind in ~w(image video) and not &1.as_file))
+      )
+
     ~H"""
     <%!-- data-client-id on MY own rows lets the rise-in observer skip them: the
           optimistic node already animated, so the real replacement swaps in
@@ -7560,53 +7616,80 @@ defmodule EdenWeb.ChatLive do
             outline + count blended into the bubble fill and read as a bare emoji. --%>
       <div class={["flex flex-col min-w-0", (@mine && "items-end") || "items-start"]}>
         <div
-          class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
+          class={[
+            "ed-bubble",
+            (@mine && "ed-bubble--me") || "ed-bubble--them",
+            @media? && "ed-bubble--media"
+          ]}
           id={"bubble-#{@message.id}"}
           data-message-id={@message.id}
           phx-hook=".ContextMenu"
           aria-haspopup="menu"
         >
-          <span
-            :if={@group and not @mine and @message.sender}
-            class="block"
-            style="font-size:0.75rem; font-weight:600; color: var(--ed-primary);"
-          >
-            {@message.sender.display_name}
-          </span>
-          <.quoted_reply message={@message} />
-          <span :if={@message.forwarded_from} class="ed-forwarded">
-            <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
-            {forwarded_label(@message.forwarded_from)}
-          </span>
-          <.album_view
-            :if={@message.attachments != []}
-            attachments={@message.attachments}
-            message_id={@message.id}
-          />
-          <%!-- Caption + meta share a flow-root block so a long caption can't stretch
-                a media bubble wider than the photo (#135-twin): in a media bubble the
-                wrap is constrained to the media's width (CSS width:0/min-width:100%) and
-                the caption wraps to it — while the meta still floats bottom-right with the
-                text wrapping before it (#108). --%>
-          <div class="ed-bubble__cap">
-            <span :if={@message.body != ""} class="break-words">
-              {Markup.to_iodata(@message.body)}
-            </span>
-            <span class="ed-bubble__meta">
-              <.local_time at={@message.inserted_at} />
+          <%= if @media? do %>
+            <%!-- Telegram-style media (#messenger only): header (sender/reply/forward)
+                  padded above, the photo/video edge-to-edge with the time as a
+                  translucent overlay pill bottom-right, the caption padded below. --%>
+            <div
+              :if={
+                (@group && not @mine && @message.sender) || @message.reply_to_id ||
+                  @message.forwarded_from
+              }
+              class="ed-bubble__head"
+            >
               <span
-                :if={@mine and not @group}
-                class="inline-flex items-center"
-                style="margin-left:2px;"
+                :if={@group and not @mine and @message.sender}
+                class="block"
+                style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
               >
-                <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
-                <span :if={@read} class="inline-flex items-center">
-                  <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
-                  <.icon name="hero-check-micro" class="size-3.5" />
-                </span>
+                {@message.sender.display_name}
               </span>
+              <.quoted_reply message={@message} />
+              <span :if={@message.forwarded_from} class="ed-forwarded">
+                <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+                {forwarded_label(@message.forwarded_from)}
+              </span>
+            </div>
+            <div class="ed-media">
+              <.album_view attachments={@message.attachments} message_id={@message.id} />
+              <span class="ed-media-time">
+                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+              </span>
+            </div>
+            <div :if={@message.body != ""} class="ed-bubble__cap ed-bubble__cap--media break-words">
+              {Markup.to_iodata(@message.body)}
+            </div>
+          <% else %>
+            <span
+              :if={@group and not @mine and @message.sender}
+              class="block"
+              style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
+            >
+              {@message.sender.display_name}
             </span>
-          </div>
+            <.quoted_reply message={@message} />
+            <span :if={@message.forwarded_from} class="ed-forwarded">
+              <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+              {forwarded_label(@message.forwarded_from)}
+            </span>
+            <.album_view
+              :if={@message.attachments != []}
+              attachments={@message.attachments}
+              message_id={@message.id}
+            />
+            <%!-- Caption + meta share a flow-root block so a long caption can't stretch
+                  a media bubble wider than the photo (#135-twin): the wrap is constrained
+                  to the media width (CSS width:0/min-width:100%) and the caption wraps to
+                  it, while the meta floats bottom-right with text wrapping before it (#108). --%>
+            <div class="ed-bubble__cap">
+              <span :if={@message.body != ""} class="break-words">
+                {Markup.to_iodata(@message.body)}
+              </span>
+              <span class="ed-bubble__meta">
+                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+              </span>
+            </div>
+          <% end %>
           <%!-- No thread affordance in the personal messenger (#26): threads are
                 a corporate-room feature only. --%>
           <.message_menu
@@ -7620,6 +7703,26 @@ defmodule EdenWeb.ChatLive do
         <.reactions message={@message} me={@me} />
       </div>
     </div>
+    """
+  end
+
+  attr :at, :any, required: true
+  # 1:1 "me" rows show delivery ticks; group rows don't (#142).
+  attr :ticks, :boolean, default: false
+  attr :read, :boolean, default: false
+
+  # The time + (1:1) delivery ticks line, shared by the text-bubble meta and the
+  # overlay pill on media bubbles.
+  defp msg_meta(assigns) do
+    ~H"""
+    <.local_time at={@at} />
+    <span :if={@ticks} class="inline-flex items-center" style="margin-left:2px;">
+      <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
+      <span :if={@read} class="inline-flex items-center">
+        <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
+        <.icon name="hero-check-micro" class="size-3.5" />
+      </span>
+    </span>
     """
   end
 
@@ -7922,8 +8025,7 @@ defmodule EdenWeb.ChatLive do
             <.icon name="hero-document-arrow-up-micro" class="size-5" />
           </button>
           <button
-            class="ed-btn ed-btn--primary shrink-0"
-            style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+            class="ed-btn ed-btn--primary ed-btn--send shrink-0"
             type="submit"
             aria-label={gettext("Send")}
           >
@@ -8055,7 +8157,7 @@ defmodule EdenWeb.ChatLive do
         src={thumb_src(@attachment)}
         width={@attachment.width}
         height={@attachment.height}
-        class="rounded-[0.6rem] block"
+        class="rounded-[var(--ed-radius)] block"
         style={img_box(@attachment)}
         loading="lazy"
         alt={gettext("Photo")}
@@ -8134,7 +8236,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_new"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -8148,6 +8250,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("New conversation")}
+          id="dlg-new-conv"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("New conversation")}</h2>
@@ -8172,9 +8278,14 @@ defmodule EdenWeb.ChatLive do
               <div class="max-h-60 overflow-y-auto space-y-0.5">
                 <label
                   :for={u <- @people}
-                  class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] cursor-pointer"
+                  class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] cursor-pointer transition-colors hover:bg-[var(--ed-surface-2)]"
                 >
-                  <input type="checkbox" name="member_ids[]" value={u.id} class="size-4" />
+                  <input
+                    type="checkbox"
+                    name="member_ids[]"
+                    value={u.id}
+                    class="size-5 accent-[var(--ed-primary)]"
+                  />
                   <.avatar name={u.display_name} src={avatar_src(u)} size={:sm} />
                   <span class="flex-1 min-w-0">
                     <span class="block" style="font-weight:550; font-size:0.875rem;">
@@ -8205,7 +8316,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_forward"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -8219,6 +8330,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Forward to")}
+          id="dlg-forward"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Forward to")}</h2>
@@ -8234,7 +8349,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={c <- @targets}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="forward"
               phx-value-target={c.id}
             >
@@ -8266,7 +8381,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_folders"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -8280,6 +8395,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Move to folder")}
+          id="dlg-folder"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Move to folder")}</h2>
@@ -8301,7 +8420,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={folder <- @folders}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="toggle_folder"
               phx-value-folder={folder.id}
               aria-pressed={to_string(MapSet.member?(@checked, folder.id))}

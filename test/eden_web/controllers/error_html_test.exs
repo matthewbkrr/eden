@@ -4,11 +4,20 @@ defmodule EdenWeb.ErrorHTMLTest do
   # Bring render_to_string/4 for testing custom views
   import Phoenix.Template, only: [render_to_string: 4]
 
-  test "renders 404.html" do
-    assert render_to_string(EdenWeb.ErrorHTML, "404", "html", []) == "Not Found"
+  test "renders a branded, unescaped 404.html" do
+    html = render_to_string(EdenWeb.ErrorHTML, "404", "html", [])
+    assert html =~ "<!DOCTYPE html>"
+    assert html =~ "Page not found"
+    assert html =~ "· eden</title>"
   end
 
-  test "renders 500.html" do
-    assert render_to_string(EdenWeb.ErrorHTML, "500", "html", []) == "Internal Server Error"
+  test "renders a branded, unescaped 500.html" do
+    html = render_to_string(EdenWeb.ErrorHTML, "500", "html", [])
+    assert html =~ "<!DOCTYPE html>"
+    assert html =~ "Something went wrong"
+  end
+
+  test "falls back to a plain status message for other templates" do
+    assert render_to_string(EdenWeb.ErrorHTML, "403", "html", []) == "Forbidden"
   end
 end

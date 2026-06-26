@@ -219,7 +219,7 @@ defmodule EdenWeb.ShellComponents do
     <div class="fixed inset-0 z-30" id={@id}>
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click={@close}
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -233,6 +233,10 @@ defmodule EdenWeb.ShellComponents do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={@title}
+          id="dlg-channel-form"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{@title}</h2>
