@@ -119,6 +119,9 @@ html {
 :root {
   /* Light theme (default base) */
   --ed-bg: oklch(0.995 0.001 261);
+  /* The gutter behind the floating panels (#layout) — deeper than every surface so
+     the cards read as lifted. */
+  --ed-sunken: oklch(0.93 0.005 261);
   --ed-surface: oklch(0.975 0.003 261);
   --ed-surface-2: oklch(0.955 0.004 261);
   --ed-border: oklch(0.90 0.006 261);
@@ -138,6 +141,9 @@ html {
   --ed-radius-sm: 0.375rem;
   --ed-radius: 0.625rem;
   --ed-radius-lg: 1rem;
+  /* Floating-panel cards (#layout): between --ed-radius and --ed-radius-lg, so the
+     panes round without reading as "playful". */
+  --ed-radius-panel: 0.875rem;
   --ed-radius-full: 9999px;
   --ed-ring: color-mix(in oklab, var(--ed-primary) 55%, transparent);
   --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.06), 0 4px 16px oklch(0 0 0 / 0.06);
@@ -149,6 +155,7 @@ html {
 /* Dark theme — explicit */
 [data-theme="dark"] {
   --ed-bg: oklch(0.18 0.012 261);
+  --ed-sunken: oklch(0.12 0.01 261);
   --ed-surface: oklch(0.225 0.014 261);
   --ed-surface-2: oklch(0.27 0.016 261);
   --ed-border: oklch(0.32 0.014 261);
@@ -169,6 +176,7 @@ html {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --ed-bg: oklch(0.18 0.012 261);
+    --ed-sunken: oklch(0.12 0.01 261);
     --ed-surface: oklch(0.225 0.014 261);
     --ed-surface-2: oklch(0.27 0.016 261);
     --ed-border: oklch(0.32 0.014 261);
@@ -223,7 +231,9 @@ html {
     color: var(--ed-ink);
     border-color: var(--ed-border);
   }
-  .ed-btn--secondary:hover:not(:disabled) { background: var(--ed-surface); }
+  /* surface-2 is already the lightest neutral, so lift via brightness rather than
+     stepping DOWN to --ed-surface (which read as the button receding on hover). */
+  .ed-btn--secondary:hover:not(:disabled) { filter: brightness(1.08); }
 
   .ed-btn--ghost { background: transparent; color: var(--ed-muted); }
   .ed-btn--ghost:hover:not(:disabled) { background: var(--ed-surface-2); color: var(--ed-ink); }
@@ -306,7 +316,9 @@ html {
     height: 0.75rem;
     border-radius: var(--ed-radius-full);
     background: var(--ed-online);
-    box-shadow: 0 0 0 2.5px var(--ed-bg);
+    /* Cutout ring matches the lifted row/panel surface (sidebar, member lists, rail
+       all sit on --ed-surface now); --ed-bg here left a dark halo on every avatar. */
+    box-shadow: 0 0 0 2.5px var(--ed-surface);
     /* Smooth the status recolor (online↔away↔dnd); a state change, not decoration (#102). */
     transition: background-color 0.18s var(--ed-ease);
   }
@@ -319,7 +331,7 @@ html {
     position: absolute;
     inset: 2.5px;
     border-radius: var(--ed-radius-full);
-    background: var(--ed-bg);
+    background: var(--ed-surface);
   }
   /* Managed dot (room message list) for an offline/untracked author — kept in the
      DOM so the .RoomPresence hook can reveal it live when they come online (#102). */
@@ -333,13 +345,13 @@ html {
     width: 0.4375rem;
     height: 2px;
     border-radius: 1px;
-    background: var(--ed-bg);
+    background: var(--ed-surface);
     transform: translate(-50%, -50%);
   }
   /* Invisible (own self-dot only): a hollow ring so you see your own state. */
   .ed-avatar__dot--invisible {
-    background: var(--ed-bg);
-    box-shadow: 0 0 0 2.5px var(--ed-bg), inset 0 0 0 2px var(--ed-muted);
+    background: var(--ed-surface);
+    box-shadow: 0 0 0 2.5px var(--ed-surface), inset 0 0 0 2px var(--ed-muted);
   }
   /* Status swatch in the picker menu (#102). */
   .ed-status-dot {
@@ -1540,8 +1552,12 @@ html {
     border: none;
     transition: background 0.16s var(--ed-ease);
   }
-  .ed-convo:hover { background: var(--ed-surface); }
-  .ed-convo--active { background: var(--ed-surface-2); }
+  /* The sidebar sits on --ed-surface (depth ramp), so the row states step up from
+     there: a neutral --ed-surface-2 hover, and a cobalt wash for the selected chat
+     — a clearer, on-brand selected identity than another flat gray step. */
+  .ed-convo:hover { background: var(--ed-surface-2); }
+  .ed-convo--active { background: color-mix(in oklab, var(--ed-primary) 16%, transparent); }
+  .ed-convo--active:hover { background: color-mix(in oklab, var(--ed-primary) 22%, transparent); }
   .ed-convo__body { min-width: 0; flex: 1; }
   .ed-convo__top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
   .ed-convo__name { color: var(--ed-ink); font: 600 0.9375rem/1.2 var(--ed-font); }
@@ -1569,7 +1585,7 @@ html {
   }
   .ed-flat:hover,
   .ed-flat:focus-within {
-    background: color-mix(in oklab, var(--ed-surface) 65%, transparent);
+    background: var(--ed-surface-2);
   }
   .ed-flat__gutter {
     flex: none;
@@ -1692,7 +1708,7 @@ html {
     width: 1.375rem;
     height: 1.375rem;
     font-size: 0.5625rem;
-    border: 2px solid var(--ed-bg);
+    border: 2px solid var(--ed-surface);
   }
   .ed-facepile .ed-avatar + .ed-avatar {
     margin-right: -0.375rem;
@@ -1703,7 +1719,10 @@ html {
   .ed-thread {
     display: flex;
     flex-direction: column;
-    background: var(--ed-bg);
+    /* Panel surface as a var so sticky children (gallery tabs, month dividers) track
+       it: --ed-bg as a full-screen mobile sheet, --ed-surface as a desktop card. */
+    --ed-panel-bg: var(--ed-bg);
+    background: var(--ed-panel-bg);
     position: fixed;
     inset: 0;
     z-index: 20;
@@ -1715,6 +1734,12 @@ html {
       width: 24rem;
       flex: none;
       border-left: 1px solid var(--ed-border);
+      /* Docked RHS chrome (thread / profile panel) lifts onto --ed-surface, the
+         same depth tier as the left sidebar, so it reads as a panel beside the
+         --ed-bg message canvas rather than blending into it. (Mobile keeps --ed-bg:
+         there it's a full-screen sheet, not a docked column.) The var also retones
+         the sticky gallery chrome inside. */
+      --ed-panel-bg: var(--ed-surface);
     }
   }
   /* Expanded conversation profile + media gallery (#136), inside the .ed-thread aside. */
@@ -1751,7 +1776,7 @@ html {
     border-bottom: 1px solid var(--ed-border);
     position: sticky;
     top: 0;
-    background: var(--ed-bg);
+    background: var(--ed-panel-bg);
     z-index: 1;
     overflow-x: auto;
   }
@@ -1806,7 +1831,7 @@ html {
     top: 2.6rem;
     z-index: 1;
     padding: 0.75rem 0.375rem 0.5rem;
-    background: var(--ed-bg);
+    background: var(--ed-panel-bg);
     font-size: 0.75rem;
     font-weight: 600;
     color: var(--ed-muted);
@@ -1879,7 +1904,7 @@ html {
     transition: background 0.16s var(--ed-ease);
   }
   .ed-member-row:hover {
-    background: var(--ed-surface);
+    background: var(--ed-surface-2);
   }
   /* "Add members" affordance atop the group roster (#165), aligned to the avatar column. */
   .ed-member-add {
@@ -1895,7 +1920,7 @@ html {
     transition: background 0.16s var(--ed-ease);
   }
   .ed-member-add:hover {
-    background: var(--ed-surface);
+    background: var(--ed-surface-2);
   }
   .ed-member-add__icon {
     display: grid;
@@ -1933,9 +1958,12 @@ html {
   }
   .ed-role-chip {
     flex: none;
-    padding: 0.05rem 0.4rem;
+    padding: 0.125rem 0.5rem;
     border-radius: var(--ed-radius-full);
-    background: var(--ed-surface-2);
+    /* Outline pill: a filled --ed-surface-2 chip vanished when the row lifted to
+       --ed-surface-2 on hover. The border reads on every row state. */
+    background: transparent;
+    border: 1px solid var(--ed-border);
     color: var(--ed-muted);
     font-size: 0.6875rem;
     font-weight: 600;
@@ -2021,7 +2049,7 @@ html {
     transition: background 0.14s var(--ed-ease);
   }
   .ed-thread-row:hover {
-    background: var(--ed-surface);
+    background: var(--ed-surface-2);
   }
   .ed-thread-row__name {
     font-weight: 600;
@@ -2090,7 +2118,9 @@ html {
     height: 1.5rem;
     border-radius: var(--ed-radius-sm);
     color: var(--ed-muted);
-    background: var(--ed-surface-2);
+    /* Ghost glyph: a --ed-surface-2 fill was invisible on the hovered row (also
+       --ed-surface-2). Own hover lifts via a cobalt wash, distinct on any surface. */
+    background: transparent;
   }
   @media (hover: hover) {
     .ed-room-wrap:hover .ed-room__more,
@@ -2099,6 +2129,7 @@ html {
     }
   }
   .ed-room__more:hover {
+    background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
     color: var(--ed-ink);
   }
   /* In-room search results: a dropdown panel over the message area. */
@@ -2176,8 +2207,32 @@ html {
     flex-direction: column;
     align-items: stretch;
     width: 4rem;
+    /* Floating panels (#layout): the rail is a lifted card (--ed-surface) like the
+       sidebar; on desktop they sit as separate cards on the --ed-sunken gutter, so
+       separation comes from the gap + card border, not a tone step. */
     background: var(--ed-surface);
     border-right: 1px solid var(--ed-border);
+  }
+
+  /* Floating panels (#layout, variant B) — desktop only. The shell becomes a set of
+     rounded cards on a deeper --ed-sunken gutter: rail + sidebar + RHS panel lift
+     onto --ed-surface, the message canvas keeps the calm dark --ed-bg, each framed
+     and gapped so the hard full-bleed pane-seams (and right-angle corners) go away.
+     Mobile stays full-bleed — every pixel counts on a phone, and a chat there is a
+     single full-screen pane, not a row of columns. */
+  @media (min-width: 768px) {
+    .ed-root {
+      background: var(--ed-sunken);
+      padding: 0.625rem;
+      gap: 0.625rem;
+    }
+    .ed-rail,
+    .ed-root > aside,
+    .ed-root > main {
+      border: 1px solid var(--ed-border);
+      border-radius: var(--ed-radius-panel);
+      overflow: hidden;
+    }
   }
   /* The scrolling middle (messenger + channels + "+"); the bottom block stays
      pinned outside it. */
@@ -2483,7 +2538,8 @@ html {
     padding: 0.375rem 0.5rem;
     border-radius: var(--ed-radius);
     border: 1px solid var(--ed-border);
-    background: var(--ed-bg);
+    /* Lifted inset row, not --ed-bg (which read as sunken/muddy on the surface card). */
+    background: var(--ed-surface-2);
   }
   .ed-folder-row--virtual {
     background: transparent;
@@ -2805,16 +2861,16 @@ html {
   .ed-seg__btn:hover { color: var(--ed-ink); }
   .ed-seg__btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
   /* Active (server-rendered, e.g. current language) */
-  .ed-seg__btn.is-active { background: var(--ed-bg); color: var(--ed-ink); box-shadow: var(--ed-shadow); }
+  .ed-seg__btn.is-active { background: color-mix(in oklab, var(--ed-primary) 16%, transparent); color: var(--ed-ink); box-shadow: var(--ed-shadow); }
   /* Active (client theme, driven by the data-theme attribute) */
   [data-theme="light"] .ed-seg__btn[data-active="light"],
   [data-theme="dark"] .ed-seg__btn[data-active="dark"] {
-    background: var(--ed-bg);
+    background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
     color: var(--ed-ink);
     box-shadow: var(--ed-shadow);
   }
   :root:not([data-theme]) .ed-seg__btn[data-active="system"] {
-    background: var(--ed-bg);
+    background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
     color: var(--ed-ink);
     box-shadow: var(--ed-shadow);
   }

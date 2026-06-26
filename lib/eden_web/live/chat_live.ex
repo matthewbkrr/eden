@@ -2148,7 +2148,7 @@ defmodule EdenWeb.ChatLive do
           "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
           @selected && "hidden md:flex"
         ]}
-        style="border-color: var(--ed-border);"
+        style="background: var(--ed-surface); border-color: var(--ed-border);"
       >
         <header
           class="flex items-center justify-between gap-2 px-4 h-14 border-b"
@@ -2350,7 +2350,7 @@ defmodule EdenWeb.ChatLive do
           "flex-1 min-w-0 md:flex-none md:w-80 border-r flex flex-col",
           @selected && "hidden md:flex"
         ]}
-        style="border-color: var(--ed-border);"
+        style="background: var(--ed-surface); border-color: var(--ed-border);"
       >
         <header
           class="flex items-center justify-between gap-2 px-4 h-14 border-b"
@@ -6605,11 +6605,11 @@ defmodule EdenWeb.ChatLive do
           <div class="max-h-80 overflow-y-auto space-y-0.5">
             <div
               :for={%{user: user, role: role} <- @members}
-              class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)]"
+              class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface-2)]"
             >
               <button
                 type="button"
-                class="flex items-center gap-3 flex-1 min-w-0 text-left rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-bg)]"
+                class="flex items-center gap-3 flex-1 min-w-0 text-left"
                 data-profile-trigger
                 phx-click="show_profile"
                 phx-value-id={user.id}
@@ -6830,7 +6830,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={user <- @addable}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="toggle_room_add_user"
               phx-value-id={user.id}
               aria-pressed={to_string(MapSet.member?(@selected, user.id))}
@@ -6914,7 +6914,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={user <- @addable}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="toggle_add_user"
               phx-value-id={user.id}
               aria-pressed={to_string(MapSet.member?(@selected, user.id))}
@@ -8234,7 +8234,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={c <- @targets}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="forward"
               phx-value-target={c.id}
             >
@@ -8301,7 +8301,7 @@ defmodule EdenWeb.ChatLive do
             <button
               :for={folder <- @folders}
               type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-bg)]"
+              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
               phx-click="toggle_folder"
               phx-value-folder={folder.id}
               aria-pressed={to_string(MapSet.member?(@checked, folder.id))}
