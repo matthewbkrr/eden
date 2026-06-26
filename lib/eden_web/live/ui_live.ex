@@ -153,7 +153,7 @@ defmodule EdenWeb.UiLive do
             </div>
             <div class="ed-bubble ed-bubble--me" style="padding:0.25rem; overflow:hidden;">
               <div
-                class="rounded-[0.7rem] grid place-items-center"
+                class="rounded-[var(--ed-radius)] grid place-items-center"
                 style="width:13rem; height:9rem; background: var(--ed-surface-2); color: var(--ed-muted);"
               >
                 <.icon name="hero-photo" class="size-8" />

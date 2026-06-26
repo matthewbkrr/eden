@@ -219,7 +219,7 @@ defmodule EdenWeb.ShellComponents do
     <div class="fixed inset-0 z-30" id={@id}>
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click={@close}
         aria-label={gettext("Close")}
         tabindex="-1"

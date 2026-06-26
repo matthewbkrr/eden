@@ -6600,7 +6600,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_channel_members"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -6804,7 +6804,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_room_add"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -6919,7 +6919,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_add_members"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -7006,7 +7006,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_invites"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -7108,7 +7108,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30" id="room-modal">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_room_modal"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -8101,7 +8101,7 @@ defmodule EdenWeb.ChatLive do
         src={thumb_src(@attachment)}
         width={@attachment.width}
         height={@attachment.height}
-        class="rounded-[0.6rem] block"
+        class="rounded-[var(--ed-radius)] block"
         style={img_box(@attachment)}
         loading="lazy"
         alt={gettext("Photo")}
@@ -8180,7 +8180,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_new"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -8255,7 +8255,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_forward"
         aria-label={gettext("Close")}
         tabindex="-1"
@@ -8320,7 +8320,7 @@ defmodule EdenWeb.ChatLive do
     <div class="fixed inset-0 z-30">
       <button
         class="absolute inset-0 w-full h-full"
-        style="background: oklch(0 0 0 / 0.55);"
+        style="background: var(--ed-scrim);"
         phx-click="close_folders"
         aria-label={gettext("Close")}
         tabindex="-1"
