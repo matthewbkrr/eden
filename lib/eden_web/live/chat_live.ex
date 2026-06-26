@@ -7592,6 +7592,15 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp message_bubble(assigns) do
+    # A photo/video message renders Telegram-style: no frame, the media fills the
+    # bubble, the time overlays it. Files keep the normal padded bubble.
+    assigns =
+      assign(
+        assigns,
+        :media?,
+        Enum.any?(assigns.message.attachments, &(&1.kind in ~w(image video) and not &1.as_file))
+      )
+
     ~H"""
     <%!-- data-client-id on MY own rows lets the rise-in observer skip them: the
           optimistic node already animated, so the real replacement swaps in
@@ -7607,53 +7616,80 @@ defmodule EdenWeb.ChatLive do
             outline + count blended into the bubble fill and read as a bare emoji. --%>
       <div class={["flex flex-col min-w-0", (@mine && "items-end") || "items-start"]}>
         <div
-          class={["ed-bubble", (@mine && "ed-bubble--me") || "ed-bubble--them"]}
+          class={[
+            "ed-bubble",
+            (@mine && "ed-bubble--me") || "ed-bubble--them",
+            @media? && "ed-bubble--media"
+          ]}
           id={"bubble-#{@message.id}"}
           data-message-id={@message.id}
           phx-hook=".ContextMenu"
           aria-haspopup="menu"
         >
-          <span
-            :if={@group and not @mine and @message.sender}
-            class="block"
-            style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
-          >
-            {@message.sender.display_name}
-          </span>
-          <.quoted_reply message={@message} />
-          <span :if={@message.forwarded_from} class="ed-forwarded">
-            <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
-            {forwarded_label(@message.forwarded_from)}
-          </span>
-          <.album_view
-            :if={@message.attachments != []}
-            attachments={@message.attachments}
-            message_id={@message.id}
-          />
-          <%!-- Caption + meta share a flow-root block so a long caption can't stretch
-                a media bubble wider than the photo (#135-twin): in a media bubble the
-                wrap is constrained to the media's width (CSS width:0/min-width:100%) and
-                the caption wraps to it — while the meta still floats bottom-right with the
-                text wrapping before it (#108). --%>
-          <div class="ed-bubble__cap">
-            <span :if={@message.body != ""} class="break-words">
-              {Markup.to_iodata(@message.body)}
-            </span>
-            <span class="ed-bubble__meta">
-              <.local_time at={@message.inserted_at} />
+          <%= if @media? do %>
+            <%!-- Telegram-style media (#messenger only): header (sender/reply/forward)
+                  padded above, the photo/video edge-to-edge with the time as a
+                  translucent overlay pill bottom-right, the caption padded below. --%>
+            <div
+              :if={
+                (@group && not @mine && @message.sender) || @message.reply_to_id ||
+                  @message.forwarded_from
+              }
+              class="ed-bubble__head"
+            >
               <span
-                :if={@mine and not @group}
-                class="inline-flex items-center"
-                style="margin-left:2px;"
+                :if={@group and not @mine and @message.sender}
+                class="block"
+                style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
               >
-                <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
-                <span :if={@read} class="inline-flex items-center">
-                  <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
-                  <.icon name="hero-check-micro" class="size-3.5" />
-                </span>
+                {@message.sender.display_name}
               </span>
+              <.quoted_reply message={@message} />
+              <span :if={@message.forwarded_from} class="ed-forwarded">
+                <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+                {forwarded_label(@message.forwarded_from)}
+              </span>
+            </div>
+            <div class="ed-media">
+              <.album_view attachments={@message.attachments} message_id={@message.id} />
+              <span class="ed-media-time">
+                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+              </span>
+            </div>
+            <div :if={@message.body != ""} class="ed-bubble__cap ed-bubble__cap--media break-words">
+              {Markup.to_iodata(@message.body)}
+            </div>
+          <% else %>
+            <span
+              :if={@group and not @mine and @message.sender}
+              class="block"
+              style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
+            >
+              {@message.sender.display_name}
             </span>
-          </div>
+            <.quoted_reply message={@message} />
+            <span :if={@message.forwarded_from} class="ed-forwarded">
+              <.icon name="hero-arrow-uturn-right-micro" class="size-3" />
+              {forwarded_label(@message.forwarded_from)}
+            </span>
+            <.album_view
+              :if={@message.attachments != []}
+              attachments={@message.attachments}
+              message_id={@message.id}
+            />
+            <%!-- Caption + meta share a flow-root block so a long caption can't stretch
+                  a media bubble wider than the photo (#135-twin): the wrap is constrained
+                  to the media width (CSS width:0/min-width:100%) and the caption wraps to
+                  it, while the meta floats bottom-right with text wrapping before it (#108). --%>
+            <div class="ed-bubble__cap">
+              <span :if={@message.body != ""} class="break-words">
+                {Markup.to_iodata(@message.body)}
+              </span>
+              <span class="ed-bubble__meta">
+                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+              </span>
+            </div>
+          <% end %>
           <%!-- No thread affordance in the personal messenger (#26): threads are
                 a corporate-room feature only. --%>
           <.message_menu
@@ -7667,6 +7703,26 @@ defmodule EdenWeb.ChatLive do
         <.reactions message={@message} me={@me} />
       </div>
     </div>
+    """
+  end
+
+  attr :at, :any, required: true
+  # 1:1 "me" rows show delivery ticks; group rows don't (#142).
+  attr :ticks, :boolean, default: false
+  attr :read, :boolean, default: false
+
+  # The time + (1:1) delivery ticks line, shared by the text-bubble meta and the
+  # overlay pill on media bubbles.
+  defp msg_meta(assigns) do
+    ~H"""
+    <.local_time at={@at} />
+    <span :if={@ticks} class="inline-flex items-center" style="margin-left:2px;">
+      <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
+      <span :if={@read} class="inline-flex items-center">
+        <.icon name="hero-check-micro" class="size-3.5 -mr-2" />
+        <.icon name="hero-check-micro" class="size-3.5" />
+      </span>
+    </span>
     """
   end
 

@@ -1111,12 +1111,6 @@ html {
      bubble is width:fit-content, so a nowrap quote line otherwise drove its
      width; width:0 stops the quote from contributing to that, and min-width:100%
      (ignored for intrinsic sizing) then fills it to the media's width. */
-  /* Media bubble: drop the text padding so the photo/video nearly fills the bubble
-     (a thin inset, not a thick cobalt/surface frame around it). The caption + meta
-     get their own padding back below, via .ed-bubble__cap. */
-  .ed-bubble:has(img, video, .ed-file) {
-    padding: 0.1875rem;
-  }
   .ed-bubble:has(img, video, .ed-file) .ed-quote {
     width: 0;
     min-width: 100%;
@@ -1133,8 +1127,63 @@ html {
   .ed-bubble:has(img, video, .ed-file) .ed-bubble__cap {
     width: 0;
     min-width: 100%;
-    /* Bubble padding is now minimal, so the caption + meta get breathing room here. */
-    padding: 0.125rem 0.375rem 0.0625rem;
+  }
+
+  /* Telegram-style media bubble (#messenger only): no frame — the photo/video fills
+     the bubble, the time floats as a translucent pill over its bottom-right corner,
+     and the caption (if any) sits below on the bubble's own background. */
+  .ed-bubble--media {
+    padding: 0;
+    overflow: hidden;
+  }
+  /* Sender / reply / forward sit above the media on the bubble bg, padded; width:0 +
+     min-width:100% keeps them from stretching the bubble wider than the media. */
+  .ed-bubble--media .ed-bubble__head {
+    width: 0;
+    min-width: 100%;
+    padding: 0.375rem 0.625rem 0.25rem;
+  }
+  .ed-media {
+    position: relative;
+    line-height: 0;
+  }
+  /* !important: these override the Tailwind mb-1 / rounded-[] utilities the shared
+     attachment_view puts on the media (rooms still need them, so they stay in the
+     markup); utilities live in @layer utilities which outranks @layer components. */
+  .ed-media > a,
+  .ed-media > img,
+  .ed-media > video,
+  .ed-media > .ed-album,
+  .ed-media > .ed-video-box {
+    display: block;
+    margin-bottom: 0 !important;
+  }
+  /* The bubble's overflow:hidden + radius does the rounding now, so drop the media's
+     own corner radius (it sat inside the bubble's, leaking a sliver of bubble bg). */
+  .ed-media img,
+  .ed-media video {
+    border-radius: 0 !important;
+  }
+  .ed-media-time {
+    position: absolute;
+    right: 0.375rem;
+    bottom: 0.375rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding: 0.0625rem 0.375rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(0 0 0 / 0.5);
+    color: oklch(0.99 0.01 261);
+    font: 500 0.6875rem/1.5 var(--ed-mono);
+    pointer-events: none;
+  }
+  .ed-bubble--media .ed-bubble__cap--media {
+    display: block;
+    width: 0;
+    min-width: 100%;
+    padding: 0.375rem 0.625rem 0.4375rem;
+    line-height: 1.4;
   }
 
   /* Permalink / jump target: briefly ring (DM bubble) or tint (flat row) the message
