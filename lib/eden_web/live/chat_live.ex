@@ -7616,7 +7616,7 @@ defmodule EdenWeb.ChatLive do
           <span
             :if={@group and not @mine and @message.sender}
             class="block"
-            style="font-size:0.75rem; font-weight:600; color: var(--ed-primary);"
+            style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
           >
             {@message.sender.display_name}
           </span>

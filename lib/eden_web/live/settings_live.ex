@@ -219,6 +219,7 @@ defmodule EdenWeb.SettingsLive do
                   :for={{value, _label, short, _color} <- status_options()}
                   class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
                   type="button"
+                  aria-pressed={to_string(@profile_user.presence_status == value)}
                   phx-click="set_status"
                   phx-value-status={value}
                 >
@@ -238,10 +239,17 @@ defmodule EdenWeb.SettingsLive do
             </p>
             <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
               <span style="font-size:0.875rem;">{gettext("Theme")}</span>
-              <div class="ed-seg" role="group" aria-label={gettext("Theme")}>
+              <div
+                class="ed-seg"
+                role="group"
+                aria-label={gettext("Theme")}
+                id="theme-seg"
+                phx-hook=".ThemeSegA11y"
+              >
                 <button
                   class="ed-seg__btn"
                   data-active="system"
+                  aria-pressed="false"
                   phx-click={JS.dispatch("phx:set-theme")}
                   data-phx-theme="system"
                 >
@@ -251,6 +259,7 @@ defmodule EdenWeb.SettingsLive do
                 <button
                   class="ed-seg__btn"
                   data-active="light"
+                  aria-pressed="false"
                   phx-click={JS.dispatch("phx:set-theme")}
                   data-phx-theme="light"
                 >
@@ -259,6 +268,7 @@ defmodule EdenWeb.SettingsLive do
                 <button
                   class="ed-seg__btn"
                   data-active="dark"
+                  aria-pressed="false"
                   phx-click={JS.dispatch("phx:set-theme")}
                   data-phx-theme="dark"
                 >
@@ -287,6 +297,7 @@ defmodule EdenWeb.SettingsLive do
               <div class="ed-seg" role="group" aria-label={gettext("Language")}>
                 <button
                   class={["ed-seg__btn", @locale == "en" && "is-active"]}
+                  aria-pressed={to_string(@locale == "en")}
                   name="locale"
                   value="en"
                   type="submit"
@@ -295,6 +306,7 @@ defmodule EdenWeb.SettingsLive do
                 </button>
                 <button
                   class={["ed-seg__btn", @locale == "ru" && "is-active"]}
+                  aria-pressed={to_string(@locale == "ru")}
                   name="locale"
                   value="ru"
                   type="submit"
@@ -445,6 +457,23 @@ defmodule EdenWeb.SettingsLive do
               // it obvious the entire name is being edited (Finder-style).
               export default {
                 mounted() { this.el.addEventListener("focus", () => this.el.select()) }
+              }
+            </script>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSegA11y">
+              // Theme is client-driven (data-theme on <html>), so aria-pressed on the
+              // theme segments can't be server-rendered — sync it here and on change.
+              export default {
+                mounted() {
+                  this._sync = () => {
+                    const cur = document.documentElement.getAttribute("data-theme") || "system"
+                    this.el.querySelectorAll("[data-phx-theme]").forEach((b) =>
+                      b.setAttribute("aria-pressed", String(b.dataset.phxTheme === cur)))
+                  }
+                  this._sync()
+                  this._obs = new MutationObserver(this._sync)
+                  this._obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+                },
+                destroyed() { this._obs && this._obs.disconnect() }
               }
             </script>
             <script :type={Phoenix.LiveView.ColocatedHook} name=".Sortable">

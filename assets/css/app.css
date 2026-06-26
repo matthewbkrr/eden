@@ -1111,6 +1111,12 @@ html {
      bubble is width:fit-content, so a nowrap quote line otherwise drove its
      width; width:0 stops the quote from contributing to that, and min-width:100%
      (ignored for intrinsic sizing) then fills it to the media's width. */
+  /* Media bubble: drop the text padding so the photo/video nearly fills the bubble
+     (a thin inset, not a thick cobalt/surface frame around it). The caption + meta
+     get their own padding back below, via .ed-bubble__cap. */
+  .ed-bubble:has(img, video, .ed-file) {
+    padding: 0.1875rem;
+  }
   .ed-bubble:has(img, video, .ed-file) .ed-quote {
     width: 0;
     min-width: 100%;
@@ -1127,6 +1133,8 @@ html {
   .ed-bubble:has(img, video, .ed-file) .ed-bubble__cap {
     width: 0;
     min-width: 100%;
+    /* Bubble padding is now minimal, so the caption + meta get breathing room here. */
+    padding: 0.125rem 0.375rem 0.0625rem;
   }
 
   /* Permalink / jump target: briefly ring (DM bubble) or tint (flat row) the message
@@ -1739,7 +1747,7 @@ html {
     background: var(--ed-surface);
   }
   .ed-thread-footer__count {
-    color: var(--ed-primary);
+    color: var(--ed-primary-strong);
     font-weight: 600;
   }
   .ed-thread-footer__time {
@@ -2863,6 +2871,20 @@ html {
     box-shadow: var(--ed-shadow);
     font: 500 0.875rem/1.3 var(--ed-font);
   }
+  .ed-toast__close {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin: -0.125rem -0.25rem -0.125rem 0;
+    padding: 0.25rem;
+    border-radius: var(--ed-radius-sm);
+    color: var(--ed-muted);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+  }
+  .ed-toast__close:hover { background: var(--ed-surface-2); color: var(--ed-ink); }
+  .ed-toast__close:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
   .ed-toast__bar { width: 0.25rem; align-self: stretch; border-radius: var(--ed-radius-full); background: var(--ed-muted); }
   .ed-toast--info .ed-toast__bar { background: var(--ed-primary); }
   .ed-toast--success .ed-toast__bar { background: var(--ed-online); }

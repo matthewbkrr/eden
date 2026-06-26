@@ -514,20 +514,57 @@ defmodule EdenWeb.CoreComponents do
     <div class="space-y-2 mb-4 empty:hidden">
       <div
         :if={msg = Phoenix.Flash.get(@flash, :error)}
-        class="ed-toast ed-toast--error pointer-events-auto cursor-pointer"
+        id="flash-error"
+        phx-hook=".FlashAutoHide"
+        data-autohide="false"
+        class="ed-toast ed-toast--error pointer-events-auto"
         role="alert"
-        phx-click={JS.push("lv:clear-flash", value: %{key: "error"}) |> JS.hide()}
       >
-        <span class="ed-toast__bar"></span>{msg}
+        <span class="ed-toast__bar"></span>
+        <span class="flex-1">{msg}</span>
+        <button
+          type="button"
+          class="ed-toast__close"
+          data-flash-close
+          phx-click={JS.push("lv:clear-flash", value: %{key: "error"}) |> JS.hide(to: "#flash-error")}
+          aria-label={gettext("Dismiss")}
+        >
+          <.icon name="hero-x-mark-mini" class="size-4" />
+        </button>
       </div>
       <div
         :if={msg = Phoenix.Flash.get(@flash, :info)}
-        class="ed-toast ed-toast--info pointer-events-auto cursor-pointer"
+        id="flash-info"
+        phx-hook=".FlashAutoHide"
+        data-autohide="true"
+        class="ed-toast ed-toast--info pointer-events-auto"
         role="status"
-        phx-click={JS.push("lv:clear-flash", value: %{key: "info"}) |> JS.hide()}
       >
-        <span class="ed-toast__bar"></span>{msg}
+        <span class="ed-toast__bar"></span>
+        <span class="flex-1">{msg}</span>
+        <button
+          type="button"
+          class="ed-toast__close"
+          data-flash-close
+          phx-click={JS.push("lv:clear-flash", value: %{key: "info"}) |> JS.hide(to: "#flash-info")}
+          aria-label={gettext("Dismiss")}
+        >
+          <.icon name="hero-x-mark-mini" class="size-4" />
+        </button>
       </div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".FlashAutoHide">
+        // Info flashes self-dismiss after a few seconds; errors stay until dismissed.
+        export default {
+          mounted() {
+            if (this.el.dataset.autohide !== "true") return
+            this._t = setTimeout(() => {
+              const x = this.el.querySelector("[data-flash-close]")
+              x && x.click()
+            }, 5000)
+          },
+          destroyed() { clearTimeout(this._t) }
+        }
+      </script>
     </div>
     """
   end
@@ -545,7 +582,9 @@ defmodule EdenWeb.CoreComponents do
   def ed_field(assigns) do
     ~H"""
     <label class="block space-y-1.5">
-      <span style="font-size:0.8125rem; color: var(--ed-muted);">{@label}</span>
+      <span style="font-size:0.8125rem; color: var(--ed-muted);">
+        {@label}<span :if={@rest[:required]} style="color: var(--ed-danger);" aria-hidden="true"> *</span>
+      </span>
       <input
         class="ed-input"
         type={@type}
