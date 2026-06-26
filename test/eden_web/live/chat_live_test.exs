@@ -41,6 +41,69 @@ defmodule EdenWeb.ChatLiveTest do
     assert html =~ "No conversation selected"
   end
 
+  describe "group role actions in the profile panel (#165)" do
+    setup do
+      alice = user_fixture(%{username: "grp_alice", display_name: "Alice"})
+      bob = user_fixture(%{username: "grp_bob", display_name: "Bob"})
+      carol = user_fixture(%{username: "grp_carol", display_name: "Carol"})
+
+      {:ok, group} =
+        Chat.create_conversation(Scope.for_user(alice), [bob.id, carol.id],
+          group: true,
+          title: "Crew"
+        )
+
+      %{alice: alice, bob: bob, carol: carol, group: group}
+    end
+
+    test "the owner sees role actions and can promote a member to admin", %{
+      conn: conn,
+      alice: alice,
+      bob: bob,
+      group: group
+    } do
+      conn = log_in_user(conn, alice)
+      {:ok, view, _} = live(conn, ~p"/app/c/#{group.id}")
+
+      # Opening the panel reveals the per-member action cluster to the owner.
+      assert render_click(view, "open_profile", %{}) =~ "group_set_role"
+
+      render_click(view, "group_set_role", %{"id" => to_string(bob.id), "role" => "admin"})
+      assert Chat.group_role(Scope.for_user(bob), group.id) == "admin"
+    end
+
+    test "the owner can remove a member from the panel", %{
+      conn: conn,
+      alice: alice,
+      carol: carol,
+      group: group
+    } do
+      conn = log_in_user(conn, alice)
+      {:ok, view, _} = live(conn, ~p"/app/c/#{group.id}")
+      render_click(view, "open_profile", %{})
+
+      render_click(view, "group_remove_member", %{"id" => to_string(carol.id)})
+      assert is_nil(Chat.group_role(Scope.for_user(carol), group.id))
+    end
+
+    test "a plain member sees no role actions and a crafted event is rejected", %{
+      conn: conn,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      conn = log_in_user(conn, bob)
+      {:ok, view, _} = live(conn, ~p"/app/c/#{group.id}")
+
+      # A member's panel offers no action buttons.
+      refute render_click(view, "open_profile", %{}) =~ "group_set_role"
+
+      # Even a hand-fired event is refused by the context — carol stays a member.
+      render_click(view, "group_set_role", %{"id" => to_string(carol.id), "role" => "admin"})
+      assert Chat.group_role(Scope.for_user(carol), group.id) == "member"
+    end
+  end
+
   describe "with a conversation" do
     setup [:setup_conversation]
 
@@ -1372,10 +1435,11 @@ defmodule EdenWeb.ChatLiveTest do
       # The group gallery is wired (per-dialog shared media).
       assert has_element?(view, ~s(.ed-gallery-tab[phx-value-tab="image"]))
 
-      # Tapping a member opens their profile popover over the panel.
+      # Tapping a member opens their profile popover over the panel. (#165 split the row
+      # into a profile button + a role-action cluster, so the trigger is `__main`.)
       profile =
         view
-        |> element(~s(.ed-member-row[phx-value-id="#{carol.id}"]))
+        |> element(~s(.ed-member-row__main[phx-value-id="#{carol.id}"]))
         |> render_click()
 
       assert profile =~ "@carol"

@@ -166,10 +166,12 @@ defmodule Eden.Chat do
       on: a.message_id == m.id and a.position == 0,
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
-      # Thread replies never become the sidebar preview (they live in threads).
+      # Thread replies never become the sidebar preview (they live in threads), and a
+      # system notice (#165 member added/removed) must not become it either — it has an
+      # empty body, which would blank the preview to "No messages yet" for an active group.
       where:
         m.conversation_id in ^ids and is_nil(d.id) and is_nil(m.deleted_at) and
-          is_nil(m.root_id),
+          is_nil(m.root_id) and m.kind != "system",
       distinct: m.conversation_id,
       order_by: [asc: m.conversation_id, desc: m.id],
       select:
@@ -304,7 +306,11 @@ defmodule Eden.Chat do
          # Rooms aren't individually deletable per-user — leaving happens at the
          # channel level; room deletion is an admin action (Channels context).
          false <- room?(id),
-         {:ok, orphan_keys} <- leave_and_maybe_gc(user, id) do
+         # A group owner can't leave while others remain — they must transfer
+         # ownership first (#165), else the group would be left ownerless. Alone,
+         # leaving is fine (it GCs the group).
+         :ok <- ensure_not_group_owner(id, user.id),
+         {:ok, orphan_keys} <- leave_and_maybe_gc(user.id, id) do
       # Side effect (irreversible) only after the DB change commits.
       delete_unreferenced_blobs(orphan_keys)
       Phoenix.PubSub.broadcast(@pubsub, user_topic(user.id), {:conversation_left, id})
@@ -320,11 +326,11 @@ defmodule Eden.Chat do
   # conversation — atomically, so a concurrent deliver can't slip a message (and
   # clear left_at) between the "is anyone left?" check and the hard delete.
   # Returns the blob keys to delete after the transaction commits.
-  defp leave_and_maybe_gc(user, conversation_id) do
+  defp leave_and_maybe_gc(user_id, conversation_id) do
     Repo.transact(fn ->
       Repo.update_all(
         from(m in Membership,
-          where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
+          where: m.conversation_id == ^conversation_id and m.user_id == ^user_id
         ),
         set: [left_at: now()]
       )
@@ -356,6 +362,260 @@ defmodule Eden.Chat do
 
     Repo.delete_all(from c in Conversation, where: c.id == ^conversation_id)
     keys
+  end
+
+  ## Group roles & member management (#165)
+  #
+  # owner > admin > member. Mirrors the Eden.Channels role pattern, scoped to
+  # GROUP conversations (is_group, no channel_id). Every function takes a
+  # `%Scope{}` and is authorized by the actor's membership role; a non-member or
+  # non-group yields `:not_found` (existence not leaked), an under-privileged
+  # actor `:forbidden`.
+
+  @doc "The scoped user's role in a group (`owner | admin | member`), or `nil` if not a member."
+  def group_role(%Scope{user: user}, conversation_id) do
+    case safe_id(conversation_id) do
+      id when is_integer(id) -> group_role_of(id, user.id)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  Removes a member from a group: marks them left (the group is GC'd if they were
+  the last) and pings their sessions with `{:removed_from_conversation, id}` so
+  they navigate away and the group disappears for them (Telegram-style). Owners
+  may remove admins/members, admins only members; nobody removes the owner or
+  themselves.
+  """
+  def remove_group_member(%Scope{user: actor}, conversation_id, user_id) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner admin)),
+         target_id when is_integer(target_id) <- safe_id(user_id),
+         false <- target_id == actor.id,
+         target_role when is_binary(target_role) <- group_role_of(id, target_id),
+         :ok <- ensure_removable(actor_role, target_role) do
+      name = Repo.one(from u in User, where: u.id == ^target_id, select: u.display_name)
+      {:ok, orphan_keys} = leave_and_maybe_gc(target_id, id)
+      delete_unreferenced_blobs(orphan_keys)
+      # The remover always stays a member, so the conversation isn't GC'd here — the
+      # "removed" notice always lands.
+      create_system_message(id, %{"action" => "member_removed", "name" => name})
+      Phoenix.PubSub.broadcast(@pubsub, user_topic(target_id), {:removed_from_conversation, id})
+      notify_members(id)
+      broadcast(id, {:group_members_changed, id})
+      :ok
+    else
+      true -> {:error, :self}
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc "Promotes/demotes a member between `admin` and `member`. Owner only; never the owner row."
+  def set_group_member_role(%Scope{user: actor}, conversation_id, user_id, role)
+      when role in ["admin", "member"] do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner)),
+         target_id when is_integer(target_id) <- safe_id(user_id),
+         false <- target_id == actor.id,
+         target_role when is_binary(target_role) <- group_role_of(id, target_id),
+         :ok <- ensure_role(target_role, ~w(admin member)) do
+      update_group_role(id, target_id, role)
+      notify_members(id)
+      broadcast(id, {:group_members_changed, id})
+      :ok
+    else
+      true -> {:error, :self}
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  # A hand-crafted role (e.g. "owner") is a clean error, not a FunctionClauseError
+  # bubbling through the LiveView.
+  def set_group_member_role(_scope, _conversation_id, _user_id, _role),
+    do: {:error, :invalid_role}
+
+  @doc """
+  Hands a group to another member: they become `owner`, the current owner becomes
+  `admin` (one transaction). Unblocks the previous owner's leave.
+  """
+  def transfer_group_ownership(%Scope{user: actor}, conversation_id, user_id) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner)),
+         target_id when is_integer(target_id) <- safe_id(user_id),
+         false <- target_id == actor.id,
+         target_role when is_binary(target_role) <- group_role_of(id, target_id),
+         :ok <- transfer_group_tx(id, actor.id, target_id) do
+      notify_members(id)
+      broadcast(id, {:group_members_changed, id})
+      :ok
+    else
+      true -> {:error, :self}
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Adds eden users to a group (owner/admin only), re-activating anyone previously
+  removed or who left. Posts a "added" system notice per added user and refreshes
+  everyone's roster live. Returns `{:ok, [%User{}]}` of the users actually added.
+  """
+  def add_group_members(%Scope{user: actor}, conversation_id, user_ids) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner admin)) do
+      ids = user_ids |> Enum.map(&safe_id/1) |> Enum.filter(&is_integer/1)
+      # Real users who aren't already active members (a left/removed member is re-activated).
+      already = active_member_ids(id)
+      candidates = Repo.all(from u in User, where: u.id in ^ids and u.id not in ^already)
+
+      added =
+        Enum.map(candidates, fn u ->
+          add_group_membership(id, u.id)
+          create_system_message(id, %{"action" => "member_added", "name" => u.display_name})
+          u
+        end)
+
+      if added != [] do
+        notify_members(id)
+        broadcast(id, {:group_members_changed, id})
+      end
+
+      {:ok, added}
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Renames a group (#165, owner/admin only). A blank title reverts to the auto name
+  built from members. Broadcasts so the header / sidebar / panel update live.
+  """
+  def rename_group(%Scope{user: actor}, conversation_id, title) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner admin)),
+         %Conversation{} = conv <- Repo.get(Conversation, id),
+         {:ok, renamed} <-
+           conv |> Conversation.title_changeset(%{"title" => title}) |> Repo.update() do
+      broadcast(id, {:conversation_renamed, renamed})
+      notify_members(id)
+      {:ok, renamed}
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp active_member_ids(conversation_id) do
+    Repo.all(
+      from m in Membership,
+        where: m.conversation_id == ^conversation_id and is_nil(m.left_at),
+        select: m.user_id
+    )
+  end
+
+  # Insert a fresh membership or, if one exists (a left/removed member), re-activate it.
+  defp add_group_membership(conversation_id, user_id) do
+    Repo.insert(
+      %Membership{conversation_id: conversation_id, user_id: user_id, role: "member"},
+      on_conflict: [set: [left_at: nil, role: "member"]],
+      conflict_target: [:conversation_id, :user_id]
+    )
+  end
+
+  # Owners out-rank admins; admins out-rank members. Nobody removes an owner.
+  defp ensure_removable("owner", target) when target in ~w(admin member), do: :ok
+  defp ensure_removable("admin", "member"), do: :ok
+  defp ensure_removable(_actor, _target), do: {:error, :forbidden}
+
+  defp ensure_role(role, allowed) when is_binary(role) do
+    if role in allowed, do: :ok, else: {:error, :forbidden}
+  end
+
+  # A group owner can't leave while OTHER members remain (transfer first); alone,
+  # leaving is allowed and GCs the group.
+  defp ensure_not_group_owner(conversation_id, user_id) do
+    if group?(conversation_id) and group_role_of(conversation_id, user_id) == "owner" and
+         other_members_exist?(conversation_id, user_id) do
+      {:error, :owner}
+    else
+      :ok
+    end
+  end
+
+  defp other_members_exist?(conversation_id, user_id) do
+    Repo.exists?(
+      from m in Membership,
+        where:
+          m.conversation_id == ^conversation_id and m.user_id != ^user_id and is_nil(m.left_at)
+    )
+  end
+
+  defp group?(conversation_id) do
+    Repo.exists?(
+      from c in Conversation,
+        where: c.id == ^conversation_id and c.is_group == true and is_nil(c.channel_id)
+    )
+  end
+
+  defp group_role_of(conversation_id, user_id) do
+    Repo.one(
+      from m in Membership,
+        where:
+          m.conversation_id == ^conversation_id and m.user_id == ^user_id and is_nil(m.left_at),
+        select: m.role
+    )
+  end
+
+  defp update_group_role(conversation_id, user_id, role) do
+    Repo.update_all(
+      from(m in Membership,
+        where:
+          m.conversation_id == ^conversation_id and m.user_id == ^user_id and is_nil(m.left_at)
+      ),
+      set: [role: role]
+    )
+  end
+
+  # The promotion is count-checked: if the target left between the read and the
+  # write, rolling back keeps the group from ending up ownerless.
+  defp transfer_group_tx(conversation_id, actor_id, target_id) do
+    Repo.transact(fn ->
+      case update_group_role(conversation_id, target_id, "owner") do
+        {1, _} ->
+          update_group_role(conversation_id, actor_id, "admin")
+          {:ok, :ok}
+
+        _ ->
+          {:error, :not_found}
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      error -> error
+    end
   end
 
   ## Rooms (channel-bound conversations)

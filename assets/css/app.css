@@ -1881,13 +1881,64 @@ html {
   .ed-member-row:hover {
     background: var(--ed-surface);
   }
-  .ed-member-row__name {
-    display: block;
+  /* "Add members" affordance atop the group roster (#165), aligned to the avatar column. */
+  .ed-member-add {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    border-radius: var(--ed-radius);
+    color: var(--ed-primary);
     font-weight: 550;
     font-size: 0.875rem;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-member-add:hover {
+    background: var(--ed-surface);
+  }
+  .ed-member-add__icon {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+  }
+  /* The clickable profile area (avatar + name); role actions sit beside it (#165). */
+  .ed-member-row__main {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+    text-align: left;
+  }
+  .ed-member-row__actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 0.125rem;
+  }
+  .ed-member-row__name {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-weight: 550;
+    font-size: 0.875rem;
+  }
+  /* The name truncates; the role chip beside it stays visible (#165). */
+  .ed-member-row__nametext {
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .ed-role-chip {
+    flex: none;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface-2);
+    color: var(--ed-muted);
+    font-size: 0.6875rem;
+    font-weight: 600;
   }
   .ed-member-row__handle {
     display: block;
@@ -1901,7 +1952,8 @@ html {
     .ed-gallery-tab,
     .ed-gallery-indicator,
     .ed-gallery-more,
-    .ed-member-row {
+    .ed-member-row,
+    .ed-member-add {
       transition: none;
     }
   }

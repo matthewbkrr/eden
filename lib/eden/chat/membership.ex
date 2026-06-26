@@ -28,7 +28,9 @@ defmodule Eden.Chat.Membership do
     membership
     |> cast(attrs, [:user_id, :role, :last_read_at])
     |> validate_required([:user_id])
-    |> validate_inclusion(:role, ["member", "owner"])
+    # owner > admin > member (#165). admin can manage members; owner additionally
+    # grants/revokes admin and transfers ownership.
+    |> validate_inclusion(:role, ["member", "admin", "owner"])
     |> assoc_constraint(:user)
     |> assoc_constraint(:conversation)
     |> unique_constraint([:user_id, :conversation_id],

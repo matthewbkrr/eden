@@ -73,6 +73,8 @@ defmodule EdenWeb.ChatLive do
         # gallery holds the active tab kind, the loaded page, and whether more exist.
         profile_open: false,
         profile_peer: nil,
+        # Inline group-rename (#165): true while the owner/admin is editing the name.
+        group_renaming: false,
         gallery_tab: "image",
         gallery_media: [],
         gallery_more: false,
@@ -140,6 +142,8 @@ defmodule EdenWeb.ChatLive do
         members_open: false,
         members: [],
         add_open: false,
+        # Which context the add-members modal acts on (#165 reuses it for groups).
+        add_target: :channel,
         addable: [],
         add_selected: MapSet.new(),
         invites_open: false,
@@ -675,6 +679,7 @@ defmodule EdenWeb.ChatLive do
      assign(socket,
        profile_open: false,
        profile_peer: nil,
+       group_renaming: false,
        gallery_media: [],
        gallery_more: false
      )}
@@ -743,8 +748,74 @@ defmodule EdenWeb.ChatLive do
       :ok ->
         {:noreply, socket}
 
+      {:error, :owner} ->
+        {:noreply,
+         put_flash(socket, :error, gettext("Transfer ownership before leaving the group."))}
+
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't delete that chat."))}
+    end
+  end
+
+  # Group role management (#165). Distinct events from the channel ones (which act on
+  # @channel) — these act on the open GROUP conversation (@selected). The context
+  # authorizes; we just surface a flash on failure. The member list + roles refresh live
+  # via the {:group_members_changed} broadcast below.
+  def handle_event("group_remove_member", %{"id" => id}, socket) do
+    case Chat.remove_group_member(socket.assigns.current_scope, socket.assigns.selected.id, id) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't remove that member."))}
+    end
+  end
+
+  # No guard: the context validates the role and errors on crafted values.
+  def handle_event("group_set_role", %{"id" => id, "role" => role}, socket) do
+    case Chat.set_group_member_role(
+           socket.assigns.current_scope,
+           socket.assigns.selected.id,
+           id,
+           role
+         ) do
+      :ok -> {:noreply, socket}
+      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't change that role."))}
+    end
+  end
+
+  def handle_event("group_transfer_ownership", %{"id" => id}, socket) do
+    case Chat.transfer_group_ownership(
+           socket.assigns.current_scope,
+           socket.assigns.selected.id,
+           id
+         ) do
+      :ok ->
+        {:noreply, socket}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't transfer ownership."))}
+    end
+  end
+
+  # #165: inline group rename (owner/admin). The pencil toggles the edit; the form saves.
+  def handle_event("start_group_rename", _params, socket),
+    do: {:noreply, assign(socket, group_renaming: true)}
+
+  def handle_event("cancel_group_rename", _params, socket),
+    do: {:noreply, assign(socket, group_renaming: false)}
+
+  def handle_event("rename_group", %{"title" => title}, socket) do
+    case Chat.rename_group(socket.assigns.current_scope, socket.assigns.selected.id, title) do
+      {:ok, _renamed} ->
+        {:noreply,
+         socket |> assign(group_renaming: false) |> put_flash(:info, gettext("Group renamed."))}
+
+      {:error, _} ->
+        {:noreply,
+         socket
+         |> assign(group_renaming: false)
+         |> put_flash(:error, gettext("Couldn't rename the group."))}
     end
   end
 
@@ -1160,9 +1231,42 @@ defmodule EdenWeb.ChatLive do
         |> Accounts.list_other_users()
         |> Enum.reject(&MapSet.member?(member_ids, &1.id))
 
-      {:noreply, assign(socket, add_open: true, addable: addable, add_selected: MapSet.new())}
+      {:noreply,
+       assign(socket,
+         add_open: true,
+         add_target: :channel,
+         addable: addable,
+         add_selected: MapSet.new()
+       )}
     else
       # Not an admin anymore / kicked between render and click — no modal.
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # #165: add eden users to a group (owner/admin). Reuses the add-members modal via
+  # add_target; addable = everyone the actor can see who isn't already an active member.
+  def handle_event("open_group_add_members", _params, socket) do
+    conv = socket.assigns.selected
+
+    with %{is_group: true} <- conv,
+         role when role in ~w(owner admin) <-
+           Chat.group_role(socket.assigns.current_scope, conv.id) do
+      member_ids = MapSet.new(active_members(conv), & &1.user_id)
+
+      addable =
+        socket.assigns.current_scope
+        |> Accounts.list_other_users()
+        |> Enum.reject(&MapSet.member?(member_ids, &1.id))
+
+      {:noreply,
+       assign(socket,
+         add_open: true,
+         add_target: :group,
+         addable: addable,
+         add_selected: MapSet.new()
+       )}
+    else
       _ -> {:noreply, socket}
     end
   end
@@ -1190,8 +1294,15 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("confirm_add_members", _params, socket) do
     ids = MapSet.to_list(socket.assigns.add_selected)
+    scope = socket.assigns.current_scope
 
-    case Channels.add_members(socket.assigns.current_scope, socket.assigns.channel.id, ids) do
+    result =
+      case socket.assigns.add_target do
+        :group -> Chat.add_group_members(scope, socket.assigns.selected.id, ids)
+        _ -> Channels.add_members(scope, socket.assigns.channel.id, ids)
+      end
+
+    case result do
       {:ok, _added} ->
         {:noreply, assign(socket, add_open: false)}
 
@@ -1838,6 +1949,41 @@ defmodule EdenWeb.ChatLive do
        socket
        |> put_flash(:error, gettext("You no longer have access to this channel."))
        |> push_navigate(to: ~p"/app")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # #165: removed from a group. If it's the open one, leave it; otherwise just drop it
+  # from the sidebar. Reloads fully (push_navigate) so the group vanishes everywhere.
+  def handle_info({:removed_from_conversation, conversation_id}, socket) do
+    if open?(socket, conversation_id) do
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("You were removed from the group."))
+       |> push_navigate(to: ~p"/app")}
+    else
+      {:noreply, refresh_sidebar(socket)}
+    end
+  end
+
+  # #165: a group's roster/roles changed — refresh the open group's member list + the
+  # profile panel (roles, the action matrix, who's listed) in place.
+  def handle_info({:group_members_changed, conversation_id}, socket) do
+    if open?(socket, conversation_id) do
+      {:noreply, reload_selected_members(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # #165: a group was renamed — update the open header/panel title; the sidebar refresh
+  # is driven by the {:conversation_activity} ping (notify_members) on each member's topic.
+  def handle_info({:conversation_renamed, conv}, socket) do
+    socket = refresh_sidebar(socket)
+
+    if open?(socket, conv.id) do
+      {:noreply, assign(socket, selected: %{socket.assigns.selected | title: conv.title})}
     else
       {:noreply, socket}
     end
@@ -3031,6 +3177,7 @@ defmodule EdenWeb.ChatLive do
         conversation={@selected}
         peer={@profile_peer}
         user={@current_scope.user}
+        group_renaming={@group_renaming}
         statuses={@statuses}
         tab={@gallery_tab}
         media={@gallery_media}
@@ -3157,7 +3304,7 @@ defmodule EdenWeb.ChatLive do
         statuses={@statuses}
       />
       <.add_members_modal
-        :if={@add_open && @channel}
+        :if={@add_open}
         addable={@addable}
         selected={@add_selected}
         statuses={@statuses}
@@ -6558,6 +6705,60 @@ defmodule EdenWeb.ChatLive do
   defp member_actions?("admin", "member", _t, _m), do: true
   defp member_actions?(_my_role, _target_role, _t, _m), do: false
 
+  # The scoped user's role within a group (for the #136 panel's action matrix); defaults
+  # to "member" so a missing/odd membership never grants actions.
+  defp my_group_role(%{memberships: ms}, user) when is_list(ms),
+    do:
+      Enum.find_value(ms, "member", fn m ->
+        is_nil(m.left_at) && m.user_id == user.id && m.role
+      end)
+
+  defp my_group_role(_conversation, _user), do: "member"
+
+  # Centered group system-notice text (#165), from the message's meta.
+  defp system_notice(%{"action" => "member_added", "name" => name}),
+    do: gettext("%{name} was added to the group", name: name)
+
+  defp system_notice(%{"action" => "member_removed", "name" => name}),
+    do: gettext("%{name} was removed from the group", name: name)
+
+  defp system_notice(_meta), do: ""
+
+  attr :m, :map, required: true
+  attr :me, :any, required: true
+  attr :statuses, :map, default: %{}
+
+  # The clickable profile area of a group member row (#165): avatar + name (+ a role chip
+  # for owner/admin) + @handle. Shared by the plain row and the action-menu row.
+  defp member_main(assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="ed-member-row__main"
+      data-profile-trigger
+      phx-click="show_profile"
+      phx-value-id={@m.user.id}
+      aria-label={gettext("View profile")}
+    >
+      <.avatar
+        name={@m.user.display_name}
+        src={avatar_src(@m.user)}
+        status={status_of(@m.user.id, @statuses)}
+        size={:sm}
+      />
+      <span class="flex-1 min-w-0">
+        <span class="ed-member-row__name">
+          <span class="ed-member-row__nametext">
+            {@m.user.display_name}{if @m.user.id == @me, do: " " <> gettext("(you)")}
+          </span>
+          <span :if={@m.role != "member"} class="ed-role-chip">{role_label(@m.role)}</span>
+        </span>
+        <span class="ed-member-row__handle">@{@m.user.username}</span>
+      </span>
+    </button>
+    """
+  end
+
   attr :room, :map, required: true
   attr :addable, :list, required: true
   attr :selected, :any, required: true
@@ -6647,8 +6848,13 @@ defmodule EdenWeb.ChatLive do
                 status={status_of(user.id, @statuses)}
                 size={:sm}
               />
-              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
-                {user.display_name}
+              <span class="flex-1 min-w-0">
+                <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
+                  {user.display_name}
+                </span>
+                <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
+                  @{user.username}
+                </span>
               </span>
             </button>
           </div>
@@ -6726,8 +6932,13 @@ defmodule EdenWeb.ChatLive do
                 status={status_of(user.id, @statuses)}
                 size={:sm}
               />
-              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
-                {user.display_name}
+              <span class="flex-1 min-w-0">
+                <span class="block truncate" style="font-weight:550; font-size:0.875rem;">
+                  {user.display_name}
+                </span>
+                <span class="block truncate" style="color: var(--ed-muted); font-size:0.75rem;">
+                  @{user.username}
+                </span>
               </span>
             </button>
           </div>
@@ -7325,6 +7536,13 @@ defmodule EdenWeb.ChatLive do
   attr :quick, :list, default: []
   attr :group, :boolean, required: true
   attr :read, :boolean, required: true
+
+  # A group system notice (member added/removed) — a centered plashka, no sender (#165).
+  defp message_bubble(%{message: %{kind: "system"}} = assigns) do
+    ~H"""
+    <div id={@id} class="ed-sysmsg"><span>{system_notice(@message.meta)}</span></div>
+    """
+  end
 
   defp message_bubble(assigns) do
     ~H"""
@@ -8191,6 +8409,7 @@ defmodule EdenWeb.ChatLive do
   attr :conversation, :map, required: true
   attr :peer, :map, default: nil
   attr :user, :map, required: true
+  attr :group_renaming, :boolean, default: false
   attr :statuses, :any, required: true
   attr :tab, :string, required: true
   attr :media, :list, required: true
@@ -8201,7 +8420,9 @@ defmodule EdenWeb.ChatLive do
   # full-screen overlay on mobile). `peer` is the loaded peer User for a DM, nil for a group.
   defp conv_profile_panel(assigns) do
     assigns =
-      assign(assigns, :peer_status, assigns.peer && status_of(assigns.peer.id, assigns.statuses))
+      assigns
+      |> assign(:peer_status, assigns.peer && status_of(assigns.peer.id, assigns.statuses))
+      |> assign(:my_role, my_group_role(assigns.conversation, assigns.user))
 
     ~H"""
     <aside class="ed-thread ed-profile" aria-label={gettext("Profile")}>
@@ -8261,10 +8482,51 @@ defmodule EdenWeb.ChatLive do
         <%!-- Group: the group's card + the member list (tap a member for their profile). --%>
         <div :if={is_nil(@peer)} class="flex flex-col items-center text-center px-4 pt-5 pb-4">
           <.avatar name={title(@conversation, @user)} size={:lg} />
-          <h2 class="mt-3 font-semibold" style="font-size:1.125rem;">
-            {title(@conversation, @user)}
-          </h2>
-          <p style="color: var(--ed-muted); font-size:0.8125rem;">
+          <%!-- Owner/admin can rename the group inline (#165); a blank name reverts to
+                the auto name from members. --%>
+          <div :if={!@group_renaming} class="mt-3 flex items-center justify-center gap-1.5">
+            <h2 class="font-semibold" style="font-size:1.125rem;">
+              {title(@conversation, @user)}
+            </h2>
+            <button
+              :if={@my_role in ~w(owner admin)}
+              type="button"
+              class="ed-btn--icon"
+              phx-click="start_group_rename"
+              title={gettext("Rename group")}
+              aria-label={gettext("Rename group")}
+            >
+              <.icon name="hero-pencil-square-micro" class="size-4" />
+            </button>
+          </div>
+          <form
+            :if={@group_renaming}
+            phx-submit="rename_group"
+            class="mt-3 flex w-full max-w-xs items-center gap-2"
+          >
+            <input
+              type="text"
+              name="title"
+              value={@conversation.title}
+              maxlength="100"
+              autocomplete="off"
+              aria-label={gettext("Group name")}
+              placeholder={gettext("Group name")}
+              phx-mounted={JS.focus()}
+              class="ed-input flex-1"
+            />
+            <button type="submit" class="ed-btn ed-btn--primary ed-btn--sm">
+              {gettext("Save")}
+            </button>
+            <button
+              type="button"
+              class="ed-btn ed-btn--ghost ed-btn--sm"
+              phx-click="cancel_group_rename"
+            >
+              {gettext("Cancel")}
+            </button>
+          </form>
+          <p class="mt-1" style="color: var(--ed-muted); font-size:0.8125rem;">
             {ngettext("%{count} member", "%{count} members", member_count(@conversation))}
           </p>
         </div>
@@ -8272,28 +8534,93 @@ defmodule EdenWeb.ChatLive do
               (a tiny uppercase eyebrow would just restate it — impeccable). Capped +
               scrollable so a large roster doesn't bury the gallery below it. --%>
         <div :if={is_nil(@peer)} class="ed-members">
+          <button
+            :if={@my_role in ~w(owner admin)}
+            type="button"
+            class="ed-member-add"
+            phx-click="open_group_add_members"
+          >
+            <span class="ed-member-add__icon">
+              <.icon name="hero-user-plus-mini" class="size-5" />
+            </span>
+            <span>{gettext("Add members")}</span>
+          </button>
           <div class="ed-members__list" aria-label={gettext("Members")} role="group">
-            <button
-              :for={m <- @conversation.memberships}
-              type="button"
-              class="ed-member-row"
-              data-profile-trigger
-              phx-click="show_profile"
-              phx-value-id={m.user.id}
-            >
-              <.avatar
-                name={m.user.display_name}
-                src={avatar_src(m.user)}
-                status={status_of(m.user.id, @statuses)}
-                size={:sm}
-              />
-              <span class="flex-1 min-w-0">
-                <span class="ed-member-row__name">
-                  {m.user.display_name}{if m.user.id == @user.id, do: " " <> gettext("(you)")}
-                </span>
-                <span class="ed-member-row__handle">@{m.user.username}</span>
-              </span>
-            </button>
+            <%= for m <- active_members(@conversation) do %>
+              <%!-- #165: owner/admin get a labeled actions menu (⋯ or right-click/long-press),
+                    reusing the .ContextMenu hook so it positions fixed (the list scrolls).
+                    Non-actionable rows are a plain row. --%>
+              <%= if member_actions?(@my_role, m.role, m.user.id, @user.id) do %>
+                <div class="ed-member-row" id={"member-#{m.user.id}"} phx-hook=".ContextMenu">
+                  <.member_main m={m} me={@user.id} statuses={@statuses} />
+                  <button
+                    type="button"
+                    class="ed-btn--icon"
+                    data-menu-trigger
+                    title={gettext("Member actions")}
+                    aria-label={gettext("Member actions")}
+                  >
+                    <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
+                  </button>
+                  <div class="ed-menu" id={"member-menu-#{m.user.id}"} data-menu role="menu" hidden>
+                    <button
+                      :if={@my_role == "owner" and m.role == "member"}
+                      type="button"
+                      class="ed-menu__item"
+                      role="menuitem"
+                      phx-click="group_set_role"
+                      phx-value-id={m.user.id}
+                      phx-value-role="admin"
+                    >
+                      <.icon name="hero-shield-check-micro" class="size-4" /> {gettext("Make admin")}
+                    </button>
+                    <button
+                      :if={@my_role == "owner" and m.role == "admin"}
+                      type="button"
+                      class="ed-menu__item"
+                      role="menuitem"
+                      phx-click="group_set_role"
+                      phx-value-id={m.user.id}
+                      phx-value-role="member"
+                    >
+                      <.icon name="hero-shield-exclamation-micro" class="size-4" /> {gettext(
+                        "Remove admin"
+                      )}
+                    </button>
+                    <button
+                      :if={@my_role == "owner"}
+                      type="button"
+                      class="ed-menu__item"
+                      role="menuitem"
+                      phx-click="group_transfer_ownership"
+                      phx-value-id={m.user.id}
+                      data-confirm={gettext("Hand this group over? You will become an admin.")}
+                    >
+                      <.icon name="hero-key-micro" class="size-4" /> {gettext("Transfer ownership")}
+                    </button>
+                    <%!-- Only owners see items above the divider; for an admin (just
+                          "Remove") the divider would dangle, so gate it on the owner items. --%>
+                    <div :if={@my_role == "owner"} class="ed-menu__sep"></div>
+                    <button
+                      type="button"
+                      class="ed-menu__item ed-menu__item--danger"
+                      role="menuitem"
+                      phx-click="group_remove_member"
+                      phx-value-id={m.user.id}
+                      data-confirm={gettext("Remove this member from the group?")}
+                    >
+                      <.icon name="hero-user-minus-micro" class="size-4" /> {gettext(
+                        "Remove from group"
+                      )}
+                    </button>
+                  </div>
+                </div>
+              <% else %>
+                <div class="ed-member-row">
+                  <.member_main m={m} me={@user.id} statuses={@statuses} />
+                </div>
+              <% end %>
+            <% end %>
           </div>
         </div>
 
@@ -8571,6 +8898,9 @@ defmodule EdenWeb.ChatLive do
       # conversation you were viewing, not the new one.
       profile_open: false,
       profile_peer: nil,
+      group_renaming: false,
+      # Drop a half-open add-members modal so it can't act on the new conversation (#165).
+      add_open: false,
       gallery_media: [],
       gallery_more: false,
       # The composer is per-conversation: reset it so a draft/last-sent body from
@@ -9091,8 +9421,15 @@ defmodule EdenWeb.ChatLive do
   defp title(%{is_group: true, title: title}, _user) when is_binary(title) and title != "",
     do: title
 
-  defp title(%{is_group: true} = conversation, user),
-    do: conversation |> others(user) |> Enum.map_join(", ", & &1.display_name)
+  # A group's auto name lists its CURRENT members (a removed/left member must not linger
+  # in it — #165). For a 1:1, the peer can carry a transient `left_at` (they "deleted" the
+  # chat but re-surface), so the DM title path below uses the unfiltered `others/2`.
+  defp title(%{is_group: true} = conversation, user) do
+    conversation
+    |> active_members()
+    |> Enum.reject(&(&1.user_id == user.id))
+    |> Enum.map_join(", ", & &1.user.display_name)
+  end
 
   defp title(conversation, user) do
     case others(conversation, user) do
@@ -9206,7 +9543,14 @@ defmodule EdenWeb.ChatLive do
 
   defp maybe_drop_gallery(socket, _message), do: socket
 
-  defp member_count(conversation), do: length(conversation.memberships)
+  defp member_count(conversation), do: length(active_members(conversation))
+
+  # A group's current members — a removed/left member keeps a row (left_at set) but must
+  # drop out of the roster, the count, and the role/action matrix (#165).
+  defp active_members(%{memberships: ms}) when is_list(ms),
+    do: Enum.filter(ms, &is_nil(&1.left_at))
+
+  defp active_members(_conversation), do: []
 
   # Avatar image URL for a user, cache-busted by the avatar key (nil → initials).
   defp avatar_src(%{avatar_key: key, id: id}) when is_binary(key),
@@ -9273,6 +9617,18 @@ defmodule EdenWeb.ChatLive do
   # last_active_at to now in-memory so the header reads "last seen <now>" — without
   # racing the DB write handle_metas does on the same leave (#102). Peers already
   # offline at open use their persisted last_active_at instead.
+  # Reload the open conversation's memberships (roles + roster) after a group change
+  # (#165), so the profile panel re-renders without a full navigation.
+  defp reload_selected_members(socket) do
+    case Chat.get_conversation(socket.assigns.current_scope, socket.assigns.selected.id) do
+      {:ok, conv} ->
+        assign(socket, selected: %{socket.assigns.selected | memberships: conv.memberships})
+
+      _ ->
+        socket
+    end
+  end
+
   defp stamp_peer_offline(socket, changed) do
     selected = socket.assigns.selected
     user = socket.assigns.current_scope.user
