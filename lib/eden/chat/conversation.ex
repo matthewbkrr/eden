@@ -53,6 +53,23 @@ defmodule Eden.Chat.Conversation do
     |> validate_length(:title, max: 100)
   end
 
+  @doc "Changeset for renaming a group (#165, owner/admin). A blank title clears it → auto name."
+  def title_changeset(conversation, attrs) do
+    conversation
+    |> cast(attrs, [:title])
+    |> update_change(:title, &normalize_title/1)
+    |> validate_length(:title, max: 100)
+  end
+
+  defp normalize_title(nil), do: nil
+
+  defp normalize_title(title) do
+    case title |> String.replace("\0", "") |> String.trim() do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
   @max_room_name 60
   @visibilities ~w(open private)
 

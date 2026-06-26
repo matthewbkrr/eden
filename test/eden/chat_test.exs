@@ -21,6 +21,14 @@ defmodule Eden.ChatTest do
 
   defp scope(user), do: Scope.for_user(user)
 
+  defp system_metas(conversation_id) do
+    Eden.Repo.all(
+      from m in Message,
+        where: m.conversation_id == ^conversation_id and m.kind == "system",
+        select: m.meta
+    )
+  end
+
   @png_signature <<137, 80, 78, 71, 13, 10, 26, 10>>
 
   defp image_path(bytes) do
@@ -1557,25 +1565,251 @@ defmodule Eden.ChatTest do
       bob: bob
     } do
       carol = user_fixture(%{username: "carolleave"})
+      # alice creates the group (so she's the owner); a plain member (bob) leaves —
+      # the owner can't leave while others remain (#165), tested separately.
       {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
 
-      :ok = Chat.delete_conversation(scope(alice), group.id)
-      assert [] == Chat.list_conversations(scope(alice))
+      :ok = Chat.delete_conversation(scope(bob), group.id)
+      assert [] == Chat.list_conversations(scope(bob))
 
-      {:ok, _} = Chat.create_message(scope(bob), group.id, %{"body" => "still on?"})
-      assert [] == Chat.list_conversations(scope(alice))
-      assert [%{id: id}] = Chat.list_conversations(scope(bob))
+      {:ok, _} = Chat.create_message(scope(alice), group.id, %{"body" => "still on?"})
+      assert [] == Chat.list_conversations(scope(bob))
+      assert [%{id: id}] = Chat.list_conversations(scope(alice))
       assert id == group.id
     end
 
     test "a member who left is not pinged about new activity", %{alice: alice, bob: bob} do
       carol = user_fixture(%{username: "carolping"})
       {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
-      :ok = Chat.delete_conversation(scope(alice), group.id)
+      :ok = Chat.delete_conversation(scope(bob), group.id)
 
-      Chat.subscribe_user(scope(alice))
-      {:ok, _} = Chat.create_message(scope(bob), group.id, %{"body" => "yo"})
+      Chat.subscribe_user(scope(bob))
+      {:ok, _} = Chat.create_message(scope(alice), group.id, %{"body" => "yo"})
       refute_receive {:conversation_activity, _}
+    end
+  end
+
+  describe "group roles & member management (#165)" do
+    setup %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol_roles"})
+      # alice creates → owner; bob + carol → member.
+      {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Crew")
+      %{group: group, carol: carol}
+    end
+
+    test "creator is owner, others are members", %{alice: alice, bob: bob, group: group} do
+      assert Chat.group_role(scope(alice), group.id) == "owner"
+      assert Chat.group_role(scope(bob), group.id) == "member"
+    end
+
+    test "owner promotes a member to admin and back", %{alice: alice, bob: bob, group: group} do
+      assert :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "admin")
+      assert Chat.group_role(scope(bob), group.id) == "admin"
+      assert :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "member")
+      assert Chat.group_role(scope(bob), group.id) == "member"
+    end
+
+    test "only the owner sets roles; an admin cannot", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "admin")
+
+      assert {:error, :forbidden} =
+               Chat.set_group_member_role(scope(bob), group.id, carol.id, "admin")
+    end
+
+    test "the owner's role can't be changed, nor your own", %{alice: alice, group: group} do
+      # alice (owner) targeting herself
+      assert {:error, :self} =
+               Chat.set_group_member_role(scope(alice), group.id, alice.id, "admin")
+    end
+
+    test "a hand-crafted role is rejected, not a crash", %{alice: alice, bob: bob, group: group} do
+      assert {:error, :invalid_role} =
+               Chat.set_group_member_role(scope(alice), group.id, bob.id, "owner")
+    end
+
+    test "owner removes a member; they're pinged and the group vanishes for them", %{
+      alice: alice,
+      bob: bob,
+      group: group
+    } do
+      Chat.subscribe_user(scope(bob))
+      assert :ok = Chat.remove_group_member(scope(alice), group.id, bob.id)
+      assert_receive {:removed_from_conversation, id} when id == group.id
+      assert [] == Chat.list_conversations(scope(bob))
+      # still alive for the others
+      assert [%{id: ^id}] = Chat.list_conversations(scope(alice))
+    end
+
+    test "owner removes an admin; admin removes a member; neither removes up the chain", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "admin")
+      # admin (bob) removes a plain member (carol)
+      assert :ok = Chat.remove_group_member(scope(bob), group.id, carol.id)
+      # owner removes the admin (bob)
+      assert :ok = Chat.remove_group_member(scope(alice), group.id, bob.id)
+    end
+
+    test "an admin can't remove another admin or the owner", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "admin")
+      :ok = Chat.set_group_member_role(scope(alice), group.id, carol.id, "admin")
+      assert {:error, :forbidden} = Chat.remove_group_member(scope(bob), group.id, carol.id)
+      assert {:error, :forbidden} = Chat.remove_group_member(scope(bob), group.id, alice.id)
+    end
+
+    test "a plain member can remove no one", %{bob: bob, carol: carol, group: group} do
+      assert {:error, :forbidden} = Chat.remove_group_member(scope(bob), group.id, carol.id)
+    end
+
+    test "you can't remove yourself, and non-members get :not_found", %{
+      alice: alice,
+      bob: bob,
+      group: group
+    } do
+      assert {:error, :self} = Chat.remove_group_member(scope(alice), group.id, alice.id)
+      dave = user_fixture(%{username: "dave_roles"})
+      assert {:error, :not_found} = Chat.remove_group_member(scope(dave), group.id, bob.id)
+    end
+
+    test "owner can't leave while others remain, but can after transferring", %{
+      alice: alice,
+      bob: bob,
+      group: group
+    } do
+      assert {:error, :owner} = Chat.delete_conversation(scope(alice), group.id)
+      assert :ok = Chat.transfer_group_ownership(scope(alice), group.id, bob.id)
+      assert Chat.group_role(scope(bob), group.id) == "owner"
+      assert Chat.group_role(scope(alice), group.id) == "admin"
+      # now the ex-owner (alice, an admin) can leave
+      assert :ok = Chat.delete_conversation(scope(alice), group.id)
+    end
+
+    test "only the owner transfers ownership; not to self", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      assert {:error, :self} = Chat.transfer_group_ownership(scope(alice), group.id, alice.id)
+      assert {:error, :forbidden} = Chat.transfer_group_ownership(scope(bob), group.id, carol.id)
+    end
+
+    test "non-group conversations (1:1) reject role ops", %{alice: alice, bob: bob} do
+      {:ok, dm} = Chat.create_conversation(scope(alice), [bob.id])
+      assert {:error, :not_found} = Chat.remove_group_member(scope(alice), dm.id, bob.id)
+      assert {:error, :not_found} = Chat.transfer_group_ownership(scope(alice), dm.id, bob.id)
+    end
+
+    test "owner adds a new member and a system notice is posted", %{alice: alice, group: group} do
+      dave = user_fixture(%{username: "dave_add"})
+      assert {:ok, [added]} = Chat.add_group_members(scope(alice), group.id, [dave.id])
+      assert added.id == dave.id
+      assert Chat.group_role(scope(dave), group.id) == "member"
+      assert system_metas(group.id) |> Enum.any?(&match?(%{"action" => "member_added"}, &1))
+    end
+
+    test "an admin can add members; a plain member cannot", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      dave = user_fixture(%{username: "dave_add2"})
+      ervin = user_fixture(%{username: "ervin_add"})
+      :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "admin")
+      assert {:ok, [_]} = Chat.add_group_members(scope(bob), group.id, [dave.id])
+      assert {:error, :forbidden} = Chat.add_group_members(scope(carol), group.id, [ervin.id])
+    end
+
+    test "adding re-activates a previously removed member", %{
+      alice: alice,
+      carol: carol,
+      group: group
+    } do
+      :ok = Chat.remove_group_member(scope(alice), group.id, carol.id)
+      assert is_nil(Chat.group_role(scope(carol), group.id))
+      assert {:ok, [back]} = Chat.add_group_members(scope(alice), group.id, [carol.id])
+      assert back.id == carol.id
+      assert Chat.group_role(scope(carol), group.id) == "member"
+    end
+
+    test "removing a member posts a removed system notice", %{
+      alice: alice,
+      carol: carol,
+      group: group
+    } do
+      :ok = Chat.remove_group_member(scope(alice), group.id, carol.id)
+      name = carol.display_name
+
+      assert system_metas(group.id)
+             |> Enum.any?(&match?(%{"action" => "member_removed", "name" => ^name}, &1))
+    end
+
+    test "a group system message doesn't count as unread", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      Chat.mark_read(scope(bob), group.id)
+      # Removing carol posts a system message; it must not bump bob's unread badge.
+      :ok = Chat.remove_group_member(scope(alice), group.id, carol.id)
+      for_bob = Chat.list_conversations(scope(bob)) |> Enum.find(&(&1.id == group.id))
+      assert for_bob.unread_count == 0
+    end
+
+    test "a member removal doesn't blank the group's sidebar preview", %{
+      alice: alice,
+      bob: bob,
+      carol: carol,
+      group: group
+    } do
+      {:ok, _} = Chat.create_message(scope(alice), group.id, %{"body" => "real message"})
+      # The removal posts a system notice (empty body) — the preview must still show the
+      # last REAL message, not fall back to "no messages".
+      :ok = Chat.remove_group_member(scope(alice), group.id, carol.id)
+      for_bob = Chat.list_conversations(scope(bob)) |> Enum.find(&(&1.id == group.id))
+      assert for_bob.last_message_body == "real message"
+    end
+
+    test "owner/admin can rename the group; a member cannot", %{
+      alice: alice,
+      bob: bob,
+      group: group
+    } do
+      assert {:ok, renamed} = Chat.rename_group(scope(alice), group.id, "Expedition")
+      assert renamed.title == "Expedition"
+      assert {:error, :forbidden} = Chat.rename_group(scope(bob), group.id, "Hijacked")
+    end
+
+    test "renaming with a blank title reverts to the auto name", %{alice: alice, group: group} do
+      {:ok, _} = Chat.rename_group(scope(alice), group.id, "Temp")
+      assert {:ok, reverted} = Chat.rename_group(scope(alice), group.id, "   ")
+      assert is_nil(reverted.title)
+    end
+
+    test "re-adding a previously-removed admin returns them as a plain member", %{
+      alice: alice,
+      bob: bob,
+      group: group
+    } do
+      :ok = Chat.set_group_member_role(scope(alice), group.id, bob.id, "admin")
+      :ok = Chat.remove_group_member(scope(alice), group.id, bob.id)
+      assert {:ok, [_]} = Chat.add_group_members(scope(alice), group.id, [bob.id])
+      assert Chat.group_role(scope(bob), group.id) == "member"
     end
   end
 
