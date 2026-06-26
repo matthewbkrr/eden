@@ -1678,6 +1678,27 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#composer[data-layout="flat"]))
     end
 
+    test "jumping to an in-room search result closes the search panel", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Search"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, msg} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "findme needle"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # Open the in-room search and type a query that matches the message.
+      view |> element("[phx-click=toggle_room_search]") |> render_click()
+      html = view |> form(~s(form[phx-change="room_search"]), %{q: "needle"}) |> render_change()
+      assert html =~ "ed-room-search__panel"
+
+      # Clicking a result jumps to /m/ — the panel and bar must close (was: stayed open
+      # because the same-room jump short-circuits select_conversation's search reset).
+      html = render_patch(view, ~p"/channels/#{channel.id}/r/#{room.id}/m/#{msg.id}")
+      refute html =~ "ed-room-search__panel"
+    end
+
     test "room message author avatars carry a presence status dot (#102)", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "FlatStatus"})
