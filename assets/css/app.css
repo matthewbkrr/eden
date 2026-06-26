@@ -271,6 +271,44 @@ html {
     .ed-btn--icon { width: 2.75rem; height: 2.75rem; }
   }
 
+  /* Round send button — a true circle matching .ed-btn--icon (incl. the mobile 44px
+     touch target) instead of a 40x36 pill. */
+  .ed-btn--send { width: 2.25rem; padding: 0; border-radius: var(--ed-radius-full); flex: none; }
+  @media (max-width: 768px) {
+    .ed-btn--send { width: 2.75rem; height: 2.75rem; }
+  }
+
+  /* Keyboard focus rings on interactive controls that lacked one (a11y audit).
+     Inset where the control fills a row inside an overflow-clipped card; outset
+     (matching .ed-btn) for discrete controls. */
+  .ed-convo:focus-visible,
+  .ed-thread-row:focus-visible,
+  .ed-member-row__main:focus-visible,
+  .ed-member-add:focus-visible,
+  .ed-folder-tab:focus-visible,
+  .ed-file:focus-visible,
+  .ed-quote:focus-visible,
+  .ed-thread-footer:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: -2px;
+  }
+  .ed-rail__btn:focus-visible,
+  .ed-rail__btn--ghost:focus-visible,
+  .ed-react:focus-visible,
+  .ed-gallery-tab:focus-visible,
+  .ed-gallery-more:focus-visible,
+  .ed-flat__name-btn:focus-visible,
+  .ed-flat__avatar-btn:focus-visible,
+  .ed-room__more:focus-visible,
+  .ed-lightbox__nav:focus-visible,
+  .ed-lightbox__close:focus-visible,
+  .ed-compose__remove:focus-visible,
+  .ed-thread-tray__remove:focus-visible,
+  .ed-emoji__item:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
+  }
+
   /* Inputs -------------------------------------------------------------- */
   .ed-input {
     width: 100%;
@@ -895,7 +933,7 @@ html {
      arrow-key navigation, so Tab is how it's reached). */
   .ed-menu__react:focus-visible {
     background: var(--ed-surface-2);
-    outline: 2px solid var(--ed-primary);
+    outline: 2px solid var(--ed-ring);
     outline-offset: -2px;
   }
   @media (hover: hover) {
@@ -964,7 +1002,7 @@ html {
     background: var(--ed-surface-2);
   }
   .ed-qr:focus-visible {
-    outline: 2px solid var(--ed-primary);
+    outline: 2px solid var(--ed-ring);
     outline-offset: -2px;
   }
   .ed-qr--on {

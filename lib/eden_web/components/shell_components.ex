@@ -233,6 +233,10 @@ defmodule EdenWeb.ShellComponents do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={@title}
+          id="dlg-channel-form"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{@title}</h2>

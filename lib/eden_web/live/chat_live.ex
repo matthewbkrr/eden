@@ -2909,8 +2909,7 @@ defmodule EdenWeb.ChatLive do
                 </div>
               </div>
               <button
-                class="ed-btn ed-btn--primary shrink-0"
-                style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+                class="ed-btn ed-btn--primary ed-btn--send shrink-0"
                 type="submit"
                 aria-label={gettext("Send")}
               >
@@ -3157,8 +3156,7 @@ defmodule EdenWeb.ChatLive do
                   icon never reflows. (No phx-disable-with: on an icon-only button it
                   swaps the glyph for text and the button visibly shrinks — #104.) --%>
             <button
-              class="ed-btn ed-btn--primary shrink-0"
-              style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+              class="ed-btn ed-btn--primary ed-btn--send shrink-0"
               type="submit"
               aria-label={gettext("Send")}
             >
@@ -3515,6 +3513,35 @@ defmodule EdenWeb.ChatLive do
             this.el.style.left = `${left}px`
             this.el.style.top = `${top}px`
             this.el.style.visibility = "visible"
+          }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".FocusTrap">
+        // Modal a11y: move focus into the dialog on open, keep Tab cycling within
+        // it, and restore focus to the trigger on close. For role=dialog panels.
+        export default {
+          mounted() {
+            this._prev = document.activeElement
+            const f = this._focusables()
+            ;(f[0] || this.el).focus()
+            this._onKey = (e) => {
+              if (e.key !== "Tab") return
+              const els = this._focusables()
+              if (!els.length) { e.preventDefault(); this.el.focus(); return }
+              const first = els[0], last = els[els.length - 1], a = document.activeElement
+              if (e.shiftKey && (a === first || a === this.el)) { e.preventDefault(); last.focus() }
+              else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus() }
+            }
+            this.el.addEventListener("keydown", this._onKey)
+          },
+          destroyed() {
+            this.el.removeEventListener("keydown", this._onKey)
+            if (this._prev && this._prev.focus) this._prev.focus()
+          },
+          _focusables() {
+            return [...this.el.querySelectorAll(
+              'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+            )].filter((el) => el.offsetParent !== null)
           }
         }
       </script>
@@ -6587,6 +6614,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Members")}
+          id="dlg-channel-members"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">
@@ -6787,6 +6818,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Add to %{room}", room: @room.name)}
+          id="dlg-room-add"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">
@@ -6898,6 +6933,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Add members")}
+          id="dlg-add-members"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Add members")}</h2>
@@ -6981,6 +7020,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Invite links")}
+          id="dlg-invites"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Invite links")}</h2>
@@ -7079,6 +7122,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={@title}
+          id="dlg-room-form"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{@title}</h2>
@@ -7922,8 +7969,7 @@ defmodule EdenWeb.ChatLive do
             <.icon name="hero-document-arrow-up-micro" class="size-5" />
           </button>
           <button
-            class="ed-btn ed-btn--primary shrink-0"
-            style="width:2.5rem; padding:0; border-radius:var(--ed-radius-full);"
+            class="ed-btn ed-btn--primary ed-btn--send shrink-0"
             type="submit"
             aria-label={gettext("Send")}
           >
@@ -8148,6 +8194,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("New conversation")}
+          id="dlg-new-conv"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("New conversation")}</h2>
@@ -8219,6 +8269,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Forward to")}
+          id="dlg-forward"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Forward to")}</h2>
@@ -8280,6 +8334,10 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
+          aria-label={gettext("Move to folder")}
+          id="dlg-folder"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
         >
           <div class="flex items-center justify-between">
             <h2 style="font-weight:600;">{gettext("Move to folder")}</h2>
