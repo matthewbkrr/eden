@@ -4481,10 +4481,20 @@ defmodule EdenWeb.ChatLive do
             }
             const existing = this.el.querySelectorAll(":scope > .ed-date-sep")
             const sig = desired.map((r) => r.id).join("|")
-            // Skip the DOM churn only when the day structure is unchanged AND the
-            // separators are still in the DOM — a stream patch (e.g. an append) can drop
-            // the injected nodes, so we must re-add them even when the structure matches.
-            if (sig === this._sig && existing.length === desired.length) return
+            // Skip the DOM churn only when the day structure is unchanged AND every
+            // separator is still sitting immediately before its row. A stream patch can
+            // drop the injected nodes (append), and a stream RESET (switching
+            // conversations) drops the message rows but leaves the phx-update="ignore"
+            // separators and re-adds the rows after them — detaching every separator to
+            // one end. A structure-only check would treat that as unchanged and leave them
+            // piled up, so verify their positions too.
+            const inPlace =
+              existing.length === desired.length &&
+              desired.every((row) => {
+                const prev = row.previousElementSibling
+                return prev && prev.id === "ds-" + row.id
+              })
+            if (sig === this._sig && inPlace) return
             this._sig = sig
             // Suspend the observer around our own edits so re-adding doesn't re-enter
             // reconcile in a loop.
@@ -9399,6 +9409,21 @@ defmodule EdenWeb.ChatLive do
   # Permalinks may point at a reply — those live in the thread panel, not the
   # main stream, so open the thread first and focus inside it.
   defp focus_message_target(socket, message_id) do
+    # Jumping to a message (a search result, a permalink) means "found it" — close any
+    # open search so its panel/results don't linger. select_conversation already clears
+    # the in-room search on a real switch, but a jump to a message in the ALREADY-open
+    # room/DM short-circuits that guard, so clear all three search states here.
+    socket =
+      assign(socket,
+        search: "",
+        search_results: nil,
+        channel_search: "",
+        channel_results: nil,
+        room_search_open: false,
+        room_search: "",
+        room_results: nil
+      )
+
     case Chat.thread_root_for(socket.assigns.current_scope, message_id) do
       {:ok, root_id} ->
         socket
