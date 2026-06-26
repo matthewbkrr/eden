@@ -6485,7 +6485,7 @@ defmodule EdenWeb.ChatLive do
         <.room_glyph room={@room} />
         <span class="ed-convo__name flex-1 truncate">
           {@room.name}
-          <span :if={@room.favorite} class="ed-convo__muted" title={gettext("Favorite")}>
+          <span :if={@room.favorite} class="ed-convo__muted ed-convo__fav" title={gettext("Favorite")}>
             <.icon name="hero-star-micro" class="size-3.5" />
             <span class="sr-only">{gettext("Favorite")}</span>
           </span>
@@ -8222,9 +8222,14 @@ defmodule EdenWeb.ChatLive do
               <div class="max-h-60 overflow-y-auto space-y-0.5">
                 <label
                   :for={u <- @people}
-                  class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] cursor-pointer"
+                  class="flex items-center gap-3 p-2 rounded-[var(--ed-radius)] cursor-pointer transition-colors hover:bg-[var(--ed-surface-2)]"
                 >
-                  <input type="checkbox" name="member_ids[]" value={u.id} class="size-4" />
+                  <input
+                    type="checkbox"
+                    name="member_ids[]"
+                    value={u.id}
+                    class="size-5 accent-[var(--ed-primary)]"
+                  />
                   <.avatar name={u.display_name} src={avatar_src(u)} size={:sm} />
                   <span class="flex-1 min-w-0">
                     <span class="block" style="font-weight:550; font-size:0.875rem;">

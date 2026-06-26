@@ -311,7 +311,7 @@ defmodule EdenWeb.SettingsLive do
             style="border-color: var(--ed-border); background: var(--ed-surface);"
           >
             <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Reactions")}</h2>
-            <p class="mt-0.5 mb-3" style="color: var(--ed-muted); font-size:0.8125rem;">
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
               {gettext(
                 "Pick the emoji in your quick-react row — the shortcuts shown first when you react to a message. Tap to add or remove (up to %{count}).",
                 count: @quick_limit
@@ -324,8 +324,7 @@ defmodule EdenWeb.SettingsLive do
               <button
                 :if={@quick_set != @default_quick}
                 type="button"
-                class="ed-btn ed-btn--ghost"
-                style="font-size:0.8125rem; padding:0.25rem 0.5rem;"
+                class="ed-btn ed-btn--ghost ed-btn--sm"
                 phx-click="reset_quick_reactions"
               >
                 {gettext("Reset to default")}
