@@ -22,8 +22,10 @@ defmodule EdenWeb.ErrorHTML do
     Phoenix.Controller.status_message_from_template(template)
   end
 
+  # sobelow_skip ["XSS.Raw"] — code/title/body are static gettext literals, no user input.
   defp page(code, title, body) do
-    """
+    # raw/1 so the markup is sent as HTML, not escaped into visible source.
+    Phoenix.HTML.raw("""
     <!DOCTYPE html>
     <html lang="#{Gettext.get_locale()}">
     <head>
@@ -57,6 +59,6 @@ defmodule EdenWeb.ErrorHTML do
       </div>
     </body>
     </html>
-    """
+    """)
   end
 end
