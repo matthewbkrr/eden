@@ -170,7 +170,7 @@ defmodule EdenWeb.SettingsLive do
                     :if={Enum.empty?(@uploads.avatar.entries)}
                     style="color: var(--ed-muted); font-size:0.75rem;"
                   >
-                    {gettext("JPEG or PNG, up to 5 MB.")}
+                    {gettext("JPEG, PNG, GIF or WebP, up to 5 MB.")}
                   </p>
                 </div>
               </div>

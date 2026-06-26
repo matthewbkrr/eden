@@ -158,6 +158,8 @@ html {
 
 /* Dark theme — explicit */
 [data-theme="dark"] {
+  /* So native controls (scrollbars, form widgets, overscroll) render dark too. */
+  color-scheme: dark;
   --ed-bg: oklch(0.18 0.012 261);
   --ed-sunken: oklch(0.12 0.01 261);
   --ed-surface: oklch(0.225 0.014 261);
@@ -179,6 +181,7 @@ html {
 /* Dark theme — system ("system" mode removes data-theme; follow the OS) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --ed-bg: oklch(0.18 0.012 261);
     --ed-sunken: oklch(0.12 0.01 261);
     --ed-surface: oklch(0.225 0.014 261);
