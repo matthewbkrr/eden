@@ -3725,6 +3725,20 @@ defmodule EdenWeb.ChatLive do
                           if (!v.getAttribute("poster")) v.setAttribute("poster", posters[i])
                         })
                       }
+                      // Same idea for PHOTOS: carry the local snapshot onto the real <img>(s)
+                      // (BEFORE paint) so a just-sent photo shows instantly instead of flashing
+                      // the cobalt bubble + "Photo" alt while /files loads — the thumbnail isn't
+                      // generated yet, so the real src is the full original (a slow fetch).
+                      // morphdom swaps to the server thumb on {:thumbnail_ready}, keeping this
+                      // frame until the thumb decodes. Skip avatar/header imgs (flat rooms).
+                      const realImgs = [...row.querySelectorAll("img")].filter(
+                        (i) => !i.closest(".ed-avatar, .ed-flat__gutter, .ed-flat__head"),
+                      )
+                      if (realImgs.length && realImgs.length === posters.length) {
+                        realImgs.forEach((img, i) => {
+                          if (posters[i]?.startsWith("data:")) img.src = posters[i]
+                        })
+                      }
                       twin.remove()
                       continue
                     }
@@ -4835,6 +4849,16 @@ defmodule EdenWeb.ChatLive do
               // #119: this batch now occupies the shared config until it completes — gate
               // further picks into the queue from this instant (not after the round-trip).
               this.mediaInFlight = true
+              // Pause any previewed clip first: a played <video> left running while the
+              // overlay goes display:none keeps the media session active and flashes the OS
+              // media-controls HUD until the server re-render tears the overlay down.
+              overlay.querySelectorAll("video").forEach((v) => {
+                try {
+                  v.pause()
+                } catch (_e) {
+                  /* a detached/!ready element can throw — ignore */
+                }
+              })
               // Close the preview INSTANTLY (#111) instead of waiting for the
               // media_sending round-trip to re-render — on a slow link the overlay
               // lingered ~seconds after Send. The element stays in the DOM (display
@@ -5449,7 +5473,11 @@ defmodule EdenWeb.ChatLive do
             const input = e.target
             if (!(input instanceof HTMLInputElement) || input.type !== "file") return
             for (const f of input.files || []) {
-              if (!(f.type || "").startsWith("video/")) continue
+              // video AND image: .VideoPreview + .ImgPreview both read these back. Images use
+              // it so the compose preview is OUR crash-safe <img>, not LiveView's
+              // <.live_img_preview> (whose mounted() threw createObjectURL(undefined) on a
+              // consumed entry mid-send, aborting the patch → empty modal).
+              if (!/^(video|image)\//.test(f.type || "")) continue
               // name+size alone collide for two different clips of equal weight →
               // the second tile would show the first file's frame. lastModified adds
               // the distinguishing entropy (it matches entry.client_last_modified).
@@ -5835,8 +5863,23 @@ defmodule EdenWeb.ChatLive do
               // album grid: there the square tile fixes width+height, which overrides
               // aspect-ratio.
               this.onMeta = () => {
-                if (this.el.videoWidth && this.el.videoHeight) {
-                  this.el.style.aspectRatio = this.el.videoWidth + " / " + this.el.videoHeight
+                const w = this.el.videoWidth
+                const h = this.el.videoHeight
+                if (!w || !h) return
+                if (this.el.closest(".ed-compose__grid--single")) {
+                  // Lone clip: size the box to the decoded dimensions, then grow + fade it in
+                  // (matches .ImgPreview) so the preview settles instead of snapping open when
+                  // metadata lands.
+                  const body = this.el.closest(".ed-compose__body")
+                  const maxW = (body ? body.clientWidth : 320) - 28 // body padding (0.875rem*2)
+                  const maxH = Math.round(window.innerHeight * 0.6)
+                  const s = Math.min(maxW / w, maxH / h, 1)
+                  this.el.style.width = Math.round(w * s) + "px"
+                  this.el.style.height = Math.round(h * s) + "px"
+                  requestAnimationFrame(() => this.el.classList.add("is-ready"))
+                } else {
+                  // Album grid: the square tile fixes width+height, so this is a no-op there.
+                  this.el.style.aspectRatio = w + " / " + h
                 }
               }
               this.el.addEventListener("loadedmetadata", this.onMeta)
@@ -5847,6 +5890,61 @@ defmodule EdenWeb.ChatLive do
           },
           destroyed() {
             if (this.onMeta) this.el.removeEventListener("loadedmetadata", this.onMeta)
+            const url = this.store && this.store.get(this.key())
+            if (url) {
+              URL.revokeObjectURL(url)
+              this.store.delete(this.key())
+            }
+          },
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ImgPreview">
+        // Crash-safe staged-photo preview — replaces LiveView's <.live_img_preview>, whose
+        // mounted() calls URL.createObjectURL(entry.file) and threw "Argument 1 could not be
+        // converted to Blob" when the entry's File was already gone mid-send (consumed). That
+        // uncaught throw aborted the DOM patch and left the compose modal blank — the "empty
+        // lightbox". Same model as .VideoPreview: read the object URL the SendQueue stashed at
+        // selection (keyed name:size:lastModified); no URL → leave blank, never throw.
+        export default {
+          key() {
+            return this.el.dataset.name + ":" + this.el.dataset.size + ":" + this.el.dataset.modified
+          },
+          mounted() {
+            this.store = this.el.closest("#composer")?.edenVideoUrls
+            const url = this.store && this.store.get(this.key())
+            if (!url) return
+            // A grid tile is an already-reserved square — just show it. A LONE photo's box
+            // has no reserved size, so decode the file off-DOM FIRST to learn its dimensions,
+            // size the box, then grow + fade it in — the preview settles smoothly instead of
+            // snapping the modal open as the blob decodes (anti layout-shift).
+            if (!this.el.closest(".ed-compose__grid--single")) {
+              this.el.src = url
+              return
+            }
+            const probe = new Image()
+            probe.onload = () => {
+              const w = probe.naturalWidth
+              const h = probe.naturalHeight
+              if (w && h) {
+                const body = this.el.closest(".ed-compose__body")
+                const maxW = (body ? body.clientWidth : 320) - 28 // body padding (0.875rem*2)
+                const maxH = Math.round(window.innerHeight * 0.6)
+                const s = Math.min(maxW / w, maxH / h, 1)
+                this.el.style.width = Math.round(w * s) + "px"
+                this.el.style.height = Math.round(h * s) + "px"
+              }
+              this.el.src = url
+              requestAnimationFrame(() => this.el.classList.add("is-ready"))
+            }
+            probe.onerror = () => {
+              this.el.style.width = "auto"
+              this.el.style.height = "auto"
+              this.el.src = url
+              this.el.classList.add("is-ready")
+            }
+            probe.src = url
+          },
+          destroyed() {
             const url = this.store && this.store.get(this.key())
             if (url) {
               URL.revokeObjectURL(url)
@@ -8022,7 +8120,18 @@ defmodule EdenWeb.ChatLive do
               data-name={entry.client_name}
               data-size={human_size(entry.client_size)}
             >
-              <.live_img_preview :if={image_entry?(entry)} entry={entry} class="ed-compose__img" />
+              <%!-- our own crash-safe preview (NOT <.live_img_preview>, see .ImgPreview) --%>
+              <img
+                :if={image_entry?(entry)}
+                id={"imgp-#{entry.ref}"}
+                phx-hook=".ImgPreview"
+                phx-update="ignore"
+                data-name={entry.client_name}
+                data-size={entry.client_size}
+                data-modified={entry.client_last_modified}
+                class="ed-compose__img"
+                alt=""
+              />
               <div :if={video_entry?(entry)} class="ed-compose__video-wrap">
                 <span class="ed-compose__video-fb" aria-hidden="true">
                   <.icon name="hero-film" class="size-7" />
@@ -8260,8 +8369,12 @@ defmodule EdenWeb.ChatLive do
       href={~p"/files/#{@attachment.id}"}
       target="_blank"
       rel="noopener"
-      class="block mb-1 cursor-zoom-in"
+      aria-label={gettext("Photo")}
+      class="ed-photo block mb-1 cursor-zoom-in"
     >
+      <%!-- alt="" (decorative): Firefox paints alt text over a not-yet-loaded <img>, so a
+            just-sent photo (no thumbnail yet → src is the slow full original) flashed
+            "Photo" on the cobalt bubble. The a11y label rides the <a> instead. --%>
       <img
         src={thumb_src(@attachment)}
         width={@attachment.width}
@@ -8269,7 +8382,7 @@ defmodule EdenWeb.ChatLive do
         class="rounded-[var(--ed-radius)] block"
         style={img_box(@attachment)}
         loading="lazy"
-        alt={gettext("Photo")}
+        alt=""
       />
     </a>
     """
@@ -8991,13 +9104,15 @@ defmodule EdenWeb.ChatLive do
       href={~p"/files/#{@item.id}"}
       target="_blank"
       rel="noopener"
-      class={[@class, "cursor-zoom-in"]}
+      aria-label={@item.filename || gettext("Photo")}
+      class={[@class, "ed-photo cursor-zoom-in"]}
     >
+      <%!-- alt="" (decorative) — the a11y label rides the <a>; see attachment_view. --%>
       <img
         src={thumb_src(@item)}
         loading="lazy"
         decoding="async"
-        alt={@item.filename || gettext("Photo")}
+        alt=""
       />
     </a>
     """

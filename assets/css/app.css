@@ -949,19 +949,21 @@ html {
 
   /* Newly arriving / sent messages rise in (the .RiseIn observer adds the
      class only to nodes inserted AFTER mount — never the initial list, so no
-     page-load choreography). Subtle and quick: 4px + fade, 140ms. */
+     page-load choreography). A quick rise + slight grow (10px + scale 0.96→1 + fade, 200ms)
+     so a large media placeholder visibly floats up instead of snapping into its box. */
   @keyframes ed-msg-in {
     from {
       opacity: 0;
-      transform: translateY(4px);
+      transform: translateY(10px) scale(0.96);
     }
     to {
       opacity: 1;
-      transform: translateY(0);
+      transform: translateY(0) scale(1);
     }
   }
   .ed-msg--enter {
-    animation: ed-msg-in 0.14s var(--ed-ease);
+    animation: ed-msg-in 0.2s var(--ed-ease);
+    transform-origin: center bottom;
   }
 
   /* "Not delivered" marker (#142): a tappable red ●! in the message's status slot
@@ -1293,6 +1295,14 @@ html {
   .ed-media img,
   .ed-media video {
     border-radius: 0 !important;
+  }
+  /* Calm loading placeholder for a photo whose bytes haven't arrived (a just-sent photo
+     has no thumbnail yet → src is the slow full original): the <img>'s own bg shows a
+     neutral box instead of the bright cobalt bubble showing through. The decoded photo
+     paints over it. Covers the message stream AND the profile gallery (.ed-photo is on
+     both photo links). */
+  .ed-photo img {
+    background-color: oklch(0.62 0.012 261);
   }
   .ed-media-time {
     position: absolute;
@@ -1694,14 +1704,34 @@ html {
     max-width: 100%;
     margin-inline: auto;
   }
+  /* Lone photo/video: .ImgPreview / .VideoPreview learns the file's dimensions first, sets the
+     box to its size, and the box grows + fades in from 0 (proportionally, so no distortion)
+     instead of snapping open as the blob/metadata loads. */
   .ed-compose__grid--single .ed-compose__img,
   .ed-compose__grid--single .ed-compose__video {
-    width: auto;
-    height: auto;
+    width: 0;
+    height: 0;
     max-width: 100%;
     max-height: 60vh;
     object-fit: contain;
     margin-inline: auto;
+    opacity: 0;
+    background: var(--ed-surface-2);
+    border-radius: var(--ed-radius);
+    transition:
+      width 0.22s var(--ed-ease),
+      height 0.22s var(--ed-ease),
+      opacity 0.22s var(--ed-ease);
+  }
+  .ed-compose__grid--single .ed-compose__img.is-ready,
+  .ed-compose__grid--single .ed-compose__video.is-ready {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-compose__grid--single .ed-compose__img,
+    .ed-compose__grid--single .ed-compose__video {
+      transition: opacity 0.01s;
+    }
   }
   .ed-compose__remove {
     position: absolute;
