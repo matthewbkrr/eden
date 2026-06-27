@@ -163,6 +163,11 @@ defmodule EdenWeb.ChatLive do
         thread_list_open: false,
         thread_list: [],
         thread_unreads: %{},
+        # In-thread search (#189): a separate search over the open thread's replies,
+        # mirroring the in-room search bar but scoped to this thread.
+        thread_search_open: false,
+        thread_search: "",
+        thread_results: nil,
         last_flat: nil,
         # The newest run tracker for the THREAD panel, mirroring last_flat for the
         # main stream — lets a live thread reply continue/break the compact run (#105).
@@ -1182,6 +1187,24 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  ## In-thread search (#189): scoped to the open thread's replies.
+
+  def handle_event("toggle_thread_search", _params, socket) do
+    open = !socket.assigns.thread_search_open
+    {:noreply, assign(socket, thread_search_open: open, thread_search: "", thread_results: nil)}
+  end
+
+  def handle_event("thread_search", %{"q" => q}, socket) do
+    case socket.assigns.thread_root do
+      %{id: root_id} ->
+        results = run_thread_search(socket, root_id, q)
+        {:noreply, assign(socket, thread_search: q, thread_results: results)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   ## Knock to join a private room (#41)
 
   def handle_event("request_join", _params, socket) do
@@ -1479,7 +1502,8 @@ defmodule EdenWeb.ChatLive do
      socket
      |> cancel_staged_thread_attachments()
      |> clear_thread_typing()
-     |> assign(thread_root: nil, thread_reply_to: nil)}
+     |> assign(thread_root: nil, thread_reply_to: nil)
+     |> reset_thread_search()}
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
@@ -2994,6 +3018,18 @@ defmodule EdenWeb.ChatLive do
                 title(@selected, @current_scope.user)}
             </div>
           </div>
+          <%!-- Search within this thread's replies (#189): separate from the
+                room's main-stream search. --%>
+          <button
+            type="button"
+            class={["ed-btn--icon", @thread_search_open && "ed-btn--icon--on"]}
+            phx-click="toggle_thread_search"
+            title={gettext("Search in thread")}
+            aria-label={gettext("Search in thread")}
+            aria-expanded={to_string(@thread_search_open)}
+          >
+            <.icon name="hero-magnifying-glass-mini" class="size-5" />
+          </button>
           <%!-- Follow / unfollow this thread (#57): following counts its new
                 replies toward your unread badge. --%>
           <button
@@ -3031,6 +3067,65 @@ defmodule EdenWeb.ChatLive do
             <.icon name="hero-x-mark-mini" class="size-5" />
           </button>
         </header>
+
+        <%!-- In-thread search (#189): a bar under the header; each result is a permalink
+              into the open thread (opens + focuses the reply, then closes this panel). --%>
+        <div :if={@thread_search_open} class="relative shrink-0">
+          <form
+            class="ed-search"
+            style="margin-bottom: 0;"
+            phx-change="thread_search"
+            phx-submit="thread_search"
+          >
+            <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
+            <input
+              type="search"
+              name="q"
+              value={@thread_search}
+              placeholder={gettext("Search in thread")}
+              autocomplete="off"
+              class="ed-search__input"
+              phx-debounce="200"
+              phx-mounted={JS.focus()}
+              aria-label={gettext("Search in thread")}
+            />
+            <button
+              type="button"
+              class="ed-btn--icon"
+              phx-click="toggle_thread_search"
+              aria-label={gettext("Close search")}
+            >
+              <.icon name="hero-x-mark-micro" class="size-4" />
+            </button>
+          </form>
+          <div :if={String.trim(@thread_search) != ""} class="ed-room-search__panel">
+            <p
+              :if={(@thread_results || []) == []}
+              class="text-center py-6"
+              style="color: var(--ed-muted); font-size:0.875rem;"
+            >
+              {gettext("No results for “%{query}”", query: String.trim(@thread_search))}
+            </p>
+            <.link
+              :for={message <- @thread_results || []}
+              patch={~p"/channels/#{@selected.channel_id}/r/#{@selected.id}/m/#{message.id}"}
+              class="ed-convo"
+            >
+              <span class="ed-convo__body">
+                <span class="ed-convo__top">
+                  <span class="ed-convo__name">
+                    {(message.sender && message.sender.display_name) ||
+                      gettext("Deleted account")}
+                  </span>
+                  <.local_time at={message.inserted_at} class="ed-convo__time" />
+                </span>
+                <span class="ed-convo__preview">
+                  <.highlighted text={snippet(message.body, @thread_search)} query={@thread_search} />
+                </span>
+              </span>
+            </.link>
+          </div>
+        </div>
 
         <div
           class="flex-1 overflow-y-auto overscroll-x-contain p-4"
@@ -9610,6 +9705,21 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # In-thread search (#189): same nil-vs-[] convention as run_room_search.
+  defp run_thread_search(socket, root_id, q) do
+    if String.trim(q) == "" do
+      nil
+    else
+      Chat.search_thread(socket.assigns.current_scope, root_id, q)
+    end
+  end
+
+  # Reset the in-thread search panel — on close, on opening a different thread, and
+  # after jumping to a result (so the panel doesn't linger over the focused reply).
+  defp reset_thread_search(socket) do
+    assign(socket, thread_search_open: false, thread_search: "", thread_results: nil)
+  end
+
   # A pending knock was approved while its window is open: the room now appears
   # in the sidebar — clear the knock window so the user can open it.
   defp maybe_clear_knock(%{assigns: %{knock_room: %{id: id}}} = socket) do
@@ -9848,6 +9958,8 @@ defmodule EdenWeb.ChatLive do
         )
         |> stream(:thread, replies, reset: true)
         |> restream_root_if_loaded(root)
+        # Fresh thread (or a jump to a thread-search result) → search starts closed (#189).
+        |> reset_thread_search()
 
       {:error, _} ->
         put_flash(socket, :error, gettext("Thread not found."))

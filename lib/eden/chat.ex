@@ -1259,9 +1259,10 @@ defmodule Eden.Chat do
   `{:channel, channel_id}` (across that channel's rooms the user is a member
   of) or `{:room, room_id}` (one room). Same guards as `search/2` (min
   #{@search_min_chars} chars, the trigram-indexed body match, capped at
-  #{@search_limit}); tombstoned/per-user-hidden messages never match. Replies
-  ARE included — their permalinks open the thread panel. Results preload sender +
-  conversation (for the room-name breadcrumb).
+  #{@search_limit}); tombstoned/per-user-hidden messages never match. Replies are
+  EXCLUDED (`is_nil(root_id)`, #189) — the main-stream search stays in the main
+  stream; thread replies are searched separately via `search_thread/3`. Results
+  preload sender + conversation (for the room-name breadcrumb).
   """
   def search_rooms(%Scope{user: user}, search_scope, query) do
     term = query |> to_string() |> String.trim()
@@ -1293,9 +1294,51 @@ defmodule Eden.Chat do
       # Only real messages — join-request system rows (kind "system") carry an
       # empty body and a meta payload, never something a user means to find.
       where: m.kind == "user",
+      # Main-stream only (#189): thread replies (root_id set) are searched separately
+      # via search_thread/3 — they don't belong in the room's main-stream results.
+      where: is_nil(m.root_id),
       where: is_nil(m.deleted_at) and is_nil(d.id),
       limit: @search_limit,
       preload: [:sender, :conversation]
+    )
+    |> where(^body_match(term))
+  end
+
+  @doc """
+  Searches the replies of one thread (#189), scoped to `root_id` — the counterpart
+  to `search_rooms/3`'s now main-stream-only search. Same guards (min
+  #{@search_min_chars} chars, the trigram body match, capped at #{@search_limit});
+  tombstoned/per-user-hidden replies never match. Only the thread's replies are
+  searched (the root is always pinned at the top of the panel). Scoped through the
+  user's membership of the root's conversation, so a foreign/unknown root yields
+  nothing. Preloads sender for the result row.
+  """
+  def search_thread(%Scope{user: user}, root_id, query) do
+    term = query |> to_string() |> String.trim()
+
+    with id when is_integer(id) <- Ids.normalize(root_id),
+         true <- String.length(term) >= @search_min_chars do
+      thread_search_base(user, id, term)
+      |> order_by(^search_order(term))
+      |> run_search(term)
+    else
+      _ -> []
+    end
+  end
+
+  defp thread_search_base(user, root_id, term) do
+    from(m in Message,
+      join: mem in Membership,
+      on:
+        mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
+          is_nil(mem.left_at),
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: m.root_id == ^root_id,
+      where: m.kind == "user",
+      where: is_nil(m.deleted_at) and is_nil(d.id),
+      limit: @search_limit,
+      preload: [:sender]
     )
     |> where(^body_match(term))
   end

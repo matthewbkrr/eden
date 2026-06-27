@@ -1028,7 +1028,7 @@ defmodule Eden.ChannelsTest do
       assert Enum.sort(Enum.map(results, & &1.body)) == ["needle here", "needle secret"]
     end
 
-    test "room scope is limited to one room; replies are included", ctx do
+    test "room scope is limited to one room; thread replies are excluded (#189)", ctx do
       %{alice: alice, channel: channel, general: general} = ctx
       {:ok, ops} = Channels.create_room(scope(alice), channel.id, %{"name" => "ops"})
 
@@ -1036,8 +1036,10 @@ defmodule Eden.ChannelsTest do
       {:ok, _} = Eden.Chat.create_reply(scope(alice), root.id, %{"body" => "pin reply"})
       {:ok, _} = Eden.Chat.create_message(scope(alice), ops.id, %{"body" => "pin other room"})
 
+      # The reply lives in the thread, not the main stream — search_thread/3 covers it now;
+      # the room's main-stream search only returns the root (and never the other room).
       results = Eden.Chat.search_rooms(scope(alice), {:room, general.id}, "pin")
-      assert Enum.sort(Enum.map(results, & &1.body)) == ["pin base", "pin reply"]
+      assert ["pin base"] == Enum.map(results, & &1.body)
     end
 
     test "system messages never surface, even with a matchable body", ctx do
@@ -1105,6 +1107,56 @@ defmodule Eden.ChannelsTest do
 
       # The typo matches that body, but bob isn't a member of og — scoped out.
       assert [] == Eden.Chat.search_rooms(scope(bob), {:room, og.id}, "deploymant")
+    end
+  end
+
+  describe "search_thread/3 (#189)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      :ok = Eden.Chat.join_general(channel.id, bob.id)
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      %{channel: channel, general: general}
+    end
+
+    test "returns only this thread's matching replies — not the root, other threads, or the main stream",
+         ctx do
+      %{alice: alice, general: general} = ctx
+      {:ok, root} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "needle root"})
+      {:ok, _} = Eden.Chat.create_reply(scope(alice), root.id, %{"body" => "needle reply one"})
+      {:ok, _} = Eden.Chat.create_reply(scope(alice), root.id, %{"body" => "needle reply two"})
+      {:ok, _} = Eden.Chat.create_reply(scope(alice), root.id, %{"body" => "unrelated"})
+
+      # A different thread + a main-stream message that ALSO match "needle".
+      {:ok, other} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "needle two"})
+      {:ok, _} = Eden.Chat.create_reply(scope(alice), other.id, %{"body" => "needle elsewhere"})
+      {:ok, _} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "needle main"})
+
+      results = Eden.Chat.search_thread(scope(alice), root.id, "needle")
+      assert Enum.sort(Enum.map(results, & &1.body)) == ["needle reply one", "needle reply two"]
+    end
+
+    test "scoped by membership: a non-member of the room gets nothing", ctx do
+      %{alice: alice, general: general} = ctx
+      carol = user_fixture(%{username: "carol_t189", display_name: "Carol"})
+      {:ok, root} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "needle root"})
+      {:ok, _} = Eden.Chat.create_reply(scope(alice), root.id, %{"body" => "needle reply"})
+
+      assert [] == Eden.Chat.search_thread(scope(carol), root.id, "needle")
+    end
+
+    test "tombstoned/hidden replies never match; min length + garbage root return nothing", ctx do
+      %{alice: alice, bob: bob, general: general} = ctx
+      {:ok, root} = Eden.Chat.create_message(scope(alice), general.id, %{"body" => "ghost root"})
+      {:ok, gone} = Eden.Chat.create_reply(scope(bob), root.id, %{"body" => "ghost gone"})
+      {:ok, hid} = Eden.Chat.create_reply(scope(bob), root.id, %{"body" => "ghost hidden"})
+      :ok = Eden.Chat.delete_message_for_both(scope(bob), gone.id)
+      :ok = Eden.Chat.delete_message_for_me(scope(alice), hid.id)
+
+      assert [] == Eden.Chat.search_thread(scope(alice), root.id, "ghost")
+      # Min length (2) applies, and a non-integer root id can't crash the cast.
+      assert [] == Eden.Chat.search_thread(scope(alice), root.id, "g")
+      assert [] == Eden.Chat.search_thread(scope(alice), "abc", "needle")
     end
   end
 

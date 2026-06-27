@@ -305,20 +305,27 @@ defmodule EdenWeb.ChannelModeTest do
       refute html =~ ">warroom<"
     end
 
-    test "in-room search finds messages and replies; a reply result opens the thread", ctx do
+    test "room search is main-stream only; thread search finds replies; a reply permalink opens the thread (#189)",
+         ctx do
       {:ok, root} = Chat.create_message(scope(ctx.alice), ctx.general.id, %{"body" => "agenda"})
       {:ok, reply} = Chat.create_reply(scope(ctx.bob), root.id, %{"body" => "agenda follow-up"})
 
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
 
+      # Room search returns the main stream, NEVER the thread reply (#189).
       render_click(view, "toggle_room_search", %{})
       html = render_change(view, "room_search", %{"q" => "agenda"})
-      # The match is wrapped in <mark>, so assert the unmatched tail.
-      assert html =~ "follow-up"
       assert html =~ "ed-room-search__panel"
+      refute html =~ "follow-up"
 
-      # Following the reply permalink opens the thread panel.
+      # The reply is found by the separate in-thread search instead.
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+      render_click(view, "toggle_thread_search", %{})
+      render_change(view, "thread_search", %{"q" => "follow-up"})
+      assert has_element?(view, ~s|.ed-thread .ed-room-search__panel a[href*="/m/#{reply.id}"]|)
+
+      # Following the reply permalink still opens the thread panel.
       {:ok, view, _html} =
         live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}/m/#{reply.id}")
 
