@@ -2963,7 +2963,8 @@ html {
   }
 
   /* In-flight cancel-X on an optimistic upload node (#137): a calm dark badge that reads on
-     a photo AND on the file card. Top-right over media; vertically centered on the file row. */
+     a photo AND on the file card. Centered inside the progress ring over media (Telegram —
+     the ring tracks progress around the X); vertically centered on the file row. */
   .ed-sending-cancel {
     position: absolute;
     top: 0.3rem;
@@ -2995,6 +2996,21 @@ html {
     right: 0.5rem;
     transform: translateY(-50%);
   }
+  /* Over media the cancel sits dead-center INSIDE the ring (which is also centered), a touch
+     smaller so the progress arc reads around it (Telegram-style). inset:0 + margin:auto
+     overrides the base top-right corner placement. */
+  .ed-media-sending .ed-sending-cancel {
+    inset: 0;
+    margin: auto;
+    width: 2rem;
+    height: 2rem;
+  }
+  /* A larger X reads better centered in the ring (!important to beat the Tailwind size-3.5
+     utility the icon span ships with). */
+  .ed-media-sending .ed-sending-cancel > span {
+    width: 1.375rem !important;
+    height: 1.375rem !important;
+  }
 
   /* Touch targets (#137): enlarge the badges on coarse pointers — a ::before hit-area
      expansion would be clipped by the tile/photo's overflow:hidden. The in-flight cancel
@@ -3004,6 +3020,20 @@ html {
     .ed-sending-cancel {
       width: 2.75rem;
       height: 2.75rem;
+    }
+    /* The centered media cancel grows to the 44px touch target, so the ring around it grows
+       too (keeps the progress arc visible outside the X). */
+    .ed-media-sending__ring {
+      width: 3.5rem;
+      height: 3.5rem;
+    }
+    .ed-media-sending .ed-sending-cancel {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+    .ed-media-sending .ed-sending-cancel > span {
+      width: 1.625rem !important;
+      height: 1.625rem !important;
     }
     .ed-compose__remove {
       width: 2.25rem;
