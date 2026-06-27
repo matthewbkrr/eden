@@ -6043,6 +6043,86 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
 
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".VideoExpand">
+        // Telegram-style video: the in-stream clip is a poster + centered play button with
+        // NO inline controls. Clicking opens the clip full-screen (wide) in a shared overlay
+        // with real controls, and plays immediately — the click is a user gesture, so
+        // autoplay with sound is allowed. Cmd/Ctrl/Shift/middle click fall through to the
+        // <a>'s "open original in a new tab" (the box has no href, so they just no-op there).
+        export default {
+          mounted() {
+            this._open = (e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
+              e.preventDefault()
+              this.open()
+            }
+            this.el.addEventListener("click", this._open)
+            this._key = (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                this.open()
+              }
+            }
+            this.el.addEventListener("keydown", this._key)
+          },
+          open() {
+            const src = this.el.dataset.src
+            if (!src) return
+            const type = this.el.dataset.type || ""
+            const box = this.modal()
+            const video = box.querySelector(".ed-video-modal__player")
+            video.innerHTML = `<source src="${src}"${type ? ` type="${type}"` : ""}>`
+            video.load()
+            box.classList.add("ed-video-modal--open")
+            document.body.style.overflow = "hidden"
+            document.addEventListener("keydown", box.__onKey)
+            // The opening tap is a user gesture, so play-with-sound is permitted.
+            video.play && video.play().catch(() => {})
+          },
+          modal() {
+            let box = document.getElementById("ed-video-modal")
+            if (box) return box
+
+            box = document.createElement("div")
+            box.id = "ed-video-modal"
+            box.className = "ed-video-modal"
+            const lbl = document.getElementById("message-scroll")?.dataset || {}
+            const xmark =
+              "M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
+            box.innerHTML =
+              `<button class="ed-video-modal__close" aria-label="${lbl.lbClose || "Close"}"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="${xmark}" clip-rule="evenodd"/></svg></button>` +
+              '<video class="ed-video-modal__player" controls playsinline></video>'
+
+            const close = () => {
+              box.classList.remove("ed-video-modal--open")
+              document.body.style.overflow = ""
+              document.removeEventListener("keydown", box.__onKey)
+              const v = box.querySelector(".ed-video-modal__player")
+              // Stop playback + release the source so the clip can't keep playing audio
+              // behind the closed overlay.
+              v.pause()
+              v.innerHTML = ""
+              v.removeAttribute("src")
+              v.load()
+            }
+            box.__onKey = (e) => {
+              if (e.key === "Escape") close()
+            }
+            box.addEventListener("click", (e) => {
+              if (e.target.closest(".ed-video-modal__close")) return close()
+              // Click on the scrim (anything but the player) closes.
+              if (!e.target.closest(".ed-video-modal__player")) close()
+            })
+            document.body.appendChild(box)
+            return box
+          },
+          destroyed() {
+            this.el.removeEventListener("click", this._open)
+            this.el.removeEventListener("keydown", this._key)
+          },
+        }
+      </script>
+
       <script :type={Phoenix.LiveView.ColocatedHook} name=".PasteUpload">
         // Paste files/images from the clipboard straight into the composer's
         // upload (#58): screenshots and copied files land in the attachment tray.
@@ -8183,17 +8263,28 @@ defmodule EdenWeb.ChatLive do
 
   defp attachment_view(%{attachment: %{kind: "video"}} = assigns) do
     ~H"""
-    <%!-- The box is the positioning context for .StreamVideo's poster cover (#130),
-          which masks the player until it can actually play so a just-uploaded clip's
-          transient first-load error never flashes its "unsupported" icon. --%>
-    <div class="ed-video-box mb-1">
+    <%!-- Telegram-style: the in-stream clip is a poster + centered play button with NO inline
+          controls (they crowded the time pill and read as clutter); .VideoExpand opens it
+          full-screen WITH controls on click. The inline <video> (no controls) only paints the
+          poster frame; the box is the positioning context for .StreamVideo's poster cover
+          (#130), which masks a just-uploaded clip's transient first-load error. --%>
+    <div
+      id={"vbox-#{@attachment.id}"}
+      phx-hook=".VideoExpand"
+      data-src={~p"/files/#{@attachment.id}"}
+      data-type={@attachment.content_type}
+      role="button"
+      tabindex="0"
+      aria-label={gettext("Play %{name}", name: @attachment.filename || gettext("video"))}
+      class="ed-video-box ed-video-box--play mb-1"
+    >
       <video
         id={"av-#{@attachment.id}"}
         phx-hook=".StreamVideo"
-        controls
         preload="metadata"
+        tabindex="-1"
         poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
-        aria-label={@attachment.filename || gettext("Video")}
+        aria-hidden="true"
         class="ed-video"
         style={video_ratio(@attachment)}
       >
@@ -8212,6 +8303,9 @@ defmodule EdenWeb.ChatLive do
         aria-hidden="true"
         alt=""
       />
+      <span class="ed-video-play" aria-hidden="true">
+        <.icon name="hero-play-solid" class="size-7" />
+      </span>
     </div>
     """
   end
@@ -8894,6 +8988,9 @@ defmodule EdenWeb.ChatLive do
     ~H"""
     <a
       id={@dom_id}
+      phx-hook=".VideoExpand"
+      data-src={~p"/files/#{@item.id}"}
+      data-type={@item.content_type}
       href={~p"/files/#{@item.id}"}
       data-ts={DateTime.to_unix(@item.inserted_at)}
       target="_blank"

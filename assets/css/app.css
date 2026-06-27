@@ -599,6 +599,85 @@ html {
   .ed-video-cover--gone {
     opacity: 0;
   }
+  /* Telegram-style in-stream video: a poster with a centered play button (no inline
+     controls). The whole box is the click target (.VideoExpand opens it full-screen). */
+  .ed-video-box--play {
+    cursor: pointer;
+  }
+  .ed-video-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: grid;
+    place-items: center;
+    width: 3.5rem;
+    height: 3.5rem;
+    /* nudge the play triangle to its optical center */
+    padding-left: 0.1875rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(0 0 0 / 0.5);
+    color: oklch(0.99 0 0);
+    pointer-events: none;
+    box-shadow: 0 2px 10px oklch(0 0 0 / 0.4);
+  }
+  .ed-video-box--play:hover .ed-video-play {
+    background: oklch(0 0 0 / 0.62);
+  }
+  .ed-video-box--play:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
+    border-radius: var(--ed-radius);
+  }
+  /* Full-screen player opened from a poster (the shared #ed-video-modal overlay). */
+  .ed-video-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: none;
+    place-items: center;
+    padding: 1.5rem;
+    background: oklch(0 0 0 / 0.9);
+    cursor: zoom-out;
+  }
+  .ed-video-modal--open {
+    display: grid;
+  }
+  .ed-video-modal__player {
+    max-width: calc(100dvw - 3rem);
+    max-height: calc(100dvh - 3rem);
+    width: auto;
+    height: auto;
+    border-radius: var(--ed-radius);
+    background: oklch(0 0 0);
+    box-shadow: 0 10px 40px oklch(0 0 0 / 0.5);
+    cursor: default;
+  }
+  .ed-video-modal__close {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(1 0 0 / 0.12);
+    color: oklch(0.99 0 0);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-video-modal__close:hover {
+    background: oklch(1 0 0 / 0.2);
+  }
+  .ed-video-modal__close svg {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+  .ed-video-modal__close:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
+  }
   .ed-file {
     display: flex;
     align-items: center;
