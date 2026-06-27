@@ -5134,21 +5134,35 @@ defmodule EdenWeb.ChatLive do
                 media.appendChild(img)
               }
             } else {
-              const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
+              // Justified mosaic matching the real album_view (album_layout/1): split into the
+              // same rows, each tile flex-grown by its aspect, so the optimistic→real swap
+              // doesn't reflow. (Old fixed-column square grid left a bg strip and snapped.)
               media = document.createElement("div")
-              media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
-              for (const t of tiles) {
-                const tile = document.createElement("span")
-                tile.className = "ed-album__tile"
-                if (t.url) {
-                  const img = document.createElement("img")
-                  img.src = t.url
-                  img.alt = ""
-                  tile.appendChild(img)
-                } else {
-                  tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+              media.className = "ed-album ed-media-sending"
+              const tileAspect = (t) =>
+                t.w > 0 && t.h > 0 ? Math.min(2.6, Math.max(0.5, t.w / t.h)) : 1
+              let i = 0
+              for (const size of this.albumRowSizes(n)) {
+                const rowTiles = tiles.slice(i, i + size)
+                i += size
+                const row = document.createElement("div")
+                row.className = "ed-album__row"
+                row.style.aspectRatio = String(rowTiles.reduce((s, t) => s + tileAspect(t), 0))
+                for (const t of rowTiles) {
+                  const tile = document.createElement("span")
+                  tile.className = "ed-album__tile"
+                  tile.style.flex = tileAspect(t) + " 1 0"
+                  if (t.url) {
+                    const img = document.createElement("img")
+                    img.src = t.url
+                    img.alt = ""
+                    tile.appendChild(img)
+                  } else {
+                    tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+                  }
+                  row.appendChild(tile)
                 }
-                media.appendChild(tile)
+                media.appendChild(row)
               }
             }
             // Determinate ring (#95): the server drives its fill arc via media_progress
@@ -5214,6 +5228,16 @@ defmodule EdenWeb.ChatLive do
               }),
             )
             return this.wrapAndAppendOptimistic(wrap, clientId, caption)
+          },
+          // Mirror album_row_sizes/1 (server): split N media into balanced rows of 2-3 (4→2+2,
+          // a trailing remainder of 1 folded into 2+2) so the optimistic album mosaic matches.
+          albumRowSizes(n) {
+            if (n <= 3) return [n]
+            if (n === 4) return [2, 2]
+            const r = n % 3
+            if (r === 0) return Array(n / 3).fill(3)
+            if (r === 1) return Array(Math.floor(n / 3) - 1).fill(3).concat([2, 2])
+            return Array(Math.floor(n / 3)).fill(3).concat([2])
           },
           // Build the determinate progress ring (#95/#149): a faint track + a fill arc.
           // `cls` styles/sizes the container per context (media = white-on-scrim overlay;
@@ -8298,24 +8322,75 @@ defmodule EdenWeb.ChatLive do
 
     assigns =
       assigns
-      |> assign(:media, media)
+      |> assign(:rows, album_layout(media))
       |> assign(:rest, assigns.attachments -- media)
       |> assign(:gallery, "album-#{assigns.message_id}")
 
     ~H"""
-    <div :if={@media != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@media))}"]}>
-      <%!-- Image tiles share a gallery so the lightbox pages them; videos are posters with a
-            play badge. Shared with the profile gallery (#136) via media_tile. --%>
-      <.media_tile
-        :for={item <- @media}
-        item={item}
-        dom_id={"att-#{item.id}"}
-        class="ed-album__tile"
-        gallery={@gallery}
-      />
+    <%!-- Telegram-style justified mosaic (#…): the media split into rows, each row a flex
+          strip whose tiles take width proportional to their aspect ratio so the row fills the
+          album width at one height with no cropping (a tile's box matches its photo's aspect).
+          Uniform photos fall out as clean 2x2 / 3x3 grids; mixed aspects size proportionally.
+          The row's aspect-ratio (= sum of its tiles' aspects) sets its height. Shared by DMs,
+          rooms and threads (one album_view); image tiles page the lightbox together. --%>
+    <div :if={@rows != []} class="ed-album mb-1">
+      <div :for={{row, sum} <- @rows} class="ed-album__row" style={"aspect-ratio:#{sum}"}>
+        <.media_tile
+          :for={{item, aspect} <- row}
+          item={item}
+          dom_id={"att-#{item.id}"}
+          class="ed-album__tile"
+          gallery={@gallery}
+          style={"flex:#{aspect} 1 0"}
+        />
+      </div>
     </div>
     <.attachment_view :for={attachment <- @rest} attachment={attachment} />
     """
+  end
+
+  # Lay a multi-item album out as Telegram-style justified rows. Returns a list of
+  # {row, aspect_sum}, where row is a list of {item, aspect}: the tile takes flex-grow =
+  # aspect, the row's height = album_width / aspect_sum, so the row fills the width with each
+  # tile shown at its own aspect (no crop). Counts split into balanced rows of 2-3.
+  defp album_layout(media) do
+    media
+    |> chunk_album_rows()
+    |> Enum.map(fn row ->
+      tiles = Enum.map(row, &{&1, album_aspect(&1)})
+      {tiles, tiles |> Enum.map(&elem(&1, 1)) |> Enum.sum() |> Float.round(4)}
+    end)
+  end
+
+  defp album_aspect(%{width: w, height: h})
+       when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+       do: (w / h) |> max(0.5) |> min(2.6) |> Float.round(4)
+
+  defp album_aspect(_attachment), do: 1.0
+
+  defp chunk_album_rows([]), do: []
+
+  defp chunk_album_rows(media) do
+    {rows, []} =
+      Enum.reduce(album_row_sizes(length(media)), {[], media}, fn size, {rows, rest} ->
+        {row, rest} = Enum.split(rest, size)
+        {[row | rows], rest}
+      end)
+
+    Enum.reverse(rows)
+  end
+
+  # Row sizes by media count: 1-3 on their own line, 4 as 2+2, then rows of 3 — with a
+  # trailing remainder of 1 folded into 2+2 so a row never holds a single lonely tile.
+  defp album_row_sizes(n) when n <= 3, do: [n]
+  defp album_row_sizes(4), do: [2, 2]
+
+  defp album_row_sizes(n) do
+    case rem(n, 3) do
+      0 -> List.duplicate(3, div(n, 3))
+      1 -> List.duplicate(3, div(n, 3) - 1) ++ [2, 2]
+      2 -> List.duplicate(3, div(n, 3)) ++ [2]
+    end
   end
 
   # Album grid columns by image count: a pair stays 2-up, a trio 3-up, a quad is
@@ -9088,6 +9163,9 @@ defmodule EdenWeb.ChatLive do
   attr :dom_id, :string, required: true
   attr :class, :string, required: true
   attr :gallery, :string, required: true
+  # Optional inline style — the album mosaic passes `flex:<aspect> 1 0` so the tile takes
+  # width proportional to its aspect ratio; the square profile gallery leaves it nil.
+  attr :style, :string, default: nil
 
   # Shared media grid tile (#136): an image opens the lightbox (paging its `gallery`); a video
   # is a poster with a play badge. Used by the message album (album_view) AND the profile
@@ -9106,6 +9184,7 @@ defmodule EdenWeb.ChatLive do
       rel="noopener"
       aria-label={@item.filename || gettext("Photo")}
       class={[@class, "ed-photo cursor-zoom-in"]}
+      style={@style}
     >
       <%!-- alt="" (decorative) — the a11y label rides the <a>; see attachment_view. --%>
       <img
@@ -9131,6 +9210,7 @@ defmodule EdenWeb.ChatLive do
       rel="noopener"
       class={@class}
       aria-label={@item.filename || gettext("Video")}
+      style={@style}
     >
       <img :if={@item.thumbnail_key} src={thumb_src(@item)} loading="lazy" decoding="async" alt="" />
       <span :if={is_nil(@item.thumbnail_key)} class="ed-album__tile-fill" />
