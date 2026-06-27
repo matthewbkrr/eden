@@ -1191,15 +1191,21 @@ html {
     padding: 0.375rem 0.75rem 0.5rem;
     line-height: 1.4;
   }
-  /* With a caption, the photo isn't the bubble's bottom edge (the bubble's overflow clip
-     can't round it), so round its bottom corners explicitly to match the bubble-clipped
-     TOP corners + a hairline gap to the caption so the rounding reads clearly. */
+  /* The bubble's overflow clip only rounds the photo where it meets the bubble's OUTER
+     edge. Where the photo abuts internal content the clip can't reach, so round those
+     corners explicitly (Telegram): a small radius against a CAPTION below, and the full
+     bubble radius against a HEAD (reply/forward/sender) above so the photo stays
+     symmetric with its bubble-clipped bottom. */
   .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media {
     margin-bottom: 3px;
   }
   .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media :where(img, video, .ed-album__tile) {
-    border-bottom-left-radius: var(--ed-radius-lg) !important;
-    border-bottom-right-radius: var(--ed-radius-lg) !important;
+    border-bottom-left-radius: var(--ed-radius-sm) !important;
+    border-bottom-right-radius: var(--ed-radius-sm) !important;
+  }
+  .ed-bubble--media:has(.ed-bubble__head) .ed-media :where(img, video, .ed-album__tile) {
+    border-top-left-radius: var(--ed-radius-lg) !important;
+    border-top-right-radius: var(--ed-radius-lg) !important;
   }
 
   /* Permalink / jump target: briefly ring (DM bubble) or tint (flat row) the message
