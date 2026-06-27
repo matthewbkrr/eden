@@ -675,6 +675,53 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ "ed-album__tile"
     end
 
+    test "an extreme-aspect photo (>5:1) auto-renders as a file card, not inline", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      scope = Scope.for_user(ctx.alice)
+
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # A 1600×150 strip (aspect ~10.6:1, past the 5:1 cap) — sent NORMALLY, no "as file".
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "strip.jpg", content: big_jpeg(1600, 150), type: "image/jpeg"}
+        ])
+
+      render_upload(file, "strip.jpg")
+      render_hook(view, "media_sending", %{"id" => "cid-strip"})
+      render_submit(element(view, "#composer"))
+
+      {:ok, msgs} = Chat.list_messages(scope, ctx.conversation.id)
+      msg = Enum.find(msgs, &(&1.client_id == "cid-strip"))
+      assert %{attachments: [att]} = msg
+      assert att.kind == "image" and att.width == 1600 and att.height == 150
+      # The DB row is untouched (as_file stays false) — the strip→file decision is a render
+      # concern (a future threshold change reflows old messages, no migration).
+      refute att.as_file
+
+      # Yet a fresh mount renders it as a downloadable document card, never an inline tile.
+      {:ok, _view2, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert html =~ "ed-file--photo"
+      refute html =~ "ed-album__tile"
+
+      # Control: a normal-aspect photo (4:3) stays inline — no file card.
+      file2 =
+        file_input(view, "#composer", :attachment, [
+          %{name: "wide.jpg", content: big_jpeg(800, 600), type: "image/jpeg"}
+        ])
+
+      render_upload(file2, "wide.jpg")
+      render_hook(view, "media_sending", %{"id" => "cid-normal"})
+      render_submit(element(view, "#composer"))
+
+      {:ok, _v3, html2} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      {:ok, msgs2} = Chat.list_messages(scope, ctx.conversation.id)
+      normal = Enum.find(msgs2, &(&1.client_id == "cid-normal"))
+      assert [%{width: 800, height: 600}] = normal.attachments
+      # Both image messages render, but only the strip became a file card (exactly one).
+      assert length(String.split(html2, "ed-file--photo")) - 1 == 1
+    end
+
     test "a file send stamps the file message with its own per-ref client_id (#149)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

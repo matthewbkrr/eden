@@ -1282,7 +1282,9 @@ html {
   /* !important: these override the Tailwind mb-1 / rounded-[] utilities the shared
      attachment_view puts on the media (rooms still need them, so they stay in the
      markup); utilities live in @layer utilities which outranks @layer components. */
-  .ed-media > a,
+  /* :not(.ed-file) — a file card (a strip photo or a doc alongside inline media) keeps its
+     own flex layout instead of being forced to block. */
+  .ed-media > a:not(.ed-file),
   .ed-media > img,
   .ed-media > video,
   .ed-media > .ed-album,
@@ -2999,6 +3001,13 @@ html {
   /* "Send as file" optimistic node (#122): stacked document cards, each card's photo
      thumbnail dimmed under the progress ring (which overlays the thumb slot). */
   .ed-asfile-sending {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  /* Optimistic send mixing inline media + strip-photo file cards: the mosaic/single and the
+     cards stack with the same small gap as the real .ed-media. */
+  .ed-media-sending__group {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
