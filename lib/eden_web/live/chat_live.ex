@@ -5863,8 +5863,23 @@ defmodule EdenWeb.ChatLive do
               // album grid: there the square tile fixes width+height, which overrides
               // aspect-ratio.
               this.onMeta = () => {
-                if (this.el.videoWidth && this.el.videoHeight) {
-                  this.el.style.aspectRatio = this.el.videoWidth + " / " + this.el.videoHeight
+                const w = this.el.videoWidth
+                const h = this.el.videoHeight
+                if (!w || !h) return
+                if (this.el.closest(".ed-compose__grid--single")) {
+                  // Lone clip: size the box to the decoded dimensions, then grow + fade it in
+                  // (matches .ImgPreview) so the preview settles instead of snapping open when
+                  // metadata lands.
+                  const body = this.el.closest(".ed-compose__body")
+                  const maxW = (body ? body.clientWidth : 320) - 28 // body padding (0.875rem*2)
+                  const maxH = Math.round(window.innerHeight * 0.6)
+                  const s = Math.min(maxW / w, maxH / h, 1)
+                  this.el.style.width = Math.round(w * s) + "px"
+                  this.el.style.height = Math.round(h * s) + "px"
+                  requestAnimationFrame(() => this.el.classList.add("is-ready"))
+                } else {
+                  // Album grid: the square tile fixes width+height, so this is a no-op there.
+                  this.el.style.aspectRatio = w + " / " + h
                 }
               }
               this.el.addEventListener("loadedmetadata", this.onMeta)
@@ -5897,7 +5912,37 @@ defmodule EdenWeb.ChatLive do
           mounted() {
             this.store = this.el.closest("#composer")?.edenVideoUrls
             const url = this.store && this.store.get(this.key())
-            if (url) this.el.src = url
+            if (!url) return
+            // A grid tile is an already-reserved square — just show it. A LONE photo's box
+            // has no reserved size, so decode the file off-DOM FIRST to learn its dimensions,
+            // size the box, then grow + fade it in — the preview settles smoothly instead of
+            // snapping the modal open as the blob decodes (anti layout-shift).
+            if (!this.el.closest(".ed-compose__grid--single")) {
+              this.el.src = url
+              return
+            }
+            const probe = new Image()
+            probe.onload = () => {
+              const w = probe.naturalWidth
+              const h = probe.naturalHeight
+              if (w && h) {
+                const body = this.el.closest(".ed-compose__body")
+                const maxW = (body ? body.clientWidth : 320) - 28 // body padding (0.875rem*2)
+                const maxH = Math.round(window.innerHeight * 0.6)
+                const s = Math.min(maxW / w, maxH / h, 1)
+                this.el.style.width = Math.round(w * s) + "px"
+                this.el.style.height = Math.round(h * s) + "px"
+              }
+              this.el.src = url
+              requestAnimationFrame(() => this.el.classList.add("is-ready"))
+            }
+            probe.onerror = () => {
+              this.el.style.width = "auto"
+              this.el.style.height = "auto"
+              this.el.src = url
+              this.el.classList.add("is-ready")
+            }
+            probe.src = url
           },
           destroyed() {
             const url = this.store && this.store.get(this.key())

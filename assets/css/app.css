@@ -1704,14 +1704,34 @@ html {
     max-width: 100%;
     margin-inline: auto;
   }
+  /* Lone photo/video: .ImgPreview / .VideoPreview learns the file's dimensions first, sets the
+     box to its size, and the box grows + fades in from 0 (proportionally, so no distortion)
+     instead of snapping open as the blob/metadata loads. */
   .ed-compose__grid--single .ed-compose__img,
   .ed-compose__grid--single .ed-compose__video {
-    width: auto;
-    height: auto;
+    width: 0;
+    height: 0;
     max-width: 100%;
     max-height: 60vh;
     object-fit: contain;
     margin-inline: auto;
+    opacity: 0;
+    background: var(--ed-surface-2);
+    border-radius: var(--ed-radius);
+    transition:
+      width 0.22s var(--ed-ease),
+      height 0.22s var(--ed-ease),
+      opacity 0.22s var(--ed-ease);
+  }
+  .ed-compose__grid--single .ed-compose__img.is-ready,
+  .ed-compose__grid--single .ed-compose__video.is-ready {
+    opacity: 1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-compose__grid--single .ed-compose__img,
+    .ed-compose__grid--single .ed-compose__video {
+      transition: opacity 0.01s;
+    }
   }
   .ed-compose__remove {
     position: absolute;
