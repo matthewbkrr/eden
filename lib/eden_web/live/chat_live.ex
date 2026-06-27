@@ -3788,6 +3788,11 @@ defmodule EdenWeb.ChatLive do
             // signals a send, glue to the bottom for a short window, then stop. This is
             // send-only, so it never yanks someone scrolled up reading history.
             this.onAfterSend = () => {
+              // ed:after-send is dispatched ONLY by the main composer (SendQueue); the open
+              // thread panel shares this hook but must NOT stick on a main-stream send (#187
+              // review: a main send was yanking a scrolled-up thread to its bottom). The thread
+              // composer scrolls its own pane separately, never via this event.
+              if (this.el.id !== "message-scroll") return
               this.stickUntil = performance.now() + 1200
               if (this._sticking) return
               this._sticking = true
@@ -4901,6 +4906,12 @@ defmodule EdenWeb.ChatLive do
               }
               this.queue.push({ clientId, body: part, sent: false })
             }
+            // Glue to the bottom on our OWN send (#187): rooms (flat) and groups draw no
+            // optimistic node — and the node is what scrolls a 1:1 DM down (addOptimistic) — so
+            // without this a text send while scrolled up leaves you stranded mid-history. The
+            // media + quote-reply paths already dispatch this; mirror it here. onAfterSend is
+            // send-only, so reading history (scrolling up without sending) is never yanked.
+            window.dispatchEvent(new CustomEvent("ed:after-send"))
             this.flush()
           },
           // A v4 UUID for the client_id. `crypto.randomUUID` only exists in a
