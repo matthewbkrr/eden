@@ -8284,8 +8284,12 @@ defmodule EdenWeb.ChatLive do
       href={~p"/files/#{@attachment.id}"}
       target="_blank"
       rel="noopener"
-      class="block mb-1 cursor-zoom-in"
+      aria-label={gettext("Photo")}
+      class="ed-photo block mb-1 cursor-zoom-in"
     >
+      <%!-- alt="" (decorative): Firefox paints alt text over a not-yet-loaded <img>, so a
+            just-sent photo (no thumbnail yet → src is the slow full original) flashed
+            "Photo" on the cobalt bubble. The a11y label rides the <a> instead. --%>
       <img
         src={thumb_src(@attachment)}
         width={@attachment.width}
@@ -8293,7 +8297,7 @@ defmodule EdenWeb.ChatLive do
         class="rounded-[var(--ed-radius)] block"
         style={img_box(@attachment)}
         loading="lazy"
-        alt={gettext("Photo")}
+        alt=""
       />
     </a>
     """
@@ -9015,13 +9019,15 @@ defmodule EdenWeb.ChatLive do
       href={~p"/files/#{@item.id}"}
       target="_blank"
       rel="noopener"
-      class={[@class, "cursor-zoom-in"]}
+      aria-label={@item.filename || gettext("Photo")}
+      class={[@class, "ed-photo cursor-zoom-in"]}
     >
+      <%!-- alt="" (decorative) — the a11y label rides the <a>; see attachment_view. --%>
       <img
         src={thumb_src(@item)}
         loading="lazy"
         decoding="async"
-        alt={@item.filename || gettext("Photo")}
+        alt=""
       />
     </a>
     """
