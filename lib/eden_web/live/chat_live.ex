@@ -3874,7 +3874,19 @@ defmodule EdenWeb.ChatLive do
                 const node = document.getElementById(domId)
                 if (!node) return
                 node.scrollIntoView({ block: "center", behavior: "auto" })
-                if (Date.now() < holdUntil) requestAnimationFrame(hold)
+                if (Date.now() < holdUntil) {
+                  requestAnimationFrame(hold)
+                } else if (this.el.contains(node)) {
+                  // A jump scrolls programmatically, so no 'scroll' event fires to kick
+                  // maybeLoadOlder — the top "load older" affordance sat visible-but-idle, and
+                  // the target could be stranded at the very top of a deep-jump window (#188).
+                  // Trigger one load now; updated()'s prepend path keeps the target put and the
+                  // continuation below fills until ~300px of older context sits above it.
+                  // Guard: focus_message reaches BOTH the main + thread .ScrollBottom hooks, but
+                  // only the pane that actually holds the target should load — else a jump to a
+                  // thread reply fires a spurious main-stream load (#188 review).
+                  this.maybeLoadOlder()
+                }
               }
               hold()
               setTimeout(() => {
@@ -3938,6 +3950,17 @@ defmodule EdenWeb.ChatLive do
               requestAnimationFrame(() => {
                 const delta = this.el.scrollHeight - this.prevHeight
                 if (delta > 0) this.el.scrollTop += delta
+                // Keep filling while a jump is still settling and the top affordance would
+                // otherwise sit visible-but-idle (#188): self-terminates once ~300px of older
+                // context is above the target (scrollTop > 300) or there's no more — so it never
+                // runs away when someone just parks near the top during normal reading.
+                if (
+                  this._focusing() &&
+                  this.el.scrollTop <= 300 &&
+                  this.el.dataset.hasMore === "true"
+                ) {
+                  this.maybeLoadOlder()
+                }
               })
               return
             }
