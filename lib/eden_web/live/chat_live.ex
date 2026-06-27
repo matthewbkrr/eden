@@ -5473,7 +5473,11 @@ defmodule EdenWeb.ChatLive do
             const input = e.target
             if (!(input instanceof HTMLInputElement) || input.type !== "file") return
             for (const f of input.files || []) {
-              if (!(f.type || "").startsWith("video/")) continue
+              // video AND image: .VideoPreview + .ImgPreview both read these back. Images use
+              // it so the compose preview is OUR crash-safe <img>, not LiveView's
+              // <.live_img_preview> (whose mounted() threw createObjectURL(undefined) on a
+              // consumed entry mid-send, aborting the patch → empty modal).
+              if (!/^(video|image)\//.test(f.type || "")) continue
               // name+size alone collide for two different clips of equal weight →
               // the second tile would show the first file's frame. lastModified adds
               // the distinguishing entropy (it matches entry.client_last_modified).
@@ -5871,6 +5875,31 @@ defmodule EdenWeb.ChatLive do
           },
           destroyed() {
             if (this.onMeta) this.el.removeEventListener("loadedmetadata", this.onMeta)
+            const url = this.store && this.store.get(this.key())
+            if (url) {
+              URL.revokeObjectURL(url)
+              this.store.delete(this.key())
+            }
+          },
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ImgPreview">
+        // Crash-safe staged-photo preview — replaces LiveView's <.live_img_preview>, whose
+        // mounted() calls URL.createObjectURL(entry.file) and threw "Argument 1 could not be
+        // converted to Blob" when the entry's File was already gone mid-send (consumed). That
+        // uncaught throw aborted the DOM patch and left the compose modal blank — the "empty
+        // lightbox". Same model as .VideoPreview: read the object URL the SendQueue stashed at
+        // selection (keyed name:size:lastModified); no URL → leave blank, never throw.
+        export default {
+          key() {
+            return this.el.dataset.name + ":" + this.el.dataset.size + ":" + this.el.dataset.modified
+          },
+          mounted() {
+            this.store = this.el.closest("#composer")?.edenVideoUrls
+            const url = this.store && this.store.get(this.key())
+            if (url) this.el.src = url
+          },
+          destroyed() {
             const url = this.store && this.store.get(this.key())
             if (url) {
               URL.revokeObjectURL(url)
@@ -8046,7 +8075,18 @@ defmodule EdenWeb.ChatLive do
               data-name={entry.client_name}
               data-size={human_size(entry.client_size)}
             >
-              <.live_img_preview :if={image_entry?(entry)} entry={entry} class="ed-compose__img" />
+              <%!-- our own crash-safe preview (NOT <.live_img_preview>, see .ImgPreview) --%>
+              <img
+                :if={image_entry?(entry)}
+                id={"imgp-#{entry.ref}"}
+                phx-hook=".ImgPreview"
+                phx-update="ignore"
+                data-name={entry.client_name}
+                data-size={entry.client_size}
+                data-modified={entry.client_last_modified}
+                class="ed-compose__img"
+                alt=""
+              />
               <div :if={video_entry?(entry)} class="ed-compose__video-wrap">
                 <span class="ed-compose__video-fb" aria-hidden="true">
                   <.icon name="hero-film" class="size-7" />
