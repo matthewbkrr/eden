@@ -5318,38 +5318,41 @@ defmodule EdenWeb.ChatLive do
             } else {
               row.className = "ed-msg flex justify-end"
               const bubble = document.createElement("div")
-              bubble.className = "ed-bubble ed-bubble--me"
-              // Mirror the REAL media bubble so the optimistic twin is the SAME height
-              // and the swap doesn't nudge the stream: the photo sits in a block (mb-1)
-              // wrapper, then a .ed-bubble__cap holds the optional caption + the
-              // .ed-bubble__meta time line (+ a 1:1 sending check) — exactly the real
-              // structure (the cap also width-constrains the caption to the media).
-              const wrap = document.createElement("div")
-              wrap.className = "mb-1"
-              wrap.appendChild(content)
-              bubble.appendChild(wrap)
-              const cap = document.createElement("div")
-              cap.className = "ed-bubble__cap"
+              // Mirror the REAL media bubble EXACTLY so the optimistic twin is the same height
+              // (no swap nudge) AND has no cobalt frame: --media zeroes the bubble padding (the
+              // photo fills edge-to-edge), the media sits in .ed-media, and the time either
+              // rides a padded .ed-bubble__cap--media (with caption) or overlays the photo
+              // bottom-right (.ed-media-time, no caption) — just like message_bubble.
+              bubble.className = "ed-bubble ed-bubble--me ed-bubble--media"
+              const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              const ticks =
+                this.el.dataset.isGroup !== "true"
+                  ? '<span class="inline-flex items-center" style="margin-left:2px;">' +
+                    '<span class="hero-check-micro size-3.5"></span></span>'
+                  : ""
+              const mediaWrap = document.createElement("div")
+              mediaWrap.className = "ed-media"
+              mediaWrap.appendChild(content)
+              if (!caption) {
+                const t = document.createElement("span")
+                t.className = "ed-media-time"
+                t.innerHTML = "<time>" + time + "</time>" + ticks
+                mediaWrap.appendChild(t)
+              }
+              bubble.appendChild(mediaWrap)
               if (caption) {
+                const cap = document.createElement("div")
+                cap.className = "ed-bubble__cap ed-bubble__cap--media"
                 const capText = document.createElement("span")
                 capText.className = "break-words"
                 capText.textContent = caption
                 cap.appendChild(capText)
+                const meta = document.createElement("span")
+                meta.className = "ed-bubble__meta"
+                meta.innerHTML = "<time>" + time + "</time>" + ticks
+                cap.appendChild(meta)
+                bubble.appendChild(cap)
               }
-              const meta = document.createElement("span")
-              meta.className = "ed-bubble__meta"
-              const time = document.createElement("time")
-              time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-              meta.appendChild(time)
-              if (this.el.dataset.isGroup !== "true") {
-                meta.insertAdjacentHTML(
-                  "beforeend",
-                  '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                    '<span class="hero-check-micro size-3.5"></span></span>',
-                )
-              }
-              cap.appendChild(meta)
-              bubble.appendChild(cap)
               row.appendChild(bubble)
             }
             this.pending.appendChild(row)
