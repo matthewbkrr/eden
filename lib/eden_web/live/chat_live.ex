@@ -3725,6 +3725,20 @@ defmodule EdenWeb.ChatLive do
                           if (!v.getAttribute("poster")) v.setAttribute("poster", posters[i])
                         })
                       }
+                      // Same idea for PHOTOS: carry the local snapshot onto the real <img>(s)
+                      // (BEFORE paint) so a just-sent photo shows instantly instead of flashing
+                      // the cobalt bubble + "Photo" alt while /files loads — the thumbnail isn't
+                      // generated yet, so the real src is the full original (a slow fetch).
+                      // morphdom swaps to the server thumb on {:thumbnail_ready}, keeping this
+                      // frame until the thumb decodes. Skip avatar/header imgs (flat rooms).
+                      const realImgs = [...row.querySelectorAll("img")].filter(
+                        (i) => !i.closest(".ed-avatar, .ed-flat__gutter, .ed-flat__head"),
+                      )
+                      if (realImgs.length && realImgs.length === posters.length) {
+                        realImgs.forEach((img, i) => {
+                          if (posters[i]?.startsWith("data:")) img.src = posters[i]
+                        })
+                      }
                       twin.remove()
                       continue
                     }
@@ -4835,6 +4849,16 @@ defmodule EdenWeb.ChatLive do
               // #119: this batch now occupies the shared config until it completes — gate
               // further picks into the queue from this instant (not after the round-trip).
               this.mediaInFlight = true
+              // Pause any previewed clip first: a played <video> left running while the
+              // overlay goes display:none keeps the media session active and flashes the OS
+              // media-controls HUD until the server re-render tears the overlay down.
+              overlay.querySelectorAll("video").forEach((v) => {
+                try {
+                  v.pause()
+                } catch (_e) {
+                  /* a detached/!ready element can throw — ignore */
+                }
+              })
               // Close the preview INSTANTLY (#111) instead of waiting for the
               // media_sending round-trip to re-render — on a slow link the overlay
               // lingered ~seconds after Send. The element stays in the DOM (display

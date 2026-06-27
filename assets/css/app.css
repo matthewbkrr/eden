@@ -949,11 +949,12 @@ html {
 
   /* Newly arriving / sent messages rise in (the .RiseIn observer adds the
      class only to nodes inserted AFTER mount — never the initial list, so no
-     page-load choreography). Subtle and quick: 4px + fade, 140ms. */
+     page-load choreography). Quick rise: 8px + fade, 180ms — enough that a large media
+     placeholder visibly floats up instead of snapping into its reserved box. */
   @keyframes ed-msg-in {
     from {
       opacity: 0;
-      transform: translateY(4px);
+      transform: translateY(8px);
     }
     to {
       opacity: 1;
@@ -961,7 +962,7 @@ html {
     }
   }
   .ed-msg--enter {
-    animation: ed-msg-in 0.14s var(--ed-ease);
+    animation: ed-msg-in 0.18s var(--ed-ease);
   }
 
   /* "Not delivered" marker (#142): a tappable red ●! in the message's status slot
