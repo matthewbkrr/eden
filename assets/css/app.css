@@ -582,6 +582,42 @@ html {
     width: fit-content;
     max-width: 100%;
   }
+  /* Portrait clip: a wider 4:5 box (width/aspect from inline style) so the caption gets a
+     normal width. overflow:hidden clips the ambient glow + honors the bubble/caption radius. */
+  .ed-video-box--portrait {
+    overflow: hidden;
+    background: oklch(0 0 0 / 0.25);
+  }
+  /* Ambient backlight (#…): the poster blurred HARD + scaled so it reads as adaptive glow
+     (the video's colors bleed out), not a recognizable frame; fills the box behind the
+     contained video — i.e. the side bars. */
+  .ed-video-box--portrait::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background-image: var(--vthumb);
+    background-position: center;
+    background-size: cover;
+    filter: blur(2rem) saturate(1.35);
+    transform: scale(1.3);
+  }
+  .ed-video-box--portrait .ed-video,
+  .ed-video-box--portrait .ed-video-cover {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    object-fit: contain;
+    background: transparent;
+    border-radius: 0 !important;
+  }
+  .ed-video-box--portrait .ed-video-play {
+    z-index: 2;
+  }
   /* Poster cover: masks the player (its frame, from the <video>'s poster) until it
      can actually play, so a transient first-load error never flashes its icon.
      pointer-events:none so the controls beneath stay clickable; fades out on reveal. */
@@ -1285,11 +1321,15 @@ html {
   .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media {
     margin-bottom: 3px;
   }
-  .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media :where(img, video, .ed-album__tile) {
+  .ed-bubble--media:has(.ed-bubble__cap--media)
+    .ed-media
+    :where(img, video, .ed-album__tile, .ed-video-box--portrait) {
     border-bottom-left-radius: var(--ed-radius-sm) !important;
     border-bottom-right-radius: var(--ed-radius-sm) !important;
   }
-  .ed-bubble--media:has(.ed-bubble__head) .ed-media :where(img, video, .ed-album__tile) {
+  .ed-bubble--media:has(.ed-bubble__head)
+    .ed-media
+    :where(img, video, .ed-album__tile, .ed-video-box--portrait) {
     border-top-left-radius: var(--ed-radius-sm) !important;
     border-top-right-radius: var(--ed-radius-sm) !important;
   }

@@ -5065,6 +5065,7 @@ defmodule EdenWeb.ChatLive do
                 url: this.snapshot(el),
                 w: (el && (el.naturalWidth || el.videoWidth)) || 0,
                 h: (el && (el.naturalHeight || el.videoHeight)) || 0,
+                video: !!el && el.tagName === "VIDEO",
               }
             })
             const n = tiles.length
@@ -5075,29 +5076,39 @@ defmodule EdenWeb.ChatLive do
             // tile); 2+ use the .ed-album grid. Only a dim + ring mark it sending.
             let media
             if (n === 1 && tiles[0].url) {
+              const { w, h, video } = tiles[0]
               media = document.createElement("div")
-              media.className = "ed-media-sending ed-media-sending--single"
               const img = document.createElement("img")
               img.src = tiles[0].url
               img.alt = ""
-              // Reserve the display box exactly like img_box/1 on the real <img>: an
-              // explicit width + aspect-ratio. Without it the data-URL's natural size
-              // (up to 800px) drove the bubble to its max while the img capped at 320,
-              // leaving empty space to the right — and the box collapsed-then-grew.
-              const { w, h } = tiles[0]
-              img.style.maxWidth = "100%"
-              img.style.height = "auto"
-              if (w > 0 && h > 0) {
-                const scale = Math.min(320 / w, 320 / h, 1)
-                img.style.width = Math.round(w * scale) + "px"
-                img.style.aspectRatio = w + " / " + h
+              if (video && w > 0 && h > w) {
+                // Portrait video: match the real wide 4:5 box + ambient glow (snapshot as
+                // the --vthumb backlight) so the optimistic→real swap doesn't jump narrow→wide.
+                media.className = "ed-media-sending ed-media-sending--single ed-video-box--portrait"
+                media.style.cssText =
+                  "--vthumb:url('" + tiles[0].url + "'); width:min(20rem,80vw); aspect-ratio:4/5;"
+                img.className = "ed-video"
+                media.appendChild(img)
               } else {
-                // A video sent before its metadata loaded (videoWidth === 0): no exact
-                // box yet, but cap the width so the data-URL's natural size can't blow
-                // the bubble to its max (the empty-space bug) while it settles.
-                img.style.width = "min(20rem, 100%)"
+                media.className = "ed-media-sending ed-media-sending--single"
+                // Reserve the display box exactly like img_box/1 on the real <img>: an
+                // explicit width + aspect-ratio. Without it the data-URL's natural size
+                // (up to 800px) drove the bubble to its max while the img capped at 320,
+                // leaving empty space to the right — and the box collapsed-then-grew.
+                img.style.maxWidth = "100%"
+                img.style.height = "auto"
+                if (w > 0 && h > 0) {
+                  const scale = Math.min(320 / w, 320 / h, 1)
+                  img.style.width = Math.round(w * scale) + "px"
+                  img.style.aspectRatio = w + " / " + h
+                } else {
+                  // A video sent before its metadata loaded (videoWidth === 0): no exact
+                  // box yet, but cap the width so the data-URL's natural size can't blow
+                  // the bubble to its max (the empty-space bug) while it settles.
+                  img.style.width = "min(20rem, 100%)"
+                }
+                media.appendChild(img)
               }
-              media.appendChild(img)
             } else {
               const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
               media = document.createElement("div")
@@ -8262,12 +8273,16 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp attachment_view(%{attachment: %{kind: "video"}} = assigns) do
+    assigns = assign(assigns, :portrait?, portrait_video?(assigns.attachment))
+
     ~H"""
     <%!-- Telegram-style: the in-stream clip is a poster + centered play button with NO inline
           controls (they crowded the time pill and read as clutter); .VideoExpand opens it
           full-screen WITH controls on click. The inline <video> (no controls) only paints the
           poster frame; the box is the positioning context for .StreamVideo's poster cover
-          (#130), which masks a just-uploaded clip's transient first-load error. --%>
+          (#130), which masks a just-uploaded clip's transient first-load error.
+          A portrait clip gets a wider 4:5 box (--portrait) with an ambient blurred-poster glow
+          filling the sides, so its caption isn't squeezed into a narrow column. --%>
     <div
       id={"vbox-#{@attachment.id}"}
       phx-hook=".VideoExpand"
@@ -8276,7 +8291,8 @@ defmodule EdenWeb.ChatLive do
       role="button"
       tabindex="0"
       aria-label={gettext("Play %{name}", name: @attachment.filename || gettext("video"))}
-      class="ed-video-box ed-video-box--play mb-1"
+      class={["ed-video-box ed-video-box--play mb-1", @portrait? && "ed-video-box--portrait"]}
+      style={@portrait? && portrait_box_style(@attachment)}
     >
       <video
         id={"av-#{@attachment.id}"}
@@ -8286,7 +8302,7 @@ defmodule EdenWeb.ChatLive do
         poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
         aria-hidden="true"
         class="ed-video"
-        style={video_ratio(@attachment)}
+        style={not @portrait? && video_ratio(@attachment)}
       >
         <source src={~p"/files/#{@attachment.id}"} type={@attachment.content_type} />
       </video>
@@ -10605,6 +10621,24 @@ defmodule EdenWeb.ChatLive do
        do: img_box(%{width: w, height: h})
 
   defp video_ratio(_attachment), do: nil
+
+  # A portrait clip (taller than wide) otherwise renders as a narrow column that drags its
+  # caption into a tall stack of short lines. Render it in a wider, caption-friendly box
+  # with an ambient blurred-poster glow filling the sides (Telegram-style); landscape video
+  # keeps its natural box (video_ratio).
+  defp portrait_video?(%{width: w, height: h})
+       when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+       do: h > w
+
+  defp portrait_video?(_attachment), do: false
+
+  # The wide box for a portrait video: a fixed 4:5 frame (caption-friendly width) that
+  # exposes the poster URL as --vthumb for the ambient ::before glow.
+  # width via vw (not %, which is circular here — the video is position:absolute, so the box
+  # has no in-flow content width and a % against its shrink-wrapped parent collapses to 0).
+  # 20rem matches img_box/1's larger-dimension cap, so a portrait clip is as wide as a photo.
+  defp portrait_box_style(%{id: id}),
+    do: "--vthumb:url('#{~p"/files/#{id}/thumb"}'); width:min(20rem,80vw); aspect-ratio:4/5;"
 
   # Reserve an inline photo's display box BEFORE its bytes load. Image dimensions
   # are known at create time (image_dimensions reads the header), so a definite
