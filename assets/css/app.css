@@ -582,6 +582,45 @@ html {
     width: fit-content;
     max-width: 100%;
   }
+  /* Portrait clip: a wider 4:5 box (width/aspect from inline style) so the caption gets a
+     normal width. overflow:hidden clips the ambient glow + honors the bubble/caption radius. */
+  .ed-video-box--portrait {
+    overflow: hidden;
+    background: oklch(0 0 0 / 0.25);
+    /* Contain the glow/video/play z-indices in their own stacking context so they don't
+       leak into .ed-media and paint over the sibling .ed-media-time pill (#…). */
+    isolation: isolate;
+  }
+  /* Ambient backlight (#…): the poster blurred HARD + scaled so it reads as adaptive glow
+     (the video's colors bleed out), not a recognizable frame; fills the box behind the
+     contained video — i.e. the side bars. */
+  .ed-video-box--portrait::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background-image: var(--vthumb);
+    background-position: center;
+    background-size: cover;
+    filter: blur(2rem) saturate(1.35);
+    transform: scale(1.3);
+  }
+  .ed-video-box--portrait .ed-video,
+  .ed-video-box--portrait .ed-video-cover {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    object-fit: contain;
+    background: transparent;
+    border-radius: 0 !important;
+  }
+  .ed-video-box--portrait .ed-video-play {
+    z-index: 2;
+  }
   /* Poster cover: masks the player (its frame, from the <video>'s poster) until it
      can actually play, so a transient first-load error never flashes its icon.
      pointer-events:none so the controls beneath stay clickable; fades out on reveal. */
@@ -598,6 +637,85 @@ html {
   }
   .ed-video-cover--gone {
     opacity: 0;
+  }
+  /* Telegram-style in-stream video: a poster with a centered play button (no inline
+     controls). The whole box is the click target (.VideoExpand opens it full-screen). */
+  .ed-video-box--play {
+    cursor: pointer;
+  }
+  .ed-video-play {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: grid;
+    place-items: center;
+    width: 3.5rem;
+    height: 3.5rem;
+    /* nudge the play triangle to its optical center */
+    padding-left: 0.1875rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(0 0 0 / 0.5);
+    color: oklch(0.99 0 0);
+    pointer-events: none;
+    box-shadow: 0 2px 10px oklch(0 0 0 / 0.4);
+  }
+  .ed-video-box--play:hover .ed-video-play {
+    background: oklch(0 0 0 / 0.62);
+  }
+  .ed-video-box--play:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
+    border-radius: var(--ed-radius);
+  }
+  /* Full-screen player opened from a poster (the shared #ed-video-modal overlay). */
+  .ed-video-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: none;
+    place-items: center;
+    padding: 1.5rem;
+    background: oklch(0 0 0 / 0.9);
+    cursor: zoom-out;
+  }
+  .ed-video-modal--open {
+    display: grid;
+  }
+  .ed-video-modal__player {
+    max-width: calc(100dvw - 3rem);
+    max-height: calc(100dvh - 3rem);
+    width: auto;
+    height: auto;
+    border-radius: var(--ed-radius);
+    background: oklch(0 0 0);
+    box-shadow: 0 10px 40px oklch(0 0 0 / 0.5);
+    cursor: default;
+  }
+  .ed-video-modal__close {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(1 0 0 / 0.12);
+    color: oklch(0.99 0 0);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-video-modal__close:hover {
+    background: oklch(1 0 0 / 0.2);
+  }
+  .ed-video-modal__close svg {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+  .ed-video-modal__close:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
   }
   .ed-file {
     display: flex;
@@ -1180,6 +1298,9 @@ html {
     position: absolute;
     right: 0.375rem;
     bottom: 0.375rem;
+    /* Above the media — a portrait clip's contained <video> (z-1, filling the box) would
+       otherwise paint over this pill ("the time goes behind the video"). */
+    z-index: 3;
     display: inline-flex;
     align-items: center;
     gap: 1px;
@@ -1206,11 +1327,15 @@ html {
   .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media {
     margin-bottom: 3px;
   }
-  .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media :where(img, video, .ed-album__tile) {
+  .ed-bubble--media:has(.ed-bubble__cap--media)
+    .ed-media
+    :where(img, video, .ed-album__tile, .ed-video-box--portrait) {
     border-bottom-left-radius: var(--ed-radius-sm) !important;
     border-bottom-right-radius: var(--ed-radius-sm) !important;
   }
-  .ed-bubble--media:has(.ed-bubble__head) .ed-media :where(img, video, .ed-album__tile) {
+  .ed-bubble--media:has(.ed-bubble__head)
+    .ed-media
+    :where(img, video, .ed-album__tile, .ed-video-box--portrait) {
     border-top-left-radius: var(--ed-radius-sm) !important;
     border-top-right-radius: var(--ed-radius-sm) !important;
   }
@@ -2884,7 +3009,8 @@ html {
   }
 
   /* In-flight cancel-X on an optimistic upload node (#137): a calm dark badge that reads on
-     a photo AND on the file card. Top-right over media; vertically centered on the file row. */
+     a photo AND on the file card. Centered inside the progress ring over media (Telegram —
+     the ring tracks progress around the X); vertically centered on the file row. */
   .ed-sending-cancel {
     position: absolute;
     top: 0.3rem;
@@ -2916,6 +3042,21 @@ html {
     right: 0.5rem;
     transform: translateY(-50%);
   }
+  /* Over media the cancel sits dead-center INSIDE the ring (which is also centered), a touch
+     smaller so the progress arc reads around it (Telegram-style). inset:0 + margin:auto
+     overrides the base top-right corner placement. */
+  .ed-media-sending .ed-sending-cancel {
+    inset: 0;
+    margin: auto;
+    width: 2rem;
+    height: 2rem;
+  }
+  /* A larger X reads better centered in the ring (!important to beat the Tailwind size-3.5
+     utility the icon span ships with). */
+  .ed-media-sending .ed-sending-cancel > span {
+    width: 1.375rem !important;
+    height: 1.375rem !important;
+  }
 
   /* Touch targets (#137): enlarge the badges on coarse pointers — a ::before hit-area
      expansion would be clipped by the tile/photo's overflow:hidden. The in-flight cancel
@@ -2925,6 +3066,20 @@ html {
     .ed-sending-cancel {
       width: 2.75rem;
       height: 2.75rem;
+    }
+    /* The centered media cancel grows to the 44px touch target, so the ring around it grows
+       too (keeps the progress arc visible outside the X). */
+    .ed-media-sending__ring {
+      width: 3.5rem;
+      height: 3.5rem;
+    }
+    .ed-media-sending .ed-sending-cancel {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+    .ed-media-sending .ed-sending-cancel > span {
+      width: 1.625rem !important;
+      height: 1.625rem !important;
     }
     .ed-compose__remove {
       width: 2.25rem;

@@ -5065,6 +5065,7 @@ defmodule EdenWeb.ChatLive do
                 url: this.snapshot(el),
                 w: (el && (el.naturalWidth || el.videoWidth)) || 0,
                 h: (el && (el.naturalHeight || el.videoHeight)) || 0,
+                video: !!el && el.tagName === "VIDEO",
               }
             })
             const n = tiles.length
@@ -5075,29 +5076,39 @@ defmodule EdenWeb.ChatLive do
             // tile); 2+ use the .ed-album grid. Only a dim + ring mark it sending.
             let media
             if (n === 1 && tiles[0].url) {
+              const { w, h, video } = tiles[0]
               media = document.createElement("div")
-              media.className = "ed-media-sending ed-media-sending--single"
               const img = document.createElement("img")
               img.src = tiles[0].url
               img.alt = ""
-              // Reserve the display box exactly like img_box/1 on the real <img>: an
-              // explicit width + aspect-ratio. Without it the data-URL's natural size
-              // (up to 800px) drove the bubble to its max while the img capped at 320,
-              // leaving empty space to the right — and the box collapsed-then-grew.
-              const { w, h } = tiles[0]
-              img.style.maxWidth = "100%"
-              img.style.height = "auto"
-              if (w > 0 && h > 0) {
-                const scale = Math.min(320 / w, 320 / h, 1)
-                img.style.width = Math.round(w * scale) + "px"
-                img.style.aspectRatio = w + " / " + h
+              if (video && w > 0 && h > w) {
+                // Portrait video: match the real wide 4:5 box + ambient glow (snapshot as
+                // the --vthumb backlight) so the optimistic→real swap doesn't jump narrow→wide.
+                media.className = "ed-media-sending ed-media-sending--single ed-video-box--portrait"
+                media.style.cssText =
+                  "--vthumb:url('" + tiles[0].url + "'); width:min(20rem,80vw); aspect-ratio:4/5;"
+                img.className = "ed-video"
+                media.appendChild(img)
               } else {
-                // A video sent before its metadata loaded (videoWidth === 0): no exact
-                // box yet, but cap the width so the data-URL's natural size can't blow
-                // the bubble to its max (the empty-space bug) while it settles.
-                img.style.width = "min(20rem, 100%)"
+                media.className = "ed-media-sending ed-media-sending--single"
+                // Reserve the display box exactly like img_box/1 on the real <img>: an
+                // explicit width + aspect-ratio. Without it the data-URL's natural size
+                // (up to 800px) drove the bubble to its max while the img capped at 320,
+                // leaving empty space to the right — and the box collapsed-then-grew.
+                img.style.maxWidth = "100%"
+                img.style.height = "auto"
+                if (w > 0 && h > 0) {
+                  const scale = Math.min(320 / w, 320 / h, 1)
+                  img.style.width = Math.round(w * scale) + "px"
+                  img.style.aspectRatio = w + " / " + h
+                } else {
+                  // A video sent before its metadata loaded (videoWidth === 0): no exact
+                  // box yet, but cap the width so the data-URL's natural size can't blow
+                  // the bubble to its max (the empty-space bug) while it settles.
+                  img.style.width = "min(20rem, 100%)"
+                }
+                media.appendChild(img)
               }
-              media.appendChild(img)
             } else {
               const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
               media = document.createElement("div")
@@ -5307,38 +5318,41 @@ defmodule EdenWeb.ChatLive do
             } else {
               row.className = "ed-msg flex justify-end"
               const bubble = document.createElement("div")
-              bubble.className = "ed-bubble ed-bubble--me"
-              // Mirror the REAL media bubble so the optimistic twin is the SAME height
-              // and the swap doesn't nudge the stream: the photo sits in a block (mb-1)
-              // wrapper, then a .ed-bubble__cap holds the optional caption + the
-              // .ed-bubble__meta time line (+ a 1:1 sending check) — exactly the real
-              // structure (the cap also width-constrains the caption to the media).
-              const wrap = document.createElement("div")
-              wrap.className = "mb-1"
-              wrap.appendChild(content)
-              bubble.appendChild(wrap)
-              const cap = document.createElement("div")
-              cap.className = "ed-bubble__cap"
+              // Mirror the REAL media bubble EXACTLY so the optimistic twin is the same height
+              // (no swap nudge) AND has no cobalt frame: --media zeroes the bubble padding (the
+              // photo fills edge-to-edge), the media sits in .ed-media, and the time either
+              // rides a padded .ed-bubble__cap--media (with caption) or overlays the photo
+              // bottom-right (.ed-media-time, no caption) — just like message_bubble.
+              bubble.className = "ed-bubble ed-bubble--me ed-bubble--media"
+              const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              const ticks =
+                this.el.dataset.isGroup !== "true"
+                  ? '<span class="inline-flex items-center" style="margin-left:2px;">' +
+                    '<span class="hero-check-micro size-3.5"></span></span>'
+                  : ""
+              const mediaWrap = document.createElement("div")
+              mediaWrap.className = "ed-media"
+              mediaWrap.appendChild(content)
+              if (!caption) {
+                const t = document.createElement("span")
+                t.className = "ed-media-time"
+                t.innerHTML = "<time>" + time + "</time>" + ticks
+                mediaWrap.appendChild(t)
+              }
+              bubble.appendChild(mediaWrap)
               if (caption) {
+                const cap = document.createElement("div")
+                cap.className = "ed-bubble__cap ed-bubble__cap--media"
                 const capText = document.createElement("span")
                 capText.className = "break-words"
                 capText.textContent = caption
                 cap.appendChild(capText)
+                const meta = document.createElement("span")
+                meta.className = "ed-bubble__meta"
+                meta.innerHTML = "<time>" + time + "</time>" + ticks
+                cap.appendChild(meta)
+                bubble.appendChild(cap)
               }
-              const meta = document.createElement("span")
-              meta.className = "ed-bubble__meta"
-              const time = document.createElement("time")
-              time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-              meta.appendChild(time)
-              if (this.el.dataset.isGroup !== "true") {
-                meta.insertAdjacentHTML(
-                  "beforeend",
-                  '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                    '<span class="hero-check-micro size-3.5"></span></span>',
-                )
-              }
-              cap.appendChild(meta)
-              bubble.appendChild(cap)
               row.appendChild(bubble)
             }
             this.pending.appendChild(row)
@@ -6039,6 +6053,86 @@ defmodule EdenWeb.ChatLive do
             )
             document.body.appendChild(box)
             return box
+          },
+        }
+      </script>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".VideoExpand">
+        // Telegram-style video: the in-stream clip is a poster + centered play button with
+        // NO inline controls. Clicking opens the clip full-screen (wide) in a shared overlay
+        // with real controls, and plays immediately — the click is a user gesture, so
+        // autoplay with sound is allowed. Cmd/Ctrl/Shift/middle click fall through to the
+        // <a>'s "open original in a new tab" (the box has no href, so they just no-op there).
+        export default {
+          mounted() {
+            this._open = (e) => {
+              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
+              e.preventDefault()
+              this.open()
+            }
+            this.el.addEventListener("click", this._open)
+            this._key = (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault()
+                this.open()
+              }
+            }
+            this.el.addEventListener("keydown", this._key)
+          },
+          open() {
+            const src = this.el.dataset.src
+            if (!src) return
+            const type = this.el.dataset.type || ""
+            const box = this.modal()
+            const video = box.querySelector(".ed-video-modal__player")
+            video.innerHTML = `<source src="${src}"${type ? ` type="${type}"` : ""}>`
+            video.load()
+            box.classList.add("ed-video-modal--open")
+            document.body.style.overflow = "hidden"
+            document.addEventListener("keydown", box.__onKey)
+            // The opening tap is a user gesture, so play-with-sound is permitted.
+            video.play && video.play().catch(() => {})
+          },
+          modal() {
+            let box = document.getElementById("ed-video-modal")
+            if (box) return box
+
+            box = document.createElement("div")
+            box.id = "ed-video-modal"
+            box.className = "ed-video-modal"
+            const lbl = document.getElementById("message-scroll")?.dataset || {}
+            const xmark =
+              "M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
+            box.innerHTML =
+              `<button class="ed-video-modal__close" aria-label="${lbl.lbClose || "Close"}"><svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="${xmark}" clip-rule="evenodd"/></svg></button>` +
+              '<video class="ed-video-modal__player" controls playsinline></video>'
+
+            const close = () => {
+              box.classList.remove("ed-video-modal--open")
+              document.body.style.overflow = ""
+              document.removeEventListener("keydown", box.__onKey)
+              const v = box.querySelector(".ed-video-modal__player")
+              // Stop playback + release the source so the clip can't keep playing audio
+              // behind the closed overlay.
+              v.pause()
+              v.innerHTML = ""
+              v.removeAttribute("src")
+              v.load()
+            }
+            box.__onKey = (e) => {
+              if (e.key === "Escape") close()
+            }
+            box.addEventListener("click", (e) => {
+              if (e.target.closest(".ed-video-modal__close")) return close()
+              // Click on the scrim (anything but the player) closes.
+              if (!e.target.closest(".ed-video-modal__player")) close()
+            })
+            document.body.appendChild(box)
+            return box
+          },
+          destroyed() {
+            this.el.removeEventListener("click", this._open)
+            this.el.removeEventListener("keydown", this._key)
           },
         }
       </script>
@@ -8182,20 +8276,36 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp attachment_view(%{attachment: %{kind: "video"}} = assigns) do
+    assigns = assign(assigns, :portrait?, portrait_video?(assigns.attachment))
+
     ~H"""
-    <%!-- The box is the positioning context for .StreamVideo's poster cover (#130),
-          which masks the player until it can actually play so a just-uploaded clip's
-          transient first-load error never flashes its "unsupported" icon. --%>
-    <div class="ed-video-box mb-1">
+    <%!-- Telegram-style: the in-stream clip is a poster + centered play button with NO inline
+          controls (they crowded the time pill and read as clutter); .VideoExpand opens it
+          full-screen WITH controls on click. The inline <video> (no controls) only paints the
+          poster frame; the box is the positioning context for .StreamVideo's poster cover
+          (#130), which masks a just-uploaded clip's transient first-load error.
+          A portrait clip gets a wider 4:5 box (--portrait) with an ambient blurred-poster glow
+          filling the sides, so its caption isn't squeezed into a narrow column. --%>
+    <div
+      id={"vbox-#{@attachment.id}"}
+      phx-hook=".VideoExpand"
+      data-src={~p"/files/#{@attachment.id}"}
+      data-type={@attachment.content_type}
+      role="button"
+      tabindex="0"
+      aria-label={gettext("Play %{name}", name: @attachment.filename || gettext("video"))}
+      class={["ed-video-box ed-video-box--play mb-1", @portrait? && "ed-video-box--portrait"]}
+      style={@portrait? && portrait_box_style(@attachment)}
+    >
       <video
         id={"av-#{@attachment.id}"}
         phx-hook=".StreamVideo"
-        controls
         preload="metadata"
+        tabindex="-1"
         poster={@attachment.thumbnail_key && ~p"/files/#{@attachment.id}/thumb"}
-        aria-label={@attachment.filename || gettext("Video")}
+        aria-hidden="true"
         class="ed-video"
-        style={video_ratio(@attachment)}
+        style={not @portrait? && video_ratio(@attachment)}
       >
         <source src={~p"/files/#{@attachment.id}"} type={@attachment.content_type} />
       </video>
@@ -8212,6 +8322,9 @@ defmodule EdenWeb.ChatLive do
         aria-hidden="true"
         alt=""
       />
+      <span class="ed-video-play" aria-hidden="true">
+        <.icon name="hero-play-solid" class="size-7" />
+      </span>
     </div>
     """
   end
@@ -8894,6 +9007,9 @@ defmodule EdenWeb.ChatLive do
     ~H"""
     <a
       id={@dom_id}
+      phx-hook=".VideoExpand"
+      data-src={~p"/files/#{@item.id}"}
+      data-type={@item.content_type}
       href={~p"/files/#{@item.id}"}
       data-ts={DateTime.to_unix(@item.inserted_at)}
       target="_blank"
@@ -10508,6 +10624,24 @@ defmodule EdenWeb.ChatLive do
        do: img_box(%{width: w, height: h})
 
   defp video_ratio(_attachment), do: nil
+
+  # A portrait clip (taller than wide) otherwise renders as a narrow column that drags its
+  # caption into a tall stack of short lines. Render it in a wider, caption-friendly box
+  # with an ambient blurred-poster glow filling the sides (Telegram-style); landscape video
+  # keeps its natural box (video_ratio).
+  defp portrait_video?(%{width: w, height: h})
+       when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+       do: h > w
+
+  defp portrait_video?(_attachment), do: false
+
+  # The wide box for a portrait video: a fixed 4:5 frame (caption-friendly width) that
+  # exposes the poster URL as --vthumb for the ambient ::before glow.
+  # width via vw (not %, which is circular here — the video is position:absolute, so the box
+  # has no in-flow content width and a % against its shrink-wrapped parent collapses to 0).
+  # 20rem matches img_box/1's larger-dimension cap, so a portrait clip is as wide as a photo.
+  defp portrait_box_style(%{id: id}),
+    do: "--vthumb:url('#{~p"/files/#{id}/thumb"}'); width:min(20rem,80vw); aspect-ratio:4/5;"
 
   # Reserve an inline photo's display box BEFORE its bytes load. Image dimensions
   # are known at create time (image_dimensions reads the header), so a definite
