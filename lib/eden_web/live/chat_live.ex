@@ -7662,12 +7662,17 @@ defmodule EdenWeb.ChatLive do
             </div>
             <div class="ed-media">
               <.album_view attachments={@message.attachments} message_id={@message.id} />
-              <span class="ed-media-time">
+              <%!-- Time overlays the photo only when there's NO caption; with a caption it
+                    rides in the caption line below (Telegram-style). --%>
+              <span :if={@message.body == ""} class="ed-media-time">
                 <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
               </span>
             </div>
-            <div :if={@message.body != ""} class="ed-bubble__cap ed-bubble__cap--media break-words">
-              {Markup.to_iodata(@message.body)}
+            <div :if={@message.body != ""} class="ed-bubble__cap ed-bubble__cap--media">
+              <span class="break-words">{Markup.to_iodata(@message.body)}</span>
+              <span class="ed-bubble__meta">
+                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+              </span>
             </div>
           <% else %>
             <span

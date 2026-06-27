@@ -1683,7 +1683,9 @@ defmodule EdenWeb.ChatLiveTest do
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Search"})
 
       {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
-      {:ok, msg} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "findme needle"})
+
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "findme needle"})
 
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")

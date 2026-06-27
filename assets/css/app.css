@@ -491,7 +491,9 @@ html {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    margin: 0.3rem 0 0 0.6rem;
+    /* 0.4rem drops the (smaller) time onto the body text's baseline on a single-line
+       message — bottoms align instead of the time floating a hair high. */
+    margin: 0.4rem 0 0 0.6rem;
     font: 500 0.6875rem/1 var(--ed-mono);
     opacity: 0.7;
   }
@@ -1070,7 +1072,9 @@ html {
     display: block;
     width: 100%;
     text-align: left;
-    margin-bottom: 0.25rem;
+    /* 0.4375rem so the gap below the quote (to the body) equals the gap above it (the
+       bubble's 0.5rem top padding) — the quote sits symmetrically, top gap unchanged. */
+    margin-bottom: 0.4375rem;
     padding: 0.2rem 0.5rem;
     border-radius: var(--ed-radius-sm);
     background: color-mix(in oklab, currentColor 12%, transparent);
@@ -1137,11 +1141,19 @@ html {
     overflow: hidden;
   }
   /* Sender / reply / forward sit above the media on the bubble bg, padded; width:0 +
-     min-width:100% keeps them from stretching the bubble wider than the media. */
+     min-width:100% keeps them from stretching the bubble wider than the media.
+     Vertical padding is symmetric so the bubble-bg "frame" around the quote reads even
+     above and below it. */
   .ed-bubble--media .ed-bubble__head {
     width: 0;
     min-width: 100%;
-    padding: 0.375rem 0.625rem 0.25rem;
+    padding: 0.375rem 0.625rem;
+  }
+  /* The quote's bottom margin (which gives DM text bubbles their quote→body gap) would
+     stack on the head's padding here and make the frame below the quote ~2x the gap
+     above it — drop it; the head padding alone balances the frame. */
+  .ed-bubble--media .ed-bubble__head .ed-quote {
+    margin-bottom: 0;
   }
   .ed-media {
     position: relative;
@@ -1179,11 +1191,28 @@ html {
     pointer-events: none;
   }
   .ed-bubble--media .ed-bubble__cap--media {
-    display: block;
+    /* flow-root to contain the floated .ed-bubble__meta — the time rides the caption line
+       now (Telegram-style), not an overlay on the photo. */
+    display: flow-root;
     width: 0;
     min-width: 100%;
-    padding: 0.375rem 0.625rem 0.4375rem;
+    padding: 0.375rem 0.75rem 0.5rem;
     line-height: 1.4;
+  }
+  /* The bubble's overflow clip only rounds the photo where it meets the bubble's OUTER
+     edge. Where the photo abuts internal content the clip can't reach, so round those
+     corners explicitly with a small Telegram-like radius — against a CAPTION below, and
+     against a HEAD (reply/forward/sender) above. Edge corners keep the bubble radius. */
+  .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media {
+    margin-bottom: 3px;
+  }
+  .ed-bubble--media:has(.ed-bubble__cap--media) .ed-media :where(img, video, .ed-album__tile) {
+    border-bottom-left-radius: var(--ed-radius-sm) !important;
+    border-bottom-right-radius: var(--ed-radius-sm) !important;
+  }
+  .ed-bubble--media:has(.ed-bubble__head) .ed-media :where(img, video, .ed-album__tile) {
+    border-top-left-radius: var(--ed-radius-sm) !important;
+    border-top-right-radius: var(--ed-radius-sm) !important;
   }
 
   /* Permalink / jump target: briefly ring (DM bubble) or tint (flat row) the message
