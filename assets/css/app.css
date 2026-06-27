@@ -1282,7 +1282,9 @@ html {
   /* !important: these override the Tailwind mb-1 / rounded-[] utilities the shared
      attachment_view puts on the media (rooms still need them, so they stay in the
      markup); utilities live in @layer utilities which outranks @layer components. */
-  .ed-media > a,
+  /* :not(.ed-file) — a file card (a strip photo or a doc alongside inline media) keeps its
+     own flex layout instead of being forced to block. */
+  .ed-media > a:not(.ed-file),
   .ed-media > img,
   .ed-media > video,
   .ed-media > .ed-album,
@@ -1339,13 +1341,13 @@ html {
   }
   .ed-bubble--media:has(.ed-bubble__cap--media)
     .ed-media
-    :where(img, video, .ed-album__tile, .ed-video-box--portrait) {
+    :where(img, video, .ed-album, .ed-video-box--portrait) {
     border-bottom-left-radius: var(--ed-radius-sm) !important;
     border-bottom-right-radius: var(--ed-radius-sm) !important;
   }
   .ed-bubble--media:has(.ed-bubble__head)
     .ed-media
-    :where(img, video, .ed-album__tile, .ed-video-box--portrait) {
+    :where(img, video, .ed-album, .ed-video-box--portrait) {
     border-top-left-radius: var(--ed-radius-sm) !important;
     border-top-right-radius: var(--ed-radius-sm) !important;
   }
@@ -1553,25 +1555,31 @@ html {
   /* Sent album: tight media mosaic in a bubble/flat row (#58, photos/videos
      only — files send separately). One image renders via attachment_view; two
      or more tile into a square grid that hugs its content (no empty bubble). */
+  /* Telegram-style justified mosaic: a column of rows; each row a flex strip whose tiles
+     flex-grow by their aspect ratio (set inline) so they fill the album width at one height.
+     The row's aspect-ratio (inline = sum of its tiles' aspects) gives that height. The bubble's
+     overflow clip rounds the outer corners; the caption/head radius rules round the album. */
   .ed-album {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: 2px;
-    width: fit-content;
-    max-width: min(18rem, 100%);
-    border-radius: var(--ed-radius);
+    /* definite width (not min(…,100%)): the % term inflates the bubble's shrink-to-fit width
+       to the whole column and leaves a bg strip beside the album. max-width:100% still caps it
+       on a narrow column (mirrors a single photo's img_box). */
+    width: 20rem;
+    max-width: 100%;
     overflow: hidden;
   }
-  .ed-album--2 {
-    grid-template-columns: repeat(2, 8.75rem);
-  }
-  .ed-album--3 {
-    grid-template-columns: repeat(3, 5.75rem);
+  .ed-album__row {
+    display: flex;
+    gap: 2px;
+    min-width: 0;
   }
   .ed-album__tile {
     display: block;
-    aspect-ratio: 1;
-    overflow: hidden;
     position: relative;
+    min-width: 0;
+    overflow: hidden;
   }
   .ed-album__tile img,
   .ed-album__tile-fill {
@@ -2993,6 +3001,13 @@ html {
   /* "Send as file" optimistic node (#122): stacked document cards, each card's photo
      thumbnail dimmed under the progress ring (which overlays the thumb slot). */
   .ed-asfile-sending {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  /* Optimistic send mixing inline media + strip-photo file cards: the mosaic/single and the
+     cards stack with the same small gap as the real .ed-media. */
+  .ed-media-sending__group {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;

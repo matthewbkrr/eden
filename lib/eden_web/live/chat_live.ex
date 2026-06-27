@@ -15,6 +15,7 @@ defmodule EdenWeb.ChatLive do
   import EdenWeb.PresenceHelpers, only: [status_label: 1, status_color_var: 1]
 
   alias Eden.{Accounts, Channels, Chat}
+  alias EdenWeb.ChatLive.AlbumLayout
   alias EdenWeb.Markup
 
   @page 50
@@ -5083,23 +5084,34 @@ defmodule EdenWeb.ChatLive do
             // fill so the album's tile count still matches the real row.
             // Snapshot each tile's frame AND its source pixel dimensions — the dims let
             // the lone-image case reserve its display box exactly like the real row.
-            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")].map((tile) => {
+            const allTiles = [...overlay.querySelectorAll(".ed-compose__tile")].map((tile) => {
               const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
               return {
                 url: this.snapshot(el),
                 w: (el && (el.naturalWidth || el.videoWidth)) || 0,
                 h: (el && (el.naturalHeight || el.videoHeight)) || 0,
                 video: !!el && el.tagName === "VIDEO",
+                name: tile.dataset.name || "",
+                size: tile.dataset.size || "",
               }
             })
+            if (allTiles.length === 0) return
+            // A very wide/tall PHOTO (aspect > 5:1) renders as a file card, not inline —
+            // mirror the server's strip_photo?/1 so the optimistic node matches the real row
+            // (no inline-image → file-card jump on swap). Videos always stay inline.
+            const isStrip = (t) =>
+              !t.video && t.w > 0 && t.h > 0 && Math.max(t.w, t.h) / Math.min(t.w, t.h) > 5
+            const tiles = allTiles.filter((t) => !isStrip(t))
+            const strips = allTiles.filter(isStrip)
             const n = tiles.length
-            if (n === 0) return
 
-            // Match the REAL render so the swap doesn't reflow (#95 review): a lone
-            // item renders via attachment_view (natural aspect, NOT a square album
-            // tile); 2+ use the .ed-album grid. Only a dim + ring mark it sending.
-            let media
-            if (n === 1 && tiles[0].url) {
+            // Match the REAL render so the swap doesn't reflow (#95 review): a message with a
+            // SINGLE attachment renders via attachment_view (natural aspect, NOT a square album
+            // tile); 2+ use the .ed-album grid. A lone inline photo that rides ALONGSIDE a strip
+            // is still a ≥2-attachment message, so the server lays it out as a 1-tile mosaic —
+            // hence the `strips.length === 0` guard (else the box→mosaic differ on swap).
+            let media = null
+            if (n === 1 && tiles[0].url && strips.length === 0) {
               const { w, h, video } = tiles[0]
               media = document.createElement("div")
               const img = document.createElement("img")
@@ -5133,38 +5145,98 @@ defmodule EdenWeb.ChatLive do
                 }
                 media.appendChild(img)
               }
-            } else {
-              const cols = { 1: 1, 2: 2, 3: 3, 4: 2 }[n] || 3
+            } else if (n >= 1) {
+              // Justified mosaic matching the real album_view (AlbumLayout.rows/1): split into the
+              // SAME aspect-balanced rows the server uses (balanceRows), each tile flex-grown by
+              // its aspect, so the optimistic→real swap doesn't reflow. (A count-based split here
+              // would regroup mixed-aspect rows on swap; a fixed-column grid left a bg strip.)
               media = document.createElement("div")
-              media.className = "ed-album ed-media-sending" + (cols > 1 ? " ed-album--" + cols : "")
-              for (const t of tiles) {
-                const tile = document.createElement("span")
-                tile.className = "ed-album__tile"
-                if (t.url) {
-                  const img = document.createElement("img")
-                  img.src = t.url
-                  img.alt = ""
-                  tile.appendChild(img)
-                } else {
-                  tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+              media.className = "ed-album ed-media-sending"
+              for (const rowTiles of this.balanceRows(tiles)) {
+                const row = document.createElement("div")
+                row.className = "ed-album__row"
+                row.style.aspectRatio = String(
+                  rowTiles.reduce((s, t) => s + this.albumAspect(t), 0),
+                )
+                for (const t of rowTiles) {
+                  const tile = document.createElement("span")
+                  tile.className = "ed-album__tile"
+                  tile.style.flex = this.albumAspect(t) + " 1 0"
+                  if (t.url) {
+                    const img = document.createElement("img")
+                    img.src = t.url
+                    img.alt = ""
+                    tile.appendChild(img)
+                  } else {
+                    tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+                  }
+                  row.appendChild(tile)
                 }
-                media.appendChild(tile)
+                media.appendChild(row)
               }
             }
+            // Strip photos render as file cards (mirrors @rest in album_view) after the
+            // inline media — one per strip, with a snapshot thumb + name + size.
+            const stripCards = strips.map((t) => {
+              const card = document.createElement("div")
+              card.className = "ed-file ed-file--photo ed-file--sending"
+              const thumb = document.createElement("span")
+              thumb.className = "ed-file__thumb"
+              if (t.url) {
+                const img = document.createElement("img")
+                img.src = t.url
+                img.alt = ""
+                thumb.appendChild(img)
+              }
+              card.appendChild(thumb)
+              const meta = document.createElement("span")
+              meta.className = "ed-file__meta"
+              const nm = document.createElement("span")
+              nm.className = "ed-file__name"
+              nm.textContent = t.name
+              const sz = document.createElement("span")
+              sz.className = "ed-file__size"
+              sz.textContent = t.size
+              meta.appendChild(nm)
+              meta.appendChild(sz)
+              card.appendChild(meta)
+              return { card, thumb }
+            })
+            // Invariant from here on: `media` and `stripCards` are never both empty. The early
+            // `allTiles.length === 0` return guarantees ≥1 tile; a tile is either inline media
+            // (→ `media`) or a strip (→ `stripCards`). So `media || stripCards[0]` always resolves.
+            //
             // Determinate ring (#95): the server drives its fill arc via media_progress
-            // (setRing moves the dashoffset). White on the photo scrim (rotated -90deg in
-            // CSS so it grows from 12 o'clock).
-            media.appendChild(this.buildRing("ed-media-sending__ring"))
-            // In-flight cancel (#137, variant A): one X on the album aborts the whole send
-            // (the optimistic node holds no per-entry refs) and clears every pending node.
-            media.appendChild(
-              this.buildCancel(() => {
-                this.pushEvent("cancel_all_uploads", {})
-                if (this.pending) this.pending.replaceChildren()
-              }),
-            )
+            // (setRing moves the dashoffset). One ring for the whole send — on the inline
+            // media (white-on-scrim, rotated -90deg so it grows from 12 o'clock) if present,
+            // else the first strip card's thumb.
+            if (media) {
+              media.appendChild(this.buildRing("ed-media-sending__ring"))
+            } else if (stripCards[0]) {
+              stripCards[0].thumb.appendChild(this.buildRing("ed-file__ring"))
+            }
+            // In-flight cancel (#137, variant A): one X aborts the whole send (the optimistic
+            // node holds no per-entry refs) and clears every pending node. It rides the inline
+            // media if present, else the first strip card.
+            const cancel = this.buildCancel(() => {
+              this.pushEvent("cancel_all_uploads", {})
+              if (this.pending) this.pending.replaceChildren()
+            })
+            ;(media || stripCards[0].card).appendChild(cancel)
 
-            return this.wrapAndAppendOptimistic(media, clientId, caption)
+            // No strips (the common path): the inline media node IS the content. With strips,
+            // the inline media (if any) and the strip cards stack as siblings inside .ed-media.
+            let content
+            if (stripCards.length === 0) {
+              content = media
+            } else {
+              content = document.createElement("div")
+              content.className = "ed-media-sending__group"
+              if (media) content.appendChild(media)
+              for (const { card } of stripCards) content.appendChild(card)
+            }
+
+            return this.wrapAndAppendOptimistic(content, clientId, caption)
           },
           // Optimistic node for a photos-only "Send as file" album (#122): mirror the real
           // render — each photo as a document card (snapshot thumb + name + size), never an
@@ -5214,6 +5286,49 @@ defmodule EdenWeb.ChatLive do
               }),
             )
             return this.wrapAndAppendOptimistic(wrap, clientId, caption)
+          },
+          // Mirror album_row_sizes/1 (server): the count plan for N media (4→2+2, a trailing
+          // remainder of 1 folded into 2+2). Only its LENGTH is used now — it sets how many
+          // rows balanceRows fills; the actual per-row split is aspect-balanced below.
+          albumRowSizes(n) {
+            if (n <= 3) return [n]
+            if (n === 4) return [2, 2]
+            const r = n % 3
+            if (r === 0) return Array(n / 3).fill(3)
+            if (r === 1) return Array(Math.floor(n / 3) - 1).fill(3).concat([2, 2])
+            return Array(Math.floor(n / 3)).fill(3).concat([2])
+          },
+          // Mirror album_aspect/1 (server): an item's display aspect, clamped to [0.5, 2.6] and
+          // rounded to 4dp so the optimistic flex-grow/row-height math matches the real render
+          // exactly (sub-pixel-faithful, no drift on swap). Missing dims fall back to square.
+          albumAspect(t) {
+            return t.w > 0 && t.h > 0
+              ? Math.round(Math.min(2.6, Math.max(0.5, t.w / t.h)) * 1e4) / 1e4
+              : 1
+          },
+          // Mirror chunk_album_rows/1 + balance_rows/3 (server): split tiles into the SAME
+          // number of rows as the count plan, but distribute by aspect so each row's aspect-sum
+          // is ~equal (→ rows of ~equal height). Uniform photos reproduce the clean count grid;
+          // mixed aspects group identically to the server, so the swap never reshuffles rows.
+          balanceRows(tiles) {
+            const r0 = this.albumRowSizes(tiles.length).length
+            const balance = (items, r) => {
+              if (r <= 1) return [items]
+              const target = items.reduce((s, t) => s + this.albumAspect(t), 0) / r
+              const row = []
+              let sum = 0
+              let i = 0
+              while (i < items.length) {
+                // Always take ≥1 (row empty); always leave ≥1 for each of the r-1 remaining
+                // rows; otherwise fill toward the target aspect-sum.
+                if (row.length > 0 && (items.length - i <= r - 1 || sum >= target)) break
+                row.push(items[i])
+                sum += this.albumAspect(items[i])
+                i++
+              }
+              return [row, ...balance(items.slice(i), r - 1)]
+            }
+            return balance(tiles, r0)
           },
           // Build the determinate progress ring (#95/#149): a faint track + a fill arc.
           // `cls` styles/sizes the container per context (media = white-on-scrim overlay;
@@ -7800,7 +7915,10 @@ defmodule EdenWeb.ChatLive do
       assign(
         assigns,
         :media?,
-        Enum.any?(assigns.message.attachments, &(&1.kind in ~w(image video) and not &1.as_file))
+        Enum.any?(
+          assigns.message.attachments,
+          &(&1.kind in ~w(image video) and not &1.as_file and not AlbumLayout.strip_photo?(&1))
+        )
       )
 
     ~H"""
@@ -8285,7 +8403,7 @@ defmodule EdenWeb.ChatLive do
   # as a media grid (images as lightbox tiles, sharing a gallery so the lightbox
   # can page through them) followed by any videos/files stacked as full items.
   defp album_view(%{attachments: [single]} = assigns) do
-    assigns = assign(assigns, :attachment, single)
+    assigns = assign(assigns, :attachment, as_file_if_strip(single))
 
     ~H"""
     <.attachment_view attachment={@attachment} />
@@ -8293,30 +8411,49 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp album_view(assigns) do
-    # as_file photos (#122) leave the media grid for the document-card list below.
-    media = Enum.filter(assigns.attachments, &(&1.kind in ~w(image video) and not &1.as_file))
+    # The mosaic holds inline media: images + videos, minus "send as file" photos (#122) AND
+    # strip photos (too wide/tall to fit the dialog — they fall to file cards below, like TG).
+    media =
+      Enum.filter(
+        assigns.attachments,
+        &(&1.kind in ~w(image video) and not &1.as_file and not AlbumLayout.strip_photo?(&1))
+      )
+
+    rest = (assigns.attachments -- media) |> Enum.map(&as_file_if_strip/1)
 
     assigns =
       assigns
-      |> assign(:media, media)
-      |> assign(:rest, assigns.attachments -- media)
+      |> assign(:rows, AlbumLayout.rows(media))
+      |> assign(:rest, rest)
       |> assign(:gallery, "album-#{assigns.message_id}")
 
     ~H"""
-    <div :if={@media != []} class={["ed-album mb-1", "ed-album--#{album_cols(length(@media))}"]}>
-      <%!-- Image tiles share a gallery so the lightbox pages them; videos are posters with a
-            play badge. Shared with the profile gallery (#136) via media_tile. --%>
-      <.media_tile
-        :for={item <- @media}
-        item={item}
-        dom_id={"att-#{item.id}"}
-        class="ed-album__tile"
-        gallery={@gallery}
-      />
+    <%!-- Telegram-style justified mosaic (#…): the media split into rows, each row a flex
+          strip whose tiles take width proportional to their aspect ratio so the row fills the
+          album width at one height with no cropping (a tile's box matches its photo's aspect).
+          Uniform photos fall out as clean 2x2 / 3x3 grids; mixed aspects size proportionally.
+          The row's aspect-ratio (= sum of its tiles' aspects) sets its height. Shared by DMs,
+          rooms and threads (one album_view); image tiles page the lightbox together. --%>
+    <div :if={@rows != []} class="ed-album mb-1">
+      <div :for={{row, sum} <- @rows} class="ed-album__row" style={"aspect-ratio:#{sum}"}>
+        <.media_tile
+          :for={{item, aspect} <- row}
+          item={item}
+          dom_id={"att-#{item.id}"}
+          class="ed-album__tile"
+          gallery={@gallery}
+          style={"flex:#{aspect} 1 0"}
+        />
+      </div>
     </div>
     <.attachment_view :for={attachment <- @rest} attachment={attachment} />
     """
   end
+
+  # Flip a strip photo to as_file at RENDER time (no DB change) so the file-card path draws it;
+  # the strip/layout math itself lives in AlbumLayout (and is unit-tested there).
+  defp as_file_if_strip(att),
+    do: if(AlbumLayout.strip_photo?(att), do: %{att | as_file: true}, else: att)
 
   # Album grid columns by image count: a pair stays 2-up, a trio 3-up, a quad is
   # a 2x2, larger sets settle on a 3-column grid (rows fill left to right).
@@ -9088,6 +9225,9 @@ defmodule EdenWeb.ChatLive do
   attr :dom_id, :string, required: true
   attr :class, :string, required: true
   attr :gallery, :string, required: true
+  # Optional inline style — the album mosaic passes `flex:<aspect> 1 0` so the tile takes
+  # width proportional to its aspect ratio; the square profile gallery leaves it nil.
+  attr :style, :string, default: nil
 
   # Shared media grid tile (#136): an image opens the lightbox (paging its `gallery`); a video
   # is a poster with a play badge. Used by the message album (album_view) AND the profile
@@ -9106,6 +9246,7 @@ defmodule EdenWeb.ChatLive do
       rel="noopener"
       aria-label={@item.filename || gettext("Photo")}
       class={[@class, "ed-photo cursor-zoom-in"]}
+      style={@style}
     >
       <%!-- alt="" (decorative) — the a11y label rides the <a>; see attachment_view. --%>
       <img
@@ -9131,6 +9272,7 @@ defmodule EdenWeb.ChatLive do
       rel="noopener"
       class={@class}
       aria-label={@item.filename || gettext("Video")}
+      style={@style}
     >
       <img :if={@item.thumbnail_key} src={thumb_src(@item)} loading="lazy" decoding="async" alt="" />
       <span :if={is_nil(@item.thumbnail_key)} class="ed-album__tile-fill" />
