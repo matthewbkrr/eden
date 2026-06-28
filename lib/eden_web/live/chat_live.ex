@@ -210,7 +210,10 @@ defmodule EdenWeb.ChatLive do
       # special rendering, everything else becomes a downloadable file.
       |> allow_upload(:attachment,
         accept: :any,
-        max_entries: Chat.max_album_entries(),
+        # Stage up to max_staged_entries (#193): a pick past the album cap is split into a
+        # sequence of albums server-side, so the config must accept more than one album's
+        # worth at once (else the excess errors at config level and the whole upload wedges).
+        max_entries: Chat.max_staged_entries(),
         max_file_size: Chat.max_attachment_bytes(),
         # Feed the in-stream optimistic node a determinate progress ring (#95) —
         # Telegram-style, instead of an indeterminate spinner that can't show how
@@ -4761,44 +4764,13 @@ defmodule EdenWeb.ChatLive do
               // is the fallback. Checked BEFORE the this.sending reset below so the pick
               // can't clear the very signal it's testing.
               const busy = this.mediaInFlight || this.el.dataset.sendingMedia === "true"
-              if (isFile && input.files?.length) {
-                const files = [...input.files]
-                const max = this.maxAlbum()
-                if (busy) {
-                  // #119: a pick WHILE a send uploads can't enter the in-flight config (it would
-                  // merge into the album). Hold its files in the queue — split into <= max chunks
-                  // (#193) so a big pick made mid-upload also lands as albums — and stop the
-                  // native stage; updated() feeds the next batch once the config frees. A single
-                  // oversized pick auto-sends all its batches; a lone <= max pick is a deliberate
-                  // #119 batch the user sends from the reopened overlay.
-                  e.stopImmediatePropagation()
-                  e.preventDefault()
-                  const chunks = this.chunkFiles(files, max)
-                  const oversized = chunks.length > 1
-                  chunks.forEach((c) => this.mediaQueue.push({ files: c, auto: oversized }))
-                  input.value = ""
-                  this.updateQueueHint()
-                  return
-                }
-                if (files.length > max) {
-                  // #193: a pick of MORE than `max` would tag the excess :too_many_files — a
-                  // CONFIG-level upload error that blocks the WHOLE upload (nothing stages, the
-                  // progress freezes, the 30s stall watchdog then drops the node — "uploaded a
-                  // chunk, hung, vanished"). Trim input.files to the first `max` IN PLACE and let
-                  // THIS event keep bubbling, so LiveView (a window bubble listener — capture runs
-                  // first) stages the trimmed set the normal way. NOTE: do NOT stop + re-dispatch
-                  // a fresh event — that tangled with LiveView's input→change dedup AND the native
-                  // file picker's own input/change pair, staging all N for a real OS pick (a
-                  // synthetic setInputFiles happened to resolve to `max`, so it slipped past the
-                  // test). Queue the overflow; it auto-sends as each batch frees the config.
-                  const [first, ...rest] = this.chunkFiles(files, max)
-                  rest.forEach((c) => this.mediaQueue.push({ files: c, auto: true }))
-                  this.updateQueueHint()
-                  const dt = new DataTransfer()
-                  first.forEach((f) => dt.items.add(f))
-                  input.files = dt.files
-                  // fall through — no stopPropagation: the trimmed event stages `first` natively
-                }
+              if (isFile && input.files?.length && busy) {
+                e.stopImmediatePropagation()
+                e.preventDefault()
+                this.mediaQueue.push([...input.files])
+                input.value = ""
+                this.updateQueueHint()
+                return
               }
               // A fresh (non-queued) pick starts a new staging cycle — clear the
               // send-in-flight guard so its preview overlay shows again (#130). The
@@ -4856,8 +4828,6 @@ defmodule EdenWeb.ChatLive do
               // Queued batches (#119) belong to the chat they were picked in; drop them on
               // a switch (they were never sent) so they can't feed into the new chat.
               this.mediaQueue = []
-              // #193: a pending auto-send (overflow batch) belongs to the old chat too.
-              this._autoSendPending = false
               this.updateQueueHint()
               this.sending = false
               this.sendTimers.forEach((t) => clearTimeout(t))
@@ -4918,14 +4888,6 @@ defmodule EdenWeb.ChatLive do
             if (justFreed && this.mediaQueue.length) this.dequeueNext()
             this.prevSm = sm
             this.prevComposeOpen = composeOpen
-            // #193: an auto-queued overflow batch was just staged (dequeueNext armed it and the
-            // compose tray is now rendered) → send it without the user, so a >max pick lands as
-            // a sequence of albums. One-shot; gated on a tray tile so we never submit empty. rAF
-            // so the submit runs after this render settles, not mid-patch.
-            if (this._autoSendPending && this.el.querySelector(".ed-compose__tile")) {
-              this._autoSendPending = false
-              requestAnimationFrame(() => this.el.requestSubmit())
-            }
           },
           onSubmit(e) {
             // #122: "Send as file" sets this flag (then requestSubmit()s) — read + reset it
@@ -5255,7 +5217,12 @@ defmodule EdenWeb.ChatLive do
             // fill so the album's tile count still matches the real row.
             // Snapshot each tile's frame AND its source pixel dimensions — the dims let
             // the lone-image case reserve its display box exactly like the real row.
-            const allTiles = [...overlay.querySelectorAll(".ed-compose__tile")].map((tile) => {
+            // Cap at one album's worth (#193): a pick past the cap is split server-side into a
+            // sequence of albums, and only the FIRST carries this optimistic id — so the node
+            // must mirror that first album (the rest stream in), not all N tiles.
+            const allTiles = [...overlay.querySelectorAll(".ed-compose__tile")]
+              .slice(0, this.maxAlbum())
+              .map((tile) => {
               const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
               return {
                 url: this.snapshot(el),
@@ -5415,7 +5382,12 @@ defmodule EdenWeb.ChatLive do
           // swap. One ring + one cancel for the whole album (its single client_id), matching
           // addOptimisticMedia's model. data-name/size ride the staged tiles.
           addOptimisticAsFile(clientId, overlay, caption) {
-            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")]
+            // Cap at one album's worth (#193): the overflow is split server-side, only the
+            // first album carries this id, so the optimistic cards mirror the first batch.
+            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")].slice(
+              0,
+              this.maxAlbum(),
+            )
             if (tiles.length === 0) return null
             const wrap = document.createElement("div")
             wrap.className = "ed-asfile-sending"
@@ -5461,6 +5433,12 @@ defmodule EdenWeb.ChatLive do
           // Mirror album_row_sizes/1 (server): the count plan for N media (4→2+2, a trailing
           // remainder of 1 folded into 2+2). Only its LENGTH is used now — it sets how many
           // rows balanceRows fills; the actual per-row split is aspect-balanced below.
+          // The album cap (server's @max_album_entries, #193) — one album's worth of media.
+          // A pick beyond it stages whole (max_staged_entries) and the server splits it into
+          // albums of this size; the optimistic node mirrors only the first.
+          maxAlbum() {
+            return Number(this.el.dataset.maxAlbum) || 10
+          },
           albumRowSizes(n) {
             if (n <= 3) return [n]
             if (n === 4) return [2, 2]
@@ -5783,17 +5761,6 @@ defmodule EdenWeb.ChatLive do
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
           },
-          // The album cap (server's @max_album_entries, #193) — how many media fit in one
-          // message. A pick beyond it is split into this-sized batches.
-          maxAlbum() {
-            return Number(this.el.dataset.maxAlbum) || 10
-          },
-          // Split a File list into batches of at most `max`, order preserved (#193).
-          chunkFiles(files, max) {
-            const out = []
-            for (let i = 0; i < files.length; i += max) out.push(files.slice(i, i + max))
-            return out
-          },
           // Feed the next queued batch (#119) into the now-free :attachment config. Only ever
           // called by updated() on the config-FREE edge, so the config is already clear (no
           // lingering entry to pile onto). feedInput stages the batch and the server re-opens
@@ -5812,13 +5779,7 @@ defmodule EdenWeb.ChatLive do
             try {
               const batch = this.mediaQueue.shift()
               this.updateQueueHint()
-              if (batch.files.length && input.isConnected) {
-                // #193: an auto batch (the overflow of one big pick) sends itself the moment
-                // its compose tray appears (updated() requestSubmits it) — no user tap. A
-                // manual #119 batch leaves the overlay open for the user to caption + send.
-                if (batch.auto) this._autoSendPending = true
-                this.feedInput(input, batch.files)
-              }
+              if (batch.length && input.isConnected) this.feedInput(input, batch)
             } finally {
               this._dequeuing = false
             }

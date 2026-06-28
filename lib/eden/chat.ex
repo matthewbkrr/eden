@@ -57,6 +57,11 @@ defmodule Eden.Chat do
   # 10 per media group; we mirror it). Each still obeys its own per-kind cap.
   @max_album_entries 10
 
+  # Most media a SINGLE pick may stage in one go (#193). A pick beyond @max_album_entries
+  # is split server-side into albums of @max_album_entries (Telegram-style), so the upload
+  # config must accept up to this many at once. Bounded so one selection can't be absurd.
+  @max_staged_entries 50
+
   # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
   @thumbnail_max 800
   @thumbnail_quality 80
@@ -78,6 +83,9 @@ defmodule Eden.Chat do
 
   @doc "Most attachments a single message (album) may carry."
   def max_album_entries, do: @max_album_entries
+
+  @doc "Most media one pick may stage at once (#193); split server-side into albums of #{@max_album_entries}."
+  def max_staged_entries, do: @max_staged_entries
 
   @doc "Accepted upload size in bytes for a given attachment kind."
   def max_attachment_bytes("image"), do: @max_image_bytes
@@ -1859,8 +1867,23 @@ defmodule Eden.Chat do
   defp attachment_steps([], [first | rest], body, _album_cid),
     do: [{[first], body, source_cid(first)} | Enum.map(rest, &{[&1], "", source_cid(&1)})]
 
-  defp attachment_steps(media, files, body, album_cid),
-    do: [{media, body, album_cid} | Enum.map(files, &{[&1], "", source_cid(&1)})]
+  # Media past @max_album_entries is split into a SEQUENCE of albums (#193, Telegram-style):
+  # the caption + the optimistic client_id (and the reply, via send_attachment_steps) ride the
+  # FIRST album; the rest are plain and stream in. `List.wrap` keeps the single-album case
+  # (the common one) identical, so the client protocol is unchanged.
+  defp attachment_steps(media, files, body, album_cid) do
+    cids = List.wrap(album_cid)
+
+    album_steps =
+      media
+      |> Enum.chunk_every(@max_album_entries)
+      |> Enum.with_index()
+      |> Enum.map(fn {chunk, i} ->
+        {chunk, if(i == 0, do: body, else: ""), Enum.at(cids, i)}
+      end)
+
+    album_steps ++ Enum.map(files, &{[&1], "", source_cid(&1)})
+  end
 
   defp source_cid(%{client_id: cid}), do: cid
   defp source_cid(_source), do: nil

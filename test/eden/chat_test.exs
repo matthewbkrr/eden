@@ -490,6 +490,29 @@ defmodule Eden.ChatTest do
       assert att.kind == "image"
       assert att.width == 2400 and att.height == 1600
     end
+
+    test "a pick past the album cap splits into a sequence of albums of 10 (#193)", %{
+      alice: alice,
+      conv: conv
+    } do
+      # 12 photos in one send → 2 albums (10 + 2), in order. The caption and the optimistic
+      # client_id ride the FIRST album; the rest are plain and stream in.
+      sources = for i <- 1..12, do: %{path: big_photo(80, 60), filename: "p#{i}.jpg"}
+
+      {:ok, messages} =
+        Chat.create_attachments(scope(alice), conv.id, sources, %{
+          body: "look",
+          client_id: "cid-1"
+        })
+
+      assert length(messages) == 2
+      [first, second] = messages
+      assert first.body == "look" and first.client_id == "cid-1"
+      assert second.body == "" and is_nil(second.client_id)
+
+      counts = Enum.map(messages, &length(Repo.preload(&1, :attachments).attachments))
+      assert counts == [10, 2]
+    end
   end
 
   describe "list_conversation_media/4 (#136)" do
