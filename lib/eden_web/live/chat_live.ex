@@ -2665,61 +2665,67 @@ defmodule EdenWeb.ChatLive do
           </header>
 
           <%!-- In-room search (#43): a bar under the header; results overlay
-                the top of the message area, each result is a permalink. --%>
-          <div :if={@room_search_open and @selected.channel_id} class="relative shrink-0">
-            <form
-              class="ed-search"
-              style="margin-bottom: 0;"
-              phx-change="room_search"
-              phx-submit="room_search"
-            >
-              <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
-              <input
-                type="search"
-                name="q"
-                value={@room_search}
-                placeholder={gettext("Search in %{room}", room: @selected.name)}
-                autocomplete="off"
-                class="ed-search__input"
-                phx-debounce="200"
-                phx-mounted={JS.focus()}
-                aria-label={gettext("Search in room")}
-              />
-              <button
-                type="button"
-                class="ed-btn--icon"
-                phx-click="toggle_room_search"
-                aria-label={gettext("Close search")}
+                the top of the message area, each result is a permalink.
+                The SLOT is always rendered (stable sibling) — toggling the bar with
+                a bare `:if` here made morphdom detach #message-scroll to re-insert it,
+                which reset its scrollTop to 0 (chat jumped to the top on open/close).
+                Only the bar's CONTENTS toggle now, so the scroller never moves. --%>
+          <div id="room-search-slot" class="shrink-0">
+            <div :if={@room_search_open and @selected.channel_id} class="relative">
+              <form
+                class="ed-search"
+                style="margin-bottom: 0;"
+                phx-change="room_search"
+                phx-submit="room_search"
               >
-                <.icon name="hero-x-mark-micro" class="size-4" />
-              </button>
-            </form>
-            <div :if={String.trim(@room_search) != ""} class="ed-room-search__panel">
-              <p
-                :if={(@room_results || []) == []}
-                class="text-center py-6"
-                style="color: var(--ed-muted); font-size:0.875rem;"
-              >
-                {gettext("No results for “%{query}”", query: String.trim(@room_search))}
-              </p>
-              <.link
-                :for={message <- @room_results || []}
-                patch={~p"/channels/#{@selected.channel_id}/r/#{@selected.id}/m/#{message.id}"}
-                class="ed-convo"
-              >
-                <span class="ed-convo__body">
-                  <span class="ed-convo__top">
-                    <span class="ed-convo__name">
-                      {(message.sender && message.sender.display_name) ||
-                        gettext("Deleted account")}
+                <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
+                <input
+                  type="search"
+                  name="q"
+                  value={@room_search}
+                  placeholder={gettext("Search in %{room}", room: @selected.name)}
+                  autocomplete="off"
+                  class="ed-search__input"
+                  phx-debounce="200"
+                  phx-mounted={JS.focus()}
+                  aria-label={gettext("Search in room")}
+                />
+                <button
+                  type="button"
+                  class="ed-btn--icon"
+                  phx-click="toggle_room_search"
+                  aria-label={gettext("Close search")}
+                >
+                  <.icon name="hero-x-mark-micro" class="size-4" />
+                </button>
+              </form>
+              <div :if={String.trim(@room_search) != ""} class="ed-room-search__panel">
+                <p
+                  :if={(@room_results || []) == []}
+                  class="text-center py-6"
+                  style="color: var(--ed-muted); font-size:0.875rem;"
+                >
+                  {gettext("No results for “%{query}”", query: String.trim(@room_search))}
+                </p>
+                <.link
+                  :for={message <- @room_results || []}
+                  patch={~p"/channels/#{@selected.channel_id}/r/#{@selected.id}/m/#{message.id}"}
+                  class="ed-convo"
+                >
+                  <span class="ed-convo__body">
+                    <span class="ed-convo__top">
+                      <span class="ed-convo__name">
+                        {(message.sender && message.sender.display_name) ||
+                          gettext("Deleted account")}
+                      </span>
+                      <.local_time at={message.inserted_at} class="ed-convo__time" />
                     </span>
-                    <.local_time at={message.inserted_at} class="ed-convo__time" />
+                    <span class="ed-convo__preview">
+                      <.highlighted text={snippet(message.body, @room_search)} query={@room_search} />
+                    </span>
                   </span>
-                  <span class="ed-convo__preview">
-                    <.highlighted text={snippet(message.body, @room_search)} query={@room_search} />
-                  </span>
-                </span>
-              </.link>
+                </.link>
+              </div>
             </div>
           </div>
 
@@ -3091,61 +3097,65 @@ defmodule EdenWeb.ChatLive do
         </header>
 
         <%!-- In-thread search (#189): a bar under the header; each result is a permalink
-              into the open thread (opens + focuses the reply, then closes this panel). --%>
-        <div :if={@thread_search_open} class="relative shrink-0">
-          <form
-            class="ed-search"
-            style="margin-bottom: 0;"
-            phx-change="thread_search"
-            phx-submit="thread_search"
-          >
-            <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
-            <input
-              type="search"
-              name="q"
-              value={@thread_search}
-              placeholder={gettext("Search in thread")}
-              autocomplete="off"
-              class="ed-search__input"
-              phx-debounce="200"
-              phx-mounted={JS.focus()}
-              aria-label={gettext("Search in thread")}
-            />
-            <button
-              type="button"
-              class="ed-btn--icon"
-              phx-click="toggle_thread_search"
-              aria-label={gettext("Close search")}
+              into the open thread (opens + focuses the reply, then closes this panel).
+              Stable slot (see #room-search-slot): a bare `:if` here let morphdom detach
+              #thread-scroll on toggle and reset its scrollTop to 0. --%>
+        <div id="thread-search-slot" class="shrink-0">
+          <div :if={@thread_search_open} class="relative">
+            <form
+              class="ed-search"
+              style="margin-bottom: 0;"
+              phx-change="thread_search"
+              phx-submit="thread_search"
             >
-              <.icon name="hero-x-mark-micro" class="size-4" />
-            </button>
-          </form>
-          <div :if={String.trim(@thread_search) != ""} class="ed-room-search__panel">
-            <p
-              :if={(@thread_results || []) == []}
-              class="text-center py-6"
-              style="color: var(--ed-muted); font-size:0.875rem;"
-            >
-              {gettext("No results for “%{query}”", query: String.trim(@thread_search))}
-            </p>
-            <.link
-              :for={message <- @thread_results || []}
-              patch={~p"/channels/#{@selected.channel_id}/r/#{@selected.id}/m/#{message.id}"}
-              class="ed-convo"
-            >
-              <span class="ed-convo__body">
-                <span class="ed-convo__top">
-                  <span class="ed-convo__name">
-                    {(message.sender && message.sender.display_name) ||
-                      gettext("Deleted account")}
+              <.icon name="hero-magnifying-glass-micro" class="size-4 shrink-0" />
+              <input
+                type="search"
+                name="q"
+                value={@thread_search}
+                placeholder={gettext("Search in thread")}
+                autocomplete="off"
+                class="ed-search__input"
+                phx-debounce="200"
+                phx-mounted={JS.focus()}
+                aria-label={gettext("Search in thread")}
+              />
+              <button
+                type="button"
+                class="ed-btn--icon"
+                phx-click="toggle_thread_search"
+                aria-label={gettext("Close search")}
+              >
+                <.icon name="hero-x-mark-micro" class="size-4" />
+              </button>
+            </form>
+            <div :if={String.trim(@thread_search) != ""} class="ed-room-search__panel">
+              <p
+                :if={(@thread_results || []) == []}
+                class="text-center py-6"
+                style="color: var(--ed-muted); font-size:0.875rem;"
+              >
+                {gettext("No results for “%{query}”", query: String.trim(@thread_search))}
+              </p>
+              <.link
+                :for={message <- @thread_results || []}
+                patch={~p"/channels/#{@selected.channel_id}/r/#{@selected.id}/m/#{message.id}"}
+                class="ed-convo"
+              >
+                <span class="ed-convo__body">
+                  <span class="ed-convo__top">
+                    <span class="ed-convo__name">
+                      {(message.sender && message.sender.display_name) ||
+                        gettext("Deleted account")}
+                    </span>
+                    <.local_time at={message.inserted_at} class="ed-convo__time" />
                   </span>
-                  <.local_time at={message.inserted_at} class="ed-convo__time" />
+                  <span class="ed-convo__preview">
+                    <.highlighted text={snippet(message.body, @thread_search)} query={@thread_search} />
+                  </span>
                 </span>
-                <span class="ed-convo__preview">
-                  <.highlighted text={snippet(message.body, @thread_search)} query={@thread_search} />
-                </span>
-              </span>
-            </.link>
+              </.link>
+            </div>
           </div>
         </div>
 
