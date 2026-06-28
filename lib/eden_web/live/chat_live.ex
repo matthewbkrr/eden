@@ -203,7 +203,10 @@ defmodule EdenWeb.ChatLive do
       )
       |> stream(:thread, [])
       |> refresh_folders()
-      |> stream(:conversations, Chat.list_conversations(scope))
+      |> then(fn s ->
+        convos = Chat.list_conversations(scope)
+        s |> assign(sidebar_top: top_conv_id(convos)) |> stream(:conversations, convos)
+      end)
       |> stream(:messages, [])
       # Accept anything: the server classifies by magic bytes and enforces the
       # per-kind size cap; the client cap is the largest (video). Images/video get
@@ -2507,7 +2510,7 @@ defmodule EdenWeb.ChatLive do
         <%!-- The stream container is only hidden (not removed) while searching,
               so its client-side items survive and updates keep applying. --%>
         <div class={["flex-1 overflow-y-auto p-2 relative", @search != "" && "hidden"]}>
-          <div id="conversations" phx-update="stream" class="space-y-0.5">
+          <div id="conversations" phx-hook=".SidebarReorder" phx-update="stream" class="space-y-0.5">
             <.conversation_item
               :for={{dom_id, conversation} <- @streams.conversations}
               id={dom_id}
@@ -3785,6 +3788,54 @@ defmodule EdenWeb.ChatLive do
               this.el.insertBefore(h, tile)
             }
           }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SidebarReorder">
+        // FLIP reorder for the DM sidebar (#194): when a chat bumps to the top on new activity
+        // the server delete+re-inserts its row, so it's a fresh node at index 0. Instead of
+        // teleporting, animate the swap: beforeUpdate snapshots each row's First top by dom-id;
+        // updated measures Last and plays the inverse via the Web Animations API (compositor-only,
+        // interruption-safe). The bumped row is matched by its STABLE dom-id, so it rises from its
+        // old slot while the displaced rows ease down (the space opening above it). Rows that did
+        // not move animate nothing; reduced-motion skips the animation (instant reorder).
+        export default {
+          rows() {
+            return [...this.el.children].filter((c) => c.id && c.id.startsWith("conversations-"))
+          },
+          beforeUpdate() {
+            // Each row's top RELATIVE to the list container, so a shift of the whole list (the
+            // folder tabs above re-rendering) cancels out and only a real reorder registers.
+            const base = this.el.getBoundingClientRect().top
+            this.first = new Map()
+            this.firstOrder = this.rows().map((r) => r.id).join(",")
+            for (const row of this.rows()) this.first.set(row.id, row.getBoundingClientRect().top - base)
+          },
+          updated() {
+            const first = this.first
+            this.first = null
+            if (!first || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+            // Skip when the row ORDER is unchanged — a send into the chat that's already at the
+            // top delete+re-inserts its row at the same spot (no real reorder), which must not
+            // re-run the bump animation on every message (#194).
+            if (this.rows().map((r) => r.id).join(",") === this.firstOrder) return
+            const base = this.el.getBoundingClientRect().top
+            // Animate the LIVE node refs (not getElementById — a delete+insert can leave the old
+            // node briefly resolvable). The bumped row is a fresh node at the top: its First is
+            // its OLD slot, so it RISES; the row it passed is pushed DOWN — a clean cross.
+            const moves = []
+            for (const row of this.rows()) {
+              const f = first.get(row.id)
+              if (f == null) continue // a brand-new conversation: let it appear, no FLIP
+              const delta = f - (row.getBoundingClientRect().top - base)
+              if (Math.abs(delta) >= 1) moves.push([row, delta])
+            }
+            for (const [row, delta] of moves) {
+              row.animate(
+                [{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }],
+                { duration: 320, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }
+              )
+            }
+          },
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
@@ -9729,10 +9780,15 @@ defmodule EdenWeb.ChatLive do
       peers = for c <- convos, p = peer(c, user), not is_nil(p), do: p.id
 
       socket
-      |> assign(sidebar_peer_ids: peers)
+      |> assign(sidebar_peer_ids: peers, sidebar_top: top_conv_id(convos))
       |> stream(:conversations, convos, opts)
     end
   end
+
+  # The conversation currently on top of the sidebar (#194) — so a bump can tell "already
+  # there" (in-place update, no animation) from a real move (delete + re-insert + animate).
+  defp top_conv_id([%{id: id} | _]), do: id
+  defp top_conv_id(_), do: nil
 
   # User ids whose presence changed in a `presence_diff` payload (keys are the
   # tracked user ids as strings). Empty for a payload without joins/leaves.
@@ -9766,13 +9822,7 @@ defmodule EdenWeb.ChatLive do
         socket
 
       {:ok, %{channel_id: nil} = summary} ->
-        fid = socket.assigns.folder_id
-
-        if is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id) do
-          stream_insert(socket, :conversations, summary, insert_opts)
-        else
-          stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
-        end
+        put_dm_sidebar(socket, summary, conversation_id, insert_opts)
 
       {:ok, _room} ->
         # Badge refresh if we're looking at this room's channel; cross-channel
@@ -9781,6 +9831,34 @@ defmodule EdenWeb.ChatLive do
 
       {:error, _} ->
         socket
+    end
+  end
+
+  # A DM's sidebar row: drop it when it's filtered out of the active folder; bump it to the
+  # top on new activity (#194); otherwise update it in place.
+  defp put_dm_sidebar(socket, summary, conversation_id, insert_opts) do
+    scope = socket.assigns.current_scope
+    fid = socket.assigns.folder_id
+    dom_id = "conversations-#{conversation_id}"
+
+    cond do
+      not (is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id)) ->
+        stream_delete_by_dom_id(socket, :conversations, dom_id)
+
+      # Reorder-to-top (activity bump, #194): stream_insert(at: 0) updates an existing row in
+      # place but does NOT lift it to the front, so delete first to actually reposition it — BUT
+      # only when the chat isn't already on top. Re-sending into the chat that's already at the
+      # top would otherwise delete+re-insert it for no net move, re-running the bump animation on
+      # every message. When it's already top, a plain in-place update keeps it there (no recreate,
+      # no animation).
+      Keyword.has_key?(insert_opts, :at) and socket.assigns.sidebar_top != conversation_id ->
+        socket
+        |> stream_delete_by_dom_id(:conversations, dom_id)
+        |> stream_insert(:conversations, summary, insert_opts)
+        |> assign(sidebar_top: conversation_id)
+
+      true ->
+        stream_insert(socket, :conversations, summary, insert_opts)
     end
   end
 
