@@ -2829,6 +2829,7 @@ defmodule EdenWeb.ChatLive do
             data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
             data-max-body={Chat.Message.max_body()}
+            data-max-album={Chat.max_album_entries()}
             data-sending-media={to_string(@sending_media)}
             data-failed={gettext("Not delivered")}
             data-resend={gettext("Resend")}
@@ -4760,13 +4761,38 @@ defmodule EdenWeb.ChatLive do
               // is the fallback. Checked BEFORE the this.sending reset below so the pick
               // can't clear the very signal it's testing.
               const busy = this.mediaInFlight || this.el.dataset.sendingMedia === "true"
-              if (isFile && input.files?.length && busy) {
-                e.stopImmediatePropagation()
-                e.preventDefault()
-                this.mediaQueue.push([...input.files])
-                input.value = ""
-                this.updateQueueHint()
-                return
+              if (isFile && input.files?.length) {
+                const files = [...input.files]
+                const max = this.maxAlbum()
+                // #193: a pick of MORE than `max` media can't go in one album — the excess
+                // would be :too_many_files entries that never finish, wedging the send forever
+                // (the optimistic node then vanishes when the 30s stall watchdog fires). And a
+                // pick made while another send uploads can't enter the in-flight config (#119).
+                // Either way, split into batches of <= max and run them through the queue; an
+                // oversized pick's overflow AUTO-sends, so a big selection lands as a sequence
+                // of albums, Telegram-style.
+                if (busy || files.length > max) {
+                  e.stopImmediatePropagation()
+                  e.preventDefault()
+                  const chunks = this.chunkFiles(files, max)
+                  const oversized = chunks.length > 1
+                  if (!busy) {
+                    // Config free: stage the FIRST chunk now (the user captions + sends it);
+                    // the overflow auto-sends as each prior batch frees the config.
+                    const [first, ...rest] = chunks
+                    rest.forEach((c) => this.mediaQueue.push({ files: c, auto: true }))
+                    this.updateQueueHint()
+                    this.feedInput(input, first)
+                    return
+                  }
+                  // Config busy: queue every chunk. A single oversized pick auto-sends all of
+                  // its batches; a lone <= max pick made while busy is a deliberate batch the
+                  // user sends from the reopened overlay (the #119 behaviour).
+                  chunks.forEach((c) => this.mediaQueue.push({ files: c, auto: oversized }))
+                  input.value = ""
+                  this.updateQueueHint()
+                  return
+                }
               }
               // A fresh (non-queued) pick starts a new staging cycle — clear the
               // send-in-flight guard so its preview overlay shows again (#130). The
@@ -4824,6 +4850,8 @@ defmodule EdenWeb.ChatLive do
               // Queued batches (#119) belong to the chat they were picked in; drop them on
               // a switch (they were never sent) so they can't feed into the new chat.
               this.mediaQueue = []
+              // #193: a pending auto-send (overflow batch) belongs to the old chat too.
+              this._autoSendPending = false
               this.updateQueueHint()
               this.sending = false
               this.sendTimers.forEach((t) => clearTimeout(t))
@@ -4884,6 +4912,14 @@ defmodule EdenWeb.ChatLive do
             if (justFreed && this.mediaQueue.length) this.dequeueNext()
             this.prevSm = sm
             this.prevComposeOpen = composeOpen
+            // #193: an auto-queued overflow batch was just staged (dequeueNext armed it and the
+            // compose tray is now rendered) → send it without the user, so a >max pick lands as
+            // a sequence of albums. One-shot; gated on a tray tile so we never submit empty. rAF
+            // so the submit runs after this render settles, not mid-patch.
+            if (this._autoSendPending && this.el.querySelector(".ed-compose__tile")) {
+              this._autoSendPending = false
+              requestAnimationFrame(() => this.el.requestSubmit())
+            }
           },
           onSubmit(e) {
             // #122: "Send as file" sets this flag (then requestSubmit()s) — read + reset it
@@ -5741,6 +5777,17 @@ defmodule EdenWeb.ChatLive do
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
           },
+          // The album cap (server's @max_album_entries, #193) — how many media fit in one
+          // message. A pick beyond it is split into this-sized batches.
+          maxAlbum() {
+            return Number(this.el.dataset.maxAlbum) || 10
+          },
+          // Split a File list into batches of at most `max`, order preserved (#193).
+          chunkFiles(files, max) {
+            const out = []
+            for (let i = 0; i < files.length; i += max) out.push(files.slice(i, i + max))
+            return out
+          },
           // Feed the next queued batch (#119) into the now-free :attachment config. Only ever
           // called by updated() on the config-FREE edge, so the config is already clear (no
           // lingering entry to pile onto). feedInput stages the batch and the server re-opens
@@ -5759,7 +5806,13 @@ defmodule EdenWeb.ChatLive do
             try {
               const batch = this.mediaQueue.shift()
               this.updateQueueHint()
-              if (batch.length && input.isConnected) this.feedInput(input, batch)
+              if (batch.files.length && input.isConnected) {
+                // #193: an auto batch (the overflow of one big pick) sends itself the moment
+                // its compose tray appears (updated() requestSubmits it) — no user tap. A
+                // manual #119 batch leaves the overlay open for the user to caption + send.
+                if (batch.auto) this._autoSendPending = true
+                this.feedInput(input, batch.files)
+              }
             } finally {
               this._dequeuing = false
             }
