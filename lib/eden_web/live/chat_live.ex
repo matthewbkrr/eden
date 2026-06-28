@@ -3814,10 +3814,13 @@ defmodule EdenWeb.ChatLive do
             const first = this.first
             this.first = null
             if (!first || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
-            // Skip when the row ORDER is unchanged — a send into the chat that's already at the
-            // top delete+re-inserts its row at the same spot (no real reorder), which must not
-            // re-run the bump animation on every message (#194).
-            if (this.rows().map((r) => r.id).join(",") === this.firstOrder) return
+            // Animate ONLY a pure reorder: same SET of chats, different order. An unchanged order
+            // is a no-op (re-send into the chat already on top); a changed SET is a folder switch
+            // / new chat / filter, where morphdom repositioning the shared rows must not look like
+            // a bump (#194).
+            const ids = this.rows().map((r) => r.id)
+            if (ids.join(",") === this.firstOrder) return
+            if (ids.slice().sort().join(",") !== [...first.keys()].sort().join(",")) return
             const base = this.el.getBoundingClientRect().top
             // Animate the LIVE node refs (not getElementById — a delete+insert can leave the old
             // node briefly resolvable). The bumped row is a fresh node at the top: its First is
@@ -9102,7 +9105,11 @@ defmodule EdenWeb.ChatLive do
   # lists. Own card shows an "Edit profile" link instead of "Message".
   defp profile_popover(assigns) do
     ~H"""
-    <div>
+    <%!-- display:contents so this grouping wrapper is NOT a flex item of .ed-root — otherwise
+          opening the popover adds one more `gap` (0.625rem) to the row and shifts the whole
+          layout ~10px sideways (#195). The scrim + card are position:fixed, so they render the
+          same with the box removed. --%>
+    <div class="contents">
       <button
         class="ed-popover__scrim"
         phx-click="close_profile"
