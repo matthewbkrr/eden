@@ -4764,34 +4764,40 @@ defmodule EdenWeb.ChatLive do
               if (isFile && input.files?.length) {
                 const files = [...input.files]
                 const max = this.maxAlbum()
-                // #193: a pick of MORE than `max` media can't go in one album — the excess
-                // would be :too_many_files entries that never finish, wedging the send forever
-                // (the optimistic node then vanishes when the 30s stall watchdog fires). And a
-                // pick made while another send uploads can't enter the in-flight config (#119).
-                // Either way, split into batches of <= max and run them through the queue; an
-                // oversized pick's overflow AUTO-sends, so a big selection lands as a sequence
-                // of albums, Telegram-style.
-                if (busy || files.length > max) {
+                if (busy) {
+                  // #119: a pick WHILE a send uploads can't enter the in-flight config (it would
+                  // merge into the album). Hold its files in the queue — split into <= max chunks
+                  // (#193) so a big pick made mid-upload also lands as albums — and stop the
+                  // native stage; updated() feeds the next batch once the config frees. A single
+                  // oversized pick auto-sends all its batches; a lone <= max pick is a deliberate
+                  // #119 batch the user sends from the reopened overlay.
                   e.stopImmediatePropagation()
                   e.preventDefault()
                   const chunks = this.chunkFiles(files, max)
                   const oversized = chunks.length > 1
-                  if (!busy) {
-                    // Config free: stage the FIRST chunk now (the user captions + sends it);
-                    // the overflow auto-sends as each prior batch frees the config.
-                    const [first, ...rest] = chunks
-                    rest.forEach((c) => this.mediaQueue.push({ files: c, auto: true }))
-                    this.updateQueueHint()
-                    this.feedInput(input, first)
-                    return
-                  }
-                  // Config busy: queue every chunk. A single oversized pick auto-sends all of
-                  // its batches; a lone <= max pick made while busy is a deliberate batch the
-                  // user sends from the reopened overlay (the #119 behaviour).
                   chunks.forEach((c) => this.mediaQueue.push({ files: c, auto: oversized }))
                   input.value = ""
                   this.updateQueueHint()
                   return
+                }
+                if (files.length > max) {
+                  // #193: a pick of MORE than `max` would tag the excess :too_many_files — a
+                  // CONFIG-level upload error that blocks the WHOLE upload (nothing stages, the
+                  // progress freezes, the 30s stall watchdog then drops the node — "uploaded a
+                  // chunk, hung, vanished"). Trim input.files to the first `max` IN PLACE and let
+                  // THIS event keep bubbling, so LiveView (a window bubble listener — capture runs
+                  // first) stages the trimmed set the normal way. NOTE: do NOT stop + re-dispatch
+                  // a fresh event — that tangled with LiveView's input→change dedup AND the native
+                  // file picker's own input/change pair, staging all N for a real OS pick (a
+                  // synthetic setInputFiles happened to resolve to `max`, so it slipped past the
+                  // test). Queue the overflow; it auto-sends as each batch frees the config.
+                  const [first, ...rest] = this.chunkFiles(files, max)
+                  rest.forEach((c) => this.mediaQueue.push({ files: c, auto: true }))
+                  this.updateQueueHint()
+                  const dt = new DataTransfer()
+                  first.forEach((f) => dt.items.add(f))
+                  input.files = dt.files
+                  // fall through — no stopPropagation: the trimmed event stages `first` natively
                 }
               }
               // A fresh (non-queued) pick starts a new staging cycle — clear the
