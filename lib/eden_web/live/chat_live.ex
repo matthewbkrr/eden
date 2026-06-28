@@ -473,10 +473,13 @@ defmodule EdenWeb.ChatLive do
     # `files` is a `%{upload_ref => client_id}` map so each file message gets its
     # OWN id and its optimistic card swaps independently (#149). A send carrying
     # neither (legacy/edge) just flips the flag without stashing junk.
-    id = if is_binary(params["id"]), do: params["id"], else: nil
+    # #193: a pick is split into a sequence of albums, so the album optimistic ids ride as a
+    # LIST (one per album). `id` (singular) is the legacy single-album client still cached
+    # during a deploy — accept it as a one-element list.
+    album_ids = sanitize_album_ids(params["album_ids"] || params["id"])
     files = sanitize_file_cids(params["files"])
 
-    if is_nil(id) and files == %{} do
+    if album_ids == [] and files == %{} do
       {:noreply, assign(socket, sending_media: true)}
     else
       caption = if is_binary(params["caption"]), do: params["caption"], else: ""
@@ -493,7 +496,7 @@ defmodule EdenWeb.ChatLive do
        assign(socket,
          sending_media: true,
          media_client_ids:
-           stash_cid(socket, id, caption, selected_id(socket), files, caption_id, as_file)
+           stash_cid(socket, album_ids, caption, selected_id(socket), files, caption_id, as_file)
        )}
     end
   end
@@ -510,6 +513,20 @@ defmodule EdenWeb.ChatLive do
   def handle_event("media_send_reset", _params, socket),
     do: {:noreply, assign(socket, sending_media: false)}
 
+  # The hook caps a pick at max_staged_entries (#193) — more than the upload config takes at
+  # once would tag the excess :too_many_files and wedge the whole upload. Surface why nothing
+  # staged via the standard flash instead of a silent drop.
+  def handle_event("media_too_many", params, socket) do
+    max = if is_integer(params["max"]), do: params["max"], else: Chat.max_staged_entries()
+
+    {:noreply,
+     put_flash(
+       socket,
+       :error,
+       gettext("You can attach at most %{count} files at once.", count: max)
+     )}
+  end
+
   # A client on cached PRE-redesign JS still uses the old two-pass and pushes the
   # id on this event instead of media_sending. Stash it the same way so its send
   # still correlates during the deploy window; a malformed payload is ignored.
@@ -518,7 +535,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("media_client_id", %{"id" => id}, socket) when is_binary(id) do
     {:noreply,
      assign(socket,
-       media_client_ids: stash_cid(socket, id, "", selected_id(socket), %{}, nil, false)
+       media_client_ids: stash_cid(socket, [id], "", selected_id(socket), %{}, nil, false)
      )}
   end
 
@@ -552,7 +569,7 @@ defmodule EdenWeb.ChatLive do
         # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
         # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
         # untouched for a later text send.
-        {{cid, caption, conv_id, file_cids, caption_id, as_file}, rest} =
+        {{album_ids, caption, conv_id, file_cids, caption_id, as_file}, rest} =
           pop_media_client_id(socket.assigns.media_client_ids)
 
         socket = assign(socket, media_client_ids: rest)
@@ -560,7 +577,7 @@ defmodule EdenWeb.ChatLive do
         # left (a mid-upload switch). Send it to that ORIGINAL conversation, not the
         # current one, so leaving doesn't lose the media or leak it into the new chat.
         # Falls back to the current conversation when no id was stashed (legacy/edge).
-        # The id-triple (album client_id + per-file cids + the files-only caption node)
+        # The id-triple (per-album client_ids + per-file cids + the files-only caption node)
         # travels as one `ids` tuple — finish_attachment already treats it as a unit — to
         # keep send_attachment within the arity budget once `as_file` (#122) is added.
         send_attachment(
@@ -569,7 +586,7 @@ defmodule EdenWeb.ChatLive do
           conv_id || conversation.id,
           caption,
           reply_to_id,
-          {cid, file_cids, caption_id},
+          {album_ids, file_cids, caption_id},
           as_file
         )
 
@@ -2833,6 +2850,7 @@ defmodule EdenWeb.ChatLive do
             data-sender-name={@current_scope.user.display_name}
             data-max-body={Chat.Message.max_body()}
             data-max-album={Chat.max_album_entries()}
+            data-max-staged={Chat.max_staged_entries()}
             data-sending-media={to_string(@sending_media)}
             data-failed={gettext("Not delivered")}
             data-resend={gettext("Resend")}
@@ -4764,6 +4782,18 @@ defmodule EdenWeb.ChatLive do
               // is the fallback. Checked BEFORE the this.sending reset below so the pick
               // can't clear the very signal it's testing.
               const busy = this.mediaInFlight || this.el.dataset.sendingMedia === "true"
+              // A pick larger than the config accepts at once (max_staged_entries, #193) would
+              // tag the excess :too_many_files — a CONFIG-level error that blocks the WHOLE
+              // upload (nothing stages, the ring freezes, the 30s watchdog then drops the node).
+              // The server splits a pick into albums, but only up to what STAGES; past the cap
+              // we stop the native stage and tell the user, instead of wedging silently.
+              if (isFile && input.files?.length > this.maxStaged()) {
+                e.stopImmediatePropagation()
+                e.preventDefault()
+                input.value = ""
+                this.pushEvent("media_too_many", { max: this.maxStaged() })
+                return
+              }
               if (isFile && input.files?.length && busy) {
                 e.stopImmediatePropagation()
                 e.preventDefault()
@@ -4920,22 +4950,28 @@ defmodule EdenWeb.ChatLive do
               // drawn in the optimistic node (so it shows during upload, not only on the
               // real row's arrival).
               const caption = (this.el.querySelector("#compose-caption")?.value || "").trim()
-              // Media tiles (image/video) coalesce into ONE album with a single id; files
-              // post one message PER file, so each gets its own optimistic card + id keyed
-              // by upload ref (#149). The caption rides the album, or — files only — the
-              // first file (mirrors the server's attachment_steps).
-              const hasMedia = !!overlay.querySelector(".ed-compose__tile")
-              const albumId = hasMedia ? this.uuid() : null
+              // Media tiles (image/video) are split into albums of maxAlbum (#193): the server
+              // splits a big pick into a sequence of albums, so split the optimistic the SAME
+              // way NOW — one node per batch, each with its own client_id — so every album
+              // appears and uploads on send (Telegram-style), not the overflow popping in
+              // already-loaded after the first. Files post one message PER file (#149).
+              const mediaTiles = [...overlay.querySelectorAll(".ed-compose__tile")]
+              const hasMedia = mediaTiles.length > 0
               // #122: a photos-only "Send as file" lands as document cards — draw the
-              // optimistic node the same way so a slow upload doesn't show an album that
-              // then reshapes. A mixed batch (a video present) keeps the album node (the
-              // video still renders inline), so fall back to it there.
-              if (albumId) {
-                const asFileDocs = asFile && !overlay.querySelector(".ed-compose__video")
+              // optimistic the same way so a slow upload doesn't show an album that reshapes.
+              // A mixed batch (a video present) keeps the album node (video renders inline).
+              const asFileDocs = asFile && !overlay.querySelector(".ed-compose__video")
+              const albumIds = []
+              for (let i = 0; i < mediaTiles.length; i += this.maxAlbum()) {
+                const batch = mediaTiles.slice(i, i + this.maxAlbum())
+                const cid = this.uuid()
+                albumIds.push(cid)
+                // The caption rides only the FIRST album (matches attachment_steps).
+                const cap = i === 0 ? caption : ""
                 this.armStall(
                   asFileDocs
-                    ? this.addOptimisticAsFile(albumId, overlay, caption)
-                    : this.addOptimisticMedia(albumId, overlay, caption),
+                    ? this.addOptimisticAsFile(cid, batch, cap)
+                    : this.addOptimisticMedia(cid, batch, cap),
                 )
               }
               const files = {}
@@ -4961,7 +4997,7 @@ defmodule EdenWeb.ChatLive do
               // #122: asFile (read at the top from the "Send as file" click) → store the
               // photo uncompressed and render it as a document instead of an inline image.
               this.pushEvent("media_sending", {
-                id: albumId,
+                album_ids: albumIds,
                 caption,
                 files,
                 caption_id: captionId,
@@ -5209,7 +5245,7 @@ defmodule EdenWeb.ChatLive do
           // revoked on consume. A files-only send (no image/video preview) gets NO
           // node — files render as cards with no meaningful local preview, and an
           // empty album box would just flash; their real rows rise in normally.
-          addOptimisticMedia(clientId, overlay, caption) {
+          addOptimisticMedia(clientId, composeTiles, caption) {
             // Snapshot every staged tile's frame IN ORDER — a photo's <img> or a
             // loaded video's first frame (#117). So a sent clip rises in with its
             // poster at full size, not a blank square that the real video later
@@ -5217,12 +5253,10 @@ defmodule EdenWeb.ChatLive do
             // fill so the album's tile count still matches the real row.
             // Snapshot each tile's frame AND its source pixel dimensions — the dims let
             // the lone-image case reserve its display box exactly like the real row.
-            // Cap at one album's worth (#193): a pick past the cap is split server-side into a
-            // sequence of albums, and only the FIRST carries this optimistic id — so the node
-            // must mirror that first album (the rest stream in), not all N tiles.
-            const allTiles = [...overlay.querySelectorAll(".ed-compose__tile")]
-              .slice(0, this.maxAlbum())
-              .map((tile) => {
+            // `composeTiles` is ONE album's worth of compose tiles (#193): the caller splits a
+            // big pick into batches of maxAlbum and builds a node per batch, so each album
+            // appears and uploads on send, mirroring the server's per-album split.
+            const allTiles = composeTiles.map((tile) => {
               const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
               return {
                 url: this.snapshot(el),
@@ -5381,13 +5415,8 @@ defmodule EdenWeb.ChatLive do
           // inline album — so a slow upload doesn't show an album that reshapes into cards on
           // swap. One ring + one cancel for the whole album (its single client_id), matching
           // addOptimisticMedia's model. data-name/size ride the staged tiles.
-          addOptimisticAsFile(clientId, overlay, caption) {
-            // Cap at one album's worth (#193): the overflow is split server-side, only the
-            // first album carries this id, so the optimistic cards mirror the first batch.
-            const tiles = [...overlay.querySelectorAll(".ed-compose__tile")].slice(
-              0,
-              this.maxAlbum(),
-            )
+          addOptimisticAsFile(clientId, tiles, caption) {
+            // `tiles` is ONE album's worth (#193) — the caller splits a big pick into batches.
             if (tiles.length === 0) return null
             const wrap = document.createElement("div")
             wrap.className = "ed-asfile-sending"
@@ -5438,6 +5467,12 @@ defmodule EdenWeb.ChatLive do
           // albums of this size; the optimistic node mirrors only the first.
           maxAlbum() {
             return Number(this.el.dataset.maxAlbum) || 10
+          },
+          // Most media one pick may stage at once (server's max_staged_entries, #193). A pick
+          // past it is capped in onPick (the config can't take more, and the excess would wedge
+          // the whole upload); what stages is split into albums of maxAlbum server-side.
+          maxStaged() {
+            return Number(this.el.dataset.maxStaged) || 50
           },
           albumRowSizes(n) {
             if (n <= 3) return [n]
@@ -10439,14 +10474,14 @@ defmodule EdenWeb.ChatLive do
   end
 
   # Remove an upload ref from whichever in-flight send owns it, dropping a stash entry that's
-  # left with no files and no album.
+  # left with no files and no albums (#193: album_ids is a list — empty means no albums).
   defp drop_ref_from_stash(stash, ref) do
     stash
-    |> Enum.map(fn {album_id, caption, conv_id, files, caption_id, as_file} ->
-      {album_id, caption, conv_id, Map.delete(files, ref), caption_id, as_file}
+    |> Enum.map(fn {album_ids, caption, conv_id, files, caption_id, as_file} ->
+      {album_ids, caption, conv_id, Map.delete(files, ref), caption_id, as_file}
     end)
-    |> Enum.reject(fn {album_id, _caption, _conv, files, _cid, _af} ->
-      files == %{} and is_nil(album_id)
+    |> Enum.reject(fn {album_ids, _caption, _conv, files, _cid, _af} ->
+      files == %{} and album_ids == []
     end)
   end
 
@@ -10588,15 +10623,20 @@ defmodule EdenWeb.ChatLive do
     if pct == socket.assigns.last_media_pct do
       {:noreply, socket}
     else
-      socket = assign(socket, last_media_pct: pct)
-
-      id =
+      album_ids =
         case List.first(socket.assigns.media_client_ids) do
-          {id, _caption, _conv_id, _files, _caption_id, _af} -> id
-          _ -> nil
+          {ids, _caption, _conv_id, _files, _caption_id, _af} -> List.wrap(ids)
+          _ -> []
         end
 
-      {:noreply, push_event(socket, "media_progress", %{percent: pct, id: id})}
+      # Drive EVERY album's ring (#193): a big pick is several albums sharing one upload, so
+      # the overall % fills each batch's optimistic node together (not just the first).
+      socket = assign(socket, last_media_pct: pct)
+
+      {:noreply,
+       Enum.reduce(album_ids, socket, fn id, s ->
+         push_event(s, "media_progress", %{percent: pct, id: id})
+       end)}
     end
   end
 
@@ -10632,13 +10672,13 @@ defmodule EdenWeb.ChatLive do
         {:noreply, socket}
 
       idx ->
-        # Independent per-file completion applies ONLY to a files-only send. When a media
-        # album rides the same batch (album_id set), leave the file for the form-submit
-        # batch so the album stays FIRST — sending the file eagerly here would land it
-        # above the album, which is consumed only after every entry is done (#149).
+        # Independent per-file completion applies ONLY to a files-only send. When media
+        # albums ride the same batch (album_ids non-empty, #193), leave the file for the
+        # form-submit batch so the albums stay FIRST — sending the file eagerly here would
+        # land it above them, and they're consumed only after every entry is done (#149).
         case Enum.at(socket.assigns.media_client_ids, idx) do
-          {nil, _cap, _conv, _files, _cid, _af} -> settle_ready_file(socket, entry, idx)
-          _album_present -> {:noreply, socket}
+          {[], _cap, _conv, _files, _cid, _af} -> settle_ready_file(socket, entry, idx)
+          _albums_present -> {:noreply, socket}
         end
     end
   end
@@ -10651,7 +10691,8 @@ defmodule EdenWeb.ChatLive do
 
     socket = consume_one_file(socket, scope, conversation_id, entry, Map.get(files, entry.ref))
     files = Map.delete(files, entry.ref)
-    done? = files == %{} and is_nil(album_id)
+    # A files-only send only reaches here (album_ids == []), so "done" = no files left (#193).
+    done? = files == %{} and album_id == []
 
     # The last file of a files-only send pulls its caption down as a trailing message.
     {socket, caption, caption_id} =
@@ -10741,16 +10782,24 @@ defmodule EdenWeb.ChatLive do
   # started in, so an in-flight upload survives a conversation switch and lands in the
   # right chat. file_cids maps each file's upload ref to its own client_id; caption_id is
   # the trailing files-only caption's optimistic node (#149).
-  defp stash_cid(socket, id, caption, conv_id, file_cids, caption_id, as_file),
+  defp stash_cid(socket, album_ids, caption, conv_id, file_cids, caption_id, as_file),
     do:
       Enum.take(
         socket.assigns.media_client_ids ++
-          [{id, caption, conv_id, file_cids, caption_id, as_file}],
+          [{album_ids, caption, conv_id, file_cids, caption_id, as_file}],
         16
       )
 
   defp pop_media_client_id([entry | rest]), do: {entry, rest}
-  defp pop_media_client_id([]), do: {{nil, "", nil, %{}, nil, false}, []}
+  defp pop_media_client_id([]), do: {{[], "", nil, %{}, nil, false}, []}
+
+  # The album optimistic client_ids — one per album a pick is split into (#193), as a list of
+  # binaries (legacy single-id clients send a bare string; wrap it). Capped defensively.
+  defp sanitize_album_ids(ids) when is_list(ids),
+    do: ids |> Enum.filter(&is_binary/1) |> Enum.take(16)
+
+  defp sanitize_album_ids(id) when is_binary(id), do: [id]
+  defp sanitize_album_ids(_), do: []
 
   # Keep only string→string pairs from the client's {ref => client_id} files map so a
   # crafted payload can't smuggle non-binaries into the source maps / progress events,
@@ -10771,10 +10820,10 @@ defmodule EdenWeb.ChatLive do
   defp push_media_failed(socket, nil), do: socket
   defp push_media_failed(socket, id), do: push_event(socket, "media_failed", %{id: id})
 
-  # Drop every optimistic node of a failed send (#149): the media album (client_id)
-  # AND each per-file card (the file_cids values). Nil/absent ids are no-ops.
-  defp push_all_failed(socket, client_id, file_cids) do
-    [client_id | Map.values(file_cids)]
+  # Drop every optimistic node of a failed send (#149/#193): each media album (album_ids,
+  # one per batch) AND each per-file card (the file_cids values). Nil/absent ids are no-ops.
+  defp push_all_failed(socket, album_ids, file_cids) do
+    (List.wrap(album_ids) ++ Map.values(file_cids))
     |> Enum.reject(&is_nil/1)
     |> Enum.reduce(socket, &push_media_failed(&2, &1))
   end
@@ -10784,10 +10833,10 @@ defmodule EdenWeb.ChatLive do
   # uuid. So the File.cp!/File.rm traversal warnings are false positives.
   # sobelow_skip ["Traversal.FileModule"]
   defp send_attachment(socket, scope, conversation_id, body, reply_to_id, ids, as_file) do
-    # ids bundles the optimistic client_ids that move together: the album's id, the
-    # per-file ref→id map, and a files-only trailing-caption node id (#149). `as_file`
-    # (#122) sends photos as uncompressed downloadable documents.
-    {client_id, file_cids, caption_id} = ids
+    # ids bundles the optimistic client_ids that move together: the album ids (one per album
+    # the pick was split into, #193), the per-file ref→id map, and a files-only trailing-
+    # caption node id (#149). `as_file` (#122) sends photos as uncompressed documents.
+    {album_ids, file_cids, caption_id} = ids
     # A caption rides a media album inline, but a files-only send carries it as a TRAILING
     # message below the pile (#149) — decide by the staged entries before they're consumed
     # (client-type is advisory but matches the caption-placement intent). This keeps the
@@ -10828,7 +10877,7 @@ defmodule EdenWeb.ChatLive do
       # the user typed as a plain text message — reusing caption_id (files-only) so its
       # optimistic node swaps instead of orphaning.
       [] ->
-        socket = push_all_failed(socket, client_id, file_cids)
+        socket = push_all_failed(socket, album_ids, file_cids)
 
         if String.trim(body) == "",
           do: {:noreply, socket},
@@ -10842,7 +10891,9 @@ defmodule EdenWeb.ChatLive do
         opts = %{
           body: album_body,
           reply_to_id: reply_to_id,
-          client_id: client_id,
+          # A list of per-album client_ids (#193): attachment_steps chunks the media into
+          # albums and stamps each with its own id (Enum.at), so every optimistic node swaps.
+          client_id: album_ids,
           as_file: as_file
         }
 
@@ -10882,13 +10933,13 @@ defmodule EdenWeb.ChatLive do
          socket,
          {:error, reason},
          {_scope, _conversation_id, _body, _has_media?},
-         {client_id, file_cids, caption_id}
+         {album_ids, file_cids, caption_id}
        ) do
     {:noreply,
      socket
      |> clear_media_caption()
      |> put_flash(:error, attachment_error(reason))
-     |> push_all_failed(client_id, file_cids)
+     |> push_all_failed(album_ids, file_cids)
      |> push_media_failed(caption_id)}
   end
 

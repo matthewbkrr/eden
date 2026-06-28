@@ -1890,6 +1890,14 @@ defmodule Eden.Chat do
 
   # A quote-reply with attachments rides only the FIRST sent message (the album,
   # or the first file); the rest are plain. The client_id is per-step (#149).
+  #
+  # NOTE on atomicity: each step commits in its OWN create_album_message transaction, so a
+  # failure on the N-th step does NOT roll back steps 1..N-1 — those are already persisted and
+  # broadcast. This is a deliberate trade (same as a multi-file send): preflight has already
+  # rejected the common failures (bad type / too large) atomically up front, so only an
+  # infrastructure error (storage/DB) reaches here, and the committed albums' real rows still
+  # swap their optimistic twins. If partial-success ever needs surfacing, return the sent
+  # messages alongside the error instead of a bare {:error, reason}.
   defp send_attachment_steps(scope, conversation_id, steps, reply_to_id) do
     steps
     |> Enum.with_index()

@@ -513,6 +513,32 @@ defmodule Eden.ChatTest do
       counts = Enum.map(messages, &length(Repo.preload(&1, :attachments).attachments))
       assert counts == [10, 2]
     end
+
+    test "each split album is stamped with its OWN client_id from the list (#193)", %{
+      alice: alice,
+      conv: conv
+    } do
+      # The per-batch optimistic mints one client_id per album and sends them as a list; each
+      # album must carry its matching id so EVERY optimistic node swaps (not just the first).
+      sources = for i <- 1..12, do: %{path: big_photo(80, 60), filename: "p#{i}.jpg"}
+
+      {:ok, [first, second]} =
+        Chat.create_attachments(scope(alice), conv.id, sources, %{
+          body: "look",
+          client_id: ["a", "b"]
+        })
+
+      assert first.client_id == "a"
+      assert second.client_id == "b"
+    end
+
+    test "client album-cap and server staging-cap stay aligned (#193)", %{} do
+      # The per-batch optimistic relies on the client (data-max-album) and the server both
+      # chunking by max_album_entries — diverging the two would misalign the per-album
+      # client_ids. And the staging cap must hold at least one album's worth.
+      assert Chat.max_album_entries() == 10
+      assert Chat.max_staged_entries() >= Chat.max_album_entries()
+    end
   end
 
   describe "list_conversation_media/4 (#136)" do
