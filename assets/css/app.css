@@ -141,6 +141,10 @@ html {
   --ed-radius-sm: 0.375rem;
   --ed-radius: 0.625rem;
   --ed-radius-lg: 1rem;
+  /* Inner corner radius for album-mosaic tiles (Telegram-like). The album's four OUTER
+     corners stay square (the bubble clip / head-caption rules round those); every inner
+     tile corner gets this so photos read as separated rounded tiles. */
+  --ed-album-inner: 0.25rem;
   /* Floating-panel cards (#layout): between --ed-radius and --ed-radius-lg, so the
      panes round without reading as "playful". */
   --ed-radius-panel: 0.875rem;
@@ -1287,9 +1291,14 @@ html {
   .ed-media > a:not(.ed-file),
   .ed-media > img,
   .ed-media > video,
-  .ed-media > .ed-album,
   .ed-media > .ed-video-box {
     display: block;
+    margin-bottom: 0 !important;
+  }
+  /* The album is its OWN flex column — its row gap draws the horizontal dividers between rows.
+     It must NOT be forced to display:block like the other inline media (gap is a no-op on a
+     block box, so the row dividers would vanish); only its mb-1 utility needs clearing. */
+  .ed-media > .ed-album {
     margin-bottom: 0 !important;
   }
   /* The bubble's overflow:hidden + radius does the rounding now, so drop the media's
@@ -1562,6 +1571,9 @@ html {
   .ed-album {
     display: flex;
     flex-direction: column;
+    /* The 2px gaps (row + tile) show THIS bg, not the cobalt media bubble behind the album,
+       so the dividers read as the theme background (Telegram-style), not a blue line. */
+    background: var(--ed-bg);
     gap: 2px;
     /* definite width (not min(…,100%)): the % term inflates the bubble's shrink-to-fit width
        to the whole column and leaves a bg strip beside the album. max-width:100% still caps it

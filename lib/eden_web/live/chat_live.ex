@@ -8623,14 +8623,18 @@ defmodule EdenWeb.ChatLive do
           The row's aspect-ratio (= sum of its tiles' aspects) sets its height. Shared by DMs,
           rooms and threads (one album_view); image tiles page the lightbox together. --%>
     <div :if={@rows != []} class="ed-album mb-1">
-      <div :for={{row, sum} <- @rows} class="ed-album__row" style={"aspect-ratio:#{sum}"}>
+      <div
+        :for={{{row, sum}, ri} <- Enum.with_index(@rows)}
+        class="ed-album__row"
+        style={"aspect-ratio:#{sum}"}
+      >
         <.media_tile
-          :for={{item, aspect} <- row}
+          :for={{{item, aspect}, ti} <- Enum.with_index(row)}
           item={item}
           dom_id={"att-#{item.id}"}
           class="ed-album__tile"
           gallery={@gallery}
-          style={"flex:#{aspect} 1 0"}
+          style={"flex:#{aspect} 1 0;#{tile_radius(ri, length(@rows), ti, length(row))}"}
         />
       </div>
     </div>
@@ -8642,6 +8646,21 @@ defmodule EdenWeb.ChatLive do
   # the strip/layout math itself lives in AlbumLayout (and is unit-tested there).
   defp as_file_if_strip(att),
     do: if(AlbumLayout.strip_photo?(att), do: %{att | as_file: true}, else: att)
+
+  # Per-tile corner radii for the album mosaic (Telegram-style rounded tiles). Every corner
+  # gets a small radius EXCEPT the album's four OUTERMOST corners, which stay square so the
+  # bubble's overflow-clip (and the head/caption edge rules) round the album as one piece —
+  # a rounded tile corner there would leave a theme-bg notch inside the bubble's bigger curve.
+  # Keyed off grid position (first/last row, first/last tile in its row), so it holds for any
+  # photo count and any justified-row layout without per-count special-casing.
+  defp tile_radius(ri, rows, ti, tiles) do
+    sm = "var(--ed-album-inner)"
+    tl = if(ri == 0 and ti == 0, do: "0", else: sm)
+    tr = if(ri == 0 and ti == tiles - 1, do: "0", else: sm)
+    br = if(ri == rows - 1 and ti == tiles - 1, do: "0", else: sm)
+    bl = if(ri == rows - 1 and ti == 0, do: "0", else: sm)
+    "border-radius:#{tl} #{tr} #{br} #{bl}"
+  end
 
   # Album grid columns by image count: a pair stays 2-up, a trio 3-up, a quad is
   # a 2x2, larger sets settle on a 3-column grid (rows fill left to right).
