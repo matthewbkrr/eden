@@ -78,5 +78,9 @@ jobs:
             docker compose pull app
             docker compose run --rm app /app/bin/migrate
             docker compose up -d
-            docker image prune -f
+            # -a: each deploy pulls a NEW sha-tagged image; those aren't "dangling", so a plain
+            # `prune -f` left every old build on disk and eventually filled the volume (db then
+            # failed with "No space left on device"). -a drops unused tagged images too; the
+            # running app/db/caddy images are in use and kept.
+            docker image prune -af
             docker logout ghcr.io
