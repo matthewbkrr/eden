@@ -3286,6 +3286,53 @@ html {
     background: var(--ed-surface-2);
     border-radius: var(--ed-radius-full);
   }
+
+  /* Boolean toggle switch (#214 notifications; reusable). Cobalt track when on,
+     a thumb that slides across. Reduced-motion drops the slide. */
+  .ed-switch {
+    flex: none;
+    position: relative;
+    width: 2.5rem;
+    height: 1.5rem;
+    border-radius: 9999px;
+    background: var(--ed-surface-2);
+    border: 1px solid var(--ed-border);
+    cursor: pointer;
+    transition:
+      background 0.18s var(--ed-ease),
+      border-color 0.18s var(--ed-ease);
+  }
+  .ed-switch::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0.1875rem;
+    width: 1.125rem;
+    height: 1.125rem;
+    border-radius: 9999px;
+    background: var(--ed-surface);
+    box-shadow: 0 1px 2px oklch(0 0 0 / 0.18);
+    transform: translateY(-50%);
+    transition: transform 0.18s var(--ed-ease);
+  }
+  .ed-switch.is-on {
+    background: var(--ed-primary);
+    border-color: var(--ed-primary);
+  }
+  .ed-switch.is-on::after {
+    transform: translate(1rem, -50%);
+    background: #fff;
+  }
+  .ed-switch:focus-visible {
+    outline: 2px solid var(--ed-primary);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-switch,
+    .ed-switch::after {
+      transition: none;
+    }
+  }
   .ed-seg__btn {
     flex: 1;
     min-width: 0;

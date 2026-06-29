@@ -2686,6 +2686,40 @@ defmodule Eden.Chat do
     {:ok, stored || hd(quick_reactions(scope))}
   end
 
+  @doc """
+  The scoped user's notification toggles (#214) as `%{sound: bool, desktop: bool}`.
+  Falls back to the defaults (sound on, desktop off) when the user has no prefs row;
+  a present row always carries booleans (the columns are NOT NULL), so the `||`
+  applies to the whole map, never a per-field default.
+  """
+  def notification_prefs(%Scope{user: user}) do
+    Repo.one(
+      from p in FolderPrefs,
+        where: p.user_id == ^user.id,
+        select: %{sound: p.notify_sound, desktop: p.notify_desktop}
+    ) || %{sound: true, desktop: false}
+  end
+
+  @doc "Sets the scoped user's sound-notification toggle (#214). Returns `{:ok, on}`."
+  def set_notify_sound(%Scope{user: user}, on) when is_boolean(on),
+    do: upsert_notify(user.id, :notify_sound, on)
+
+  @doc "Sets the scoped user's desktop-notification toggle (#214). Returns `{:ok, on}`."
+  def set_notify_desktop(%Scope{user: user}, on) when is_boolean(on),
+    do: upsert_notify(user.id, :notify_desktop, on)
+
+  # One-field upsert: the other notify column keeps its schema default on insert,
+  # and on conflict only this field (+ updated_at) is touched — never clobbering
+  # quick_reactions / dbl_click_reaction on the shared row.
+  defp upsert_notify(user_id, field, on) do
+    Repo.insert!(struct(%FolderPrefs{user_id: user_id}, [{field, on}]),
+      on_conflict: [set: [{field, on}, {:updated_at, now()}]],
+      conflict_target: :user_id
+    )
+
+    {:ok, on}
+  end
+
   # Keep only currently-allowed emoji (deduped, order preserved, capped). nil-safe:
   # a NULL column — or a set curated down in a later release — normalizes cleanly,
   # so a now-stale stored emoji silently drops instead of becoming a dead button.

@@ -1282,6 +1282,27 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "notification prefs (#214)" do
+    test "default to sound-on / desktop-off until set, then persist", %{alice: alice} do
+      assert Chat.notification_prefs(scope(alice)) == %{sound: true, desktop: false}
+
+      {:ok, false} = Chat.set_notify_sound(scope(alice), false)
+      assert Chat.notification_prefs(scope(alice)) == %{sound: false, desktop: false}
+
+      {:ok, true} = Chat.set_notify_desktop(scope(alice), true)
+      assert Chat.notification_prefs(scope(alice)) == %{sound: false, desktop: true}
+    end
+
+    test "setting one toggle doesn't clobber the other or the reaction prefs", %{alice: alice} do
+      {:ok, _} = Chat.set_quick_reactions(scope(alice), ["🔥"])
+      {:ok, _} = Chat.set_notify_desktop(scope(alice), true)
+
+      # notify_sound keeps its default; the shared FolderPrefs row's quick_reactions survive.
+      assert Chat.notification_prefs(scope(alice)) == %{sound: true, desktop: true}
+      assert Chat.quick_reactions(scope(alice)) == ["🔥"]
+    end
+  end
+
   describe "quote-reply (#71)" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
