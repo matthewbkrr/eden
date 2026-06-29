@@ -2072,6 +2072,65 @@ html {
       animation: none;
     }
   }
+  /* #207 drag-and-drop file overlay — appears only over the pane you're dragging files INTO, so
+     the active target reads clearly even with the thread panel open beside the room (the "thin
+     edge" between zones). Cobalt wash + inset dashed frame (the conventional "drop here"
+     affordance); the label rides a lifted surface card so it stays legible over any chat
+     content. The overlay is built lazily + toggled by the .DropZone hook. */
+  .ed-dropzone {
+    position: relative;
+  }
+  .ed-dropzone__overlay {
+    position: absolute;
+    inset: 0.5rem;
+    z-index: 30; /* above the chat content; hidden entirely while a staging tray is open (below) */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--ed-primary);
+    border-radius: var(--ed-radius-lg);
+    /* Cobalt wash that LIFTS the pane (never darkens into --ed-bg); fixed oklch stays reliable
+       on Firefox, where color-mix is gated behind @supports. */
+    background: oklch(0.6 0.16 261 / 0.12);
+    pointer-events: none; /* the drop must land on the pane, not the overlay */
+    opacity: 0;
+    transition: opacity 0.16s var(--ed-ease);
+  }
+  .ed-dropzone--over .ed-dropzone__overlay {
+    opacity: 1;
+  }
+  /* While a staging tray is already open, dragging MORE files in must not clash with it — the
+     tray IS the context and the drop still adds to the batch, so suppress the big overlay rather
+     than fight the modal (#207 review: it was rendering on top of the open "N фото" tray). */
+  .ed-dropzone--over:has([data-upload-preview]) .ed-dropzone__overlay,
+  .ed-dropzone--over:has(.ed-thread-tray) .ed-dropzone__overlay {
+    opacity: 0;
+  }
+  .ed-dropzone__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.5rem;
+    border-radius: var(--ed-radius);
+    background: var(--ed-surface);
+    box-shadow: var(--ed-shadow-pop);
+    color: var(--ed-primary);
+    font-weight: 600;
+    font-size: 0.9375rem;
+    transform: translateY(6px) scale(0.98);
+    transition: transform 0.16s var(--ed-ease);
+  }
+  .ed-dropzone--over .ed-dropzone__inner {
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-dropzone__overlay,
+    .ed-dropzone__inner {
+      transition: none;
+    }
+  }
+
   .ed-profile__scroll {
     flex: 1;
     overflow-y: auto;

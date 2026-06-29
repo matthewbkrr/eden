@@ -2598,9 +2598,11 @@ defmodule EdenWeb.ChatLive do
       </aside>
 
       <main
+        id="chat-dropzone"
+        phx-hook=".DropZone"
         class={
           [
-            "flex-1 flex flex-col min-w-0",
+            "ed-dropzone flex-1 flex flex-col min-w-0",
             # Hidden on mobile when no room is open — UNLESS a private-room knock
             # window is pending (it lives in here; without this it'd be invisible on
             # mobile, #91). selected is nil during a knock, so guard on knock_room.
@@ -2609,6 +2611,7 @@ defmodule EdenWeb.ChatLive do
         }
         style="background: var(--ed-bg);"
       >
+        <.drop_overlay label={gettext("Drop files to send")} />
         <%= if @selected do %>
           <header
             class="flex items-center gap-3 px-4 h-14 border-b shrink-0"
@@ -3066,7 +3069,14 @@ defmodule EdenWeb.ChatLive do
 
       <%!-- Thread panel (Mattermost RHS): a right column on desktop, a
             full-screen overlay on mobile. --%>
-      <aside :if={@thread_root && @selected} class="ed-thread" aria-label={gettext("Thread")}>
+      <aside
+        :if={@thread_root && @selected}
+        id="thread-dropzone"
+        phx-hook=".DropZone"
+        class="ed-dropzone ed-thread"
+        aria-label={gettext("Thread")}
+      >
+        <.drop_overlay label={gettext("Drop files into the thread")} />
         <header
           class="flex items-center gap-2 px-4 h-14 border-b shrink-0"
           style="border-color: var(--ed-border);"
@@ -6675,6 +6685,85 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
 
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".DropZone">
+        // Drag-and-drop file upload (#207): drop files from Finder/Explorer anywhere in the
+        // chat (or thread) pane → staged into the composer. Mirrors .PasteUpload — it sets the
+        // pane's own file input + dispatches `input`, which the SendQueue pick-interceptor
+        // catches (queue #119 / cap / preview reused, no new server path). ONLY reacts to OS
+        // FILE drags (dataTransfer has "Files"), so message swipe-reply and the room-list
+        // sortable (element drags) are untouched. stopPropagation makes the innermost zone win,
+        // so the thread pane and the main pane never both fire.
+        export default {
+          input() {
+            // The pane's own file input (main → :attachment, thread → :thread_attachment).
+            // Absent only during the brief inert window mid-send (#207 P3) → the drop no-ops then.
+            // Drag-drop is a mouse-only enhancement; the picker + paste stay the accessible paths.
+            return this.el.querySelector('input[type="file"]')
+          },
+          hasFiles(e) {
+            return e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files")
+          },
+          show(on) {
+            this.el.classList.toggle("ed-dropzone--over", on)
+          },
+          mounted() {
+            // The overlay is SERVER-rendered in the template (#207 P1): appending it from JS got
+            // wiped by morphdom on the next re-render, so the hook only toggles --over.
+            this.depth = 0
+            this.reset = () => {
+              this.depth = 0
+              this.show(false)
+            }
+            this.onEnter = (e) => {
+              if (!this.hasFiles(e) || !this.input()) return
+              e.preventDefault()
+              e.stopPropagation()
+              this.depth++
+              this.show(true)
+            }
+            this.onOver = (e) => {
+              if (!this.hasFiles(e) || !this.input()) return
+              e.preventDefault() // required to allow the drop
+              e.stopPropagation()
+              e.dataTransfer.dropEffect = "copy"
+            }
+            this.onLeave = (e) => {
+              if (!this.hasFiles(e)) return
+              this.depth = Math.max(0, this.depth - 1)
+              if (this.depth === 0) this.show(false)
+            }
+            this.onDrop = (e) => {
+              if (!this.hasFiles(e) || !this.input()) return
+              e.preventDefault()
+              e.stopPropagation()
+              this.reset()
+              const files = Array.from(e.dataTransfer.files)
+              if (!files.length) return
+              const input = this.input()
+              const dt = new DataTransfer()
+              files.forEach((f) => dt.items.add(f))
+              input.files = dt.files
+              input.dispatchEvent(new Event("input", { bubbles: true }))
+            }
+            this.el.addEventListener("dragenter", this.onEnter)
+            this.el.addEventListener("dragover", this.onOver)
+            this.el.addEventListener("dragleave", this.onLeave)
+            this.el.addEventListener("drop", this.onDrop)
+            // P2: a drag that ends ANYWHERE (dropped outside a zone, or cancelled) must clear a
+            // stuck overlay — those don't always fire dragleave on us.
+            window.addEventListener("drop", this.reset)
+            window.addEventListener("dragend", this.reset)
+          },
+          destroyed() {
+            this.el.removeEventListener("dragenter", this.onEnter)
+            this.el.removeEventListener("dragover", this.onOver)
+            this.el.removeEventListener("dragleave", this.onLeave)
+            this.el.removeEventListener("drop", this.onDrop)
+            window.removeEventListener("drop", this.reset)
+            window.removeEventListener("dragend", this.reset)
+          },
+        }
+      </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".EmojiPicker">
         // Composer emoji picker (#60): toggle a small grid; clicking a glyph
         // inserts it at the caret in the message input. Closes on outside click
@@ -8760,6 +8849,22 @@ defmodule EdenWeb.ChatLive do
   # the strip/layout math itself lives in AlbumLayout (and is unit-tested there).
   defp as_file_if_strip(att),
     do: if(AlbumLayout.strip_photo?(att), do: %{att | as_file: true}, else: att)
+
+  # The drag-and-drop affordance (#207) — server-rendered (not appended by the hook) so it
+  # survives morphdom re-renders; the .DropZone hook only toggles `.ed-dropzone--over` to fade
+  # it in over the pane you're dragging files into.
+  attr :label, :string, required: true
+
+  defp drop_overlay(assigns) do
+    ~H"""
+    <div class="ed-dropzone__overlay" aria-hidden="true">
+      <div class="ed-dropzone__inner">
+        <.icon name="hero-arrow-up-tray" class="size-7" />
+        <span>{@label}</span>
+      </div>
+    </div>
+    """
+  end
 
   # Per-tile corner radii for the album mosaic (Telegram-style rounded tiles). Every corner
   # gets a small radius EXCEPT the album's four OUTERMOST corners, which stay square so the

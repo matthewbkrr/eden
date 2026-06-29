@@ -74,6 +74,13 @@ liveSocket.connect()
 // >> liveSocket.disableLatencySim()
 window.liveSocket = liveSocket
 
+// #207: absorb file drops anywhere in the window so a file dropped OUTSIDE a .DropZone (the
+// sidebar, the rail, the gaps) doesn't make the browser navigate away and open the file. The
+// drop zones handle + stopPropagation their own drops, so this only fires for stray drops.
+const edIsFileDrag = (e) => e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files")
+window.addEventListener("dragover", (e) => { if (edIsFileDrag(e)) e.preventDefault() })
+window.addEventListener("drop", (e) => { if (edIsFileDrag(e)) e.preventDefault() })
+
 // The lines below enable quality of life phoenix_live_reload
 // development features:
 //
