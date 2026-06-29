@@ -1386,6 +1386,28 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "messenger_unread_total (#216 rail badge)" do
+    alias Eden.Channels
+
+    test "sums non-muted DM/group unread, excludes rooms and muted", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "1"})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "2"})
+      assert Chat.messenger_unread_total(scope(alice)) == 2
+
+      # A room message doesn't count toward the messenger total (rooms have their own badge).
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "C"})
+      {:ok, [room]} = Channels.list_rooms(scope(alice), channel.id)
+      :ok = Chat.join_room(room.id, bob.id)
+      {:ok, _} = Chat.create_message(scope(bob), room.id, %{"body" => "in room"})
+      assert Chat.messenger_unread_total(scope(alice)) == 2
+
+      # Muting the DM zeroes the messenger total.
+      {:ok, _} = Chat.toggle_conversation_mute(scope(alice), conv.id)
+      assert Chat.messenger_unread_total(scope(alice)) == 0
+    end
+  end
+
   describe "quote-reply (#71)" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

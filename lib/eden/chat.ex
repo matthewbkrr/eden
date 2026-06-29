@@ -257,6 +257,32 @@ defmodule Eden.Chat do
     |> Map.new()
   end
 
+  @doc """
+  Total unread across the user's non-muted DM/group conversations — the messenger
+  rail badge (mirrors the per-channel rail badge). Rooms are excluded (they have
+  their own channel badges); replies and muted chats are already out of
+  `unread_counts/2` / via `muted_conversation_ids/2`.
+  """
+  def messenger_unread_total(%Scope{user: user}) do
+    ids = messenger_conversation_ids(user)
+    unread = unread_counts(user, ids)
+    muted = MapSet.new(muted_conversation_ids(user, ids))
+
+    for {id, n} <- unread, not MapSet.member?(muted, id), reduce: 0 do
+      acc -> acc + n
+    end
+  end
+
+  defp messenger_conversation_ids(user) do
+    Repo.all(
+      from m in Membership,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where: m.user_id == ^user.id and is_nil(m.left_at) and is_nil(c.channel_id),
+        select: m.conversation_id
+    )
+  end
+
   @doc "Fetches a conversation the scoped user belongs to (members preloaded), or `{:error, :not_found}`."
   def get_conversation(%Scope{user: user}, id) do
     query =

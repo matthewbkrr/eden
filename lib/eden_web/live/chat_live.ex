@@ -2271,6 +2271,7 @@ defmodule EdenWeb.ChatLive do
             mobile the rail hides with the sidebar while a chat is open. --%>
       <.rail
         channels={@channels}
+        messenger_unread={@messenger_unread}
         active={(@channel && @channel.id) || :messenger}
         class={@selected && "hidden md:flex"}
         me={@current_scope.user}
@@ -3621,14 +3622,16 @@ defmodule EdenWeb.ChatLive do
         // chime when it fires, so there's no double-ding).
         export default {
           mounted() {
-            this.ctx = null
-            this.lastChime = 0
+            // The AudioContext + throttle live on `window`, NOT the hook: switching between
+            // the messenger and a channel is a `navigate` (remount), which would otherwise
+            // re-create the hook with a fresh, locked context — the chime would go silent in
+            // channel mode until the next click. Window-scoping keeps it unlocked across remounts.
             this.unlock = () => {
-              if (!this.ctx) {
+              if (!window.__edAudio) {
                 const AC = window.AudioContext || window.webkitAudioContext
-                if (AC) this.ctx = new AC()
+                if (AC) window.__edAudio = new AC()
               }
-              if (this.ctx && this.ctx.state === "suspended") this.ctx.resume()
+              if (window.__edAudio && window.__edAudio.state === "suspended") window.__edAudio.resume()
             }
             window.addEventListener("pointerdown", this.unlock)
             window.addEventListener("keydown", this.unlock)
@@ -3642,11 +3645,11 @@ defmodule EdenWeb.ChatLive do
             if (this.el.dataset.sound === "true") this.chime()
           },
           chime() {
+            const ctx = window.__edAudio
+            if (!ctx || ctx.state !== "running") return // not unlocked yet
             const now = Date.now()
-            if (now - this.lastChime < 1500) return // throttle bursts
-            if (!this.ctx || this.ctx.state !== "running") return // not unlocked yet
-            this.lastChime = now
-            const ctx = this.ctx
+            if (now - (window.__edLastChime || 0) < 1500) return // throttle bursts (across remounts)
+            window.__edLastChime = now
             const t = ctx.currentTime
             const gain = ctx.createGain()
             gain.connect(ctx.destination)
@@ -10260,7 +10263,12 @@ defmodule EdenWeb.ChatLive do
   # Recompute the rail's per-channel unread badges (the channel list carries
   # the aggregate). Called when room activity arrives or a room is read.
   defp refresh_rail(socket) do
-    assign(socket, channels: Channels.list_channels(socket.assigns.current_scope))
+    scope = socket.assigns.current_scope
+
+    assign(socket,
+      channels: Channels.list_channels(scope),
+      messenger_unread: Chat.messenger_unread_total(scope)
+    )
   end
 
   defp refresh_channel_access(socket, channel_id) do

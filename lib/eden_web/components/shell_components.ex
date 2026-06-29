@@ -20,6 +20,7 @@ defmodule EdenWeb.ShellComponents do
 
   attr :channels, :list, required: true
   attr :active, :any, required: true, doc: ":messenger or a channel id"
+  attr :messenger_unread, :integer, default: 0, doc: "total DM/group unread, for the rail badge"
   attr :class, :any, default: nil
   attr :me, :any, default: nil, doc: "the current user, for the status picker (#102)"
   attr :my_status, :string, default: "auto", doc: "the user's manual presence status (#102)"
@@ -36,17 +37,26 @@ defmodule EdenWeb.ShellComponents do
       <%!-- The channel list scrolls; the bottom block (settings/logout) is
             pinned outside it so it never scrolls away with many channels. --%>
       <div class="ed-rail__scroll">
-        <.link
-          navigate={~p"/app"}
-          class={[
-            "ed-rail__btn ed-rail__btn--home",
-            @active == :messenger && "ed-rail__btn--active"
-          ]}
-          title={gettext("Messages")}
-          aria-label={gettext("Messages")}
-        >
-          <.icon name="hero-chat-bubble-left-right" class="size-5" />
-        </.link>
+        <span class="ed-rail__slot">
+          <.link
+            navigate={~p"/app"}
+            class={[
+              "ed-rail__btn ed-rail__btn--home",
+              @active == :messenger && "ed-rail__btn--active"
+            ]}
+            title={gettext("Messages")}
+            aria-label={
+              (@messenger_unread > 0 &&
+                 gettext("Messages, %{count} unread", count: @messenger_unread)) ||
+                gettext("Messages")
+            }
+          >
+            <.icon name="hero-chat-bubble-left-right" class="size-5" />
+          </.link>
+          <span :if={@messenger_unread > 0} class="ed-rail__badge" aria-hidden="true">
+            {rail_badge_text(@messenger_unread)}
+          </span>
+        </span>
 
         <div :if={@channels != []} class="ed-rail__sep"></div>
 

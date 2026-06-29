@@ -18,6 +18,7 @@ defmodule EdenWeb.RailHook do
     statics: EdenWeb.static_paths()
 
   alias Eden.Channels
+  alias Eden.Chat
 
   def on_mount(:default, _params, _session, socket) do
     scope = socket.assigns.current_scope
@@ -28,6 +29,9 @@ defmodule EdenWeb.RailHook do
       socket
       |> assign(
         channels: Channels.list_channels(scope),
+        # The messenger rail badge — total DM/group unread, mirroring the per-channel
+        # badges. Refreshed by the host LiveView's refresh_rail on DM activity/read.
+        messenger_unread: Chat.messenger_unread_total(scope),
         show_new_channel: false,
         new_channel_form: to_form(Channels.change_channel())
       )
