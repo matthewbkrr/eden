@@ -3646,10 +3646,17 @@ defmodule EdenWeb.ChatLive do
           },
           chime() {
             const ctx = window.__edAudio
-            if (!ctx || ctx.state !== "running") return // not unlocked yet
+            if (!ctx) return // never unlocked (no gesture this page session)
             const now = Date.now()
             if (now - (window.__edLastChime || 0) < 1500) return // throttle bursts (across remounts)
             window.__edLastChime = now
+            // The browser auto-suspends an AudioContext after a spell in the background; once a
+            // gesture has unlocked it, resume() needs no fresh gesture, so a notification can still
+            // ring while you're in another app. Play now if running, else after the resume settles.
+            if (ctx.state === "running") this.play(ctx)
+            else ctx.resume().then(() => ctx.state === "running" && this.play(ctx)).catch(() => {})
+          },
+          play(ctx) {
             const t = ctx.currentTime
             const gain = ctx.createGain()
             gain.connect(ctx.destination)
