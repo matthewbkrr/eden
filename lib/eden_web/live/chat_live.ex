@@ -1927,9 +1927,19 @@ defmodule EdenWeb.ChatLive do
         {:noreply, socket}
 
       reader_id != scope.user.id ->
-        # The peer read — advance their marker so our sent messages flip to ✓✓.
-        {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
-        {:noreply, socket |> assign(other_read_at: read_at) |> stream(:messages, messages)}
+        # The peer read — advance their marker so our sent DM messages flip to ✓✓.
+        # Read receipts are DM-only (#142): rooms (flat layout) render none, and
+        # re-streaming the raw list there drops the virtual `compact` flag — every
+        # collapsed author header springs back on the sender's screen (#155). So only
+        # re-stream where a receipt actually shows; in a room just record the marker.
+        socket = assign(socket, other_read_at: read_at)
+
+        if conversation.channel_id do
+          {:noreply, socket}
+        else
+          {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+          {:noreply, stream(socket, :messages, messages)}
+        end
 
       true ->
         # WE read the open chat (on open, or auto-read when a message arrives while it's open):
@@ -2816,6 +2826,23 @@ defmodule EdenWeb.ChatLive do
               data-today={gettext("Today")}
               data-yesterday={gettext("Yesterday")}
             >
+              <%!-- Room empty-state (#154): the canonical LiveView stream empty pattern —
+                    `only:block` reveals it only while #messages holds no streamed rows.
+                    Rooms only (DMs / threads carry their own placeholders). --%>
+              <div
+                :if={@selected.channel_id}
+                id="messages-empty"
+                role="status"
+                class="ed-room-empty hidden only:block"
+              >
+                <div class="ed-room-empty__medallion" aria-hidden="true">
+                  <.icon name="hero-chat-bubble-left-right" class="size-7" />
+                </div>
+                <p class="ed-room-empty__title">{gettext("No messages yet")}</p>
+                <p class="ed-room-empty__sub">
+                  {gettext("Be the first to post in #%{room}.", room: @selected.name)}
+                </p>
+              </div>
               <%= for {dom_id, message} <- @streams.messages do %>
                 <%= if @selected.channel_id do %>
                   <.flat_message

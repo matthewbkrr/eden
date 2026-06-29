@@ -2443,6 +2443,39 @@ html {
     line-height: 1.5;
   }
 
+  /* Room empty-state (#154): a calm placeholder for a room with no messages.
+     Visibility is toggled by the stream's `only:block` (sole child of #messages);
+     this just styles it to match the muted language of .ed-thread-empty and the
+     "No conversation selected" branch. Floats down from the top so it doesn't
+     hug the header. */
+  .ed-room-empty {
+    margin-inline: auto;
+    max-width: 20rem;
+    padding: clamp(2.5rem, 12vh, 5.5rem) 1.5rem 2rem;
+    text-align: center;
+  }
+  .ed-room-empty__medallion {
+    width: 3.5rem;
+    height: 3.5rem;
+    margin: 0 auto 1rem;
+    display: grid;
+    place-items: center;
+    border-radius: 9999px;
+    background: var(--ed-surface-2);
+    color: var(--ed-primary);
+  }
+  .ed-room-empty__title {
+    font-weight: 600;
+    color: var(--ed-ink);
+    font-size: 0.9375rem;
+  }
+  .ed-room-empty__sub {
+    margin-top: 0.25rem;
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+  }
+
   /* Channel rooms (sidebar rows; reuse .ed-convo geometry) -------------- */
   .ed-room {
     gap: 0.5rem;
