@@ -95,6 +95,10 @@ defmodule EdenWeb.ChatLive do
         # Auto-away (#102): true while this session is idle. Effective status is
         # recomputed from (my_status, idle?) — "auto" shows away when idle.
         idle?: false,
+        # Tab is in the foreground (#206): default true (we just mounted in a focused tab; a
+        # background mount corrects it via visibilitychange). While false, an incoming message
+        # in the open chat is NOT auto-marked read — the user isn't looking.
+        tab_visible: true,
         # Typing indicator (#11): user_id => %{name, token} for everyone currently
         # typing in the open conversation; `last_typing_at` throttles our own
         # outgoing broadcasts (monotonic ms, nil until first keystroke).
@@ -750,6 +754,24 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("presence_active", _params, socket) do
     {:noreply, maybe_apply_idle(assign(socket, idle?: false))}
+  end
+
+  # Tab hidden (#206): stop auto-marking incoming messages read while the user isn't looking
+  # (presence already went away via presence_idle from the same visibilitychange).
+  def handle_event("tab_hidden", _params, socket),
+    do: {:noreply, assign(socket, tab_visible: false)}
+
+  # Tab visible again (#206): resume, and read whatever arrived in the open chat while away
+  # (mark_read broadcasts {:read} → the badges refresh via #204).
+  def handle_event("tab_visible", _params, socket) do
+    socket = assign(socket, tab_visible: true)
+
+    case socket.assigns.selected do
+      %{id: id} -> Chat.mark_read(socket.assigns.current_scope, id)
+      _ -> :ok
+    end
+
+    {:noreply, socket}
   end
 
   # --- Message actions -------------------------------------------------------
@@ -1735,9 +1757,10 @@ defmodule EdenWeb.ChatLive do
 
   @impl true
   def handle_info({:new_message, message}, socket) do
-    # Incoming message in the open conversation counts as read; skip our own
-    # (nothing to clear, no write needed).
-    if message.sender_id != socket.assigns.current_scope.user.id do
+    # An incoming message in the open conversation counts as read ONLY if the tab is in the
+    # foreground (#206) — a chat open in a background tab must not send a false ✓✓. While
+    # hidden the read is deferred; the "tab_visible" event reads it on return. Skip our own.
+    if message.sender_id != socket.assigns.current_scope.user.id and socket.assigns.tab_visible do
       Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
     end
 
@@ -3526,12 +3549,29 @@ defmodule EdenWeb.ChatLive do
                 this.pushEvent("presence_idle", {})
               }, this.IDLE_MS)
             }
+            // Switching/minimizing the tab isn't "input idle", but the user still isn't looking
+            // (#206): go away IMMEDIATELY (don't wait out IDLE_MS), and tell the server the tab is
+            // hidden so it stops auto-marking incoming messages read. Returning reads what arrived.
+            // visibilitychange fires once per switch (event, not polling) → negligible.
+            this.onVisibility = () => {
+              if (document.hidden) {
+                clearTimeout(this.timer)
+                if (!this.idle) { this.idle = true; this.pushEvent("presence_idle", {}) }
+                this.pushEvent("tab_hidden", {})
+              } else {
+                this.pushEvent("tab_visible", {})
+                this.bump()
+              }
+            }
             this.events.forEach((e) => window.addEventListener(e, this.bump, { passive: true }))
+            document.addEventListener("visibilitychange", this.onVisibility)
             this.bump()
+            if (document.hidden) this.onVisibility()
           },
           destroyed() {
             clearTimeout(this.timer)
             this.events.forEach((e) => window.removeEventListener(e, this.bump))
+            document.removeEventListener("visibilitychange", this.onVisibility)
           }
         }
       </script>
