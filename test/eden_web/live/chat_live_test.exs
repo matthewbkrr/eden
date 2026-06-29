@@ -1725,6 +1725,52 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#composer[data-layout="flat"]))
     end
 
+    test "a room with no messages renders an empty-state (#154)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Fresh"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # The general room is born empty → the empty-state element is present (CSS `only:block`
+      # reveals it while #messages is childless) and there are no message rows.
+      assert has_element?(view, "#messages-empty .ed-room-empty__title", "No messages yet")
+      refute has_element?(view, "#messages .ed-flat")
+
+      # Posting clears it: a row now exists alongside the (now-hidden) placeholder.
+      {:ok, _} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "hello"})
+      assert render(view) =~ "hello"
+      assert has_element?(view, "#messages .ed-flat")
+    end
+
+    test "a peer's read does not un-collapse the sender's compact room run (#155)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Flat"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      :ok = Chat.join_general(channel.id, ctx.bob.id)
+      scope = Scope.for_user(ctx.alice)
+      {:ok, _r1} = Chat.create_message(scope, room.id, %{"body" => "first in run"})
+      {:ok, _r2} = Chat.create_message(scope, room.id, %{"body" => "second in run"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      # The run collapses on first render (the second message drops its author header).
+      assert has_element?(view, ".ed-flat--compact")
+
+      # Bob reads the room → broadcasts {:read, bob.id, _}. Read receipts are DM-only,
+      # so the room view must NOT re-stream the raw list: doing so would drop the
+      # virtual `compact` flag and bring every collapsed author header back on the
+      # sender's screen (#155).
+      :ok = Chat.mark_read(Scope.for_user(ctx.bob), room.id)
+      _ = render(view)
+
+      assert has_element?(view, ".ed-flat--compact")
+    end
+
     test "jumping to an in-room search result closes the search panel", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Search"})
