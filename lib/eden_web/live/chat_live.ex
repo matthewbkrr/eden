@@ -1899,12 +1899,26 @@ defmodule EdenWeb.ChatLive do
   def handle_info({:read, reader_id, read_at}, socket) do
     %{current_scope: scope, selected: conversation} = socket.assigns
 
-    if conversation && reader_id != scope.user.id do
-      {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+    cond do
+      is_nil(conversation) ->
+        {:noreply, socket}
 
-      {:noreply, socket |> assign(other_read_at: read_at) |> stream(:messages, messages)}
-    else
-      {:noreply, socket}
+      reader_id != scope.user.id ->
+        # The peer read — advance their marker so our sent messages flip to ✓✓.
+        {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+        {:noreply, socket |> assign(other_read_at: read_at) |> stream(:messages, messages)}
+
+      true ->
+        # WE read the open chat (on open, or auto-read when a message arrives while it's open):
+        # its unread is now cleared in the DB, so recompute the badges live — the row's own
+        # badge, the folder tab badges, and the channel rail — none of which refresh otherwise
+        # (#204). Mirrors the increment on {:conversation_activity}, minus the reorder (a read
+        # must not bump the chat to the top).
+        {:noreply,
+         socket
+         |> put_sidebar_conversation(conversation.id)
+         |> refresh_folders()
+         |> refresh_rail()}
     end
   end
 
