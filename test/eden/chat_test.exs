@@ -1219,6 +1219,34 @@ defmodule Eden.ChatTest do
       assert Chat.quick_reactions(scope(alice)) == ["🔥", "👀"]
     end
 
+    test "the double-click reaction defaults to the first quick reaction, then persists (#106)",
+         %{alice: alice} do
+      # Unset → the first of the (default) quick row.
+      assert Chat.dbl_click_reaction(scope(alice)) == hd(MessageReaction.quick())
+
+      # It tracks the quick row while unset.
+      {:ok, _} = Chat.set_quick_reactions(scope(alice), ["🔥", "👀"])
+      assert Chat.dbl_click_reaction(scope(alice)) == "🔥"
+
+      # An explicit pick wins and survives a quick-row change.
+      {:ok, saved} = Chat.set_dbl_click_reaction(scope(alice), "❤️")
+      assert saved == "❤️"
+      {:ok, _} = Chat.set_quick_reactions(scope(alice), ["😂", "🎉"])
+      assert Chat.dbl_click_reaction(scope(alice)) == "❤️"
+    end
+
+    test "set_dbl_click_reaction rejects a non-allowed emoji back to the default (#106)",
+         %{alice: alice} do
+      {:ok, eff} = Chat.set_dbl_click_reaction(scope(alice), "not-an-emoji")
+      assert eff == hd(MessageReaction.quick())
+      assert Chat.dbl_click_reaction(scope(alice)) == hd(MessageReaction.quick())
+
+      # nil clears an earlier explicit pick.
+      {:ok, _} = Chat.set_dbl_click_reaction(scope(alice), "❤️")
+      {:ok, cleared} = Chat.set_dbl_click_reaction(scope(alice), nil)
+      assert cleared == hd(MessageReaction.quick())
+    end
+
     test "set_quick_reactions drops non-allowed, dedups, and caps", %{alice: alice} do
       limit = Chat.quick_reaction_limit()
       {:ok, saved} = Chat.set_quick_reactions(scope(alice), ["🔥", "not-emoji", "🔥", "👀"])

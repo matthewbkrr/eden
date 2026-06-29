@@ -37,11 +37,18 @@ defmodule EdenWeb.SettingsLive do
           reaction_set: Chat.allowed_reactions(),
           quick_set: Chat.quick_reactions(scope),
           quick_limit: Chat.quick_reaction_limit(),
-          default_quick: Chat.default_quick_reactions()
+          default_quick: Chat.default_quick_reactions(),
+          dbl_reaction: Chat.dbl_click_reaction(scope)
         )
 
       _ ->
-        assign(socket, reaction_set: [], quick_set: [], quick_limit: 0, default_quick: [])
+        assign(socket,
+          reaction_set: [],
+          quick_set: [],
+          quick_limit: 0,
+          default_quick: [],
+          dbl_reaction: nil
+        )
     end
   end
 
@@ -355,6 +362,30 @@ defmodule EdenWeb.SettingsLive do
                 {e}
               </button>
             </div>
+
+            <div class="mt-5 pt-4" style="border-top: 1px solid var(--ed-border);">
+              <p style="font-weight:600; font-size:0.8125rem;">
+                {gettext("Double-click to react")}
+              </p>
+              <p class="mt-0.5 mb-3" style="color: var(--ed-muted); font-size:0.8125rem;">
+                {gettext(
+                  "Double-clicking a message reacts with this emoji. Pick one from your quick-react row."
+                )}
+              </p>
+              <div class="ed-qr-grid" role="radiogroup" aria-label={gettext("Double-click reaction")}>
+                <button
+                  :for={e <- @quick_set}
+                  type="button"
+                  class={["ed-qr", e == @dbl_reaction && "ed-qr--on"]}
+                  phx-click="set_dbl_reaction"
+                  phx-value-emoji={e}
+                  role="radio"
+                  aria-checked={to_string(e == @dbl_reaction)}
+                >
+                  {e}
+                </button>
+              </div>
+            </div>
           </section>
 
           <section
@@ -634,14 +665,22 @@ defmodule EdenWeb.SettingsLive do
         do: List.delete(current, emoji),
         else: current ++ [emoji]
 
-    {:ok, saved} = Chat.set_quick_reactions(socket.assigns.current_scope, next)
-    {:noreply, assign(socket, quick_set: saved)}
+    {:ok, _saved} = Chat.set_quick_reactions(socket.assigns.current_scope, next)
+    # Re-read the whole reactions block: an unset double-click reaction resolves to
+    # the FIRST quick reaction, so changing the row can move which chip is active.
+    {:noreply, assign_reactions(socket)}
   end
 
   # Drop the personal quick row back to the default set.
   def handle_event("reset_quick_reactions", _params, socket) do
-    {:ok, saved} = Chat.set_quick_reactions(socket.assigns.current_scope, [])
-    {:noreply, assign(socket, quick_set: saved)}
+    {:ok, _saved} = Chat.set_quick_reactions(socket.assigns.current_scope, [])
+    {:noreply, assign_reactions(socket)}
+  end
+
+  # #106: pick the emoji a double-click reacts with (one of the quick-react row).
+  def handle_event("set_dbl_reaction", %{"emoji" => emoji}, socket) do
+    {:ok, saved} = Chat.set_dbl_click_reaction(socket.assigns.current_scope, emoji)
+    {:noreply, assign(socket, dbl_reaction: saved)}
   end
 
   defp reload_folders(socket), do: assign_folders(socket)

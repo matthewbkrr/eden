@@ -224,13 +224,41 @@ defmodule EdenWeb.SettingsLiveTest do
 
       refute "🔥" in Chat.quick_reactions(scope)
 
-      view |> element(~s(.ed-qr[phx-value-emoji="🔥"])) |> render_click()
+      view
+      |> element(~s(.ed-qr[phx-click="toggle_quick_reaction"][phx-value-emoji="🔥"]))
+      |> render_click()
+
       assert "🔥" in Chat.quick_reactions(scope)
-      assert has_element?(view, ~s(.ed-qr--on[phx-value-emoji="🔥"]))
+
+      assert has_element?(
+               view,
+               ~s(.ed-qr--on[phx-click="toggle_quick_reaction"][phx-value-emoji="🔥"])
+             )
 
       # Toggling again removes it.
-      view |> element(~s(.ed-qr[phx-value-emoji="🔥"])) |> render_click()
+      view
+      |> element(~s(.ed-qr[phx-click="toggle_quick_reaction"][phx-value-emoji="🔥"]))
+      |> render_click()
+
       refute "🔥" in Chat.quick_reactions(scope)
+    end
+
+    test "picking a double-click reaction persists and highlights it (#106)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      # Defaults to the first quick reaction.
+      assert Chat.dbl_click_reaction(scope) == hd(Chat.default_quick_reactions())
+
+      # Pick ❤️ from the radiogroup (scoped so it's the dbl picker, not the quick toggle).
+      view
+      |> element(~s([role="radiogroup"] .ed-qr[phx-value-emoji="❤️"]))
+      |> render_click()
+
+      assert Chat.dbl_click_reaction(scope) == "❤️"
+      assert has_element?(view, ~s([role="radiogroup"] .ed-qr--on[phx-value-emoji="❤️"]))
     end
 
     test "reset returns the quick row to the default (and the button only shows when custom)", %{
@@ -244,7 +272,10 @@ defmodule EdenWeb.SettingsLiveTest do
       # Default state: nothing to reset.
       refute has_element?(view, ~s(button[phx-click="reset_quick_reactions"]))
 
-      view |> element(~s(.ed-qr[phx-value-emoji="🔥"])) |> render_click()
+      view
+      |> element(~s(.ed-qr[phx-click="toggle_quick_reaction"][phx-value-emoji="🔥"]))
+      |> render_click()
+
       assert has_element?(view, ~s(button[phx-click="reset_quick_reactions"]))
 
       view |> element(~s(button[phx-click="reset_quick_reactions"])) |> render_click()

@@ -185,6 +185,9 @@ defmodule EdenWeb.ChatLive do
         # The viewer's personal quick-react row (#67), shown in every message menu;
         # set in Settings, read once here (a remount on navigation picks up changes).
         my_quick: Chat.quick_reactions(scope),
+        # The viewer's double-click reaction (#106), read into #composer's dataset so
+        # the .ContextMenu hook reacts with it; mount-only, like my_quick above.
+        my_dbl: Chat.dbl_click_reaction(scope),
         # Quote-reply (#71): the message currently being replied to (or nil). Shown
         # in the composer tray; its id rides the next send. `thread_reply_to` is the
         # same for the thread panel's own composer (a quote within the thread).
@@ -2924,6 +2927,7 @@ defmodule EdenWeb.ChatLive do
             data-is-group={to_string(@selected.is_group)}
             data-sender-id={@current_scope.user.id}
             data-sender-name={@current_scope.user.display_name}
+            data-dbl-react={@my_dbl}
             data-max-body={Chat.Message.max_body()}
             data-max-album={Chat.max_album_entries()}
             data-max-staged={Chat.max_staged_entries()}
@@ -4295,6 +4299,34 @@ defmodule EdenWeb.ChatLive do
               const r = this.el.getBoundingClientRect()
               this.open(e.clientX || r.left + 8, e.clientY || r.top + 8)
             })
+
+            // Double-click a message → react with the viewer's configured emoji (#106).
+            // Only on real message rows: the same hook also hosts sidebar/channel context
+            // menus, which carry no data-message-id — gating the whole setup here keeps
+            // those hosts listener-free. Listen on the full message ROW (.ed-msg in DM
+            // bubbles, the .ed-flat host in rooms/threads) so the hit area matches rooms,
+            // not just the narrow bubble. Skips interactive descendants — buttons, inputs,
+            // video, existing chips and real text links (a:not(.ed-photo)); PHOTOS are
+            // reactable (<a class="ed-photo">): the .Lightbox hook defers its open ~250ms so
+            // a double-click reacts instead. The emoji rides #composer's dataset (present
+            // for DM, room AND thread rows).
+            if (this.el.dataset.messageId) {
+              const dblRow = this.el.closest(".ed-msg") || this.el
+              const canReact = (t) =>
+                !t.closest("button, input, textarea, video, .ed-reactions, a:not(.ed-photo)")
+              // preventDefault on the SECOND mousedown stops the browser selecting the word
+              // BEFORE it paints — clearing the selection after dblclick still flickered.
+              dblRow.addEventListener("mousedown", (e) => {
+                if (e.detail === 2 && canReact(e.target)) e.preventDefault()
+              })
+              dblRow.addEventListener("dblclick", (e) => {
+                if (!canReact(e.target)) return
+                const emoji = document.getElementById("composer")?.dataset.dblReact
+                if (!emoji) return
+                e.preventDefault()
+                this.pushEvent("react", { id: this.el.dataset.messageId, emoji })
+              })
+            }
 
             // Touch: long-press opens the menu; a horizontal LEFT-swipe on a
             // message row quote-replies (#71). A move cancels the long-press
@@ -6462,13 +6494,26 @@ defmodule EdenWeb.ChatLive do
         // to an album (data-gallery), the overlay pages through that album's
         // photos with on-screen arrows and ←/→. Cmd/Ctrl/Shift/middle click fall
         // through to the normal "open original in a new tab".
+        // #106: inside a message, a double-click reacts — so a photo there must give the
+        // second click a chance to arrive before opening. We defer the open by DBL_MS and
+        // cancel it when a 2nd click lands (the .ContextMenu row handler then reacts). Photos
+        // OUTSIDE a message row (the profile gallery) keep opening instantly — nothing reacts
+        // there, so there's nothing to disambiguate.
+        const DBL_MS = 250
         export default {
           mounted() {
+            const inMsg = !!this.el.closest(".ed-msg, .ed-flat")
             this.el.addEventListener("click", (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
               e.preventDefault()
-              this.openLightbox()
+              if (!inMsg) return this.openLightbox()
+              if (e.detail > 1) return clearTimeout(this._openT) // part of a dbl-click → react
+              clearTimeout(this._openT)
+              this._openT = setTimeout(() => this.openLightbox(), DBL_MS)
             })
+          },
+          destroyed() {
+            clearTimeout(this._openT)
           },
           openLightbox() {
             const gallery = this.el.dataset.gallery

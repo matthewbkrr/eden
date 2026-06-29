@@ -2653,6 +2653,39 @@ defmodule Eden.Chat do
     {:ok, stored || MessageReaction.quick()}
   end
 
+  @doc """
+  The scoped user's double-click reaction emoji (#106): their stored choice when
+  it's still an allowed emoji, otherwise the first of their quick-react row.
+  Always returns a valid emoji (the quick row falls back to the default set, which
+  is non-empty), so callers can use it directly.
+  """
+  def dbl_click_reaction(%Scope{user: user} = scope) do
+    stored =
+      Repo.one(from p in FolderPrefs, where: p.user_id == ^user.id, select: p.dbl_click_reaction)
+
+    if is_binary(stored) and stored in MessageReaction.allowed() do
+      stored
+    else
+      hd(quick_reactions(scope))
+    end
+  end
+
+  @doc """
+  Sets the scoped user's double-click reaction (#106). A non-allowed emoji (or
+  `nil`) is stored as `nil`, which resolves back to the first quick reaction.
+  Returns `{:ok, effective_emoji}`.
+  """
+  def set_dbl_click_reaction(%Scope{user: user} = scope, emoji) do
+    stored = if is_binary(emoji) and emoji in MessageReaction.allowed(), do: emoji, else: nil
+
+    Repo.insert!(%FolderPrefs{user_id: user.id, dbl_click_reaction: stored},
+      on_conflict: [set: [dbl_click_reaction: stored, updated_at: now()]],
+      conflict_target: :user_id
+    )
+
+    {:ok, stored || hd(quick_reactions(scope))}
+  end
+
   # Keep only currently-allowed emoji (deduped, order preserved, capped). nil-safe:
   # a NULL column — or a set curated down in a later release — normalizes cleanly,
   # so a now-stale stored emoji silently drops instead of becoming a dead button.
