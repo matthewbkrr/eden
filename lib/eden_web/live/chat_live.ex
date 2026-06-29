@@ -188,6 +188,10 @@ defmodule EdenWeb.ChatLive do
         # The viewer's double-click reaction (#106), read into #composer's dataset so
         # the .ContextMenu hook reacts with it; mount-only, like my_quick above.
         my_dbl: Chat.dbl_click_reaction(scope),
+        # Notification toggles (#214) fed to the always-present .Notifier host so the
+        # sound (#215) / desktop (#217) renderers honor them; mount-only (a remount on
+        # navigation from Settings picks up a change), like my_quick/my_dbl.
+        notify_prefs: Chat.notification_prefs(scope),
         # Quote-reply (#71): the message currently being replied to (or nil). Shown
         # in the composer tray; its id rides the next send. `thread_reply_to` is the
         # same for the thread panel's own composer (a quote within the thread).
@@ -2246,6 +2250,17 @@ defmodule EdenWeb.ChatLive do
     <div class="ed-root h-screen flex overflow-hidden">
       <%!-- Auto-away (#102): reports this session idle/active to the server. --%>
       <div id="idle-tracker" phx-hook=".IdleTracker" hidden></div>
+      <%!-- Notification renderer (#215 sound / #217 desktop): an always-present, invisible
+            host that catches the server's gated "notify" push_event (#213) and plays a
+            sound / shows an OS notification per the viewer's toggles (#214). --%>
+      <div
+        id="notifier"
+        phx-hook=".Notifier"
+        data-sound={to_string(@notify_prefs.sound)}
+        data-desktop={to_string(@notify_prefs.desktop)}
+        hidden
+      >
+      </div>
       <%!-- Below the header so it never covers the header buttons; the wrapper
             ignores pointer events so only the toast itself is interactive. --%>
       <div class="fixed top-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4 pointer-events-none">
@@ -3594,6 +3609,59 @@ defmodule EdenWeb.ChatLive do
                 dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
               })
           }
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".Notifier">
+        // #215: play a short chime when the server pushes a gated "notify" (the #213
+        // recipient gating already ran — self / muted / DND / non-followers are gone, and
+        // the LiveView already dropped the focused-chat / muted-channel cases). Web Audio
+        // can't start without a user gesture, so we lazily unlock the context on the first
+        // interaction; a throttle keeps a burst of messages from machine-gunning the sound.
+        // #217 will add the desktop-notification output to this same hook (and suppress the
+        // chime when it fires, so there's no double-ding).
+        export default {
+          mounted() {
+            this.ctx = null
+            this.lastChime = 0
+            this.unlock = () => {
+              if (!this.ctx) {
+                const AC = window.AudioContext || window.webkitAudioContext
+                if (AC) this.ctx = new AC()
+              }
+              if (this.ctx && this.ctx.state === "suspended") this.ctx.resume()
+            }
+            window.addEventListener("pointerdown", this.unlock)
+            window.addEventListener("keydown", this.unlock)
+            this.handleEvent("notify", (payload) => this.onNotify(payload))
+          },
+          destroyed() {
+            window.removeEventListener("pointerdown", this.unlock)
+            window.removeEventListener("keydown", this.unlock)
+          },
+          onNotify(_payload) {
+            if (this.el.dataset.sound === "true") this.chime()
+          },
+          chime() {
+            const now = Date.now()
+            if (now - this.lastChime < 1500) return // throttle bursts
+            if (!this.ctx || this.ctx.state !== "running") return // not unlocked yet
+            this.lastChime = now
+            const ctx = this.ctx
+            const t = ctx.currentTime
+            const gain = ctx.createGain()
+            gain.connect(ctx.destination)
+            // Soft attack/decay so it's a gentle chime, not a beep.
+            gain.gain.setValueAtTime(0.0001, t)
+            gain.gain.exponentialRampToValueAtTime(0.11, t + 0.012)
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34)
+            const osc = ctx.createOscillator()
+            osc.type = "sine"
+            osc.frequency.setValueAtTime(660, t)
+            osc.frequency.setValueAtTime(880, t + 0.09) // a small two-note rise
+            osc.connect(gain)
+            osc.start(t)
+            osc.stop(t + 0.35)
+          },
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".IdleTracker">
