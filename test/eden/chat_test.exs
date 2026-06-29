@@ -21,6 +21,9 @@ defmodule Eden.ChatTest do
 
   defp scope(user), do: Scope.for_user(user)
 
+  # Subscribe the test process to a user's notification topic (#213).
+  defp sub(user), do: Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{user.id}:chat")
+
   defp system_metas(conversation_id) do
     Eden.Repo.all(
       from m in Message,
@@ -1300,6 +1303,86 @@ defmodule Eden.ChatTest do
       # notify_sound keeps its default; the shared FolderPrefs row's quick_reactions survive.
       assert Chat.notification_prefs(scope(alice)) == %{sound: true, desktop: true}
       assert Chat.quick_reactions(scope(alice)) == ["🔥"]
+    end
+  end
+
+  describe "notification gating (#213)" do
+    alias Eden.Accounts
+    alias Eden.Channels
+
+    setup %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol_n"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
+      %{conv: conv, carol: carol}
+    end
+
+    test "notifies the other members but not the sender", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      sub(bob)
+      sub(alice)
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+
+      aid = alice.id
+      cid = conv.id
+
+      assert_receive {:notify,
+                      %{sender_id: ^aid, conversation_id: ^cid, preview: "hi", kind: "group"}}
+
+      # The same process is subscribed to the sender's topic too — no self-notification.
+      refute_received {:notify, %{conversation_id: ^cid}}
+    end
+
+    test "a directly-muted member is not notified", %{alice: alice, bob: bob, conv: conv} do
+      {:ok, _} = Chat.toggle_conversation_mute(scope(bob), conv.id)
+      sub(bob)
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      refute_receive {:notify, _}
+    end
+
+    test "a folder-muted member is not notified", %{alice: alice, bob: bob, conv: conv} do
+      {:ok, folder} = Chat.create_folder(scope(bob), %{"name" => "Work"})
+      {:ok, _} = Chat.toggle_conversation_folder(scope(bob), conv.id, folder.id)
+      {:ok, _} = Chat.toggle_folder_mute(scope(bob), folder.id)
+      sub(bob)
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      refute_receive {:notify, _}
+    end
+
+    test "a Do-Not-Disturb member is not notified", %{alice: alice, bob: bob, conv: conv} do
+      {:ok, _} = Accounts.set_presence_status(bob, "dnd")
+      sub(bob)
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      refute_receive {:notify, _}
+    end
+
+    test "a thread reply notifies followers only; non-followers and muted followers get nothing",
+         %{alice: alice, bob: bob, carol: carol} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "talk"})
+      :ok = Chat.join_room(room.id, bob.id)
+      :ok = Chat.join_room(room.id, carol.id)
+      {:ok, root} = Chat.create_message(scope(alice), room.id, %{"body" => "root"})
+      # Bob replies → bob follows; alice (root author) is pulled in. Carol never engages.
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "first"})
+
+      sub(bob)
+      sub(carol)
+      # Alice replies again → followers minus sender(alice) = bob only.
+      {:ok, _} = Chat.create_reply(scope(alice), root.id, %{"body" => "second"})
+
+      rid = room.id
+      assert_receive {:notify, %{conversation_id: ^rid, root_id: root_id, kind: "room"}}
+      assert is_integer(root_id)
+      # Carol (room member, not a follower) is not notified for the thread reply.
+      refute_received {:notify, %{conversation_id: ^rid}}
+
+      # A follower who mutes the room stops getting thread notifications (mute silences all).
+      {:ok, _} = Chat.toggle_conversation_mute(scope(bob), room.id)
+      {:ok, _} = Chat.create_reply(scope(alice), root.id, %{"body" => "third"})
+      refute_receive {:notify, %{conversation_id: ^rid}}
     end
   end
 

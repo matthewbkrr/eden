@@ -2536,6 +2536,7 @@ defmodule Eden.Chat do
       # in on the first reply, and every other follower gains one unread reply.
       track_reply(root, reply)
       broadcast(root.conversation_id, {:thread_reply, fresh_root, reply})
+      notify_new(reply)
     end
 
     reply
@@ -3115,6 +3116,113 @@ defmodule Eden.Chat do
     end
   end
 
+  # #213: fan a notification out to everyone who should hear about `message`. The
+  # recipient set is gated on Chat-only data — members (or, for a thread reply,
+  # thread FOLLOWERS) minus the sender, minus anyone with the conversation directly
+  # muted (membership or folder), minus anyone in Do-Not-Disturb. The remaining two
+  # gates — "is this the chat I'm currently looking at" and channel-level mute — are
+  # per-session / Channels data, so the web layer applies them. Mute and DND silence
+  # everything, including followed threads (decided in #213).
+  defp notify_new(message) do
+    case notify_recipient_ids(message) do
+      [] ->
+        :ok
+
+      recipients ->
+        payload = notify_payload(message)
+
+        for uid <- recipients,
+            do: Phoenix.PubSub.broadcast(@pubsub, user_topic(uid), {:notify, payload})
+    end
+  end
+
+  defp notify_recipient_ids(%{root_id: root_id} = message) when not is_nil(root_id),
+    do: thread_recipient_ids(message)
+
+  defp notify_recipient_ids(message), do: direct_recipient_ids(message)
+
+  # Active members (minus sender) joined to their user + folder-mute, filtered in one pass.
+  defp direct_recipient_ids(message) do
+    rows =
+      Repo.all(
+        from m in Membership,
+          join: u in User,
+          on: u.id == m.user_id,
+          where:
+            m.conversation_id == ^message.conversation_id and is_nil(m.left_at) and
+              m.user_id != ^message.sender_id,
+          select: {m.user_id, not is_nil(m.muted_at), u.presence_status}
+      )
+
+    folder_muted = MapSet.new(folder_muted_ids(message.conversation_id))
+
+    for {uid, muted, status} <- rows,
+        not muted,
+        status != "dnd",
+        not MapSet.member?(folder_muted, uid),
+        do: uid
+  end
+
+  # Thread reply: only FOLLOWERS (#57). Threads are rooms-only, so no folder mute —
+  # just the room membership's direct mute + DND. The Membership join also drops
+  # anyone who has left the room.
+  defp thread_recipient_ids(message) do
+    Repo.all(
+      from tm in ThreadMembership,
+        join: u in User,
+        on: u.id == tm.user_id,
+        join: m in Membership,
+        on: m.user_id == tm.user_id and m.conversation_id == ^message.conversation_id,
+        where:
+          tm.root_id == ^message.root_id and tm.following == true and
+            tm.user_id != ^message.sender_id and is_nil(m.left_at) and is_nil(m.muted_at) and
+            u.presence_status != "dnd",
+        select: tm.user_id
+    )
+  end
+
+  defp folder_muted_ids(conversation_id) do
+    Repo.all(
+      from fm in FolderMembership,
+        join: f in Folder,
+        on: f.id == fm.folder_id,
+        where: fm.conversation_id == ^conversation_id and not is_nil(f.muted_at),
+        select: f.user_id
+    )
+  end
+
+  # Locale-neutral payload: the web layer (recipient's session) formats the title,
+  # localizes any media label, and applies the channel-mute + focus suppression.
+  defp notify_payload(message) do
+    conv = Repo.get(Conversation, message.conversation_id)
+    sender = message.sender
+
+    %{
+      conversation_id: message.conversation_id,
+      message_id: message.id,
+      root_id: message.root_id,
+      channel_id: conv && conv.channel_id,
+      kind: notify_kind(conv),
+      conv_title: notify_title(conv),
+      sender_id: message.sender_id,
+      sender_name: sender && sender.display_name,
+      avatar_key: sender && sender.avatar_key,
+      preview: message.body || "",
+      media_kind: notify_media_kind(message)
+    }
+  end
+
+  defp notify_kind(%{channel_id: cid}) when not is_nil(cid), do: "room"
+  defp notify_kind(%{is_group: true}), do: "group"
+  defp notify_kind(_), do: "dm"
+
+  defp notify_title(%{channel_id: cid} = conv) when not is_nil(cid), do: conv.name
+  defp notify_title(%{is_group: true} = conv), do: conv.title
+  defp notify_title(_), do: nil
+
+  defp notify_media_kind(%{attachments: [%{kind: kind} | _]}), do: kind
+  defp notify_media_kind(_), do: nil
+
   defp topic(conversation_id), do: "conversation:#{conversation_id}"
   defp user_topic(user_id), do: "user:#{user_id}:chat"
 
@@ -3203,6 +3311,7 @@ defmodule Eden.Chat do
 
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
+    notify_new(message)
     message
   end
 

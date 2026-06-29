@@ -1991,6 +1991,29 @@ defmodule EdenWeb.ChatLive do
      |> refresh_rail()}
   end
 
+  # #213: a gated notification for a new message/reply landed on our user topic.
+  # The server already dropped self / muted / DND / non-followers; here we apply the
+  # two gates only this session can see — is THIS chat focused right now, and is its
+  # channel muted in our rail — then hand the payload to the client renderers
+  # (#215 sound / #217 desktop) via a push_event.
+  def handle_info({:notify, payload}, socket) do
+    channels = Map.get(socket.assigns, :channels, [])
+
+    focused? =
+      socket.assigns.tab_visible && socket.assigns.selected &&
+        socket.assigns.selected.id == payload.conversation_id
+
+    channel_muted? =
+      payload.channel_id &&
+        Enum.any?(channels, &(&1.id == payload.channel_id && &1.muted))
+
+    if focused? || channel_muted? do
+      {:noreply, socket}
+    else
+      {:noreply, push_event(socket, "notify", payload)}
+    end
+  end
+
   # Folder set / membership / order / mute changed in one of the user's
   # sessions: refresh the tab bar, re-apply the active filter, and refresh room
   # badges (room mute lives on the same memberships).
