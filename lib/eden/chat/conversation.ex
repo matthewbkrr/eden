@@ -11,6 +11,9 @@ defmodule Eden.Chat.Conversation do
   schema "conversations" do
     field :title, :string
     field :is_group, :boolean, default: false
+    # Storage key of the processed group photo (#178, set by Chat.set_group_avatar/3),
+    # or nil → initials fallback. Mirrors users/channels avatar_key.
+    field :avatar_key, :string
     field :last_message_at, :utc_datetime
     # Rooms (corporate layer): a conversation bound to a channel. Referenced by
     # id, not an assoc — channels live in the Channels context.
