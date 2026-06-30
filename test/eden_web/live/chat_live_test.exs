@@ -2343,6 +2343,28 @@ defmodule EdenWeb.ChatLiveTest do
     end
   end
 
+  # A complete {:notify} payload (the shape Chat.notify_payload/1 broadcasts), so the
+  # web layer's notify_event/1 — which reads sender_id/avatar_key/media_kind — doesn't
+  # KeyError on a hand-built stub. Override only the fields a test cares about.
+  defp notify_payload(attrs) do
+    Map.merge(
+      %{
+        conversation_id: 0,
+        message_id: 1,
+        root_id: nil,
+        channel_id: nil,
+        kind: "dm",
+        conv_title: nil,
+        sender_id: 0,
+        sender_name: "Someone",
+        avatar_key: nil,
+        preview: "",
+        media_kind: nil
+      },
+      attrs
+    )
+  end
+
   describe "notification push (#213)" do
     alias Eden.Accounts.Scope
     alias Eden.Channels
@@ -2354,13 +2376,13 @@ defmodule EdenWeb.ChatLiveTest do
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
       # A notification for a DIFFERENT chat → handed to the client renderers.
-      send(view.pid, {:notify, %{conversation_id: 999, channel_id: nil, preview: "hi"}})
+      send(view.pid, {:notify, notify_payload(%{conversation_id: 999, preview: "hi"})})
       assert_push_event(view, "notify", %{conversation_id: 999})
 
       # The OPEN, focused chat → suppressed (you're already looking at it).
       send(
         view.pid,
-        {:notify, %{conversation_id: ctx.conversation.id, channel_id: nil, preview: "yo"}}
+        {:notify, notify_payload(%{conversation_id: ctx.conversation.id, preview: "yo"})}
       )
 
       render(view)
@@ -2375,7 +2397,11 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
 
-      send(view.pid, {:notify, %{conversation_id: room.id, channel_id: ch.id, preview: "x"}})
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: room.id, channel_id: ch.id, preview: "x"})}
+      )
+
       render(view)
       refute_push_event(view, "notify", %{})
     end

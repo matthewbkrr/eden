@@ -2003,18 +2003,22 @@ defmodule EdenWeb.ChatLive do
   def handle_info({:notify, payload}, socket) do
     channels = Map.get(socket.assigns, :channels, [])
 
+    # This server gate answers "am I reading THIS chat right now" → full suppression
+    # (no chime, no banner). It's distinct from the client's later "am I on the site
+    # at all" check in the .Notifier hook, which only routes chime-vs-desktop; the two
+    # answer different questions, so both are intentional (not redundant).
     focused? =
-      socket.assigns.tab_visible && socket.assigns.selected &&
-        socket.assigns.selected.id == payload.conversation_id
+      !!(socket.assigns.tab_visible && socket.assigns.selected &&
+           socket.assigns.selected.id == payload.conversation_id)
 
     channel_muted? =
-      payload.channel_id &&
-        Enum.any?(channels, &(&1.id == payload.channel_id && &1.muted))
+      !!(payload.channel_id &&
+           Enum.any?(channels, &(&1.id == payload.channel_id && &1.muted)))
 
     if focused? || channel_muted? do
       {:noreply, socket}
     else
-      {:noreply, push_event(socket, "notify", payload)}
+      {:noreply, push_event(socket, "notify", notify_event(payload))}
     end
   end
 
@@ -3618,8 +3622,9 @@ defmodule EdenWeb.ChatLive do
         // the LiveView already dropped the focused-chat / muted-channel cases). Web Audio
         // can't start without a user gesture, so we lazily unlock the context on the first
         // interaction; a throttle keeps a burst of messages from machine-gunning the sound.
-        // #217 will add the desktop-notification output to this same hook (and suppress the
-        // chime when it fires, so there's no double-ding).
+        // #217 adds the desktop-notification output to this same hook: when you're AWAY it shows
+        // an OS notification (suppressing the chime, no double-ding); when you're ON the site it
+        // plays the chime instead (no redundant OS banner). See onNotify for the split.
         export default {
           mounted() {
             // The AudioContext + throttle live on `window`, NOT the hook: switching between
@@ -3641,8 +3646,48 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("pointerdown", this.unlock)
             window.removeEventListener("keydown", this.unlock)
           },
-          onNotify(_payload) {
-            if (this.el.dataset.sound === "true") this.chime()
+          onNotify(payload) {
+            // #217: split the output by where your attention is. The #213 server gate already
+            // dropped the case where you're actively viewing THIS chat; here we split the rest:
+            //   • on the site (window focused AND tab visible) → the in-app chime only — you're
+            //     looking at eden, an OS banner would just be redundant noise.
+            //   • away (another app/window, minimized, or a background tab) → the desktop OS
+            //     notification (it carries its own system sound), so we suppress the chime to
+            //     avoid a double-ding. Falls back to the chime when desktop is off or not
+            //     permitted on this device (a per-user pref can outrun a per-device permission).
+            // With several eden tabs open the OS de-dups banners by `tag` (one per conversation),
+            // but a focused tab may chime while a background tab banners the same message — an
+            // accepted minor; cross-tab election would be out of proportion to the annoyance.
+            const here = !document.hidden && document.hasFocus()
+            if (here) {
+              if (this.el.dataset.sound === "true") this.chime()
+            } else {
+              const desktopShown = this.el.dataset.desktop === "true" && this.notify(payload)
+              if (this.el.dataset.sound === "true" && !desktopShown) this.chime()
+            }
+          },
+          notify(payload) {
+            if (!("Notification" in window) || Notification.permission !== "granted") return false
+            const head =
+              payload.kind === "room" && payload.conv_title ? "#" + payload.conv_title : payload.conv_title
+            const title =
+              payload.kind === "dm"
+                ? payload.sender_name || ""
+                : [head, payload.sender_name].filter(Boolean).join(" · ")
+            const opts = { body: payload.body || "", tag: "ed-conv-" + payload.conversation_id }
+            if (payload.avatar_url) opts.icon = payload.avatar_url
+            let n
+            try { n = new Notification(title, opts) } catch (_e) { return false }
+            // Click → focus the window and jump to the message (the permalink scrolls to it).
+            n.onclick = () => {
+              window.focus()
+              const path = payload.channel_id
+                ? "/channels/" + payload.channel_id + "/r/" + payload.conversation_id + "/m/" + payload.message_id
+                : "/app/c/" + payload.conversation_id + "/m/" + payload.message_id
+              n.close()
+              window.location.assign(path)
+            }
+            return true
           },
           chime() {
             const ctx = window.__edAudio
@@ -8137,6 +8182,24 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp reply_snippet(_message), do: ""
+
+  # #217: enrich the gated notification payload for the client renderers — a localized body
+  # line (the message text, else a media-kind label) and a ready avatar URL for the desktop
+  # notification's icon. Localization lives here (the recipient's session), not in the
+  # once-built broadcast payload.
+  defp notify_event(payload) do
+    body =
+      cond do
+        payload.preview != "" -> payload.preview
+        payload.media_kind -> media_label(payload.media_kind)
+        true -> gettext("New message")
+      end
+
+    Map.merge(payload, %{
+      body: body,
+      avatar_url: avatar_src(%{avatar_key: payload.avatar_key, id: payload.sender_id})
+    })
+  end
 
   defp media_label("image"), do: gettext("Photo")
   defp media_label("video"), do: gettext("Video")
