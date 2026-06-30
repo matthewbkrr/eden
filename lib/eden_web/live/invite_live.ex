@@ -13,7 +13,13 @@ defmodule EdenWeb.InviteLive do
       case Accounts.fetch_valid_invite(token) do
         {:ok, _invite} ->
           form = to_form(Accounts.change_user_registration(), as: "user")
-          assign(socket, token: token, valid?: true, form: form, page_title: gettext("Join eden"))
+
+          assign(socket,
+            token: token,
+            valid?: true,
+            form: form,
+            page_title: gettext("Join ihichat")
+          )
 
         {:error, reason} ->
           assign(socket,
@@ -52,7 +58,7 @@ defmodule EdenWeb.InviteLive do
     ~H"""
     <div class="ed-root min-h-screen grid place-items-center px-5 py-10">
       <div class="w-full max-w-sm">
-        <h1 class="mb-1" style="font-size:1.375rem; font-weight:650;">{gettext("Join eden")}</h1>
+        <h1 class="mb-1" style="font-size:1.375rem; font-weight:650;">{gettext("Join ihichat")}</h1>
         <p class="mb-6" style="color: var(--ed-muted); font-size:0.875rem;">
           {gettext("You were invited. Pick a username and password.")}
         </p>

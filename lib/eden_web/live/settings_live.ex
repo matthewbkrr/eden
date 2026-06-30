@@ -255,7 +255,7 @@ defmodule EdenWeb.SettingsLive do
           >
             <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Appearance")}</h2>
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Choose how eden looks on this device.")}
+              {gettext("Choose how ihichat looks on this device.")}
             </p>
             <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
               <span style="font-size:0.875rem;">{gettext("Theme")}</span>
@@ -304,7 +304,7 @@ defmodule EdenWeb.SettingsLive do
           >
             <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Language")}</h2>
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Changes the language across eden.")}
+              {gettext("Changes the language across ihichat.")}
             </p>
             <form
               action={~p"/locale"}
