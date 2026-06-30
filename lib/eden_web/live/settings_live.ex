@@ -23,8 +23,21 @@ defmodule EdenWeb.SettingsLive do
       |> assign_profile()
       |> assign_folders()
       |> assign_reactions()
+      |> assign_notifications()
 
     {:ok, socket}
+  end
+
+  # Per-user notification toggles (#214), account-scoped like the reactions block.
+  defp assign_notifications(socket) do
+    case socket.assigns[:current_scope] do
+      %{user: %User{}} = scope ->
+        %{sound: sound, desktop: desktop} = Chat.notification_prefs(scope)
+        assign(socket, notify_sound: sound, notify_desktop: desktop)
+
+      _ ->
+        assign(socket, notify_sound: true, notify_desktop: false)
+    end
   end
 
   # The personal quick-react row (#67) is account-scoped — only when signed in.
@@ -393,6 +406,65 @@ defmodule EdenWeb.SettingsLive do
             class="rounded-[var(--ed-radius-lg)] border p-5"
             style="border-color: var(--ed-border); background: var(--ed-surface);"
           >
+            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Notifications")}</h2>
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext(
+                "Alerts for new messages while a browser tab is open. Muted chats and Do Not Disturb stay silent."
+              )}
+            </p>
+
+            <div class="flex items-center justify-between py-1.5">
+              <div class="min-w-0 pr-4">
+                <p style="font-size:0.875rem;">{gettext("Sound")}</p>
+                <p style="color: var(--ed-muted); font-size:0.75rem;">
+                  {gettext("Play a chime when a message arrives in a chat you're not looking at.")}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={to_string(@notify_sound)}
+                aria-label={gettext("Sound notifications")}
+                class={["ed-switch", @notify_sound && "is-on"]}
+                phx-click="set_notify_sound"
+              >
+              </button>
+            </div>
+
+            <div
+              class="flex items-center justify-between py-1.5 mt-2 pt-3 border-t"
+              style="border-color: var(--ed-border);"
+            >
+              <div class="min-w-0 pr-4">
+                <p style="font-size:0.875rem;">{gettext("Desktop notifications")}</p>
+                <p style="color: var(--ed-muted); font-size:0.75rem;">
+                  {gettext(
+                    "Show a system notification (Windows / macOS). Your browser will ask permission."
+                  )}
+                </p>
+              </div>
+              <%!-- The hook owns the click: Notification.requestPermission() MUST run inside the
+                    user gesture (Safari rejects a later server round-trip), so there's no
+                    phx-click — the hook requests permission, then pushes the result. --%>
+              <button
+                type="button"
+                id="notify-desktop-switch"
+                phx-hook=".NotifyPerm"
+                role="switch"
+                aria-checked={to_string(@notify_desktop)}
+                aria-label={gettext("Desktop notifications")}
+                data-on={to_string(@notify_desktop)}
+                class={["ed-switch", @notify_desktop && "is-on"]}
+              >
+              </button>
+            </div>
+          </section>
+
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
             <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
             <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
               {gettext(
@@ -488,6 +560,30 @@ defmodule EdenWeb.SettingsLive do
               // it obvious the entire name is being edited (Finder-style).
               export default {
                 mounted() { this.el.addEventListener("focus", () => this.el.select()) }
+              }
+            </script>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".NotifyPerm">
+              // Desktop-notifications toggle (#214). Notification.requestPermission() must be
+              // called INSIDE the user gesture (Safari is strict; a server round-trip wouldn't
+              // count), so the click is handled here — not via phx-click — and only the RESULT
+              // is pushed. data-on reflects the current pref so we know which way we're toggling.
+              export default {
+                mounted() {
+                  this.el.addEventListener("click", async () => {
+                    if (this.el.dataset.on === "true") {
+                      this.pushEvent("set_notify_desktop", { on: false })
+                      return
+                    }
+                    if (!("Notification" in window)) {
+                      this.pushEvent("set_notify_desktop", { on: false, perm: "unsupported" })
+                      return
+                    }
+                    let perm
+                    try { perm = await Notification.requestPermission() }
+                    catch (_e) { perm = Notification.permission }
+                    this.pushEvent("set_notify_desktop", { on: perm === "granted", perm })
+                  })
+                }
               }
             </script>
             <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSegA11y">
@@ -671,6 +767,9 @@ defmodule EdenWeb.SettingsLive do
     {:noreply, assign_reactions(socket)}
   end
 
+  # A forged event missing/garbling its payload is a client-reachable no-op, not a crash.
+  def handle_event("toggle_quick_reaction", _params, socket), do: {:noreply, socket}
+
   # Drop the personal quick row back to the default set.
   def handle_event("reset_quick_reactions", _params, socket) do
     {:ok, _saved} = Chat.set_quick_reactions(socket.assigns.current_scope, [])
@@ -682,6 +781,52 @@ defmodule EdenWeb.SettingsLive do
     {:ok, saved} = Chat.set_dbl_click_reaction(socket.assigns.current_scope, emoji)
     {:noreply, assign(socket, dbl_reaction: saved)}
   end
+
+  def handle_event("set_dbl_reaction", _params, socket), do: {:noreply, socket}
+
+  # #214: sound toggle flips server-side (plain phx-click). Flip from the DB's current
+  # value, not this tab's cached assign — another tab may have changed it (a stale assign
+  # would otherwise need a double-click to "catch up"). The desktop toggle is immune: it
+  # carries an explicit `on` from the hook.
+  def handle_event("set_notify_sound", _params, socket) do
+    %{sound: cur} = Chat.notification_prefs(socket.assigns.current_scope)
+    {:ok, on} = Chat.set_notify_sound(socket.assigns.current_scope, not cur)
+    {:noreply, assign(socket, notify_sound: on)}
+  end
+
+  # #214: desktop toggle carries the browser-permission result from the .NotifyPerm hook;
+  # if it couldn't enable, explain why instead of silently snapping back off.
+  def handle_event("set_notify_desktop", %{"on" => on} = params, socket) when is_boolean(on) do
+    {:ok, _} = Chat.set_notify_desktop(socket.assigns.current_scope, on)
+    socket = assign(socket, notify_desktop: on)
+
+    socket =
+      cond do
+        on ->
+          socket
+
+        params["perm"] == "unsupported" ->
+          put_flash(
+            socket,
+            :error,
+            gettext("Your browser doesn't support desktop notifications.")
+          )
+
+        params["perm"] in ["denied", "default"] ->
+          put_flash(
+            socket,
+            :error,
+            gettext("Allow notifications in your browser to turn this on.")
+          )
+
+        true ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("set_notify_desktop", _params, socket), do: {:noreply, socket}
 
   defp reload_folders(socket), do: assign_folders(socket)
 

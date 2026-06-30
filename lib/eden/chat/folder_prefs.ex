@@ -11,6 +11,9 @@ defmodule Eden.Chat.FolderPrefs do
     * `dbl_click_reaction` — the emoji a double-click reacts with (#106); `nil`
       means "use the first quick reaction". Written by
       `Chat.set_dbl_click_reaction/2`.
+    * `notify_sound` / `notify_desktop` — per-user notification toggles (#214):
+      play a sound / show an OS desktop notification on a new message. Written by
+      `Chat.set_notify_sound/2` and `Chat.set_notify_desktop/2`.
   """
   use Ecto.Schema
 
@@ -18,6 +21,8 @@ defmodule Eden.Chat.FolderPrefs do
     field :all_chats_position, :integer, default: 0
     field :quick_reactions, {:array, :string}
     field :dbl_click_reaction, :string
+    field :notify_sound, :boolean, default: true
+    field :notify_desktop, :boolean, default: false
 
     belongs_to :user, Eden.Accounts.User
 

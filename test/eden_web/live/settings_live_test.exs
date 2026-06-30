@@ -284,6 +284,45 @@ defmodule EdenWeb.SettingsLiveTest do
     end
   end
 
+  describe "notifications section (#214)" do
+    alias Eden.Accounts.Scope
+    alias Eden.Chat
+
+    test "is hidden for signed-out visitors", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/settings")
+      refute html =~ "Desktop notifications"
+    end
+
+    test "sound toggle flips and persists", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      assert Chat.notification_prefs(scope).sound == true
+      view |> element(~s(button[phx-click="set_notify_sound"])) |> render_click()
+      assert Chat.notification_prefs(scope).sound == false
+      assert has_element?(view, ~s(button[phx-click="set_notify_sound"][aria-checked="false"]))
+    end
+
+    test "desktop toggle persists the hook's permission result; denied flashes guidance", %{
+      conn: conn
+    } do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      # The .NotifyPerm hook pushes the browser-permission result.
+      render_hook(view, "set_notify_desktop", %{"on" => true, "perm" => "granted"})
+      assert Chat.notification_prefs(scope).desktop == true
+
+      html = render_hook(view, "set_notify_desktop", %{"on" => false, "perm" => "denied"})
+      assert Chat.notification_prefs(scope).desktop == false
+      assert html =~ "Allow notifications"
+    end
+  end
+
   defp png_bytes(w \\ 600, h \\ 600) do
     {:ok, img} = Image.new(w, h, color: [10, 200, 90])
     {:ok, bytes} = Image.write(img, :memory, suffix: ".png")

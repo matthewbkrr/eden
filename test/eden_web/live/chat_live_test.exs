@@ -2342,4 +2342,68 @@ defmodule EdenWeb.ChatLiveTest do
       assert [] == Chat.conversation_folder_ids(scope, ctx.conversation.id)
     end
   end
+
+  # A complete {:notify} payload (the shape Chat.notify_payload/1 broadcasts), so the
+  # web layer's notify_event/1 — which reads sender_id/avatar_key/media_kind — doesn't
+  # KeyError on a hand-built stub. Override only the fields a test cares about.
+  defp notify_payload(attrs) do
+    Map.merge(
+      %{
+        conversation_id: 0,
+        message_id: 1,
+        root_id: nil,
+        channel_id: nil,
+        kind: "dm",
+        conv_title: nil,
+        sender_id: 0,
+        sender_name: "Someone",
+        avatar_key: nil,
+        preview: "",
+        media_kind: nil
+      },
+      attrs
+    )
+  end
+
+  describe "notification push (#213)" do
+    alias Eden.Accounts.Scope
+    alias Eden.Channels
+
+    setup [:setup_conversation]
+
+    test "pushes a 'notify' for another chat; suppresses it for the focused chat", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # A notification for a DIFFERENT chat → handed to the client renderers.
+      send(view.pid, {:notify, notify_payload(%{conversation_id: 999, preview: "hi"})})
+      assert_push_event(view, "notify", %{conversation_id: 999})
+
+      # The OPEN, focused chat → suppressed (you're already looking at it).
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: ctx.conversation.id, preview: "yo"})}
+      )
+
+      render(view)
+      refute_push_event(view, "notify", %{})
+    end
+
+    test "suppresses a muted channel's room even in DM mode (the rail is loaded)", ctx do
+      {:ok, ch} = Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Muted"})
+      {:ok, [room]} = Channels.list_rooms(Scope.for_user(ctx.alice), ch.id)
+      {:ok, _} = Channels.toggle_channel_mute(Scope.for_user(ctx.alice), ch.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: room.id, channel_id: ch.id, preview: "x"})}
+      )
+
+      render(view)
+      refute_push_event(view, "notify", %{})
+    end
+  end
 end

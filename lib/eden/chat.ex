@@ -257,6 +257,35 @@ defmodule Eden.Chat do
     |> Map.new()
   end
 
+  @doc """
+  Total unread across the user's non-muted DM/group conversations — the messenger
+  rail badge (mirrors the per-channel rail badge). Rooms are excluded (they have
+  their own channel badges). Sums `unread_counts/2` (sender ≠ me, not a tombstone,
+  not deleted-for-me, not a reply, after my last read) over the user's active
+  non-room chats, the mute filter folded into the id query so a chat muted directly
+  (`memberships.muted_at`) or via ANY muted folder never counts — matching the
+  `muted_conversation_ids/2` invariant. Two queries (was three).
+  """
+  def messenger_unread_total(%Scope{user: user}) do
+    ids = unmuted_messenger_ids(user)
+    unread_counts(user, ids) |> Map.values() |> Enum.sum()
+  end
+
+  # Active, non-room memberships, minus chats muted directly or via a muted folder.
+  defp unmuted_messenger_ids(user) do
+    muted_folder_convs = muted_via_folder_query(user)
+
+    Repo.all(
+      from m in Membership,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where:
+          m.user_id == ^user.id and is_nil(m.left_at) and is_nil(c.channel_id) and
+            is_nil(m.muted_at) and m.conversation_id not in subquery(muted_folder_convs),
+        select: m.conversation_id
+    )
+  end
+
   @doc "Fetches a conversation the scoped user belongs to (members preloaded), or `{:error, :not_found}`."
   def get_conversation(%Scope{user: user}, id) do
     query =
@@ -2521,14 +2550,7 @@ defmodule Eden.Chat do
         set: [last_reply_at: reply.inserted_at]
       )
 
-    reply =
-      Repo.preload(reply, [
-        :sender,
-        :attachments,
-        reactions: :user,
-        reply_to: [:sender, :attachments],
-        forwarded_from: :sender
-      ])
+    reply = Repo.preload(reply, @message_preloads)
 
     with 1 <- bumped,
          %Message{} = fresh_root <- preloaded_message(root.id) do
@@ -2536,23 +2558,14 @@ defmodule Eden.Chat do
       # in on the first reply, and every other follower gains one unread reply.
       track_reply(root, reply)
       broadcast(root.conversation_id, {:thread_reply, fresh_root, reply})
+      notify_new(reply)
     end
 
     reply
   end
 
   defp preloaded_message(id) do
-    Repo.one(
-      from m in Message,
-        where: m.id == ^id,
-        preload: [
-          :sender,
-          :attachments,
-          reactions: :user,
-          reply_to: [:sender, :attachments],
-          forwarded_from: :sender
-        ]
-    )
+    Repo.one(from m in Message, where: m.id == ^id, preload: ^@message_preloads)
   end
 
   # Follow bookkeeping for a new reply (#57). Sequenced inside one transaction:
@@ -2684,6 +2697,40 @@ defmodule Eden.Chat do
     )
 
     {:ok, stored || hd(quick_reactions(scope))}
+  end
+
+  @doc """
+  The scoped user's notification toggles (#214) as `%{sound: bool, desktop: bool}`.
+  Falls back to the defaults (sound on, desktop off) when the user has no prefs row;
+  a present row always carries booleans (the columns are NOT NULL), so the `||`
+  applies to the whole map, never a per-field default.
+  """
+  def notification_prefs(%Scope{user: user}) do
+    Repo.one(
+      from p in FolderPrefs,
+        where: p.user_id == ^user.id,
+        select: %{sound: p.notify_sound, desktop: p.notify_desktop}
+    ) || %{sound: true, desktop: false}
+  end
+
+  @doc "Sets the scoped user's sound-notification toggle (#214). Returns `{:ok, on}`."
+  def set_notify_sound(%Scope{user: user}, on) when is_boolean(on),
+    do: upsert_notify(user.id, :notify_sound, on)
+
+  @doc "Sets the scoped user's desktop-notification toggle (#214). Returns `{:ok, on}`."
+  def set_notify_desktop(%Scope{user: user}, on) when is_boolean(on),
+    do: upsert_notify(user.id, :notify_desktop, on)
+
+  # One-field upsert: the other notify column keeps its schema default on insert,
+  # and on conflict only this field (+ updated_at) is touched — never clobbering
+  # quick_reactions / dbl_click_reaction on the shared row.
+  defp upsert_notify(user_id, field, on) do
+    Repo.insert!(struct(%FolderPrefs{user_id: user_id}, [{field, on}]),
+      on_conflict: [set: [{field, on}, {:updated_at, now()}]],
+      conflict_target: :user_id
+    )
+
+    {:ok, on}
   end
 
   # Keep only currently-allowed emoji (deduped, order preserved, capped). nil-safe:
@@ -3081,6 +3128,110 @@ defmodule Eden.Chat do
     end
   end
 
+  # #213: fan a notification out to everyone who should hear about `message`. The
+  # recipient set is gated on Chat-only data — members (or, for a thread reply,
+  # thread FOLLOWERS) minus the sender, minus anyone with the conversation directly
+  # muted (membership or folder), minus anyone in Do-Not-Disturb. The remaining two
+  # gates — "is this the chat I'm currently looking at" and channel-level mute — are
+  # per-session / Channels data, so the web layer applies them. Mute and DND silence
+  # everything, including followed threads (decided in #213).
+  defp notify_new(message) do
+    case notify_recipient_ids(message) do
+      [] ->
+        :ok
+
+      recipients ->
+        payload = notify_payload(message)
+
+        for uid <- recipients,
+            do: Phoenix.PubSub.broadcast(@pubsub, user_topic(uid), {:notify, payload})
+    end
+  end
+
+  defp notify_recipient_ids(%{root_id: root_id} = message) when not is_nil(root_id),
+    do: thread_recipient_ids(message)
+
+  defp notify_recipient_ids(message), do: direct_recipient_ids(message)
+
+  # Active members (minus sender), filtered entirely in SQL: drop anyone with the
+  # conversation directly muted (`muted_at`), in Do-Not-Disturb, or muted via ANY of
+  # their muted folders. `presence_status` is NOT NULL (default "auto"), so the bare
+  # `!= "dnd"` keeps everyone else (no NULL-comparison surprise).
+  defp direct_recipient_ids(message) do
+    muted_folder_users =
+      from fm in FolderMembership,
+        join: f in Folder,
+        on: f.id == fm.folder_id,
+        where: fm.conversation_id == ^message.conversation_id and not is_nil(f.muted_at),
+        select: f.user_id
+
+    Repo.all(
+      from m in Membership,
+        join: u in User,
+        on: u.id == m.user_id,
+        where:
+          m.conversation_id == ^message.conversation_id and is_nil(m.left_at) and
+            m.user_id != ^message.sender_id and is_nil(m.muted_at) and
+            u.presence_status != "dnd" and
+            m.user_id not in subquery(muted_folder_users),
+        select: m.user_id
+    )
+  end
+
+  # Thread reply: only FOLLOWERS (#57). Threads are rooms-only, so no folder mute —
+  # just the room membership's direct mute + DND. The Membership join also drops
+  # anyone who has left the room.
+  defp thread_recipient_ids(message) do
+    Repo.all(
+      from tm in ThreadMembership,
+        join: u in User,
+        on: u.id == tm.user_id,
+        join: m in Membership,
+        on: m.user_id == tm.user_id and m.conversation_id == ^message.conversation_id,
+        where:
+          tm.root_id == ^message.root_id and tm.following == true and
+            tm.user_id != ^message.sender_id and is_nil(m.left_at) and is_nil(m.muted_at) and
+            u.presence_status != "dnd",
+        select: tm.user_id
+    )
+  end
+
+  # Locale-neutral payload: the web layer (recipient's session) formats the title,
+  # localizes any media label, and applies the channel-mute + focus suppression.
+  # The `%User{}` match makes the `:sender` preload a hard contract — a caller that
+  # forgets it fails loudly here (a NotLoaded assoc is truthy, so a `sender && …`
+  # would otherwise crash deep in field access). Both callers preload it (`deliver`,
+  # `deliver_reply`). `conv` can be nil if the conversation was GC'd between insert
+  # and here; the catch-all `notify_*` clauses degrade it to a title-less DM.
+  defp notify_payload(%{sender: %User{} = sender} = message) do
+    conv = Repo.get(Conversation, message.conversation_id)
+
+    %{
+      conversation_id: message.conversation_id,
+      message_id: message.id,
+      root_id: message.root_id,
+      channel_id: conv && conv.channel_id,
+      kind: notify_kind(conv),
+      conv_title: notify_title(conv),
+      sender_id: message.sender_id,
+      sender_name: sender.display_name,
+      avatar_key: sender.avatar_key,
+      preview: message.body || "",
+      media_kind: notify_media_kind(message)
+    }
+  end
+
+  defp notify_kind(%{channel_id: cid}) when not is_nil(cid), do: "room"
+  defp notify_kind(%{is_group: true}), do: "group"
+  defp notify_kind(_), do: "dm"
+
+  defp notify_title(%{channel_id: cid} = conv) when not is_nil(cid), do: conv.name
+  defp notify_title(%{is_group: true} = conv), do: conv.title
+  defp notify_title(_), do: nil
+
+  defp notify_media_kind(%{attachments: [%{kind: kind} | _]}), do: kind
+  defp notify_media_kind(_), do: nil
+
   defp topic(conversation_id), do: "conversation:#{conversation_id}"
   defp user_topic(user_id), do: "user:#{user_id}:chat"
 
@@ -3158,17 +3309,12 @@ defmodule Eden.Chat do
     resurface_direct(conversation_id)
     # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
     # bubble would phantom-render its "Forwarded" label on realtime messages.
-    message =
-      Repo.preload(message, [
-        :sender,
-        :attachments,
-        reactions: :user,
-        reply_to: [:sender, :attachments],
-        forwarded_from: :sender
-      ])
+    # (`@message_preloads` also satisfies notify_payload's `:sender` contract.)
+    message = Repo.preload(message, @message_preloads)
 
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)
+    notify_new(message)
     message
   end
 
