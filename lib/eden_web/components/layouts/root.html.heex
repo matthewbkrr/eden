@@ -4,9 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <link rel="icon" type="image/png" sizes="32x32" href={~p"/favicon-32x32.png"} />
-    <link rel="icon" type="image/png" sizes="16x16" href={~p"/favicon-16x16.png"} />
-    <link rel="apple-touch-icon" href={~p"/apple-touch-icon.png"} />
+    <%!-- Under images/ on purpose: ~p digests these in prod, and Plug.Static's `only` matches
+          the digested request only when the path is under a listed PREFIX (images). At the root
+          they'd be listed by exact name, which the hashed name doesn't match → 404. images/ keeps
+          ~p (so the path picks up the digest AND any script_name prefix) while still serving. --%>
+    <link rel="icon" type="image/png" sizes="32x32" href={~p"/images/favicon-32x32.png"} />
+    <link rel="icon" type="image/png" sizes="16x16" href={~p"/images/favicon-16x16.png"} />
+    <link rel="apple-touch-icon" href={~p"/images/apple-touch-icon.png"} />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfd" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#16181c" />
     <.live_title default="ihichat" suffix=" · ihichat" phx-no-format>{assigns[:page_title]}</.live_title>
