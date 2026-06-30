@@ -8,7 +8,7 @@ defmodule EdenWeb.InviteController do
     case Accounts.register_user_with_invite(token, user_params) do
       {:ok, user} ->
         conn
-        |> put_flash(:info, gettext("Welcome to eden, %{name}!", name: user.display_name))
+        |> put_flash(:info, gettext("Welcome to ihichat, %{name}!", name: user.display_name))
         |> UserAuth.log_in_user(user)
 
       {:error, %Ecto.Changeset{}} ->

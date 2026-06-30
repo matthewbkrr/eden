@@ -8,7 +8,7 @@ defmodule EdenWeb.ErrorHTMLTest do
     html = render_to_string(EdenWeb.ErrorHTML, "404", "html", [])
     assert html =~ "<!DOCTYPE html>"
     assert html =~ "Page not found"
-    assert html =~ "· eden</title>"
+    assert html =~ "· ihichat</title>"
   end
 
   test "renders a branded, unescaped 500.html" do

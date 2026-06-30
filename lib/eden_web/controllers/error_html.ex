@@ -31,7 +31,7 @@ defmodule EdenWeb.ErrorHTML do
     <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>#{title} · eden</title>
+    <title>#{title} · ihichat</title>
     <style>
       :root { color-scheme: dark; }
       html, body { height: 100%; margin: 0; }
@@ -55,7 +55,7 @@ defmodule EdenWeb.ErrorHTML do
         <div class="code">#{code}</div>
         <h1>#{title}</h1>
         <p>#{body}</p>
-        <a href="/app">#{gettext("Back to eden")}</a>
+        <a href="/app">#{gettext("Back to ihichat")}</a>
       </div>
     </body>
     </html>

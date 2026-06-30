@@ -2265,6 +2265,16 @@ defmodule EdenWeb.ChatLive do
         hidden
       >
       </div>
+      <%!-- Tab unread badge (#216): reflects total unread (DMs/groups + unmuted channels)
+            in the browser tab — a "(N)" title prefix + a red favicon dot — so a backgrounded
+            tab shows there's something waiting. data-count is recomputed on every rail refresh. --%>
+      <div
+        id="tab-badge"
+        phx-hook=".TabBadge"
+        data-count={tab_unread_total(@messenger_unread, @channels)}
+        hidden
+      >
+      </div>
       <%!-- Below the header so it never covers the header buttons; the wrapper
             ignores pointer events so only the toast itself is interactive. --%>
       <div class="fixed top-20 left-1/2 -translate-x-1/2 z-40 w-full max-w-sm px-4 pointer-events-none">
@@ -3716,6 +3726,79 @@ defmodule EdenWeb.ChatLive do
             osc.connect(gain)
             osc.start(t)
             osc.stop(t + 0.35)
+          },
+        }
+      </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".TabBadge">
+        // #216: reflect total unread in the browser tab — a "(N) " prefix on the title and a
+        // red dot on the favicon — so a backgrounded tab shows there's something waiting. The
+        // count rides data-count (recomputed server-side on every unread change). The title is
+        // kept in sync with live_title via a MutationObserver: live_title rewrites <title> on
+        // navigation, which would otherwise drop our prefix.
+        export default {
+          mounted() {
+            this.titleEl = document.querySelector("title")
+            this.iconEl = document.querySelector("link[rel~='icon']")
+            this.baseHref = this.iconEl && this.iconEl.getAttribute("href")
+            this.canvas = document.createElement("canvas")
+            this.canvas.width = this.canvas.height = 32
+            // Load the base favicon once so the dot is drawn OVER it (same-origin → no taint).
+            this.baseImg = new Image()
+            // Guard the async load: a slow favicon could fire onload AFTER teardown and
+            // re-badge the next page's tab. `dead` (set in destroyed) makes it a no-op.
+            this.baseImg.onload = () => { if (!this.dead) this.paintIcon(this.count()) }
+            if (this.baseHref) this.baseImg.src = this.baseHref
+            this.apply()
+            this.obs = new MutationObserver(() => this.applyTitle())
+            if (this.titleEl) {
+              this.obs.observe(this.titleEl, { childList: true, characterData: true, subtree: true })
+            }
+          },
+          updated() { this.apply() },
+          destroyed() {
+            this.dead = true // a late favicon onload must not re-badge after teardown
+            if (this.obs) this.obs.disconnect()
+            this.applyTitle(0)
+            this.paintIcon(0)
+          },
+          count() { return parseInt(this.el.dataset.count || "0", 10) || 0 },
+          apply() { this.applyTitle(); this.paintIcon(this.count()) },
+          applyTitle(force) {
+            const n = force === 0 ? 0 : this.count()
+            // Strip any prefix we added so we re-read the base title live_title set.
+            const base = document.title.replace(/^\(\d+\+?\)\s+/, "")
+            const next = n > 0 ? "(" + (n > 99 ? "99+" : n) + ") " + base : base
+            if (document.title !== next) document.title = next // re-fires the observer; the
+            // guard above makes the second pass a no-op (base strips back to the same string).
+          },
+          // Favicon updates are unreliable when you mutate the existing <link href> (Firefox
+          // especially caches it), so swap in a fresh node each time — the favico.js trick.
+          // Remove ALL icon links (not just ours): with static 16/32 variants present, a
+          // leftover would let the browser pick the unbadged size and hide the dot.
+          setIcon(href) {
+            document.querySelectorAll("link[rel~='icon']").forEach((l) => l.remove())
+            const link = document.createElement("link")
+            link.rel = "icon"
+            link.href = href
+            document.head.appendChild(link)
+            this.iconEl = link
+          },
+          paintIcon(n) {
+            if (n === 0) { if (this.baseHref) this.setIcon(this.baseHref); return }
+            const ctx = this.canvas.getContext("2d")
+            ctx.clearRect(0, 0, 32, 32)
+            if (this.baseImg.complete && this.baseImg.naturalWidth) {
+              ctx.drawImage(this.baseImg, 0, 0, 32, 32)
+            }
+            // A red dot, top-right, ringed so it reads against the glyph.
+            ctx.beginPath()
+            ctx.arc(24, 8, 7, 0, 2 * Math.PI)
+            ctx.fillStyle = "#ef4444"
+            ctx.fill()
+            ctx.lineWidth = 2
+            ctx.strokeStyle = "#fff"
+            ctx.stroke()
+            this.setIcon(this.canvas.toDataURL("image/png"))
           },
         }
       </script>
@@ -10353,6 +10436,13 @@ defmodule EdenWeb.ChatLive do
       channels: Channels.list_channels(scope),
       messenger_unread: Chat.messenger_unread_total(scope)
     )
+  end
+
+  # #216: total unread for the browser-tab badge — messenger (DMs/groups, already
+  # mute-filtered) plus unmuted channels. Muted channels are excluded, same as the
+  # rail/folder "no badge past mute" invariant.
+  defp tab_unread_total(messenger_unread, channels) do
+    messenger_unread + Enum.sum(for c <- channels, not c.muted, do: c.unread_count)
   end
 
   defp refresh_channel_access(socket, channel_id) do

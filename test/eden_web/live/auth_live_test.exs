@@ -6,7 +6,7 @@ defmodule EdenWeb.AuthLiveTest do
   describe "/login" do
     test "renders the login form", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/login")
-      assert html =~ "Log in to eden"
+      assert html =~ "Log in to ihichat"
       # #153: the native-post form is phx-update="ignore" so the connect re-render can't
       # wipe credentials typed before the socket connects. (The timing race itself is only
       # reproducible in the e2e harness, which isn't in CI — this guards the mechanism.)
@@ -37,7 +37,7 @@ defmodule EdenWeb.AuthLiveTest do
   describe "/invite/:token" do
     test "renders the registration form for a valid token", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/invite/#{invite_token_fixture()}")
-      assert html =~ "Join eden"
+      assert html =~ "Join ihichat"
     end
 
     test "shows an error for an invalid token", %{conn: conn} do
