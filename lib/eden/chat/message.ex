@@ -22,6 +22,9 @@ defmodule Eden.Chat.Message do
     # "Delete for both" tombstone: when set, body/attachment are cleared and the
     # row renders as "Message deleted".
     field :deleted_at, :utc_datetime
+    # Set the first time the author edits the text/caption (#164); the UI shows
+    # "(edited)" + this time. No edit window (Telegram-style).
+    field :edited_at, :utc_datetime
 
     belongs_to :conversation, Eden.Chat.Conversation
     belongs_to :sender, Eden.Accounts.User
@@ -68,6 +71,10 @@ defmodule Eden.Chat.Message do
   def deleted?(%__MODULE__{deleted_at: nil}), do: false
   def deleted?(%__MODULE__{}), do: true
 
+  @doc "Whether the message has been edited (#164)."
+  def edited?(%__MODULE__{edited_at: nil}), do: false
+  def edited?(%__MODULE__{}), do: true
+
   @doc "Changeset for a text message: a non-blank body is required."
   def changeset(message, attrs) do
     message
@@ -91,6 +98,22 @@ defmodule Eden.Chat.Message do
     |> validate_length(:body, max: @max_body, count: :codepoints)
     |> validate_length(:client_id, max: @max_client_id)
     |> dedup_constraint()
+  end
+
+  @doc """
+  Changeset for an edit (#164): re-sanitizes the body like a create. A text-only
+  message requires a non-blank body (blanking it = delete instead); a message with
+  attachments may blank its caption. `edited_at` is stamped by the context. Expects
+  `message.attachments` preloaded to pick the rule.
+  """
+  def edit_changeset(message, attrs) do
+    has_media? = match?([_ | _], message.attachments)
+
+    message
+    |> cast(attrs, [:body])
+    |> update_change(:body, &sanitize/1)
+    |> then(&if(has_media?, do: ensure_body(&1), else: validate_required(&1, :body)))
+    |> validate_length(:body, max: @max_body, count: :codepoints)
   end
 
   # Surfaces the (sender_id, client_id) unique index as a changeset error the
