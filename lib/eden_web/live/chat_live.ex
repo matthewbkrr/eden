@@ -9751,7 +9751,7 @@ defmodule EdenWeb.ChatLive do
         </div>
 
         <%!-- Group: the group's card + the member list (tap a member for their profile). --%>
-        <div :if={is_nil(@peer)} class="flex flex-col items-center text-center px-4 pt-5 pb-4">
+        <div :if={is_nil(@peer)} class="flex flex-col items-center text-center px-4 pt-4 pb-3.5">
           <%!-- #178: owner/admin set the group photo by clicking the big avatar (auto-uploads);
                 everyone else sees it plain. Initials fall back when unset. --%>
           <.avatar
@@ -9805,14 +9805,19 @@ defmodule EdenWeb.ChatLive do
           </div>
           <%!-- Owner/admin can rename the group inline (#165); a blank name reverts to
                 the auto name from members. --%>
-          <div :if={!@group_renaming} class="mt-3 flex items-center justify-center gap-1.5">
-            <h2 class="font-semibold" style="font-size:1.125rem;">
+          <%!-- Title stays optically centred; the rename pencil floats in the right gutter
+                (absolute, so it never nudges the name off-centre) and stays visible on touch. --%>
+          <div
+            :if={!@group_renaming}
+            class="relative mt-3 flex w-full items-center justify-center px-7"
+          >
+            <h2 class="truncate font-semibold" style="font-size:1.125rem;">
               {title(@conversation, @user)}
             </h2>
             <button
               :if={@my_role in ~w(owner admin)}
               type="button"
-              class="ed-btn--icon"
+              class="ed-btn--icon absolute right-0 top-1/2 -translate-y-1/2"
               phx-click="start_group_rename"
               title={gettext("Rename group")}
               aria-label={gettext("Rename group")}
@@ -9847,25 +9852,27 @@ defmodule EdenWeb.ChatLive do
               {gettext("Cancel")}
             </button>
           </form>
-          <p class="mt-1" style="color: var(--ed-muted); font-size:0.8125rem;">
-            {ngettext("%{count} member", "%{count} members", member_count(@conversation))}
-          </p>
         </div>
-        <%!-- No "Members" heading: the card's "N members" subtitle above already labels it
-              (a tiny uppercase eyebrow would just restate it — impeccable). Capped +
-              scrollable so a large roster doesn't bury the gallery below it. --%>
+        <%!-- Members section (#136): the "N members" count anchors the list as a left-aligned
+              section header (no separate eyebrow — impeccable), with the add action on the right.
+              A top divider bridges the centred identity card above. Capped + scrollable so a
+              large roster doesn't bury the gallery below. --%>
         <div :if={is_nil(@peer)} class="ed-members">
-          <button
-            :if={@my_role in ~w(owner admin)}
-            type="button"
-            class="ed-member-add"
-            phx-click="open_group_add_members"
-          >
-            <span class="ed-member-add__icon">
-              <.icon name="hero-user-plus-mini" class="size-5" />
+          <div class="ed-members__head">
+            <span class="ed-members__count">
+              {ngettext("%{count} member", "%{count} members", member_count(@conversation))}
             </span>
-            <span>{gettext("Add members")}</span>
-          </button>
+            <button
+              :if={@my_role in ~w(owner admin)}
+              type="button"
+              class="ed-member-add"
+              phx-click="open_group_add_members"
+              aria-label={gettext("Add members")}
+            >
+              <.icon name="hero-user-plus-mini" class="size-4" />
+              <span>{gettext("Add")}</span>
+            </button>
+          </div>
           <div class="ed-members__list" aria-label={gettext("Members")} role="group">
             <%= for m <- active_members(@conversation) do %>
               <%!-- #165: owner/admin get a labeled actions menu (⋯ or right-click/long-press),
