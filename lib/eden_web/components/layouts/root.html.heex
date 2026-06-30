@@ -4,9 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
-    <link rel="icon" type="image/png" sizes="32x32" href={~p"/favicon-32x32.png"} />
-    <link rel="icon" type="image/png" sizes="16x16" href={~p"/favicon-16x16.png"} />
-    <link rel="apple-touch-icon" href={~p"/apple-touch-icon.png"} />
+    <%!-- Plain (non-digested) paths on purpose: ~p digests these in prod to
+          /favicon-32x32-<hash>.png, but they're listed in static_paths by exact name, so
+          Plug.Static's `only` doesn't match the hashed request → 404 (works in dev where ~p
+          doesn't digest, breaks in prod). The originals are always served at these names. --%>
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fcfcfd" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#16181c" />
     <.live_title default="ihichat" suffix=" · ihichat" phx-no-format>{assigns[:page_title]}</.live_title>
