@@ -80,8 +80,8 @@ S3 without touching callers).
 Eden.Chat  --(already gated #213)-->  Eden.Notifications  --fan out-->  adapters
                                             |                              |
                                       notification_targets          Notifications.Adapter
-                                      (per-user devices)            ├─ Web (in-tab)  ← first/only today
-                                                                    ├─ Desktop (native app)
+                                      (per-user PUSH devices,       ├─ Web (in-tab)  ← live socket, no stored row
+                                       token NOT NULL)              ├─ Desktop (native app)
                                                                     ├─ APNs  (iOS)
                                                                     ├─ FCM   (Android, default)
                                                                     └─ RuStore / VK (Android, fallback)
@@ -97,12 +97,16 @@ Eden.Chat  --(already gated #213)-->  Eden.Notifications  --fan out-->  adapters
   exactly like `Storage.Adapter`. New transports are new modules + config, no caller
   changes. The locale-neutral payload already broadcast on the user topic is the
   contract the adapters render.
-- **`notification_targets` table** — one row per user **device/channel**:
-  `user_id`, `kind` (`web | desktop | apns | fcm | rustore | vk`), `token` (push
-  token / device id; null for the in-tab web target), `enabled`, `last_seen_at`,
-  timestamps; unique on `(user_id, kind, token)`. A user has many (phone + laptop +
-  desktop app). Registration writes a row; stale/invalid tokens (APNs/FCM report them)
-  are pruned. This is the only new persistent state the strategy requires.
+- **`notification_targets` table** — one row per user **push device**:
+  `user_id`, `kind` (`desktop | apns | fcm | rustore | vk`), `token` (the device's
+  push token / id, **`NOT NULL`**), `enabled`, `last_seen_at`, timestamps; unique on
+  `(user_id, kind, token)`. A user has many (phone + laptop + desktop app).
+  Registration writes a row; stale/invalid tokens (APNs/FCM report them) are pruned.
+  The in-tab **Web** adapter has **no** stored row here — it has no device token and
+  delivers over the live LiveView/PubSub connection — so the table is push-only and
+  `token` is never null. (That matters: a nullable token would defeat the unique index,
+  since Postgres treats NULLs as distinct, letting duplicate web rows accumulate.) This
+  is the only new persistent state the strategy requires.
 
 ### What is reused, unchanged
 
