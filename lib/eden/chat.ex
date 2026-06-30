@@ -577,8 +577,8 @@ defmodule Eden.Chat do
          true <- group?(id),
          actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
          :ok <- ensure_role(actor_role, ~w(owner admin)),
-         {:ok, jpeg} <- Images.square_avatar(source_path),
-         %Conversation{} = conv <- Repo.get(Conversation, id) do
+         %Conversation{} = conv <- Repo.get(Conversation, id),
+         {:ok, jpeg} <- Images.square_avatar(source_path) do
       store_and_swap_group_avatar(conv, jpeg)
     else
       false -> {:error, :not_found}
@@ -595,8 +595,7 @@ defmodule Eden.Chat do
          {:ok, updated} <- conv |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
       # Best-effort cleanup of the replaced blob (don't fail the update on it).
       if conv.avatar_key, do: Storage.delete(conv.avatar_key)
-      broadcast(conv.id, {:conversation_avatar_changed, updated})
-      notify_members(conv.id)
+      broadcast_avatar_change(conv.id, updated)
       {:ok, updated}
     else
       error ->
@@ -616,14 +615,27 @@ defmodule Eden.Chat do
          %Conversation{avatar_key: key} = conv <- Repo.get(Conversation, id),
          {:ok, updated} <- conv |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
       if key, do: Storage.delete(key)
-      broadcast(conv.id, {:conversation_avatar_changed, updated})
-      notify_members(conv.id)
+      broadcast_avatar_change(conv.id, updated)
       {:ok, updated}
     else
       false -> {:error, :not_found}
       nil -> {:error, :not_found}
       :error -> {:error, :not_found}
       {:error, _} = error -> error
+    end
+  end
+
+  # #178: tell every member's session the photo changed, WITHOUT a reorder. Unlike a new
+  # message (notify_members → {:conversation_activity}, which bumps the chat to the top), an
+  # avatar change isn't activity — so we ping each member's user topic directly and their
+  # session refreshes the sidebar in place (natural order), updating the avatar without a bump.
+  defp broadcast_avatar_change(conversation_id, conversation) do
+    for user_id <- active_member_ids(conversation_id) do
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user_id),
+        {:conversation_avatar_changed, conversation}
+      )
     end
   end
 

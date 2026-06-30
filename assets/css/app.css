@@ -359,6 +359,39 @@ html {
   .ed-avatar img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
   .ed-avatar--sm { width: 2rem; height: 2rem; font-size: 0.75rem; }
   .ed-avatar--lg { width: 3.5rem; height: 3.5rem; font-size: 1.125rem; }
+
+  /* #178: clickable group-avatar upload — the big avatar reveals a camera scrim on
+     hover/focus to signal it's editable (owner/admin only). */
+  .ed-avatar-edit {
+    position: relative;
+    display: inline-flex;
+    border-radius: var(--ed-radius-full);
+    cursor: pointer;
+  }
+  .ed-avatar-edit__overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: var(--ed-radius-full);
+    background: oklch(0 0 0 / 0.42);
+    color: #fff;
+    opacity: 0;
+    transition: opacity 0.16s var(--ed-ease);
+  }
+  .ed-avatar-edit:hover .ed-avatar-edit__overlay,
+  .ed-avatar-edit:focus-within .ed-avatar-edit__overlay {
+    opacity: 1;
+  }
+  .ed-avatar-edit:focus-within {
+    outline: 2px solid var(--ed-primary);
+    outline-offset: 3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-avatar-edit__overlay {
+      transition: none;
+    }
+  }
   .ed-avatar__dot {
     position: absolute;
     right: -1px;

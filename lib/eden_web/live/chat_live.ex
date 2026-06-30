@@ -248,6 +248,15 @@ defmodule EdenWeb.ChatLive do
         max_entries: 1,
         max_file_size: 5_000_000
       )
+      # Group avatar (#178): click the big avatar in the profile panel → pick → it's
+      # set at once (auto_upload + progress), processed server-side to a square.
+      |> allow_upload(:group_avatar,
+        accept: ~w(.png .jpg .jpeg .gif .webp),
+        max_entries: 1,
+        max_file_size: 5_000_000,
+        auto_upload: true,
+        progress: &consume_group_avatar/3
+      )
 
     # "Last seen" (#102): record now on connect, reusing the heartbeat's guard
     # (skipped while invisible) so the rule lives in one place.
@@ -1019,6 +1028,32 @@ defmodule EdenWeb.ChatLive do
     case Channels.remove_channel_avatar(socket.assigns.current_scope, socket.assigns.channel.id) do
       {:ok, channel} -> {:noreply, assign(socket, channel: channel)}
       {:error, _} -> {:noreply, socket}
+    end
+  end
+
+  # #178: the group-avatar file input lives in a form so the auto-upload registers;
+  # the actual work happens in the progress callback (consume_group_avatar/3).
+  def handle_event("validate_group_avatar", _params, socket) do
+    # Pin which group the in-flight upload belongs to (the open one when it started), so
+    # the progress callback applies it correctly even if the user navigates away.
+    target =
+      case socket.assigns.selected do
+        %{is_group: true, id: id} -> id
+        _ -> nil
+      end
+
+    {:noreply, assign(socket, group_avatar_target: target)}
+  end
+
+  # #178: owner/admin clears the group photo from the profile panel (back to initials).
+  def handle_event("remove_group_avatar", _params, socket) do
+    case Chat.remove_group_avatar(socket.assigns.current_scope, socket.assigns.selected.id) do
+      {:ok, updated} ->
+        {:noreply,
+         assign(socket, selected: %{socket.assigns.selected | avatar_key: updated.avatar_key})}
+
+      {:error, _} ->
+        {:noreply, socket}
     end
   end
 
@@ -2118,6 +2153,19 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # #178: a group's photo changed — same live-refresh as a rename (header/panel from
+  # `selected`, sidebar from the re-stream; non-viewers update via {:conversation_activity}).
+  def handle_info({:conversation_avatar_changed, conv}, socket) do
+    socket = refresh_sidebar(socket)
+
+    if open?(socket, conv.id) do
+      {:noreply,
+       assign(socket, selected: %{socket.assigns.selected | avatar_key: conv.avatar_key})}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info({:room_renamed, room}, socket) do
     socket = refresh_rooms(socket)
 
@@ -2745,7 +2793,7 @@ defmodule EdenWeb.ChatLive do
             >
               <.avatar
                 name={title(@selected, @current_scope.user)}
-                src={avatar_src(peer(@selected, @current_scope.user))}
+                src={conversation_avatar_src(@selected, @current_scope.user)}
                 status={peer_status(@selected, @current_scope.user, @statuses)}
                 size={:sm}
               />
@@ -3438,6 +3486,7 @@ defmodule EdenWeb.ChatLive do
         peer={@profile_peer}
         user={@current_scope.user}
         group_renaming={@group_renaming}
+        upload={@uploads.group_avatar}
         statuses={@statuses}
         tab={@gallery_tab}
         media={@gallery_media}
@@ -7152,7 +7201,7 @@ defmodule EdenWeb.ChatLive do
       >
         <.avatar
           name={title(@conversation, @user)}
-          src={avatar_src(peer(@conversation, @user))}
+          src={conversation_avatar_src(@conversation, @user)}
           status={peer_status(@conversation, @user, @statuses)}
         />
         <span class="ed-convo__body">
@@ -7257,7 +7306,7 @@ defmodule EdenWeb.ChatLive do
         >
           <.avatar
             name={title(conversation, @user)}
-            src={avatar_src(peer(conversation, @user))}
+            src={conversation_avatar_src(conversation, @user)}
             status={peer_status(conversation, @user, @statuses)}
           />
           <span class="ed-convo__body">
@@ -7277,7 +7326,7 @@ defmodule EdenWeb.ChatLive do
         >
           <.avatar
             name={title(message.conversation, @user)}
-            src={avatar_src(peer(message.conversation, @user))}
+            src={conversation_avatar_src(message.conversation, @user)}
             status={peer_status(message.conversation, @user, @statuses)}
           />
           <span class="ed-convo__body">
@@ -9453,7 +9502,7 @@ defmodule EdenWeb.ChatLive do
             >
               <.avatar
                 name={title(c, @user)}
-                src={avatar_src(peer(c, @user))}
+                src={conversation_avatar_src(c, @user)}
                 status={peer_status(c, @user, @statuses)}
                 size={:sm}
               />
@@ -9631,6 +9680,7 @@ defmodule EdenWeb.ChatLive do
   attr :peer, :map, default: nil
   attr :user, :map, required: true
   attr :group_renaming, :boolean, default: false
+  attr :upload, :any, default: nil, doc: "the :group_avatar upload config (#178)"
   attr :statuses, :any, required: true
   attr :tab, :string, required: true
   attr :media, :list, required: true
@@ -9702,7 +9752,57 @@ defmodule EdenWeb.ChatLive do
 
         <%!-- Group: the group's card + the member list (tap a member for their profile). --%>
         <div :if={is_nil(@peer)} class="flex flex-col items-center text-center px-4 pt-5 pb-4">
-          <.avatar name={title(@conversation, @user)} size={:lg} />
+          <%!-- #178: owner/admin set the group photo by clicking the big avatar (auto-uploads);
+                everyone else sees it plain. Initials fall back when unset. --%>
+          <.avatar
+            :if={@my_role not in ~w(owner admin)}
+            name={title(@conversation, @user)}
+            src={group_avatar_src(@conversation)}
+            size={:lg}
+          />
+          <div :if={@my_role in ~w(owner admin)} class="flex flex-col items-center">
+            <% entry = @upload && List.first(@upload.entries) %>
+            <form phx-change="validate_group_avatar" phx-submit="validate_group_avatar">
+              <label
+                class="ed-avatar-edit"
+                tabindex="-1"
+                title={gettext("Change group photo")}
+                aria-label={gettext("Change group photo")}
+              >
+                <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
+                  <.live_img_preview :if={entry} entry={entry} />
+                  <img
+                    :if={!entry && @conversation.avatar_key}
+                    src={group_avatar_src(@conversation)}
+                    alt=""
+                  />
+                  <span :if={!entry && !@conversation.avatar_key}>
+                    {initials(title(@conversation, @user))}
+                  </span>
+                </span>
+                <span class="ed-avatar-edit__overlay" aria-hidden="true">
+                  <.icon name="hero-camera-micro" class="size-5" />
+                </span>
+                <.live_file_input :if={@upload} upload={@upload} class="sr-only" />
+              </label>
+            </form>
+            <button
+              :if={@conversation.avatar_key && @upload && Enum.empty?(@upload.entries)}
+              type="button"
+              phx-click="remove_group_avatar"
+              class="mt-1.5"
+              style="color: var(--ed-danger); font-size:0.75rem;"
+            >
+              {gettext("Remove photo")}
+            </button>
+            <p
+              :for={err <- (@upload && upload_errors(@upload)) || []}
+              class="mt-1.5"
+              style="color: var(--ed-danger); font-size:0.75rem;"
+            >
+              {group_avatar_error(err)}
+            </p>
+          </div>
           <%!-- Owner/admin can rename the group inline (#165); a blank name reverts to
                 the auto name from members. --%>
           <div :if={!@group_renaming} class="mt-3 flex items-center justify-center gap-1.5">
@@ -10860,6 +10960,22 @@ defmodule EdenWeb.ChatLive do
 
   defp avatar_src(_user), do: nil
 
+  # Avatar image URL for a group (#178), cache-busted by the avatar key (nil → initials).
+  defp group_avatar_src(%{id: id, avatar_key: key}) when is_binary(key),
+    do: ~p"/conversations/#{id}/avatar?v=#{:erlang.phash2(key)}"
+
+  defp group_avatar_src(_conversation), do: nil
+
+  # The avatar a conversation shows: a group's own photo (#178), else the DM peer's.
+  defp conversation_avatar_src(%{is_group: true} = conv, _user), do: group_avatar_src(conv)
+  defp conversation_avatar_src(conv, user), do: avatar_src(peer(conv, user))
+
+  defp group_avatar_error(:too_large), do: gettext("That image is too large (up to 5 MB).")
+  defp group_avatar_error(:not_accepted), do: gettext("Use a JPEG, PNG, GIF or WebP image.")
+  defp group_avatar_error(:too_many_files), do: gettext("Pick a single image.")
+  defp group_avatar_error(:unprocessable), do: gettext("Couldn't process that image.")
+  defp group_avatar_error(_other), do: gettext("Couldn't upload that image.")
+
   defp initials(name), do: name |> String.first() |> String.upcase()
 
   # Presence status of a 1:1's other participant (nil for groups / offline), used
@@ -11618,6 +11734,38 @@ defmodule EdenWeb.ChatLive do
       [{:ok, updated}] -> {updated, nil}
       [{:error, reason}] -> {channel, reason}
       [] -> {channel, nil}
+    end
+  end
+
+  # #178: auto-upload progress for the group avatar — when the picked image finishes,
+  # process + set it, then update the open header/panel locally (the broadcast covers
+  # the other members' sessions). A processing error surfaces as a flash.
+  defp consume_group_avatar(:group_avatar, %{done?: true}, socket) do
+    scope = socket.assigns.current_scope
+    # The target group was pinned when the upload STARTED (validate_group_avatar), so a
+    # navigation away mid-upload can't misfire onto the now-selected chat (or crash on nil).
+    target = socket.assigns[:group_avatar_target]
+
+    case consume_uploaded_entries(socket, :group_avatar, fn %{path: path}, _e ->
+           {:ok, target && Chat.set_group_avatar(scope, target, path)}
+         end) do
+      [{:ok, updated}] -> {:noreply, sync_selected_avatar(socket, updated)}
+      [{:error, reason}] -> {:noreply, put_flash(socket, :error, group_avatar_error(reason))}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  defp consume_group_avatar(:group_avatar, _entry, socket), do: {:noreply, socket}
+
+  # Update the open header/panel only if it's still the group we just set (the broadcast
+  # covers everyone else); a no-op if the user navigated away mid-upload.
+  defp sync_selected_avatar(socket, updated) do
+    case socket.assigns.selected do
+      %{id: id} when id == updated.id ->
+        assign(socket, selected: %{socket.assigns.selected | avatar_key: updated.avatar_key})
+
+      _ ->
+        socket
     end
   end
 
