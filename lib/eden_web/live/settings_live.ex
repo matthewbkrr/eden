@@ -570,12 +570,17 @@ defmodule EdenWeb.SettingsLive do
               export default {
                 mounted() {
                   this.el.addEventListener("click", async () => {
-                    if (this.el.dataset.on === "true") {
-                      this.pushEvent("set_notify_desktop", { on: false })
-                      return
-                    }
+                    const on = this.el.dataset.on === "true"
                     if (!("Notification" in window)) {
                       this.pushEvent("set_notify_desktop", { on: false, perm: "unsupported" })
+                      return
+                    }
+                    // Only an ON pref that's ALSO granted on THIS origin toggles off. A pref that's
+                    // "on" but ungranted here — e.g. the same account on a new domain (prod vs the
+                    // dev origin), where browser permission is per-origin — (re)requests instead,
+                    // so re-enabling is one click, not off-then-on.
+                    if (on && Notification.permission === "granted") {
+                      this.pushEvent("set_notify_desktop", { on: false })
                       return
                     }
                     let perm
