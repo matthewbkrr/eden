@@ -260,25 +260,28 @@ defmodule Eden.Chat do
   @doc """
   Total unread across the user's non-muted DM/group conversations — the messenger
   rail badge (mirrors the per-channel rail badge). Rooms are excluded (they have
-  their own channel badges); replies and muted chats are already out of
-  `unread_counts/2` / via `muted_conversation_ids/2`.
+  their own channel badges). Sums `unread_counts/2` (sender ≠ me, not a tombstone,
+  not deleted-for-me, not a reply, after my last read) over the user's active
+  non-room chats, the mute filter folded into the id query so a chat muted directly
+  (`memberships.muted_at`) or via ANY muted folder never counts — matching the
+  `muted_conversation_ids/2` invariant. Two queries (was three).
   """
   def messenger_unread_total(%Scope{user: user}) do
-    ids = messenger_conversation_ids(user)
-    unread = unread_counts(user, ids)
-    muted = MapSet.new(muted_conversation_ids(user, ids))
-
-    for {id, n} <- unread, not MapSet.member?(muted, id), reduce: 0 do
-      acc -> acc + n
-    end
+    ids = unmuted_messenger_ids(user)
+    unread_counts(user, ids) |> Map.values() |> Enum.sum()
   end
 
-  defp messenger_conversation_ids(user) do
+  # Active, non-room memberships, minus chats muted directly or via a muted folder.
+  defp unmuted_messenger_ids(user) do
+    muted_folder_convs = muted_via_folder_query(user)
+
     Repo.all(
       from m in Membership,
         join: c in Conversation,
         on: c.id == m.conversation_id,
-        where: m.user_id == ^user.id and is_nil(m.left_at) and is_nil(c.channel_id),
+        where:
+          m.user_id == ^user.id and is_nil(m.left_at) and is_nil(c.channel_id) and
+            is_nil(m.muted_at) and m.conversation_id not in subquery(muted_folder_convs),
         select: m.conversation_id
     )
   end
@@ -2547,14 +2550,7 @@ defmodule Eden.Chat do
         set: [last_reply_at: reply.inserted_at]
       )
 
-    reply =
-      Repo.preload(reply, [
-        :sender,
-        :attachments,
-        reactions: :user,
-        reply_to: [:sender, :attachments],
-        forwarded_from: :sender
-      ])
+    reply = Repo.preload(reply, @message_preloads)
 
     with 1 <- bumped,
          %Message{} = fresh_root <- preloaded_message(root.id) do
@@ -2569,17 +2565,7 @@ defmodule Eden.Chat do
   end
 
   defp preloaded_message(id) do
-    Repo.one(
-      from m in Message,
-        where: m.id == ^id,
-        preload: [
-          :sender,
-          :attachments,
-          reactions: :user,
-          reply_to: [:sender, :attachments],
-          forwarded_from: :sender
-        ]
-    )
+    Repo.one(from m in Message, where: m.id == ^id, preload: ^@message_preloads)
   end
 
   # Follow bookkeeping for a new reply (#57). Sequenced inside one transaction:
@@ -3167,26 +3153,29 @@ defmodule Eden.Chat do
 
   defp notify_recipient_ids(message), do: direct_recipient_ids(message)
 
-  # Active members (minus sender) joined to their user + folder-mute, filtered in one pass.
+  # Active members (minus sender), filtered entirely in SQL: drop anyone with the
+  # conversation directly muted (`muted_at`), in Do-Not-Disturb, or muted via ANY of
+  # their muted folders. `presence_status` is NOT NULL (default "auto"), so the bare
+  # `!= "dnd"` keeps everyone else (no NULL-comparison surprise).
   defp direct_recipient_ids(message) do
-    rows =
-      Repo.all(
-        from m in Membership,
-          join: u in User,
-          on: u.id == m.user_id,
-          where:
-            m.conversation_id == ^message.conversation_id and is_nil(m.left_at) and
-              m.user_id != ^message.sender_id,
-          select: {m.user_id, not is_nil(m.muted_at), u.presence_status}
-      )
+    muted_folder_users =
+      from fm in FolderMembership,
+        join: f in Folder,
+        on: f.id == fm.folder_id,
+        where: fm.conversation_id == ^message.conversation_id and not is_nil(f.muted_at),
+        select: f.user_id
 
-    folder_muted = MapSet.new(folder_muted_ids(message.conversation_id))
-
-    for {uid, muted, status} <- rows,
-        not muted,
-        status != "dnd",
-        not MapSet.member?(folder_muted, uid),
-        do: uid
+    Repo.all(
+      from m in Membership,
+        join: u in User,
+        on: u.id == m.user_id,
+        where:
+          m.conversation_id == ^message.conversation_id and is_nil(m.left_at) and
+            m.user_id != ^message.sender_id and is_nil(m.muted_at) and
+            u.presence_status != "dnd" and
+            m.user_id not in subquery(muted_folder_users),
+        select: m.user_id
+    )
   end
 
   # Thread reply: only FOLLOWERS (#57). Threads are rooms-only, so no folder mute —
@@ -3207,21 +3196,15 @@ defmodule Eden.Chat do
     )
   end
 
-  defp folder_muted_ids(conversation_id) do
-    Repo.all(
-      from fm in FolderMembership,
-        join: f in Folder,
-        on: f.id == fm.folder_id,
-        where: fm.conversation_id == ^conversation_id and not is_nil(f.muted_at),
-        select: f.user_id
-    )
-  end
-
   # Locale-neutral payload: the web layer (recipient's session) formats the title,
   # localizes any media label, and applies the channel-mute + focus suppression.
-  defp notify_payload(message) do
+  # The `%User{}` match makes the `:sender` preload a hard contract — a caller that
+  # forgets it fails loudly here (a NotLoaded assoc is truthy, so a `sender && …`
+  # would otherwise crash deep in field access). Both callers preload it (`deliver`,
+  # `deliver_reply`). `conv` can be nil if the conversation was GC'd between insert
+  # and here; the catch-all `notify_*` clauses degrade it to a title-less DM.
+  defp notify_payload(%{sender: %User{} = sender} = message) do
     conv = Repo.get(Conversation, message.conversation_id)
-    sender = message.sender
 
     %{
       conversation_id: message.conversation_id,
@@ -3231,8 +3214,8 @@ defmodule Eden.Chat do
       kind: notify_kind(conv),
       conv_title: notify_title(conv),
       sender_id: message.sender_id,
-      sender_name: sender && sender.display_name,
-      avatar_key: sender && sender.avatar_key,
+      sender_name: sender.display_name,
+      avatar_key: sender.avatar_key,
       preview: message.body || "",
       media_kind: notify_media_kind(message)
     }
@@ -3326,14 +3309,8 @@ defmodule Eden.Chat do
     resurface_direct(conversation_id)
     # forwarded_from must be loaded too: a NotLoaded assoc is truthy, and the
     # bubble would phantom-render its "Forwarded" label on realtime messages.
-    message =
-      Repo.preload(message, [
-        :sender,
-        :attachments,
-        reactions: :user,
-        reply_to: [:sender, :attachments],
-        forwarded_from: :sender
-      ])
+    # (`@message_preloads` also satisfies notify_payload's `:sender` contract.)
+    message = Repo.preload(message, @message_preloads)
 
     broadcast(conversation_id, {:new_message, message})
     notify_members(conversation_id)

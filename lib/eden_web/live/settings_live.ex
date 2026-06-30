@@ -784,10 +784,13 @@ defmodule EdenWeb.SettingsLive do
 
   def handle_event("set_dbl_reaction", _params, socket), do: {:noreply, socket}
 
-  # #214: sound toggle flips server-side (plain phx-click).
+  # #214: sound toggle flips server-side (plain phx-click). Flip from the DB's current
+  # value, not this tab's cached assign — another tab may have changed it (a stale assign
+  # would otherwise need a double-click to "catch up"). The desktop toggle is immune: it
+  # carries an explicit `on` from the hook.
   def handle_event("set_notify_sound", _params, socket) do
-    on = not socket.assigns.notify_sound
-    {:ok, _} = Chat.set_notify_sound(socket.assigns.current_scope, on)
+    %{sound: cur} = Chat.notification_prefs(socket.assigns.current_scope)
+    {:ok, on} = Chat.set_notify_sound(socket.assigns.current_scope, not cur)
     {:noreply, assign(socket, notify_sound: on)}
   end
 
