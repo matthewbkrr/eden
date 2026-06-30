@@ -565,6 +565,101 @@ defmodule Eden.Chat do
     end
   end
 
+  @doc """
+  Sets a group's photo (#178, owner/admin only). Processes the upload into a square
+  JPEG (metadata stripped) via the user/channel avatar pipeline, stores it through the
+  Storage adapter, swaps `avatar_key`, and deletes the previous blob. Broadcasts so the
+  header / panel / sidebar update live (mirrors `rename_group/3`). Returns
+  `{:ok, conversation}` or `{:error, :not_found | :forbidden | :too_large | :unprocessable | reason}`.
+  """
+  def set_group_avatar(%Scope{user: actor}, conversation_id, source_path) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner admin)),
+         %Conversation{} = conv <- Repo.get(Conversation, id),
+         {:ok, jpeg} <- Images.square_avatar(source_path) do
+      store_and_swap_group_avatar(conv, jpeg)
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp store_and_swap_group_avatar(conv, jpeg) do
+    key = Storage.build_key("avatars", "jpg")
+
+    with :ok <- Storage.put_binary(key, jpeg),
+         {:ok, updated} <- conv |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
+      # Best-effort cleanup of the replaced blob (don't fail the update on it).
+      if conv.avatar_key, do: Storage.delete(conv.avatar_key)
+      broadcast_avatar_change(conv.id, updated)
+      {:ok, updated}
+    else
+      error ->
+        # The blob was written but the row update failed (e.g. the group was GC'd
+        # mid-flight) — reclaim the orphan.
+        Storage.delete(key)
+        error
+    end
+  end
+
+  @doc "Removes a group's photo (#178, owner/admin only) and its blob. `{:ok, conversation}`."
+  def remove_group_avatar(%Scope{user: actor}, conversation_id) do
+    with id when is_integer(id) <- safe_id(conversation_id),
+         true <- group?(id),
+         actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
+         :ok <- ensure_role(actor_role, ~w(owner admin)),
+         %Conversation{avatar_key: key} = conv <- Repo.get(Conversation, id),
+         {:ok, updated} <- conv |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
+      if key, do: Storage.delete(key)
+      broadcast_avatar_change(conv.id, updated)
+      {:ok, updated}
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  # #178: tell every member's session the photo changed, WITHOUT a reorder. Unlike a new
+  # message (notify_members → {:conversation_activity}, which bumps the chat to the top), an
+  # avatar change isn't activity — so we ping each member's user topic directly and their
+  # session refreshes the sidebar in place (natural order), updating the avatar without a bump.
+  defp broadcast_avatar_change(conversation_id, conversation) do
+    for user_id <- active_member_ids(conversation_id) do
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user_id),
+        {:conversation_avatar_changed, conversation}
+      )
+    end
+  end
+
+  @doc """
+  The group's avatar Storage key for the scoped user — only when they're an active
+  member and the group has one (authorizes serving, #178). `nil` otherwise, so a
+  non-member can't probe existence.
+  """
+  def group_avatar_key(%Scope{user: user}, conversation_id) do
+    case safe_id(conversation_id) do
+      id when is_integer(id) ->
+        Repo.one(
+          from c in Conversation,
+            join: m in Membership,
+            on: m.conversation_id == c.id and m.user_id == ^user.id and is_nil(m.left_at),
+            where: c.id == ^id and not is_nil(c.avatar_key),
+            select: c.avatar_key
+        )
+
+      _ ->
+        nil
+    end
+  end
+
   defp active_member_ids(conversation_id) do
     Repo.all(
       from m in Membership,

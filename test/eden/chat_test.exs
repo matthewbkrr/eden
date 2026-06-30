@@ -145,6 +145,69 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "group avatar (#178)" do
+    setup %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol_ga"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Trip")
+      %{conv: conv}
+    end
+
+    test "owner sets a photo; the key is stored and the blob readable", %{
+      alice: alice,
+      conv: conv
+    } do
+      assert {:ok, %{avatar_key: key}} = Chat.set_group_avatar(scope(alice), conv.id, real_png())
+      assert is_binary(key)
+      assert {:ok, _bytes} = Eden.Storage.read(key)
+    end
+
+    test "admin may set; a plain member may not", %{alice: alice, bob: bob, conv: conv} do
+      assert {:error, :forbidden} = Chat.set_group_avatar(scope(bob), conv.id, real_png())
+
+      :ok = Chat.set_group_member_role(scope(alice), conv.id, bob.id, "admin")
+      assert {:ok, %{avatar_key: key}} = Chat.set_group_avatar(scope(bob), conv.id, real_png())
+      assert is_binary(key)
+    end
+
+    test "a non-member gets :not_found (existence not leaked)", %{conv: conv} do
+      stranger = user_fixture(%{username: "stranger_ga"})
+      assert {:error, :not_found} = Chat.set_group_avatar(scope(stranger), conv.id, real_png())
+    end
+
+    test "a 1:1 DM is not a group", %{alice: alice, bob: bob} do
+      {:ok, dm} = Chat.create_conversation(scope(alice), [bob.id])
+      refute dm.is_group
+      assert {:error, :not_found} = Chat.set_group_avatar(scope(alice), dm.id, real_png())
+    end
+
+    test "replacing deletes the previous blob", %{alice: alice, conv: conv} do
+      {:ok, %{avatar_key: old}} = Chat.set_group_avatar(scope(alice), conv.id, real_png())
+      {:ok, %{avatar_key: new}} = Chat.set_group_avatar(scope(alice), conv.id, real_png())
+      refute old == new
+      assert {:error, _} = Eden.Storage.read(old)
+      assert {:ok, _} = Eden.Storage.read(new)
+    end
+
+    test "remove_group_avatar clears the key and deletes the blob", %{alice: alice, conv: conv} do
+      {:ok, %{avatar_key: key}} = Chat.set_group_avatar(scope(alice), conv.id, real_png())
+      assert {:ok, %{avatar_key: nil}} = Chat.remove_group_avatar(scope(alice), conv.id)
+      assert {:error, _} = Eden.Storage.read(key)
+    end
+
+    test "group_avatar_key authorizes serving: member yes, non-member nil", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      assert is_nil(Chat.group_avatar_key(scope(alice), conv.id))
+      {:ok, %{avatar_key: key}} = Chat.set_group_avatar(scope(alice), conv.id, real_png())
+      assert Chat.group_avatar_key(scope(bob), conv.id) == key
+
+      stranger = user_fixture(%{username: "stranger_ga2"})
+      assert is_nil(Chat.group_avatar_key(scope(stranger), conv.id))
+    end
+  end
+
   describe "scoping" do
     test "list/get only expose conversations the user belongs to", %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
