@@ -2345,6 +2345,102 @@ defmodule Eden.Chat do
   defp ensure_editable(%Message{}), do: :ok
 
   @doc """
+  Replaces a media message's album (#164, PR-2) — author only, same rules as
+  `edit_message/3`. `kept_ids` are the message's existing attachments to keep (in their
+  current order); `new_sources` are freshly uploaded files, appended after. Removed
+  attachments' rows go and their blobs are reclaimed forward-safe (a blob a surviving
+  attachment or a forward still references is spared). The album can't be emptied (delete
+  the message instead) or exceed the cap. Caption rides `opts[:body]`. Stamps `edited_at`
+  and broadcasts `{:message_edited}`. `{:error, :not_found | :forbidden | :empty | :too_many
+  | :too_large | :unprocessable | %Ecto.Changeset{}}`.
+  """
+  def edit_message_media(
+        %Scope{user: user} = scope,
+        message_id,
+        kept_ids,
+        new_sources,
+        opts \\ %{}
+      )
+      when is_list(kept_ids) and is_list(new_sources) do
+    kept_ids = kept_ids |> Enum.map(&safe_id/1) |> Enum.filter(&is_integer/1)
+
+    with {:ok, message} <- fetch_message(scope, message_id),
+         :ok <- ensure_sender(message, user.id),
+         :ok <- ensure_editable(message),
+         message = Repo.preload(message, :attachments),
+         :ok <- ensure_media_message(message),
+         kept = Enum.filter(message.attachments, &(&1.id in kept_ids)),
+         :ok <- ensure_edit_album_size(length(kept) + length(new_sources)),
+         {:ok, prepared} <- prepare_album(new_sources) do
+      apply_media_edit(message, kept, prepared, opts)
+    else
+      false -> {:error, :not_found}
+      nil -> {:error, :not_found}
+      :error -> {:error, :not_found}
+      {:error, _} = error -> error
+    end
+  end
+
+  # Media-editing is only for a message that already has an album (text uses edit_message/3).
+  defp ensure_media_message(%Message{attachments: [_ | _]}), do: :ok
+  defp ensure_media_message(%Message{}), do: {:error, :not_found}
+
+  # The album can't be emptied and can't exceed the cap (kept + new).
+  defp ensure_edit_album_size(0), do: {:error, :empty}
+  defp ensure_edit_album_size(n) when n > @max_album_entries, do: {:error, :too_many}
+  defp ensure_edit_album_size(_), do: :ok
+
+  defp apply_media_edit(message, kept, prepared, opts) do
+    removed = Enum.reject(message.attachments, fn a -> Enum.any?(kept, &(&1.id == a.id)) end)
+    # Forward-safe: keys no surviving attachment (or a forward) still references.
+    orphan_keys = unshared_blob_keys(removed)
+    base = length(kept)
+
+    prepared =
+      prepared |> Enum.with_index(base) |> Enum.map(fn {a, i} -> Map.put(a, :position, i) end)
+
+    result =
+      Repo.transact(fn ->
+        Enum.each(removed, &Repo.delete/1)
+
+        kept
+        |> Enum.with_index()
+        |> Enum.each(fn {a, i} ->
+          Repo.update_all(from(x in Attachment, where: x.id == ^a.id), set: [position: i])
+        end)
+
+        with :ok <- insert_attachments(message.id, prepared),
+             {:ok, updated} <-
+               message
+               |> Message.edit_changeset(%{body: Map.get(opts, :body, message.body)})
+               |> Ecto.Changeset.put_change(:edited_at, now())
+               |> Repo.update() do
+          {:ok, Repo.preload(updated, @message_preloads, force: true)}
+        end
+      end)
+
+    case result do
+      {:ok, edited} ->
+        # Storage.delete only after the rows commit (blobs are irreversible), re-checking
+        # references now the removed rows are gone.
+        delete_unreferenced_blobs(orphan_keys)
+
+        for a <- edited.attachments,
+            is_nil(a.thumbnail_key),
+            needs_media_processing?(a.kind),
+            do: enqueue_thumbnail(a)
+
+        broadcast(message.conversation_id, {:message_edited, edited})
+        {:ok, edited}
+
+      {:error, reason} ->
+        # The transaction rolled back — reclaim the new blobs we stored.
+        Enum.each(prepared, &Storage.delete(&1.storage_key))
+        {:error, reason}
+    end
+  end
+
+  @doc """
   Deletes a message for everyone ("delete for both") — sender only. Soft-deletes
   the row (tombstone: `deleted_at` set, body cleared, attachment removed),
   deletes the attachment's blobs unless another attachment still references them
