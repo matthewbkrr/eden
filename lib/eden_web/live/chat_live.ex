@@ -200,6 +200,14 @@ defmodule EdenWeb.ChatLive do
         # The message currently being edited (#164), or nil — drives the composer's
         # edit banner + pre-fill and routes "send" to edit_message. `%{id, body}`.
         editing: nil,
+        # Same for a THREAD reply being edited (#164): drives the reply-composer's edit
+        # banner + pre-fill and routes "send_reply" to edit_message. A thread reply edits
+        # in the thread composer, not the main one.
+        thread_editing: nil,
+        # A MEDIA message being edited (#164 PR-2), or nil — drives the edit-media
+        # modal (replace the album + caption). `%{message, kept}` where `kept` is the
+        # MapSet of still-kept attachment ids; new photos ride the :edit_media upload.
+        edit_media: nil,
         # Knock window (#41): a private room you're not in, reached by link.
         knock_room: nil,
         knock_pending: false,
@@ -236,6 +244,15 @@ defmodule EdenWeb.ChatLive do
         # Telegram-style, instead of an indeterminate spinner that can't show how
         # far a slow cross-border upload has gotten.
         progress: &handle_attachment_progress/3
+      )
+      # Edit-media album (#164 PR-2): the photos ADDED while editing a media message.
+      # Same caps as :attachment; the total (kept + these) is re-checked server-side by
+      # edit_message_media. No progress ring — the modal shows staged previews, not a
+      # streaming bubble.
+      |> allow_upload(:edit_media,
+        accept: :any,
+        max_entries: Chat.max_album_entries(),
+        max_file_size: Chat.max_attachment_bytes()
       )
       # Thread-reply album (#104): same accept/caps as :attachment, a separate upload so
       # the thread composer stages independently. No progress callback — a thread reply
@@ -451,6 +468,7 @@ defmodule EdenWeb.ChatLive do
       # A staged quote-reply (#71) belonged to a room — drop it on the way out.
       reply_to: nil,
       thread_reply_to: nil,
+      thread_editing: nil,
       # Threads (#57) are a rooms feature — clear the panel + badges leaving channel mode.
       thread_root: nil,
       thread_following: false,
@@ -577,6 +595,11 @@ defmodule EdenWeb.ChatLive do
     entries = live_entries(socket.assigns.uploads.attachment)
 
     cond do
+      # #164 text→media: an edit with staged media (all done) converts the message into a
+      # media message — must precede the plain edit branch, else the media is stranded.
+      socket.assigns.editing && all_uploads_done?(entries) ->
+        save_edit_to_media(socket, msg)
+
       # #164: an active edit routes "send" to edit_message, not a new send.
       socket.assigns.editing ->
         save_edit(socket, body)
@@ -591,7 +614,7 @@ defmodule EdenWeb.ChatLive do
       # crashes the LiveView — losing the upload + its optimistic node. Such a send
       # falls through to the text path; the upload keeps going and lands on its own
       # later "send" when every entry is done.
-      entries != [] and Enum.all?(entries, & &1.done?) ->
+      all_uploads_done?(entries) ->
         # The client_id AND caption rode the socket (media_sending), captured by the hook
         # at submit — NOT the form/@composer. media_sending closes the overlay (removing
         # #compose-caption) before the form serializes, and a composer_changed during the
@@ -1596,7 +1619,7 @@ defmodule EdenWeb.ChatLive do
      socket
      |> cancel_staged_thread_attachments()
      |> clear_thread_typing()
-     |> assign(thread_root: nil, thread_reply_to: nil)
+     |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
      |> reset_thread_search()}
   end
 
@@ -1609,6 +1632,7 @@ defmodule EdenWeb.ChatLive do
        thread_list_open: true,
        thread_root: nil,
        thread_reply_to: nil,
+       thread_editing: nil,
        thread_list: Chat.list_followed_threads(scope, socket.assigns.selected.id)
      )}
   end
@@ -1680,15 +1704,104 @@ defmodule EdenWeb.ChatLive do
   # #164: enter edit mode — pre-fill the chat input with the message's current body and
   # show the edit banner. The menu only offers this for your own non-system messages;
   # edit_message re-checks on save. A staged reply is dropped (you're editing, not replying).
-  def handle_event("start_edit", %{"id" => id, "body" => body}, socket) do
-    {:noreply,
-     socket
-     |> assign(editing: %{id: id, body: body}, reply_to: nil)
-     |> push_event("set_composer_body", %{body: body})}
+  # Edit (#164): fetch the message (scoped, author re-checked below) and branch — a media
+  # message opens the edit-media modal (replace album + caption, #164 PR-2); a text message
+  # edits inline in the composer (banner + pre-fill). Fetching centralises the choice and
+  # avoids trusting a client-passed body.
+  def handle_event("start_edit", %{"id" => id}, socket) do
+    scope = socket.assigns.current_scope
+    message = Chat.get_message(scope, id)
+
+    cond do
+      is_nil(message) or message.sender_id != scope.user.id or message.kind == "system" ->
+        {:noreply, socket}
+
+      match?([_ | _], message.attachments) ->
+        {:noreply,
+         assign(socket,
+           edit_media: %{
+             message: message,
+             kept: initial_kept_ids(message),
+             caption: message.body
+           }
+         )}
+
+      not is_nil(message.root_id) ->
+        # A thread reply (rooms-only, #57) edits in the THREAD composer, not the main one —
+        # its banner + pre-fill live in the reply-composer (targeted push, F3).
+        {:noreply,
+         socket
+         |> assign(
+           thread_editing: %{id: message.id, body: message.body},
+           thread_reply_to: nil,
+           editing: nil
+         )
+         |> push_event("set_thread_composer_body", %{body: message.body})}
+
+      true ->
+        {:noreply,
+         socket
+         |> assign(
+           editing: %{id: message.id, body: message.body},
+           reply_to: nil,
+           edit_media: nil,
+           thread_editing: nil
+         )
+         |> push_event("set_composer_body", %{body: message.body})}
+    end
   end
 
   def handle_event("cancel_edit", _params, socket) do
     {:noreply, socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+  end
+
+  def handle_event("cancel_thread_edit", _params, socket) do
+    {:noreply,
+     socket |> assign(thread_editing: nil) |> push_event("set_thread_composer_body", %{body: ""})}
+  end
+
+  # --- Edit-media modal (#164 PR-2) -------------------------------------------------
+
+  # Toggle-remove a still-kept attachment; removing the last one is allowed (Save just
+  # disables until something is staged, so an accidental "remove all" can't post an empty
+  # album). Re-open to reset.
+  def handle_event("edit_media_remove", %{"att" => att_id}, socket) do
+    case socket.assigns.edit_media do
+      %{kept: kept} = em ->
+        kept = MapSet.delete(kept, safe_int(att_id))
+        {:noreply, assign(socket, edit_media: %{em | kept: kept})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Cancel a photo staged (but not yet saved) in the edit-media upload.
+  def handle_event("edit_media_cancel_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :edit_media, ref)}
+  end
+
+  # The upload form's phx-change: LiveView validates staged entries here (caps/accept). Also
+  # persist the typed caption into @edit_media so it's server-tracked — otherwise removing a
+  # tile (edit_media_remove re-renders the modal) resets the caption input to the original
+  # body and the in-progress caption is lost (like #compose-caption's @form[:caption]).
+  def handle_event("validate_edit_media", params, socket) do
+    case socket.assigns.edit_media do
+      %{} = em ->
+        caption = params |> Map.get("message", %{}) |> Map.get("body", em.caption)
+        {:noreply, assign(socket, edit_media: %{em | caption: caption})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("close_edit_media", _params, socket) do
+    {:noreply, cancel_all_edit_media_uploads(socket) |> assign(edit_media: nil)}
+  end
+
+  def handle_event("save_edit_media", params, socket) do
+    save_edit_media(socket, Map.get(params, "message", %{}))
   end
 
   # Quote-reply from inside the thread panel: stages the target in the THREAD
@@ -1746,6 +1859,15 @@ defmodule EdenWeb.ChatLive do
     entries = socket.assigns.uploads.thread_attachment.entries
 
     cond do
+      # #164 text→media: editing a thread reply + attached media converts it to media (parity
+      # with the main composer) — before the plain edit branch, else the media is stranded.
+      socket.assigns.thread_editing && all_uploads_done?(entries) ->
+        save_thread_edit_to_media(socket, body)
+
+      # #164: an active thread-reply edit routes send_reply to edit_message, not a new reply.
+      socket.assigns.thread_editing ->
+        save_thread_edit(socket, body)
+
       is_nil(root) ->
         {:noreply, socket}
 
@@ -1860,9 +1982,20 @@ defmodule EdenWeb.ChatLive do
           do: {:noreply, stream_insert(socket, :thread, message)},
           else: {:noreply, socket}
 
+      # Only restream a message that's in the viewer's loaded window (compacts tracks it,
+      # like restream_root_if_loaded): a bare stream_insert of a paginated-out message would
+      # APPEND it to the bottom, out of order. It re-renders edited when scrolled into view.
+      open?(socket, message.conversation_id) and Map.has_key?(socket.assigns.compacts, message.id) ->
+        streamed = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
+
+        {:noreply,
+         socket
+         |> stream_insert(:messages, streamed)
+         |> maybe_update_thread_root(message)
+         |> refresh_sidebar()}
+
       open?(socket, message.conversation_id) ->
-        message = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
-        {:noreply, socket |> stream_insert(:messages, message) |> refresh_sidebar()}
+        {:noreply, socket |> maybe_update_thread_root(message) |> refresh_sidebar()}
 
       true ->
         {:noreply, refresh_sidebar(socket)}
@@ -3089,7 +3222,13 @@ defmodule EdenWeb.ChatLive do
             <%!-- Edit tray (#164): the message being edited. data-edit-active defers the
                   send to the server (edit_message) — an edit updates an existing row, so
                   there's no optimistic node and no hidden field (the id lives in @editing). --%>
-            <div :if={@editing} class="ed-reply-bar ed-reply-bar--edit" data-edit-active>
+            <div
+              :if={@editing}
+              class="ed-reply-bar ed-reply-bar--edit"
+              data-edit-active
+              phx-window-keydown="cancel_edit"
+              phx-key="Escape"
+            >
               <span class="ed-reply-bar__accent" aria-hidden="true"></span>
               <div class="ed-reply-bar__body">
                 <span class="ed-reply-bar__name">
@@ -3215,6 +3354,7 @@ defmodule EdenWeb.ChatLive do
               :if={live_entries(@uploads.attachment) != [] and not @sending_media}
               upload={@uploads.attachment}
               form={@composer}
+              editing={@editing != nil}
             />
           </.form>
         <% else %>
@@ -3460,6 +3600,33 @@ defmodule EdenWeb.ChatLive do
           class="flex flex-col gap-2 p-3 border-t shrink-0"
           style="border-color: var(--ed-border);"
         >
+          <%!-- Thread edit tray (#164): editing a thread reply. `.ed-reply-bar` makes
+                .ThreadSendQueue.onSubmit defer to the server (send_reply → edit_message),
+                so there's no optimistic node; the id lives in @thread_editing. --%>
+          <div
+            :if={@thread_editing}
+            class="ed-reply-bar ed-reply-bar--edit"
+            data-edit-active
+            phx-window-keydown="cancel_thread_edit"
+            phx-key="Escape"
+          >
+            <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+            <div class="ed-reply-bar__body">
+              <span class="ed-reply-bar__name">
+                <.icon name="hero-pencil-square-micro" class="size-3.5" />
+                {gettext("Editing")}
+              </span>
+              <span class="ed-reply-bar__text">{@thread_editing.body}</span>
+            </div>
+            <button
+              type="button"
+              class="ed-btn--icon shrink-0"
+              phx-click="cancel_thread_edit"
+              aria-label={gettext("Cancel edit")}
+            >
+              <.icon name="hero-x-mark-micro" class="size-4" />
+            </button>
+          </div>
           <%!-- Quote-reply within the thread (#71). --%>
           <div :if={@thread_reply_to} class="ed-reply-bar">
             <span class="ed-reply-bar__accent" aria-hidden="true"></span>
@@ -3681,6 +3848,7 @@ defmodule EdenWeb.ChatLive do
         statuses={@statuses}
       />
       <.invites_modal :if={@invites_open && @channel} invites={@invites} new_url={@new_invite_url} />
+      <.edit_media_modal :if={@edit_media} edit_media={@edit_media} upload={@uploads.edit_media} />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyUrl">
         // Copies data-url to the clipboard and briefly flips the label to
@@ -5424,6 +5592,14 @@ defmodule EdenWeb.ChatLive do
             // beat (it only fires once the overlay is gone). One guarded path, sequential.
             const sm = this.el.dataset.sendingMedia === "true"
             const composeOpen = !!this.el.querySelector("[data-upload-preview]")
+            // #164 text→media: when the overlay OPENS during a text edit, seed its caption with
+            // the edit text (in #composer-body) so the conversion's caption defaults to the
+            // message text — editable + blankable there. On the open transition only, so later
+            // patches never clobber the user's caption edits.
+            if (composeOpen && !this.prevComposeOpen && this.el.querySelector("[data-edit-active]")) {
+              const cap = this.el.querySelector("#compose-caption")
+              if (cap && !cap.value && this.input) cap.value = this.input.value
+            }
             const configFree = !sm && !composeOpen
             // Never stay gated once the config is genuinely free (else a lost media_sending
             // would leave mediaInFlight stuck true and silently queue every later pick).
@@ -5448,6 +5624,24 @@ defmodule EdenWeb.ChatLive do
             // until a pushEvent ack re-fired it; that ack path was the fragile bit
             // that stalled real uploads in prod (the spinner-forever bug).
             const overlay = this.el.querySelector("[data-upload-preview]")
+            // #164 text→media: editing a text message + attached media → convert. Unlike a
+            // normal media send, an edit updates an EXISTING row (via {:message_edited}), so
+            // draw NO optimistic node and push NO media_sending — just close the overlay and
+            // let the native submit upload the :attachment entries + fire "send" (the server
+            // routes editing+media to edit_message_media). Keep a client-side error visible.
+            if (overlay && this.el.querySelector("[data-edit-active]")) {
+              if (overlay.querySelector(".ed-attach-err")) {
+                e.preventDefault()
+                return
+              }
+              overlay.querySelectorAll("video").forEach((v) => {
+                try { v.pause() } catch (_e) {}
+              })
+              this.sending = true
+              overlay.style.display = "none"
+              window.dispatchEvent(new CustomEvent("ed:after-send"))
+              return
+            }
             if (overlay) {
               // A staged entry with a client-side error (e.g. a video over the size
               // cap) won't upload. Don't close the overlay (media_sending) — that
@@ -6488,6 +6682,18 @@ defmodule EdenWeb.ChatLive do
             this.connected = true
             this.sendTimers = new Map()
             this.input = this.el.querySelector('input[name="reply[body]"]')
+            // Edit (#164): the server pre-fills (start) / clears (cancel|save) the reply input
+            // directly — a targeted event (NOT the main composer's set_composer_body) so the two
+            // composers never cross-fill.
+            this.handleEvent("set_thread_composer_body", ({ body }) => {
+              if (!this.input) return
+              this.input.value = body
+              this.input.dispatchEvent(new Event("input", { bubbles: true }))
+              if (body) {
+                this.input.focus()
+                try { this.input.setSelectionRange(body.length, body.length) } catch (_e) {}
+              }
+            })
             this.pending = document.getElementById("thread-pending")
             this.onOffline = () => { for (const i of this.queue) this.armWatchdog(i.clientId, i.body) }
             window.addEventListener("offline", this.onOffline)
@@ -7695,6 +7901,154 @@ defmodule EdenWeb.ChatLive do
     </div>
     """
   end
+
+  attr :edit_media, :map, required: true
+  attr :upload, :any, required: true
+
+  # Edit-media modal (#164 PR-2): replace a media message's album (keep some existing photos,
+  # add new ones) + its caption. The kept photos are toggled off in place; new photos ride the
+  # :edit_media upload. Save hands kept ids + new sources to edit_message_media. Matches the
+  # app's other modals (scrim + centered dialog + FocusTrap + Escape).
+  defp edit_media_modal(assigns) do
+    assigns = assign(assigns, :kept, kept_atts(assigns.edit_media))
+
+    ~H"""
+    <div class="fixed inset-0 z-30" id="edit-media">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: var(--ed-scrim);"
+        phx-click="close_edit_media"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <form
+          class="w-full max-w-md rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="close_edit_media"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+          aria-label={gettext("Edit media")}
+          id="dlg-edit-media"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
+          phx-submit="save_edit_media"
+          phx-change="validate_edit_media"
+        >
+          <div class="flex items-center justify-between">
+            <h2 style="font-weight:600;">{gettext("Edit media")}</h2>
+            <button
+              type="button"
+              class="ed-btn--icon"
+              phx-click="close_edit_media"
+              aria-label={gettext("Close")}
+            >
+              <.icon name="hero-x-mark-mini" class="size-5" />
+            </button>
+          </div>
+
+          <%!-- The album: kept existing photos + newly-staged photos, each removable. --%>
+          <div class="ed-editmedia__grid">
+            <div :for={{att, i} <- Enum.with_index(@kept, 1)} class="ed-editmedia__tile">
+              <img
+                :if={att.kind == "image"}
+                src={thumb_src(att)}
+                class="ed-editmedia__img"
+                alt={gettext("Photo %{n}", n: i)}
+              />
+              <span :if={att.kind != "image"} class="ed-editmedia__ph" aria-hidden="true">
+                <.icon name={kind_icon(att.kind)} class="size-7" />
+              </span>
+              <button
+                type="button"
+                class="ed-editmedia__x"
+                phx-click="edit_media_remove"
+                phx-value-att={att.id}
+                aria-label={gettext("Remove photo %{n}", n: i)}
+              >
+                <.icon name="hero-x-mark-micro" class="size-3.5" />
+              </button>
+            </div>
+
+            <div :for={entry <- @upload.entries} class="ed-editmedia__tile">
+              <.live_img_preview
+                :if={image_entry?(entry)}
+                entry={entry}
+                class="ed-editmedia__img"
+              />
+              <span :if={not image_entry?(entry)} class="ed-editmedia__ph" aria-hidden="true">
+                <.icon name="hero-film" class="size-7" />
+              </span>
+              <button
+                type="button"
+                class="ed-editmedia__x"
+                phx-click="edit_media_cancel_upload"
+                phx-value-ref={entry.ref}
+                aria-label={gettext("Remove %{name}", name: entry.client_name)}
+              >
+                <.icon name="hero-x-mark-micro" class="size-3.5" />
+              </button>
+            </div>
+
+            <label class="ed-editmedia__add" aria-label={gettext("Add photos")}>
+              <.icon name="hero-plus" class="size-6" />
+              <.live_file_input upload={@upload} class="sr-only" />
+            </label>
+          </div>
+
+          <p :for={err <- upload_errors(@upload)} class="ed-attach-err">
+            {upload_error_text(err)}
+          </p>
+          <%= for entry <- @upload.entries, err <- upload_errors(@upload, entry) do %>
+            <p class="ed-attach-err">{entry.client_name}: {upload_error_text(err)}</p>
+          <% end %>
+
+          <input
+            type="text"
+            name="message[body]"
+            value={@edit_media.caption}
+            maxlength={Eden.Chat.Message.max_body()}
+            class="ed-input w-full"
+            placeholder={gettext("Add a caption…")}
+            aria-label={gettext("Caption")}
+            autocomplete="off"
+          />
+
+          <div class="flex items-center justify-end gap-2 pt-1">
+            <%!-- Why Save is disabled: an album can't be emptied (delete the message instead). --%>
+            <p
+              :if={@kept == [] and @upload.entries == []}
+              class="mr-auto"
+              style="font-size:0.8125rem; color: var(--ed-muted);"
+            >
+              {gettext("Keep or add at least one photo.")}
+            </p>
+            <button type="button" class="ed-btn ed-btn--ghost" phx-click="close_edit_media">
+              {gettext("Cancel")}
+            </button>
+            <button
+              type="submit"
+              class="ed-btn ed-btn--primary"
+              disabled={@kept == [] and @upload.entries == []}
+              phx-disable-with={gettext("Saving…")}
+            >
+              {gettext("Save")}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    """
+  end
+
+  defp kept_atts(%{message: %{attachments: atts}, kept: kept}),
+    do: Enum.filter(atts, &MapSet.member?(kept, &1.id))
+
+  defp kind_icon("video"), do: "hero-film"
+  defp kind_icon("audio"), do: "hero-musical-note"
+  defp kind_icon(_), do: "hero-document"
 
   attr :members, :list, required: true
   attr :channel, :map, required: true
@@ -8948,7 +9302,9 @@ defmodule EdenWeb.ChatLive do
       >
         <.icon name="hero-chat-bubble-left-micro" class="size-4" /> {gettext("Reply in thread")}
       </button>
-      <%!-- Edit (#164): your own, non-system, non-deleted messages. The server re-checks. --%>
+      <%!-- Edit (#164): your own, non-system, non-deleted messages. `start_edit` fetches the
+            message and routes text → composer banner, media → the edit-media modal (PR-2).
+            The server re-checks authorship. --%>
       <button
         :if={@mine and @message.kind != "system" and is_nil(@message.deleted_at)}
         type="button"
@@ -8956,7 +9312,6 @@ defmodule EdenWeb.ChatLive do
         role="menuitem"
         phx-click="start_edit"
         phx-value-id={@message.id}
-        phx-value-body={@message.body}
       >
         <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("Edit")}
       </button>
@@ -9014,6 +9369,7 @@ defmodule EdenWeb.ChatLive do
 
   attr :upload, :any, required: true
   attr :form, :any, required: true
+  attr :editing, :boolean, default: false
 
   # Attachment compose modal (#58): a Telegram-style centered overlay (media grid +
   # caption + send) opened when files are staged. The composer bar stays rendered
@@ -9060,6 +9416,13 @@ defmodule EdenWeb.ChatLive do
             <.live_file_input upload={@upload} class="sr-only" />
           </label>
         </header>
+
+        <%!-- #164 text→media: signal this send EDITS the message (photos become it), so the
+              overlay isn't mistaken for a brand-new message (the edit banner is behind us). --%>
+        <p :if={@editing} class="ed-compose__edit-hint">
+          <.icon name="hero-pencil-square-micro" class="size-3.5" />
+          {gettext("Editing this message")}
+        </p>
 
         <div class="ed-compose__body">
           <div
@@ -10331,6 +10694,7 @@ defmodule EdenWeb.ChatLive do
       selected: conversation,
       # An edit is bound to a specific message — drop it when the chat changes (#164).
       editing: nil,
+      edit_media: nil,
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
@@ -10356,6 +10720,7 @@ defmodule EdenWeb.ChatLive do
       # Drop any staged quote-reply (#71) — its target is the old conversation's.
       reply_to: nil,
       thread_reply_to: nil,
+      thread_editing: nil,
       # Thread following (#57) is per-room: reset the panel + seed the per-thread
       # unread badges from the DB for the room just opened.
       thread_following: false,
@@ -10835,6 +11200,8 @@ defmodule EdenWeb.ChatLive do
           # Fresh thread → clear a quote-reply staged in the previously-open one; without
           # this it would silently carry over (same conversation, so it'd validate).
           thread_reply_to: nil,
+          # Fresh thread → drop any edit staged against the previously-open thread's reply.
+          thread_editing: nil,
           # Fresh thread → no stale typers from a previously-open one (#103).
           thread_typing_users: %{},
           last_thread_typing_at: nil
@@ -10867,6 +11234,15 @@ defmodule EdenWeb.ChatLive do
   # Re-stream a root ONLY when it's in the loaded message window (tracked by the
   # `compacts` map). The `:messages` stream is unbounded with manual paging, so
   # inserting a paged-out root would resurrect it out of order at the stream end.
+  # #164: keep an open thread panel's root header live when the root message itself is edited
+  # (it renders from @thread_root, not the :messages stream).
+  defp maybe_update_thread_root(socket, %{id: mid} = message) do
+    case socket.assigns.thread_root do
+      %{id: ^mid} -> assign(socket, thread_root: message)
+      _ -> socket
+    end
+  end
+
   defp restream_root_if_loaded(socket, root) do
     if Map.has_key?(socket.assigns.compacts, root.id),
       do: stream_insert(socket, :messages, restore_compact(socket, root)),
@@ -11393,6 +11769,151 @@ defmodule EdenWeb.ChatLive do
         {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
     end
   end
+
+  # Staged uploads are ready to consume: at least one entry, and every one finished. A
+  # consume on an in-progress entry raises, so this gates every consume_uploaded_entries path.
+  defp all_uploads_done?([]), do: false
+  defp all_uploads_done?(entries), do: Enum.all?(entries, & &1.done?)
+
+  # #164 text→media: an edit where the author attached media converts the (text) message into
+  # a media message — consume the :attachment uploads into sources and hand them to
+  # edit_message_media (kept=[]). The overlay caption (seeded with the edit text) becomes the
+  # caption. Mirrors save_edit_media's temp cleanup; clears edit mode on success.
+  #
+  # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable` the
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp save_edit_to_media(socket, msg) do
+    %{current_scope: scope, editing: %{id: id}} = socket.assigns
+    caption = Map.get(msg, "caption", "")
+
+    sources =
+      consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
+        stable = Path.join(System.tmp_dir!(), "eden-edit-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
+      end)
+
+    try do
+      case Chat.edit_message_media(scope, id, [], sources, %{body: caption}) do
+        {:ok, _edited} ->
+          {:noreply,
+           socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, edit_media_error(reason))}
+      end
+    after
+      Enum.each(sources, &File.rm(&1.path))
+    end
+  end
+
+  # #164: same as save_edit, for a thread reply edited in the thread composer. The
+  # {:message_edited} broadcast routes the updated reply to the :thread stream.
+  defp save_thread_edit(socket, body) do
+    %{current_scope: scope, thread_editing: %{id: id}} = socket.assigns
+
+    case Chat.edit_message(scope, id, body) do
+      {:ok, _edited} ->
+        {:noreply,
+         socket
+         |> assign(thread_editing: nil)
+         |> push_event("set_thread_composer_body", %{body: ""})}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
+    end
+  end
+
+  # #164 text→media in a thread: attaching media while editing a text reply converts it to a
+  # media reply — the reply input (its own caption) becomes the caption. Mirrors
+  # save_edit_to_media; the {:message_edited} broadcast routes the row to the :thread stream.
+  #
+  # Same false positive as send_thread_album: `path` is the LiveView upload temp, `stable` the
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp save_thread_edit_to_media(socket, caption) do
+    %{current_scope: scope, thread_editing: %{id: id}} = socket.assigns
+
+    sources =
+      consume_uploaded_entries(socket, :thread_attachment, fn %{path: path}, entry ->
+        stable = Path.join(System.tmp_dir!(), "eden-thread-edit-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
+      end)
+
+    try do
+      case Chat.edit_message_media(scope, id, [], sources, %{body: caption}) do
+        {:ok, _edited} ->
+          {:noreply,
+           socket
+           |> assign(thread_editing: nil)
+           |> push_event("set_thread_composer_body", %{body: ""})}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, edit_media_error(reason))}
+      end
+    after
+      Enum.each(sources, &File.rm(&1.path))
+    end
+  end
+
+  # #164 PR-2: save a media edit. Consume the newly-staged photos into sources, gather the
+  # still-kept attachment ids, and hand both to edit_message_media (which re-authorizes,
+  # reclaims dropped blobs forward-safe, and broadcasts {:message_edited} — updating the row
+  # everywhere incl. this session, so we don't touch the stream). Closes the modal on
+  # success; a rejected edit keeps it open with a flash.
+  #
+  # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable` the
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp save_edit_media(socket, message_params) do
+    %{current_scope: scope, edit_media: %{message: message, kept: kept}} = socket.assigns
+    body = Map.get(message_params, "body", "")
+
+    new_sources =
+      consume_uploaded_entries(socket, :edit_media, fn %{path: path}, entry ->
+        stable = Path.join(System.tmp_dir!(), "eden-edit-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
+      end)
+
+    try do
+      case Chat.edit_message_media(scope, message.id, MapSet.to_list(kept), new_sources, %{
+             body: body
+           }) do
+        {:ok, _edited} -> {:noreply, assign(socket, edit_media: nil)}
+        {:error, reason} -> {:noreply, put_flash(socket, :error, edit_media_error(reason))}
+      end
+    after
+      Enum.each(new_sources, &File.rm(&1.path))
+    end
+  end
+
+  # kept ids seeded when the modal opens: every attachment, minus whatever the user removes.
+  defp initial_kept_ids(%{attachments: attachments}), do: MapSet.new(attachments, & &1.id)
+
+  defp cancel_all_edit_media_uploads(socket) do
+    Enum.reduce(socket.assigns.uploads.edit_media.entries, socket, fn entry, acc ->
+      cancel_upload(acc, :edit_media, entry.ref)
+    end)
+  end
+
+  defp safe_int(v) when is_integer(v), do: v
+
+  defp safe_int(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp edit_media_error(:empty), do: gettext("Keep or add at least one photo.")
+
+  defp edit_media_error(:too_many),
+    do: gettext("An album can hold at most %{count} items.", count: Chat.max_album_entries())
+
+  defp edit_media_error(_), do: gettext("Couldn't save the edit.")
 
   defp send_text(socket, scope, conversation_id, body, client_id, reply_to_id) do
     attrs = %{"body" => body, "client_id" => client_id, "reply_to_id" => reply_to_id}

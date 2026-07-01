@@ -57,7 +57,18 @@ design — built incrementally as features land.)
     soft-deletes via `deleted_at`, removing the message for everyone, and cleans up
     every attachment's unshared blobs; **forward** copies it into another
     conversation (re-referencing the same blobs in order, `forwarded_from_id` for
-    attribution); **quote-reply** (`#71`, `reply_to_id` self-ref — distinct from
+    attribution); **edit** (`#164`, author-only) revises a message's text or, for a
+    media message, replaces its album AND/OR caption (`edit_message` / `edit_message_media`
+    — keep/drop existing attachments + append new, order preserved, forward-safe blob
+    cleanup; rejects a tombstone/system message), stamping `edited_at` (no window,
+    Telegram-style — the UI shows "(edited)" + time) and broadcasting `{:message_edited}`
+    which restreams the row everywhere (thread vs main routed by `root_id`); a text
+    message edits inline in the composer (banner + pre-fill — a thread reply in the
+    thread composer, targeted so the two composers never cross-fill; attaching media while
+    editing a text message CONVERTS it into a media message via `edit_message_media`, the
+    edit text becoming the caption), a media message opens the edit-media modal (removable
+    existing tiles + an add-photos tile + the caption);
+    **quote-reply** (`#71`, `reply_to_id` self-ref — distinct from
     threads' `root_id`) renders a tappable quote of the referenced message above
     the body (DMs + rooms), composed via swipe-left, the room toolbar's reply
     arrow, or the context-menu "Reply"; `reply_to_id` is set by the context only

@@ -112,6 +112,19 @@ defmodule Eden.Chat.Message do
     |> validate_length(:body, max: @max_body, count: :codepoints)
   end
 
+  @doc """
+  Changeset for a media-album edit (#164, PR-2): the result always has ≥1 attachment, so the
+  body is an optional caption (blank → ""). Used for both a genuine media edit and a
+  text→media conversion. `edited_at` is stamped by the context.
+  """
+  def caption_edit_changeset(message, attrs) do
+    message
+    |> cast(attrs, [:body])
+    |> update_change(:body, &sanitize/1)
+    |> ensure_body()
+    |> validate_length(:body, max: @max_body, count: :codepoints)
+  end
+
   # Surfaces the (sender_id, client_id) unique index as a changeset error the
   # context can recognise as a duplicate resend.
   defp dedup_constraint(changeset) do

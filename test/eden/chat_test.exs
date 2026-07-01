@@ -751,6 +751,141 @@ defmodule Eden.ChatTest do
       :ok = Chat.delete_message_for_both(scope(alice), m.id)
       assert {:error, :not_found} = Chat.edit_message(scope(alice), m.id, "back")
     end
+
+    test "a system message can't be edited (kind guard, not just author)", %{
+      alice: alice,
+      conv: conv
+    } do
+      # A system row is authored by no one; force alice as the sender so ensure_sender passes
+      # and the rejection is isolated to ensure_editable's kind guard.
+      system =
+        Eden.Repo.insert!(%Message{
+          conversation_id: conv.id,
+          sender_id: alice.id,
+          kind: "system",
+          body: "",
+          meta: %{"action" => "member_added"}
+        })
+
+      assert {:error, :forbidden} = Chat.edit_message(scope(alice), system.id, "tampered")
+    end
+  end
+
+  describe "edit_message_media/5 (#164 PR-2)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    defp two_photo_album(scope, conv_id, body \\ "") do
+      Chat.create_album_message(
+        scope,
+        conv_id,
+        [%{path: real_png(), filename: "a.png"}, %{path: real_png(), filename: "b.png"}],
+        %{body: body}
+      )
+    end
+
+    test "author keeps one, drops one, adds a new one; caption + edited_at update", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, m} = two_photo_album(scope(alice), conv.id, "trip")
+      [a, b] = Enum.sort_by(m.attachments, & &1.position)
+
+      assert {:ok, edited} =
+               Chat.edit_message_media(
+                 scope(alice),
+                 m.id,
+                 [a.id],
+                 [%{path: real_png(), filename: "c.png"}],
+                 %{body: "trip 2"}
+               )
+
+      ordered = Enum.sort_by(edited.attachments, & &1.position)
+      # Order preserved: the kept photo stays first (position 0), the new one is appended (1).
+      assert Enum.map(ordered, & &1.position) == [0, 1]
+      assert hd(ordered).storage_key == a.storage_key
+      keys = Enum.map(ordered, & &1.storage_key)
+      assert length(keys) == 2
+      assert a.storage_key in keys
+      refute b.storage_key in keys
+      assert edited.body == "trip 2"
+      assert edited.edited_at
+      assert {:error, _} = Eden.Storage.read(b.storage_key)
+      assert {:ok, _} = Eden.Storage.read(a.storage_key)
+    end
+
+    test "the album can't be emptied (delete instead)", %{alice: alice, conv: conv} do
+      {:ok, m} = two_photo_album(scope(alice), conv.id)
+      assert {:error, :empty} = Chat.edit_message_media(scope(alice), m.id, [], [], %{})
+    end
+
+    test "the album can't exceed the cap", %{alice: alice, conv: conv} do
+      {:ok, m} = two_photo_album(scope(alice), conv.id)
+      [a, _b] = Enum.sort_by(m.attachments, & &1.position)
+      too_many = for i <- 1..10, do: %{path: real_png(), filename: "n#{i}.png"}
+
+      assert {:error, :too_many} =
+               Chat.edit_message_media(scope(alice), m.id, [a.id], too_many, %{})
+    end
+
+    test "a non-author can't edit media", %{alice: alice, bob: bob, conv: conv} do
+      {:ok, m} = two_photo_album(scope(alice), conv.id)
+      [a, _] = m.attachments
+      assert {:error, :forbidden} = Chat.edit_message_media(scope(bob), m.id, [a.id], [], %{})
+    end
+
+    test "a text message converts to media, keeping the text as the caption (text→media)", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "привет"})
+
+      assert {:ok, edited} =
+               Chat.edit_message_media(
+                 scope(alice),
+                 m.id,
+                 [],
+                 [%{path: real_png(), filename: "a.png"}],
+                 %{body: "привет"}
+               )
+
+      assert edited.body == "привет"
+      assert edited.edited_at
+      assert [att] = edited.attachments
+      assert att.kind == "image"
+      assert att.position == 0
+    end
+
+    test "converting text→media still can't produce an empty album", %{alice: alice, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      assert {:error, :empty} = Chat.edit_message_media(scope(alice), m.id, [], [], %{body: "hi"})
+    end
+
+    test "a dropped blob a forward still references is spared (forward-safe)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      {:ok, other} = Chat.create_conversation(scope(alice), [bob.id], group: true)
+      {:ok, m} = two_photo_album(scope(alice), conv.id)
+      [_a, b] = Enum.sort_by(m.attachments, & &1.position)
+      {:ok, _fwd} = Chat.forward_message(scope(alice), m.id, other.id)
+
+      # Drop b from the original — the forwarded copy still references its blob.
+      assert {:ok, edited} =
+               Chat.edit_message_media(
+                 scope(alice),
+                 m.id,
+                 [Enum.at(Enum.sort_by(m.attachments, & &1.position), 0).id],
+                 [],
+                 %{}
+               )
+
+      assert length(edited.attachments) == 1
+      assert {:ok, _} = Eden.Storage.read(b.storage_key)
+    end
   end
 
   describe "delete_message_for_me/2" do
