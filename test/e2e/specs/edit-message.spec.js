@@ -136,6 +136,23 @@ test("edit-media modal: removing a tile keeps the typed caption (#164)", async (
   await expect(alice.locator('#dlg-edit-media input[name="message[body]"]')).toHaveValue(cap)
 })
 
+// #164 a11y: Escape cancels an in-progress text edit (parity with the modal's Escape).
+test("Escape cancels the text-edit banner and clears the composer (#164)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await send(alice, `escape me ${Date.now()}`)
+  const bubble = alice.locator(".ed-bubble").last()
+  const menu = await openMenu(alice, bubble)
+  await menu.locator(".ed-menu__item", { hasText: "Edit" }).click()
+  await expect(alice.locator(".ed-reply-bar--edit")).toBeVisible()
+  await alice.keyboard.press("Escape")
+  await expect(alice.locator(".ed-reply-bar--edit")).toHaveCount(0)
+  await expect(alice.locator("#composer-body")).toHaveValue("")
+})
+
 // #164 text→media: editing a TEXT message and attaching media converts it into a media
 // message — the edit text seeds the caption, and the same row becomes a photo + "edited".
 test("editing a text message + attaching media converts it to a media message (#164)", async ({

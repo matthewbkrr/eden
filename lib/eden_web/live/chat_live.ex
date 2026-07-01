@@ -3212,7 +3212,13 @@ defmodule EdenWeb.ChatLive do
             <%!-- Edit tray (#164): the message being edited. data-edit-active defers the
                   send to the server (edit_message) — an edit updates an existing row, so
                   there's no optimistic node and no hidden field (the id lives in @editing). --%>
-            <div :if={@editing} class="ed-reply-bar ed-reply-bar--edit" data-edit-active>
+            <div
+              :if={@editing}
+              class="ed-reply-bar ed-reply-bar--edit"
+              data-edit-active
+              phx-window-keydown="cancel_edit"
+              phx-key="Escape"
+            >
               <span class="ed-reply-bar__accent" aria-hidden="true"></span>
               <div class="ed-reply-bar__body">
                 <span class="ed-reply-bar__name">
@@ -3338,6 +3344,7 @@ defmodule EdenWeb.ChatLive do
               :if={live_entries(@uploads.attachment) != [] and not @sending_media}
               upload={@uploads.attachment}
               form={@composer}
+              editing={@editing != nil}
             />
           </.form>
         <% else %>
@@ -3586,7 +3593,13 @@ defmodule EdenWeb.ChatLive do
           <%!-- Thread edit tray (#164): editing a thread reply. `.ed-reply-bar` makes
                 .ThreadSendQueue.onSubmit defer to the server (send_reply → edit_message),
                 so there's no optimistic node; the id lives in @thread_editing. --%>
-          <div :if={@thread_editing} class="ed-reply-bar ed-reply-bar--edit" data-edit-active>
+          <div
+            :if={@thread_editing}
+            class="ed-reply-bar ed-reply-bar--edit"
+            data-edit-active
+            phx-window-keydown="cancel_thread_edit"
+            phx-key="Escape"
+          >
             <span class="ed-reply-bar__accent" aria-hidden="true"></span>
             <div class="ed-reply-bar__body">
               <span class="ed-reply-bar__name">
@@ -7928,12 +7941,12 @@ defmodule EdenWeb.ChatLive do
 
           <%!-- The album: kept existing photos + newly-staged photos, each removable. --%>
           <div class="ed-editmedia__grid">
-            <div :for={att <- @kept} class="ed-editmedia__tile">
+            <div :for={{att, i} <- Enum.with_index(@kept, 1)} class="ed-editmedia__tile">
               <img
                 :if={att.kind == "image"}
                 src={thumb_src(att)}
                 class="ed-editmedia__img"
-                alt=""
+                alt={gettext("Photo %{n}", n: i)}
               />
               <span :if={att.kind != "image"} class="ed-editmedia__ph" aria-hidden="true">
                 <.icon name={kind_icon(att.kind)} class="size-7" />
@@ -7943,7 +7956,7 @@ defmodule EdenWeb.ChatLive do
                 class="ed-editmedia__x"
                 phx-click="edit_media_remove"
                 phx-value-att={att.id}
-                aria-label={gettext("Remove")}
+                aria-label={gettext("Remove photo %{n}", n: i)}
               >
                 <.icon name="hero-x-mark-micro" class="size-3.5" />
               </button>
@@ -7994,6 +8007,14 @@ defmodule EdenWeb.ChatLive do
           />
 
           <div class="flex items-center justify-end gap-2 pt-1">
+            <%!-- Why Save is disabled: an album can't be emptied (delete the message instead). --%>
+            <p
+              :if={@kept == [] and @upload.entries == []}
+              class="mr-auto"
+              style="font-size:0.8125rem; color: var(--ed-muted);"
+            >
+              {gettext("Keep or add at least one photo.")}
+            </p>
             <button type="button" class="ed-btn ed-btn--ghost" phx-click="close_edit_media">
               {gettext("Cancel")}
             </button>
@@ -8001,6 +8022,7 @@ defmodule EdenWeb.ChatLive do
               type="submit"
               class="ed-btn ed-btn--primary"
               disabled={@kept == [] and @upload.entries == []}
+              phx-disable-with={gettext("Saving…")}
             >
               {gettext("Save")}
             </button>
@@ -9337,6 +9359,7 @@ defmodule EdenWeb.ChatLive do
 
   attr :upload, :any, required: true
   attr :form, :any, required: true
+  attr :editing, :boolean, default: false
 
   # Attachment compose modal (#58): a Telegram-style centered overlay (media grid +
   # caption + send) opened when files are staged. The composer bar stays rendered
@@ -9383,6 +9406,13 @@ defmodule EdenWeb.ChatLive do
             <.live_file_input upload={@upload} class="sr-only" />
           </label>
         </header>
+
+        <%!-- #164 text→media: signal this send EDITS the message (photos become it), so the
+              overlay isn't mistaken for a brand-new message (the edit banner is behind us). --%>
+        <p :if={@editing} class="ed-compose__edit-hint">
+          <.icon name="hero-pencil-square-micro" class="size-3.5" />
+          {gettext("Editing this message")}
+        </p>
 
         <div class="ed-compose__body">
           <div

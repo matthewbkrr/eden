@@ -557,6 +557,11 @@ html {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0.5rem;
+    /* A full 10-photo album (11 cells) must not push Save past the viewport (#164): scroll
+       the tiles, keep the caption + actions in view. */
+    max-height: 46vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .ed-editmedia__tile,
   .ed-editmedia__add {
@@ -585,12 +590,19 @@ html {
     right: 0.25rem;
     display: grid;
     place-items: center;
-    width: 1.375rem;
-    height: 1.375rem;
+    /* 28px clears the WCAG 2.5.8 (AA) 24px tap-target floor; the ::before widens the hit
+       area further for touch (clipped to the tile, so it can't reach a neighbour). */
+    width: 1.75rem;
+    height: 1.75rem;
     border-radius: var(--ed-radius-full);
     color: #fff;
     background: color-mix(in oklab, black 52%, transparent);
     transition: background 0.16s var(--ed-ease);
+  }
+  .ed-editmedia__x::before {
+    content: "";
+    position: absolute;
+    inset: -0.5rem;
   }
   .ed-editmedia__x:hover { background: color-mix(in oklab, black 68%, transparent); }
   .ed-editmedia__add {
@@ -603,9 +615,25 @@ html {
     transition: color 0.16s var(--ed-ease), border-color 0.16s var(--ed-ease),
       background 0.16s var(--ed-ease);
   }
-  .ed-editmedia__add:hover {
+  .ed-editmedia__add:hover,
+  .ed-editmedia__add:focus-within {
     color: var(--ed-primary);
     border-color: var(--ed-primary);
+    background: color-mix(in oklab, var(--ed-primary) 8%, transparent);
+  }
+  /* The file input is sr-only, so surface keyboard focus on the tile itself. */
+  .ed-editmedia__add:focus-within {
+    box-shadow: 0 0 0 3px var(--ed-ring);
+  }
+  /* #164 text→media: the "Editing this message" hint atop the compose overlay. */
+  .ed-compose__edit-hint {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ed-primary);
     background: color-mix(in oklab, var(--ed-primary) 8%, transparent);
   }
   @media (prefers-reduced-motion: reduce) {
