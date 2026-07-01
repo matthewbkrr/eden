@@ -1503,19 +1503,21 @@ defmodule EdenWeb.ChatLive do
   # Carry-and-drop forward: "Forward" picks the message up (plaque on the composer) instead of
   # opening a target modal. The .ForwardCarry hook re-fires this on every mount with the id it
   # kept in sessionStorage, so the carry survives navigation across DMs, rooms and channels.
-  def handle_event("forward_prompt", %{"id" => id}, socket) do
-    case Chat.get_message(socket.assigns.current_scope, id) do
-      %{} = message ->
-        {:noreply,
-         socket
-         |> assign(pending_forward: message, editing: nil, reply_to: nil, thread_editing: nil)
-         |> push_event("carry_set", %{id: message.id})}
+  # "Forward" from a single message's menu — carry just that one.
+  def handle_event("forward_prompt", %{"id" => id}, socket), do: {:noreply, carry(socket, [id])}
 
-      # Gone / not visible (also clears a stale sessionStorage id on re-hydrate).
-      _ ->
-        {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
-    end
+  # "Forward" from the multi-select bar — carry the whole selection (ordered) and exit select.
+  def handle_event("forward_selection", _params, socket) do
+    ids = socket.assigns.selection |> then(&((&1 && MapSet.to_list(&1)) || []))
+    {:noreply, socket |> assign(selection: nil, sel_delete: nil) |> carry(ids)}
   end
+
+  # Re-hydrate the carry after a navigation/remount (the .ForwardCarry hook replays the ids it
+  # kept in sessionStorage). Gone/unauthorized ids drop out; an empty result clears the plaque.
+  def handle_event("forward_rehydrate", %{"ids" => ids}, socket) when is_list(ids),
+    do: {:noreply, carry(socket, ids)}
+
+  def handle_event("forward_rehydrate", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_forward", _params, socket) do
     {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
@@ -2463,10 +2465,14 @@ defmodule EdenWeb.ChatLive do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ForwardCarry">
         export default {
           mounted() {
-            // Re-hydrate: if a message is being carried, re-arm the server-side plaque.
-            const id = sessionStorage.getItem("ed:carry")
-            if (id) this.pushEvent("forward_prompt", { id })
-            this.handleEvent("carry_set", ({ id }) => sessionStorage.setItem("ed:carry", id))
+            // Re-hydrate: if messages are being carried, re-arm the server-side plaque with
+            // the ids kept across this navigation/remount.
+            let ids = []
+            try { ids = JSON.parse(sessionStorage.getItem("ed:carry") || "[]") } catch (_e) {}
+            if (ids.length) this.pushEvent("forward_rehydrate", { ids })
+            this.handleEvent("carry_set", ({ ids }) =>
+              sessionStorage.setItem("ed:carry", JSON.stringify(ids)),
+            )
             this.handleEvent("carry_clear", () => sessionStorage.removeItem("ed:carry"))
           },
         }
@@ -3236,7 +3242,7 @@ defmodule EdenWeb.ChatLive do
                   <.icon name="hero-arrow-uturn-right-micro" class="size-3.5" />
                   {gettext("Forwarding: pick a chat and send")}
                 </span>
-                <span class="ed-reply-bar__text">{reply_snippet(@pending_forward)}</span>
+                <span class="ed-reply-bar__text">{forward_plaque_label(@pending_forward)}</span>
               </div>
               <button
                 type="button"
@@ -3643,7 +3649,7 @@ defmodule EdenWeb.ChatLive do
                 <.icon name="hero-arrow-uturn-right-micro" class="size-3.5" />
                 {gettext("Forwarding: send to add it here")}
               </span>
-              <span class="ed-reply-bar__text">{reply_snippet(@pending_forward)}</span>
+              <span class="ed-reply-bar__text">{forward_plaque_label(@pending_forward)}</span>
             </div>
             <button
               type="button"
@@ -8995,6 +9001,14 @@ defmodule EdenWeb.ChatLive do
       <button
         type="button"
         class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
+        phx-click="forward_selection"
+        disabled={@count == 0}
+      >
+        <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
+      </button>
+      <button
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
         phx-hook=".CopySelection"
         id="selbar-copy"
         disabled={@count == 0}
@@ -12225,14 +12239,39 @@ defmodule EdenWeb.ChatLive do
 
   # Carry-and-drop: drop the carried message into `conversation_id` (or into a thread when
   # `root_id` is given). Clears the plaque + the client's sessionStorage on either outcome.
+  # The forward plaque body: a single carried message shows its snippet; several show a count.
+  defp forward_plaque_label([message]), do: reply_snippet(message)
+
+  defp forward_plaque_label(messages),
+    do: ngettext("%{count} message", "%{count} messages", length(messages))
+
+  # Pick up messages to carry: fetch them (scoped, visible, oldest-first) and stash on
+  # pending_forward, mirroring the ids to the client so the plaque survives navigation. An empty
+  # result clears the plaque. Carrying clears the composer's edit/reply state.
+  defp carry(socket, ids) do
+    case Chat.get_messages(socket.assigns.current_scope, ids) do
+      [] ->
+        socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})
+
+      messages ->
+        socket
+        |> assign(pending_forward: messages, editing: nil, reply_to: nil, thread_editing: nil)
+        |> push_event("carry_set", %{ids: Enum.map(messages, & &1.id)})
+    end
+  end
+
+  # Drop the carried messages into `conversation_id` (or a thread when `root_id` is given), in
+  # order. Clears the plaque + the client's sessionStorage afterwards.
   defp drop_forward(socket, conversation_id, root_id \\ nil) do
-    %{current_scope: scope, pending_forward: %{id: source_id}} = socket.assigns
+    %{current_scope: scope, pending_forward: messages} = socket.assigns
+
+    results =
+      Enum.map(messages, fn m -> Chat.forward_message(scope, m.id, conversation_id, root_id) end)
 
     flash =
-      case Chat.forward_message(scope, source_id, conversation_id, root_id) do
-        {:ok, _message} -> {:info, gettext("Forwarded.")}
-        {:error, _reason} -> {:error, gettext("Couldn't forward that message.")}
-      end
+      if Enum.all?(results, &match?({:ok, _}, &1)),
+        do: {:info, gettext("Forwarded.")},
+        else: {:error, gettext("Couldn't forward that message.")}
 
     {:noreply,
      socket

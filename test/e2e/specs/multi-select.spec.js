@@ -112,3 +112,37 @@ test("mixed selection offers only delete-for-me; removes them for me (#multisele
   await expect(alice.locator(".ed-bubble", { hasText: theirs })).toHaveCount(0)
   await expect(bob.locator(".ed-bubble", { hasText: theirs })).toBeVisible()
 })
+
+test("forward the selection: carry many from a DM, drop into a room (#multiselect)", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const f1 = `fwd-1 ${testInfo.project.name} ${Date.now()}`
+  const f2 = `fwd-2 ${testInfo.project.name} ${Date.now()}`
+  await send(alice, f1)
+  await send(alice, f2)
+
+  // Select both, then Forward from the bar → the carry plaque shows a count; select mode exits.
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: f1 }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await alice.locator(".ed-msg", { hasText: f2 }).first().locator(".ed-select-hit").click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await alice.locator(".ed-selbar button", { hasText: "Forward" }).click()
+  await expect(alice.locator(".ed-selbar")).toHaveCount(0)
+  await expect(alice.locator(".ed-reply-bar--forward")).toBeVisible()
+  await expect(alice.locator(".ed-reply-bar--forward")).toContainText("2")
+
+  // Cross to a room via the rail (remount) — the plaque survives (sessionStorage re-hydrate).
+  await alice.locator(`.ed-rail a[href*="/channels/${seed.channel_id}"]`).first().click()
+  await expect(alice).toHaveURL(new RegExp(`/channels/${seed.channel_id}`))
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await expect(alice.locator(".ed-reply-bar--forward")).toBeVisible()
+
+  // Send drops both into the room, in order.
+  await alice.locator("#composer").evaluate((form) => form.requestSubmit())
+  await expect(alice.locator("#messages .ed-flat", { hasText: f1 })).toBeVisible({ timeout: 10_000 })
+  await expect(alice.locator("#messages .ed-flat", { hasText: f2 })).toBeVisible({ timeout: 10_000 })
+  await expect(alice.locator(".ed-reply-bar--forward")).toHaveCount(0)
+})
