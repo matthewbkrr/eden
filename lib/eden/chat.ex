@@ -2488,11 +2488,27 @@ defmodule Eden.Chat do
   end
 
   @doc """
-  Multi-select delete-for-me (#multiselect): hides each of `ids` for the scoped user.
-  Best-effort — an id that's already gone/unauthorized is skipped. Always `:ok`.
+  Multi-select delete-for-me (#multiselect): hides each of `ids` for the scoped user in one
+  `insert_all` (unauthorized/already-hidden ids drop out via `get_messages`), then broadcasts a
+  hide per affected message. Always `:ok`.
   """
-  def delete_messages_for_me(%Scope{} = scope, ids) when is_list(ids) do
-    Enum.each(ids, &delete_message_for_me(scope, &1))
+  def delete_messages_for_me(%Scope{user: user} = scope, ids) when is_list(ids) do
+    messages = get_messages(scope, ids)
+    rows = Enum.map(messages, &%{message_id: &1.id, user_id: user.id, inserted_at: now()})
+
+    Repo.insert_all(MessageDeletion, rows,
+      on_conflict: :nothing,
+      conflict_target: [:message_id, :user_id]
+    )
+
+    Enum.each(messages, fn m ->
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user.id),
+        {:message_hidden, m.conversation_id, m.id}
+      )
+    end)
+
     :ok
   end
 

@@ -1571,7 +1571,8 @@ defmodule EdenWeb.ChatLive do
     do: {:noreply, assign(socket, sel_delete: nil)}
 
   def handle_event("delete_selection", %{"scope" => scope}, socket) do
-    ids = socket.assigns.selection |> MapSet.to_list()
+    # Guard a stale/forged event arriving after the selection was cleared (nil isn't a MapSet).
+    ids = (socket.assigns.selection || MapSet.new()) |> MapSet.to_list()
     user = socket.assigns.current_scope
 
     case scope do
@@ -2469,6 +2470,8 @@ defmodule EdenWeb.ChatLive do
             // the ids kept across this navigation/remount.
             let ids = []
             try { ids = JSON.parse(sessionStorage.getItem("ed:carry") || "[]") } catch (_e) {}
+            // Tolerate a malformed / legacy single-id value (JSON.parse("123") → a number).
+            if (!Array.isArray(ids)) ids = ids ? [ids] : []
             if (ids.length) this.pushEvent("forward_rehydrate", { ids })
             this.handleEvent("carry_set", ({ ids }) =>
               sessionStorage.setItem("ed:carry", JSON.stringify(ids)),
@@ -3198,7 +3201,11 @@ defmodule EdenWeb.ChatLive do
                 their own indicator in the thread panel (#103). --%>
           <.typing_row typers={@typing_users} />
 
-          <.selection_bar :if={@selection != nil} selection={@selection} />
+          <.selection_bar
+            :if={@selection != nil}
+            selection={@selection}
+            confirming={@sel_delete != nil}
+          />
 
           <.form
             for={@composer}
@@ -8940,9 +8947,10 @@ defmodule EdenWeb.ChatLive do
   end
 
   attr :selection, :any, required: true
+  attr :confirming, :boolean, default: false
 
   # The bottom action bar shown in place of the composer while selecting (Telegram-style):
-  # a count, and the actions on the selected messages (copy for now; forward/delete follow).
+  # a count + the actions on the selected messages (forward / copy / delete).
   defp selection_bar(assigns) do
     assigns = assign(assigns, :count, MapSet.size(assigns.selection))
 
@@ -8952,7 +8960,7 @@ defmodule EdenWeb.ChatLive do
       id="selbar"
       phx-hook=".SelectSync"
       data-selected={Jason.encode!(MapSet.to_list(@selection))}
-      phx-window-keydown="exit_select"
+      phx-window-keydown={not @confirming && "exit_select"}
       phx-key="Escape"
       role="toolbar"
       aria-label={gettext("Selection")}
@@ -8995,9 +9003,6 @@ defmodule EdenWeb.ChatLive do
       <span class="ed-selbar__count">
         {ngettext("%{count} selected", "%{count} selected", @count)}
       </span>
-      <%!-- Copy assembles the selected rows' text CLIENT-SIDE within the click gesture
-            (Firefox blocks navigator.clipboard.writeText after a server round-trip), then
-            pings the server to flash + exit. Disabled with nothing selected. --%>
       <button
         type="button"
         class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
@@ -9006,6 +9011,9 @@ defmodule EdenWeb.ChatLive do
       >
         <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
       </button>
+      <%!-- Copy assembles the selected rows' text CLIENT-SIDE within the click gesture
+            (Firefox blocks navigator.clipboard.writeText after a server round-trip), then
+            pings the server to flash + exit. Disabled with nothing selected. --%>
       <button
         type="button"
         class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"

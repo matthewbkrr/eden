@@ -146,3 +146,28 @@ test("forward the selection: carry many from a DM, drop into a room (#multiselec
   await expect(alice.locator("#messages .ed-flat", { hasText: f2 })).toBeVisible({ timeout: 10_000 })
   await expect(alice.locator(".ed-reply-bar--forward")).toHaveCount(0)
 })
+
+test("Escape in the delete dialog closes only the dialog, keeping the selection (#multiselect)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const a = `keep-sel-a ${Date.now()}`
+  const b = `keep-sel-b ${Date.now()}`
+  await send(alice, a)
+  await send(alice, b)
+
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: a }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await alice.locator(".ed-msg", { hasText: b }).first().locator(".ed-select-hit").click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+
+  // Open the confirm sheet, then Escape → only the dialog closes; the selection survives.
+  await alice.locator(".ed-selbar button", { hasText: "Delete" }).click()
+  await expect(alice.locator("#dlg-delete")).toBeVisible()
+  await alice.keyboard.press("Escape")
+  await expect(alice.locator("#dlg-delete")).toHaveCount(0)
+  await expect(alice.locator(".ed-selbar")).toBeVisible()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+})
