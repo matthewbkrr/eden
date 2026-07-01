@@ -83,6 +83,10 @@ defmodule EdenWeb.ChatLive do
         # is mirrored to sessionStorage by the .ForwardCarry hook, so the plaque survives
         # navigation/remount — every mount re-hydrates via forward_prompt. Send drops it here.
         pending_forward: nil,
+        # Multi-select (Telegram-style): nil = off, else a MapSet of selected message ids
+        # (may be empty while the mode stays on). Scoped to the open conversation; the bottom
+        # action bar (forward/copy/delete) replaces the composer while it's non-nil.
+        selection: nil,
         people: [],
         has_more: false,
         oldest_id: nil,
@@ -1512,6 +1516,33 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("cancel_forward", _params, socket) do
     {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
+  end
+
+  # Multi-select (Telegram-style). "Select" from the message menu enters the mode with this
+  # message picked; tapping a row toggles it; the mode ends on Close / Escape / chat switch.
+  def handle_event("enter_select", %{"id" => id}, socket) do
+    case safe_int(id) do
+      nil -> {:noreply, socket}
+      mid -> {:noreply, assign(socket, selection: MapSet.new([mid]))}
+    end
+  end
+
+  def handle_event("toggle_select", %{"id" => id}, socket) do
+    case {socket.assigns.selection, safe_int(id)} do
+      {%MapSet{} = sel, mid} when is_integer(mid) ->
+        sel = if MapSet.member?(sel, mid), do: MapSet.delete(sel, mid), else: MapSet.put(sel, mid)
+        {:noreply, assign(socket, selection: sel)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("exit_select", _params, socket), do: {:noreply, assign(socket, selection: nil)}
+
+  # The client copied the selection (assembled + written within the gesture) — confirm + exit.
+  def handle_event("selection_copied", _params, socket) do
+    {:noreply, socket |> assign(selection: nil) |> put_flash(:info, gettext("Copied."))}
   end
 
   def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
@@ -3022,7 +3053,11 @@ defmodule EdenWeb.ChatLive do
                   Intl(locale) + gettext Today/Yesterday — gettext is unreachable in the
                   hook, so they ride as data-*. --%>
             <div
-              class={["flex flex-col", (@selected.channel_id && "ed-flat-list") || "gap-2"]}
+              class={[
+                "flex flex-col",
+                (@selected.channel_id && "ed-flat-list") || "gap-2",
+                @selection != nil && "selecting"
+              ]}
               id="messages"
               phx-update="stream"
               phx-hook=".DateRail"
@@ -3119,6 +3154,8 @@ defmodule EdenWeb.ChatLive do
                 their own indicator in the thread panel (#103). --%>
           <.typing_row typers={@typing_users} />
 
+          <.selection_bar :if={@selection != nil} selection={@selection} />
+
           <.form
             for={@composer}
             id="composer"
@@ -3142,7 +3179,7 @@ defmodule EdenWeb.ChatLive do
             data-queued-label={gettext("In queue")}
             phx-submit="send"
             phx-change="composer_changed"
-            class="flex flex-col gap-2 p-3 border-t shrink-0"
+            class={["flex flex-col gap-2 p-3 border-t shrink-0", @selection != nil && "hidden"]}
             style="border-color: var(--ed-border);"
           >
             <%!-- Forward carry: the message being carried. data-forward-active defers the send
@@ -8832,6 +8869,139 @@ defmodule EdenWeb.ChatLive do
     gettext("%{names} and %{last}", names: Enum.join(leading, ", "), last: last)
   end
 
+  attr :id, :any, required: true
+
+  # Multi-select click-catcher (Telegram-style): a full-row overlay that toggles this message's
+  # selection — suppressing the normal click (lightbox, reactions, profile) — with a leading
+  # checkbox. Rendered ALWAYS but inert (pointer-events:none) until the #messages container
+  # carries `.selecting` (server-driven); the row's `--selected` wash + the check glyph are
+  # reflected onto the row by the .SelectSync hook, because phx-update="stream" rows don't
+  # re-render on a plain @selection change.
+  defp select_overlay(assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="ed-select-hit"
+      phx-click="toggle_select"
+      phx-value-id={@id}
+      data-select-id={@id}
+      aria-label={gettext("Select message")}
+    >
+      <span class="ed-select-check" aria-hidden="true">
+        <.icon name="hero-check-micro" class="size-3" />
+      </span>
+    </button>
+    """
+  end
+
+  attr :selection, :any, required: true
+
+  # The bottom action bar shown in place of the composer while selecting (Telegram-style):
+  # a count, and the actions on the selected messages (copy for now; forward/delete follow).
+  defp selection_bar(assigns) do
+    assigns = assign(assigns, :count, MapSet.size(assigns.selection))
+
+    ~H"""
+    <div
+      class="ed-selbar"
+      id="selbar"
+      phx-hook=".SelectSync"
+      data-selected={Jason.encode!(MapSet.to_list(@selection))}
+      phx-window-keydown="exit_select"
+      phx-key="Escape"
+      role="toolbar"
+      aria-label={gettext("Selection")}
+    >
+      <%!-- Reflect the server's selected set onto the stream rows: phx-update="stream" rows
+            don't re-render on a plain @selection change, so this hook toggles the row wash +
+            check to match data-selected on every change, and clears them when it unmounts. --%>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectSync">
+        export default {
+          mounted() { this.sync() },
+          updated() { this.sync() },
+          destroyed() { this.clear() },
+          sync() {
+            let ids = []
+            try { ids = JSON.parse(this.el.dataset.selected || "[]") } catch (_e) {}
+            const set = new Set(ids.map(String))
+            const mark = (sel, cls) =>
+              document.querySelectorAll("#messages " + sel).forEach((r) => {
+                const id = r.querySelector(".ed-select-hit")?.dataset.selectId
+                r.classList.toggle(cls, !!id && set.has(String(id)))
+              })
+            mark(".ed-msg", "ed-msg--selected")
+            mark(".ed-flat", "ed-flat--selected")
+          },
+          clear() {
+            document
+              .querySelectorAll("#messages .ed-msg--selected, #messages .ed-flat--selected")
+              .forEach((r) => r.classList.remove("ed-msg--selected", "ed-flat--selected"))
+          },
+        }
+      </script>
+      <button
+        type="button"
+        class="ed-btn--icon shrink-0"
+        phx-click="exit_select"
+        aria-label={gettext("Cancel selection")}
+      >
+        <.icon name="hero-x-mark-mini" class="size-5" />
+      </button>
+      <span class="ed-selbar__count">
+        {ngettext("%{count} selected", "%{count} selected", @count)}
+      </span>
+      <%!-- Copy assembles the selected rows' text CLIENT-SIDE within the click gesture
+            (Firefox blocks navigator.clipboard.writeText after a server round-trip), then
+            pings the server to flash + exit. Disabled with nothing selected. --%>
+      <button
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
+        phx-hook=".CopySelection"
+        id="selbar-copy"
+        disabled={@count == 0}
+      >
+        <.icon name="hero-clipboard-document-micro" class="size-4" /> {gettext("Copy")}
+      </button>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".CopySelection">
+        export default {
+          mounted() {
+            this.el.addEventListener("click", () => {
+              // Selected rows in chronological (document) order, both layouts.
+              const rows = document.querySelectorAll(
+                "#messages .ed-flat--selected, #messages .ed-msg--selected",
+              )
+              const parts = []
+              rows.forEach((r) => {
+                const el = r.querySelector(".ed-flat__body, .ed-bubble__cap .break-words")
+                const t = (el?.textContent || "").trim()
+                if (t) parts.push(t)
+              })
+              const text = parts.join("\n\n")
+              const done = () => this.pushEvent("selection_copied", {})
+              if (!text) return done()
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done).catch(() => this.legacy(text, done))
+              } else {
+                this.legacy(text, done)
+              }
+            })
+          },
+          legacy(text, done) {
+            const ta = document.createElement("textarea")
+            ta.value = text
+            ta.style.position = "fixed"
+            ta.style.opacity = "0"
+            document.body.appendChild(ta)
+            ta.focus()
+            ta.select()
+            try { if (document.execCommand("copy")) done() } finally { ta.remove() }
+          },
+        }
+      </script>
+    </div>
+    """
+  end
+
   attr :id, :string, required: true
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
@@ -8903,6 +9073,7 @@ defmodule EdenWeb.ChatLive do
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
+      <.select_overlay id={@message.id} />
       <div class="ed-flat__gutter">
         <button
           :if={!@message.compact && @message.sender}
@@ -9068,6 +9239,7 @@ defmodule EdenWeb.ChatLive do
       data-client-id={@mine && @message.client_id}
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
     >
+      <.select_overlay id={@message.id} />
       <%!-- Bubble + reactions stack in a column so reactions hang UNDER the bubble
             (aligned to its side), not inside it (#107). Inside the bubble their chip
             outline + count blended into the bubble fill and read as a bare emoji. --%>
@@ -9315,6 +9487,15 @@ defmodule EdenWeb.ChatLive do
         phx-value-id={@message.id}
       >
         <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
+      </button>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="enter_select"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Select")}
       </button>
       <button
         type="button"
@@ -10604,6 +10785,8 @@ defmodule EdenWeb.ChatLive do
       # An edit is bound to a specific message — drop it when the chat changes (#164).
       editing: nil,
       edit_media: nil,
+      # Multi-select is per-conversation — exit it on a chat switch.
+      selection: nil,
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
