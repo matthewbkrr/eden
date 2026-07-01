@@ -545,6 +545,12 @@ html {
     color: inherit;
     font-size: inherit;
   }
+  /* Blank-caption media: the meta rides the .ed-media-time overlay pill (near-white on a
+     photo scrim), so "edited" must inherit that colour too — not the muted default (#164). */
+  .ed-media-time .ed-edited {
+    color: inherit;
+    font-size: inherit;
+  }
   /* Edit-media modal (#164 PR-2): kept + newly-staged photos as removable square tiles,
      plus a dashed "add" tile. Lift on hover (never darken into --ed-bg). */
   .ed-editmedia__grid {

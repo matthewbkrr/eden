@@ -63,8 +63,9 @@ design — built incrementally as features land.)
     cleanup; rejects a tombstone/system message), stamping `edited_at` (no window,
     Telegram-style — the UI shows "(edited)" + time) and broadcasting `{:message_edited}`
     which restreams the row everywhere (thread vs main routed by `root_id`); a text
-    message edits inline in the composer (banner + pre-fill), a media message opens the
-    edit-media modal (removable existing tiles + an add-photos tile + the caption);
+    message edits inline in the composer (banner + pre-fill — a thread reply in the
+    thread composer, targeted so the two composers never cross-fill), a media message
+    opens the edit-media modal (removable existing tiles + an add-photos tile + the caption);
     **quote-reply** (`#71`, `reply_to_id` self-ref — distinct from
     threads' `root_id`) renders a tappable quote of the referenced message above
     the body (DMs + rooms), composed via swipe-left, the room toolbar's reply

@@ -200,6 +200,10 @@ defmodule EdenWeb.ChatLive do
         # The message currently being edited (#164), or nil — drives the composer's
         # edit banner + pre-fill and routes "send" to edit_message. `%{id, body}`.
         editing: nil,
+        # Same for a THREAD reply being edited (#164): drives the reply-composer's edit
+        # banner + pre-fill and routes "send_reply" to edit_message. A thread reply edits
+        # in the thread composer, not the main one.
+        thread_editing: nil,
         # A MEDIA message being edited (#164 PR-2), or nil — drives the edit-media
         # modal (replace the album + caption). `%{message, kept}` where `kept` is the
         # MapSet of still-kept attachment ids; new photos ride the :edit_media upload.
@@ -464,6 +468,7 @@ defmodule EdenWeb.ChatLive do
       # A staged quote-reply (#71) belonged to a room — drop it on the way out.
       reply_to: nil,
       thread_reply_to: nil,
+      thread_editing: nil,
       # Threads (#57) are a rooms feature — clear the panel + badges leaving channel mode.
       thread_root: nil,
       thread_following: false,
@@ -1609,7 +1614,7 @@ defmodule EdenWeb.ChatLive do
      socket
      |> cancel_staged_thread_attachments()
      |> clear_thread_typing()
-     |> assign(thread_root: nil, thread_reply_to: nil)
+     |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
      |> reset_thread_search()}
   end
 
@@ -1622,6 +1627,7 @@ defmodule EdenWeb.ChatLive do
        thread_list_open: true,
        thread_root: nil,
        thread_reply_to: nil,
+       thread_editing: nil,
        thread_list: Chat.list_followed_threads(scope, socket.assigns.selected.id)
      )}
   end
@@ -1709,16 +1715,38 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          assign(socket, edit_media: %{message: message, kept: initial_kept_ids(message)})}
 
+      not is_nil(message.root_id) ->
+        # A thread reply (rooms-only, #57) edits in the THREAD composer, not the main one —
+        # its banner + pre-fill live in the reply-composer (targeted push, F3).
+        {:noreply,
+         socket
+         |> assign(
+           thread_editing: %{id: message.id, body: message.body},
+           thread_reply_to: nil,
+           editing: nil
+         )
+         |> push_event("set_thread_composer_body", %{body: message.body})}
+
       true ->
         {:noreply,
          socket
-         |> assign(editing: %{id: message.id, body: message.body}, reply_to: nil, edit_media: nil)
+         |> assign(
+           editing: %{id: message.id, body: message.body},
+           reply_to: nil,
+           edit_media: nil,
+           thread_editing: nil
+         )
          |> push_event("set_composer_body", %{body: message.body})}
     end
   end
 
   def handle_event("cancel_edit", _params, socket) do
     {:noreply, socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+  end
+
+  def handle_event("cancel_thread_edit", _params, socket) do
+    {:noreply,
+     socket |> assign(thread_editing: nil) |> push_event("set_thread_composer_body", %{body: ""})}
   end
 
   # --- Edit-media modal (#164 PR-2) -------------------------------------------------
@@ -1811,6 +1839,10 @@ defmodule EdenWeb.ChatLive do
     entries = socket.assigns.uploads.thread_attachment.entries
 
     cond do
+      # #164: an active thread-reply edit routes send_reply to edit_message, not a new reply.
+      socket.assigns.thread_editing ->
+        save_thread_edit(socket, body)
+
       is_nil(root) ->
         {:noreply, socket}
 
@@ -1925,9 +1957,15 @@ defmodule EdenWeb.ChatLive do
           do: {:noreply, stream_insert(socket, :thread, message)},
           else: {:noreply, socket}
 
-      open?(socket, message.conversation_id) ->
+      # Only restream a message that's in the viewer's loaded window (compacts tracks it,
+      # like restream_root_if_loaded): a bare stream_insert of a paginated-out message would
+      # APPEND it to the bottom, out of order. It re-renders edited when scrolled into view.
+      open?(socket, message.conversation_id) and Map.has_key?(socket.assigns.compacts, message.id) ->
         message = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
         {:noreply, socket |> stream_insert(:messages, message) |> refresh_sidebar()}
+
+      open?(socket, message.conversation_id) ->
+        {:noreply, refresh_sidebar(socket)}
 
       true ->
         {:noreply, refresh_sidebar(socket)}
@@ -3525,6 +3563,27 @@ defmodule EdenWeb.ChatLive do
           class="flex flex-col gap-2 p-3 border-t shrink-0"
           style="border-color: var(--ed-border);"
         >
+          <%!-- Thread edit tray (#164): editing a thread reply. `.ed-reply-bar` makes
+                .ThreadSendQueue.onSubmit defer to the server (send_reply → edit_message),
+                so there's no optimistic node; the id lives in @thread_editing. --%>
+          <div :if={@thread_editing} class="ed-reply-bar ed-reply-bar--edit" data-edit-active>
+            <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+            <div class="ed-reply-bar__body">
+              <span class="ed-reply-bar__name">
+                <.icon name="hero-pencil-square-micro" class="size-3.5" />
+                {gettext("Editing")}
+              </span>
+              <span class="ed-reply-bar__text">{@thread_editing.body}</span>
+            </div>
+            <button
+              type="button"
+              class="ed-btn--icon shrink-0"
+              phx-click="cancel_thread_edit"
+              aria-label={gettext("Cancel edit")}
+            >
+              <.icon name="hero-x-mark-micro" class="size-4" />
+            </button>
+          </div>
           <%!-- Quote-reply within the thread (#71). --%>
           <div :if={@thread_reply_to} class="ed-reply-bar">
             <span class="ed-reply-bar__accent" aria-hidden="true"></span>
@@ -6554,6 +6613,18 @@ defmodule EdenWeb.ChatLive do
             this.connected = true
             this.sendTimers = new Map()
             this.input = this.el.querySelector('input[name="reply[body]"]')
+            // Edit (#164): the server pre-fills (start) / clears (cancel|save) the reply input
+            // directly — a targeted event (NOT the main composer's set_composer_body) so the two
+            // composers never cross-fill.
+            this.handleEvent("set_thread_composer_body", ({ body }) => {
+              if (!this.input) return
+              this.input.value = body
+              this.input.dispatchEvent(new Event("input", { bubbles: true }))
+              if (body) {
+                this.input.focus()
+                try { this.input.setSelectionRange(body.length, body.length) } catch (_e) {}
+              }
+            })
             this.pending = document.getElementById("thread-pending")
             this.onOffline = () => { for (const i of this.queue) this.armWatchdog(i.clientId, i.body) }
             window.addEventListener("offline", this.onOffline)
@@ -10563,6 +10634,7 @@ defmodule EdenWeb.ChatLive do
       # Drop any staged quote-reply (#71) — its target is the old conversation's.
       reply_to: nil,
       thread_reply_to: nil,
+      thread_editing: nil,
       # Thread following (#57) is per-room: reset the panel + seed the per-thread
       # unread badges from the DB for the room just opened.
       thread_following: false,
@@ -11042,6 +11114,8 @@ defmodule EdenWeb.ChatLive do
           # Fresh thread → clear a quote-reply staged in the previously-open one; without
           # this it would silently carry over (same conversation, so it'd validate).
           thread_reply_to: nil,
+          # Fresh thread → drop any edit staged against the previously-open thread's reply.
+          thread_editing: nil,
           # Fresh thread → no stale typers from a previously-open one (#103).
           thread_typing_users: %{},
           last_thread_typing_at: nil
@@ -11595,6 +11669,23 @@ defmodule EdenWeb.ChatLive do
         # Clear edit mode + the input ONLY on success, so a rejected edit (e.g. past the
         # 4000-char cap) keeps the banner + the typed text for the user to fix.
         {:noreply, socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
+    end
+  end
+
+  # #164: same as save_edit, for a thread reply edited in the thread composer. The
+  # {:message_edited} broadcast routes the updated reply to the :thread stream.
+  defp save_thread_edit(socket, body) do
+    %{current_scope: scope, thread_editing: %{id: id}} = socket.assigns
+
+    case Chat.edit_message(scope, id, body) do
+      {:ok, _edited} ->
+        {:noreply,
+         socket
+         |> assign(thread_editing: nil)
+         |> push_event("set_thread_composer_body", %{body: ""})}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
