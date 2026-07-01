@@ -171,3 +171,48 @@ test("Escape in the delete dialog closes only the dialog, keeping the selection 
   await expect(alice.locator(".ed-selbar")).toBeVisible()
   await expect(alice.locator(".ed-selbar__count")).toContainText("2")
 })
+
+test("deselecting the last message exits select mode; aria-pressed reflects state (#multiselect)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const m = `solo-sel ${Date.now()}`
+  await send(alice, m)
+
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: m }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  const row = alice.locator(".ed-msg", { hasText: m }).first()
+  // a11y: the selected row's overlay reports aria-pressed=true.
+  await expect(row.locator(".ed-select-hit")).toHaveAttribute("aria-pressed", "true")
+
+  // Deselect the only selection → the mode auto-exits (no dead bar).
+  await row.locator(".ed-select-hit").click()
+  await expect(alice.locator(".ed-selbar")).toHaveCount(0)
+  await expect(alice.locator("#composer")).toBeVisible()
+})
+
+test("shift-click selects the whole range (#multiselect)", async ({ alice, seed }) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const base = Date.now()
+  const texts = [0, 1, 2, 3].map((i) => `range-${i} ${base}`)
+  for (const t of texts) await send(alice, t)
+
+  // Enter select on the first, then shift-click the last → all four selected.
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: texts[0] }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+
+  await alice
+    .locator(".ed-msg", { hasText: texts[3] })
+    .first()
+    .locator(".ed-select-hit")
+    .click({ modifiers: ["Shift"] })
+
+  await expect(alice.locator(".ed-selbar__count")).toContainText("4")
+  for (const t of texts) {
+    await expect(alice.locator(".ed-msg", { hasText: t }).first()).toHaveClass(/ed-msg--selected/)
+  }
+})

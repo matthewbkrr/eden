@@ -132,6 +132,8 @@ html {
   --ed-on-primary: oklch(0.99 0.01 261);
   --ed-online: oklch(0.62 0.15 150);
   --ed-danger: oklch(0.55 0.20 25);
+  /* Danger as TEXT on a light surface — darkened to clear WCAG AA 4.5:1 (the fill red is ~4:1). */
+  --ed-danger-strong: oklch(0.48 0.20 25);
   --ed-warning: oklch(0.70 0.14 75);
   /* Presence statuses (#102): away reuses warning amber, dnd reuses danger red. */
   --ed-away: var(--ed-warning);
@@ -176,6 +178,8 @@ html {
   --ed-on-primary: oklch(0.99 0.01 261);
   --ed-online: oklch(0.72 0.15 150);
   --ed-danger: oklch(0.65 0.19 25);
+  /* Danger as TEXT on a dark surface — lightened for contrast (the reverse of the light theme). */
+  --ed-danger-strong: oklch(0.75 0.17 25);
   --ed-warning: oklch(0.78 0.14 75);
   --ed-away: var(--ed-warning);
   --ed-dnd: var(--ed-danger);
@@ -198,6 +202,7 @@ html {
     --ed-on-primary: oklch(0.99 0.01 261);
     --ed-online: oklch(0.72 0.15 150);
     --ed-danger: oklch(0.65 0.19 25);
+    --ed-danger-strong: oklch(0.75 0.17 25);
     --ed-warning: oklch(0.78 0.14 75);
     --ed-away: var(--ed-warning);
     --ed-dnd: var(--ed-danger);
@@ -2057,7 +2062,7 @@ html {
   #messages.selecting .ed-flat--selected:hover,
   .ed-msg--selected,
   #messages.selecting .ed-msg--selected:hover {
-    background: color-mix(in oklab, var(--ed-primary) 13%, transparent);
+    background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
   }
   #messages.selecting .ed-select-hit {
     display: block;
@@ -2068,6 +2073,15 @@ html {
     height: 100%;
     background: transparent;
     cursor: pointer;
+  }
+  /* Keyboard focus lands on the full-row overlay button; ring its checkbox so the focused row
+     is obvious (the overlay itself is transparent). */
+  #messages.selecting .ed-select-hit:focus-visible {
+    outline: none;
+  }
+  #messages.selecting .ed-select-hit:focus-visible .ed-select-check {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
   }
   .ed-select-check {
     position: absolute;
@@ -2107,6 +2121,18 @@ html {
     font-size: 0.9375rem;
     font-weight: 500;
     color: var(--ed-ink);
+  }
+  /* Danger-colored text (bar "Delete", the "Delete for me" ghost) uses the darkened token so it
+     clears AA on the surface; the solid danger buttons keep white-on-red. */
+  .ed-selbar__danger { color: var(--ed-danger-strong); }
+  /* Mobile: the bar's action labels collapse (markup) — keep the icon buttons a comfortable
+     tap target (≥40px) so they don't shrink to the icon glyph. */
+  @media (max-width: 640px) {
+    .ed-selbar .ed-btn {
+      min-height: 2.5rem;
+      min-width: 2.5rem;
+      justify-content: center;
+    }
   }
   .ed-flat__gutter {
     flex: none;
