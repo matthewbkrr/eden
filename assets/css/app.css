@@ -545,6 +545,66 @@ html {
     color: inherit;
     font-size: inherit;
   }
+  /* Edit-media modal (#164 PR-2): kept + newly-staged photos as removable square tiles,
+     plus a dashed "add" tile. Lift on hover (never darken into --ed-bg). */
+  .ed-editmedia__grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+  }
+  .ed-editmedia__tile,
+  .ed-editmedia__add {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: var(--ed-radius);
+    overflow: hidden;
+    background: var(--ed-surface-2);
+  }
+  .ed-editmedia__img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .ed-editmedia__ph {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    color: var(--ed-muted);
+  }
+  .ed-editmedia__x {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    display: grid;
+    place-items: center;
+    width: 1.375rem;
+    height: 1.375rem;
+    border-radius: var(--ed-radius-full);
+    color: #fff;
+    background: color-mix(in oklab, black 52%, transparent);
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-editmedia__x:hover { background: color-mix(in oklab, black 68%, transparent); }
+  .ed-editmedia__add {
+    display: grid;
+    place-items: center;
+    color: var(--ed-muted);
+    background: transparent;
+    border: 1px dashed var(--ed-border);
+    cursor: pointer;
+    transition: color 0.16s var(--ed-ease), border-color 0.16s var(--ed-ease),
+      background 0.16s var(--ed-ease);
+  }
+  .ed-editmedia__add:hover {
+    color: var(--ed-primary);
+    border-color: var(--ed-primary);
+    background: color-mix(in oklab, var(--ed-primary) 8%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-editmedia__x, .ed-editmedia__add { transition: none; }
+  }
   .ed-bubble--system {
     margin: 0 auto;
     background: var(--ed-surface-2);
