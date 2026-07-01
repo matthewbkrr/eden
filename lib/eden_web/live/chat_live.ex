@@ -79,8 +79,10 @@ defmodule EdenWeb.ChatLive do
         gallery_tab: "image",
         gallery_media: [],
         gallery_more: false,
-        forward_id: nil,
-        forward_targets: [],
+        # Carry-and-drop forward: the message being carried (preloaded source) or nil. The id
+        # is mirrored to sessionStorage by the .ForwardCarry hook, so the plaque survives
+        # navigation/remount — every mount re-hydrates via forward_prompt. Send drops it here.
+        pending_forward: nil,
         people: [],
         has_more: false,
         oldest_id: nil,
@@ -586,69 +588,13 @@ defmodule EdenWeb.ChatLive do
   def handle_event("media_client_id", _params, socket), do: {:noreply, socket}
 
   def handle_event("send", %{"message" => %{"body" => body} = msg}, socket) do
-    %{current_scope: scope, selected: conversation} = socket.assigns
-    client_id = msg["client_id"]
-    reply_to_id = msg["reply_to_id"]
+    conversation = socket.assigns.selected
 
-    # Cancelled-but-lingering ghosts (a file X'd mid-batch) are never "done?", so a
-    # naive `Enum.all?(done?)` would wedge the send forever; ignore them (#158).
-    entries = live_entries(socket.assigns.uploads.attachment)
-
-    cond do
-      # #164 text→media: an edit with staged media (all done) converts the message into a
-      # media message — must precede the plain edit branch, else the media is stranded.
-      socket.assigns.editing && all_uploads_done?(entries) ->
-        save_edit_to_media(socket, msg)
-
-      # #164: an active edit routes "send" to edit_message, not a new send.
-      socket.assigns.editing ->
-        save_edit(socket, body)
-
-      is_nil(conversation) ->
-        {:noreply, socket}
-
-      # Consume ONLY once the upload has finished — the media's native form submit
-      # fires "send" after every entry is done. A TEXT send that arrives WHILE the
-      # video is still uploading (the SendQueue hook's queued "send") would otherwise
-      # hit consume_uploaded_entries here, which RAISES on an in-progress entry and
-      # crashes the LiveView — losing the upload + its optimistic node. Such a send
-      # falls through to the text path; the upload keeps going and lands on its own
-      # later "send" when every entry is done.
-      all_uploads_done?(entries) ->
-        # The client_id AND caption rode the socket (media_sending), captured by the hook
-        # at submit — NOT the form/@composer. media_sending closes the overlay (removing
-        # #compose-caption) before the form serializes, and a composer_changed during the
-        # (slow) upload could clobber @composer[:caption], so both would be lost; carrying
-        # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
-        # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
-        # untouched for a later text send.
-        {{album_ids, caption, conv_id, file_cids, caption_id, as_file}, rest} =
-          pop_media_client_id(socket.assigns.media_client_ids)
-
-        socket = assign(socket, media_client_ids: rest)
-        # Pinned conversation: the upload may have started in a chat the user has since
-        # left (a mid-upload switch). Send it to that ORIGINAL conversation, not the
-        # current one, so leaving doesn't lose the media or leak it into the new chat.
-        # Falls back to the current conversation when no id was stashed (legacy/edge).
-        # The id-triple (per-album client_ids + per-file cids + the files-only caption node)
-        # travels as one `ids` tuple — finish_attachment already treats it as a unit — to
-        # keep send_attachment within the arity budget once `as_file` (#122) is added.
-        send_attachment(
-          socket,
-          scope,
-          conv_id || conversation.id,
-          caption,
-          reply_to_id,
-          {album_ids, file_cids, caption_id},
-          as_file
-        )
-
-      String.trim(body) == "" ->
-        {:noreply, assign(socket, composer: empty_composer())}
-
-      true ->
-        send_text(socket, scope, conversation.id, body, client_id, reply_to_id)
-    end
+    # Carry-and-drop forward: while carrying a message, Send drops it into this conversation
+    # (top-level). Handled before the normal dispatch, which stays within complexity limits.
+    if socket.assigns.pending_forward && conversation,
+      do: drop_forward(socket, conversation.id),
+      else: send_dispatch(socket, body, msg)
   end
 
   # Ignore malformed send payloads (e.g. a crafted event) instead of crashing.
@@ -1547,13 +1493,25 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # Carry-and-drop forward: "Forward" picks the message up (plaque on the composer) instead of
+  # opening a target modal. The .ForwardCarry hook re-fires this on every mount with the id it
+  # kept in sessionStorage, so the carry survives navigation across DMs, rooms and channels.
   def handle_event("forward_prompt", %{"id" => id}, socket) do
-    targets = Chat.list_conversations(socket.assigns.current_scope)
-    {:noreply, assign(socket, forward_id: id, forward_targets: targets)}
+    case Chat.get_message(socket.assigns.current_scope, id) do
+      %{} = message ->
+        {:noreply,
+         socket
+         |> assign(pending_forward: message, editing: nil, reply_to: nil, thread_editing: nil)
+         |> push_event("carry_set", %{id: message.id})}
+
+      # Gone / not visible (also clears a stale sessionStorage id on re-hydrate).
+      _ ->
+        {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
+    end
   end
 
-  def handle_event("close_forward", _params, socket) do
-    {:noreply, assign(socket, forward_id: nil)}
+  def handle_event("cancel_forward", _params, socket) do
+    {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
   end
 
   def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
@@ -1580,25 +1538,6 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("close_folders", _params, socket) do
     {:noreply, assign(socket, folder_chat_id: nil)}
-  end
-
-  def handle_event("forward", %{"target" => target_id}, socket) do
-    %{current_scope: scope, forward_id: forward_id} = socket.assigns
-
-    case Chat.forward_message(scope, forward_id, target_id) do
-      {:ok, _message} ->
-        {:noreply,
-         socket
-         |> assign(forward_id: nil)
-         |> put_flash(:info, gettext("Forwarded."))
-         |> push_patch(to: ~p"/app/c/#{target_id}")}
-
-      {:error, _reason} ->
-        {:noreply,
-         socket
-         |> assign(forward_id: nil)
-         |> put_flash(:error, gettext("Couldn't forward that message."))}
-    end
   end
 
   # Clipboard copies are done client-side; the hook reports back for feedback.
@@ -1854,38 +1793,11 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
     root = socket.assigns.thread_root
-    reply_to_id = reply["reply_to_id"]
-    client_id = reply["client_id"]
-    entries = socket.assigns.uploads.thread_attachment.entries
 
-    cond do
-      # #164 text→media: editing a thread reply + attached media converts it to media (parity
-      # with the main composer) — before the plain edit branch, else the media is stranded.
-      socket.assigns.thread_editing && all_uploads_done?(entries) ->
-        save_thread_edit_to_media(socket, body)
-
-      # #164: an active thread-reply edit routes send_reply to edit_message, not a new reply.
-      socket.assigns.thread_editing ->
-        save_thread_edit(socket, body)
-
-      is_nil(root) ->
-        {:noreply, socket}
-
-      # An album reply (#104): the attachments are the content, so an empty caption is OK.
-      # Mirror the main composer (P0): consume only once every entry is done. The thread
-      # composer submits normally (no optimistic typing during upload), so this is
-      # always true in normal use — but it stops a crafted "send_reply" sent while an
-      # attachment is still uploading from reaching consume_uploaded_entries, which
-      # raises on an in-progress entry and crashes the LiveView.
-      entries != [] and Enum.all?(entries, & &1.done?) ->
-        send_thread_album(socket, root, body, reply_to_id)
-
-      String.trim(body) == "" ->
-        {:noreply, socket}
-
-      true ->
-        send_thread_reply_text(socket, root, body, reply_to_id, client_id)
-    end
+    # Carry-and-drop forward: dropping from the thread composer forwards INTO this thread.
+    if socket.assigns.pending_forward && root,
+      do: drop_forward(socket, root.conversation_id, root.id),
+      else: send_reply_dispatch(socket, body, reply)
   end
 
   def handle_event("message_unavailable", _params, socket),
@@ -2476,6 +2388,20 @@ defmodule EdenWeb.ChatLive do
     <div class="ed-root h-screen flex overflow-hidden">
       <%!-- Auto-away (#102): reports this session idle/active to the server. --%>
       <div id="idle-tracker" phx-hook=".IdleTracker" hidden></div>
+      <%!-- Carry-and-drop forward: re-hydrates the plaque from sessionStorage on every mount,
+            so a carried message survives navigation across DMs, rooms and channels. --%>
+      <div id="forward-carry" phx-hook=".ForwardCarry" hidden></div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".ForwardCarry">
+        export default {
+          mounted() {
+            // Re-hydrate: if a message is being carried, re-arm the server-side plaque.
+            const id = sessionStorage.getItem("ed:carry")
+            if (id) this.pushEvent("forward_prompt", { id })
+            this.handleEvent("carry_set", ({ id }) => sessionStorage.setItem("ed:carry", id))
+            this.handleEvent("carry_clear", () => sessionStorage.removeItem("ed:carry"))
+          },
+        }
+      </script>
       <%!-- Notification renderer (#215 sound / #217 desktop): an always-present, invisible
             host that catches the server's gated "notify" push_event (#213) and plays a
             sound / shows an OS notification per the viewer's toggles (#214). --%>
@@ -3219,6 +3145,33 @@ defmodule EdenWeb.ChatLive do
             class="flex flex-col gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
+            <%!-- Forward carry: the message being carried. data-forward-active defers the send
+                  to the server (drop_forward) — Send drops it into THIS conversation. Survives
+                  navigation via the .ForwardCarry hook (sessionStorage). --%>
+            <div
+              :if={@pending_forward}
+              class="ed-reply-bar ed-reply-bar--forward"
+              data-forward-active
+              phx-window-keydown="cancel_forward"
+              phx-key="Escape"
+            >
+              <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+              <div class="ed-reply-bar__body">
+                <span class="ed-reply-bar__name">
+                  <.icon name="hero-arrow-uturn-right-micro" class="size-3.5" />
+                  {gettext("Forwarding: pick a chat and send")}
+                </span>
+                <span class="ed-reply-bar__text">{reply_snippet(@pending_forward)}</span>
+              </div>
+              <button
+                type="button"
+                class="ed-btn--icon shrink-0"
+                phx-click="cancel_forward"
+                aria-label={gettext("Cancel forward")}
+              >
+                <.icon name="hero-x-mark-micro" class="size-4" />
+              </button>
+            </div>
             <%!-- Edit tray (#164): the message being edited. data-edit-active defers the
                   send to the server (edit_message) — an edit updates an existing row, so
                   there's no optimistic node and no hidden field (the id lives in @editing). --%>
@@ -3600,6 +3553,32 @@ defmodule EdenWeb.ChatLive do
           class="flex flex-col gap-2 p-3 border-t shrink-0"
           style="border-color: var(--ed-border);"
         >
+          <%!-- Forward carry in a thread: dropping from here forwards INTO this thread.
+                `.ed-reply-bar` makes .ThreadSendQueue.onSubmit defer (no optimistic node). --%>
+          <div
+            :if={@pending_forward}
+            class="ed-reply-bar ed-reply-bar--forward"
+            data-forward-active
+            phx-window-keydown="cancel_forward"
+            phx-key="Escape"
+          >
+            <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+            <div class="ed-reply-bar__body">
+              <span class="ed-reply-bar__name">
+                <.icon name="hero-arrow-uturn-right-micro" class="size-3.5" />
+                {gettext("Forwarding: send to add it here")}
+              </span>
+              <span class="ed-reply-bar__text">{reply_snippet(@pending_forward)}</span>
+            </div>
+            <button
+              type="button"
+              class="ed-btn--icon shrink-0"
+              phx-click="cancel_forward"
+              aria-label={gettext("Cancel forward")}
+            >
+              <.icon name="hero-x-mark-micro" class="size-4" />
+            </button>
+          </div>
           <%!-- Thread edit tray (#164): editing a thread reply. `.ed-reply-bar` makes
                 .ThreadSendQueue.onSubmit defer to the server (send_reply → edit_message),
                 so there's no optimistic node; the id lives in @thread_editing. --%>
@@ -3790,12 +3769,6 @@ defmodule EdenWeb.ChatLive do
         user={@profile}
         status={status_of(@profile.id, @statuses)}
         self={@profile.id == @current_scope.user.id}
-      />
-      <.forward_modal
-        :if={@forward_id}
-        targets={@forward_targets}
-        user={@current_scope.user}
-        statuses={@statuses}
       />
       <.folder_modal :if={@folder_chat_id} folders={@folders} checked={@folder_checked} />
       <.channel_form_modal
@@ -5745,7 +5718,7 @@ defmodule EdenWeb.ChatLive do
             // rides along and the quote renders at the right height (no optimistic
             // node that would pop taller when the real row streams in). An edit (#164)
             // defers too — it updates an existing row, so there's no optimistic node.
-            if (this.el.querySelector("[data-reply-active], [data-edit-active]")) {
+            if (this.el.querySelector("[data-reply-active], [data-edit-active], [data-forward-active]")) {
               window.dispatchEvent(new CustomEvent("ed:after-send"))
               return
             }
@@ -9922,70 +9895,6 @@ defmodule EdenWeb.ChatLive do
     """
   end
 
-  attr :targets, :list, required: true
-  attr :user, :map, required: true
-  attr :statuses, :any, required: true
-
-  # Pick a conversation to forward the pending message into.
-  defp forward_modal(assigns) do
-    ~H"""
-    <div class="fixed inset-0 z-30">
-      <button
-        class="absolute inset-0 w-full h-full"
-        style="background: var(--ed-scrim);"
-        phx-click="close_forward"
-        aria-label={gettext("Close")}
-        tabindex="-1"
-      >
-      </button>
-      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
-        <div
-          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
-          style="background: var(--ed-surface); border-color: var(--ed-border);"
-          phx-window-keydown="close_forward"
-          phx-key="Escape"
-          role="dialog"
-          aria-modal="true"
-          aria-label={gettext("Forward to")}
-          id="dlg-forward"
-          phx-hook=".FocusTrap"
-          tabindex="-1"
-        >
-          <div class="flex items-center justify-between">
-            <h2 style="font-weight:600;">{gettext("Forward to")}</h2>
-            <button class="ed-btn--icon" phx-click="close_forward" aria-label={gettext("Close")}>
-              <.icon name="hero-x-mark-mini" class="size-5" />
-            </button>
-          </div>
-
-          <p :if={@targets == []} style="color: var(--ed-muted); font-size:0.875rem;">
-            {gettext("No conversations yet.")}
-          </p>
-          <div class="max-h-72 overflow-y-auto space-y-0.5">
-            <button
-              :for={c <- @targets}
-              type="button"
-              class="flex w-full items-center gap-3 p-2 rounded-[var(--ed-radius)] text-left transition-colors hover:bg-[var(--ed-surface-2)]"
-              phx-click="forward"
-              phx-value-target={c.id}
-            >
-              <.avatar
-                name={title(c, @user)}
-                src={conversation_avatar_src(c, @user)}
-                status={peer_status(c, @user, @statuses)}
-                size={:sm}
-              />
-              <span class="flex-1 min-w-0 truncate" style="font-weight:550; font-size:0.875rem;">
-                {title(c, @user)}
-              </span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
   attr :folders, :list, required: true
   attr :checked, :any, required: true
 
@@ -11914,6 +11823,126 @@ defmodule EdenWeb.ChatLive do
     do: gettext("An album can hold at most %{count} items.", count: Chat.max_album_entries())
 
   defp edit_media_error(_), do: gettext("Couldn't save the edit.")
+
+  defp send_dispatch(socket, body, msg) do
+    %{current_scope: scope, selected: conversation} = socket.assigns
+    client_id = msg["client_id"]
+    reply_to_id = msg["reply_to_id"]
+
+    # Cancelled-but-lingering ghosts (a file X'd mid-batch) are never "done?", so a
+    # naive `Enum.all?(done?)` would wedge the send forever; ignore them (#158).
+    entries = live_entries(socket.assigns.uploads.attachment)
+
+    cond do
+      # #164 text→media: an edit with staged media (all done) converts the message into a
+      # media message — must precede the plain edit branch, else the media is stranded.
+      socket.assigns.editing && all_uploads_done?(entries) ->
+        save_edit_to_media(socket, msg)
+
+      # #164: an active edit routes "send" to edit_message, not a new send.
+      socket.assigns.editing ->
+        save_edit(socket, body)
+
+      is_nil(conversation) ->
+        {:noreply, socket}
+
+      # Consume ONLY once the upload has finished — the media's native form submit
+      # fires "send" after every entry is done. A TEXT send that arrives WHILE the
+      # video is still uploading (the SendQueue hook's queued "send") would otherwise
+      # hit consume_uploaded_entries here, which RAISES on an in-progress entry and
+      # crashes the LiveView — losing the upload + its optimistic node. Such a send
+      # falls through to the text path; the upload keeps going and lands on its own
+      # later "send" when every entry is done.
+      all_uploads_done?(entries) ->
+        # The client_id AND caption rode the socket (media_sending), captured by the hook
+        # at submit — NOT the form/@composer. media_sending closes the overlay (removing
+        # #compose-caption) before the form serializes, and a composer_changed during the
+        # (slow) upload could clobber @composer[:caption], so both would be lost; carrying
+        # them on the push keeps them intact. Pop the oldest queued pair to stamp this send
+        # so its optimistic twin swaps out (#95). The chat input (message[body]) is left
+        # untouched for a later text send.
+        {{album_ids, caption, conv_id, file_cids, caption_id, as_file}, rest} =
+          pop_media_client_id(socket.assigns.media_client_ids)
+
+        socket = assign(socket, media_client_ids: rest)
+        # Pinned conversation: the upload may have started in a chat the user has since
+        # left (a mid-upload switch). Send it to that ORIGINAL conversation, not the
+        # current one, so leaving doesn't lose the media or leak it into the new chat.
+        # Falls back to the current conversation when no id was stashed (legacy/edge).
+        # The id-triple (per-album client_ids + per-file cids + the files-only caption node)
+        # travels as one `ids` tuple — finish_attachment already treats it as a unit — to
+        # keep send_attachment within the arity budget once `as_file` (#122) is added.
+        send_attachment(
+          socket,
+          scope,
+          conv_id || conversation.id,
+          caption,
+          reply_to_id,
+          {album_ids, file_cids, caption_id},
+          as_file
+        )
+
+      String.trim(body) == "" ->
+        {:noreply, assign(socket, composer: empty_composer())}
+
+      true ->
+        send_text(socket, scope, conversation.id, body, client_id, reply_to_id)
+    end
+  end
+
+  defp send_reply_dispatch(socket, body, reply) do
+    root = socket.assigns.thread_root
+    reply_to_id = reply["reply_to_id"]
+    client_id = reply["client_id"]
+    entries = socket.assigns.uploads.thread_attachment.entries
+
+    cond do
+      # #164 text→media: editing a thread reply + attached media converts it to media (parity
+      # with the main composer) — before the plain edit branch, else the media is stranded.
+      socket.assigns.thread_editing && all_uploads_done?(entries) ->
+        save_thread_edit_to_media(socket, body)
+
+      # #164: an active thread-reply edit routes send_reply to edit_message, not a new reply.
+      socket.assigns.thread_editing ->
+        save_thread_edit(socket, body)
+
+      is_nil(root) ->
+        {:noreply, socket}
+
+      # An album reply (#104): the attachments are the content, so an empty caption is OK.
+      # Mirror the main composer (P0): consume only once every entry is done. The thread
+      # composer submits normally (no optimistic typing during upload), so this is
+      # always true in normal use — but it stops a crafted "send_reply" sent while an
+      # attachment is still uploading from reaching consume_uploaded_entries, which
+      # raises on an in-progress entry and crashes the LiveView.
+      entries != [] and Enum.all?(entries, & &1.done?) ->
+        send_thread_album(socket, root, body, reply_to_id)
+
+      String.trim(body) == "" ->
+        {:noreply, socket}
+
+      true ->
+        send_thread_reply_text(socket, root, body, reply_to_id, client_id)
+    end
+  end
+
+  # Carry-and-drop: drop the carried message into `conversation_id` (or into a thread when
+  # `root_id` is given). Clears the plaque + the client's sessionStorage on either outcome.
+  defp drop_forward(socket, conversation_id, root_id \\ nil) do
+    %{current_scope: scope, pending_forward: %{id: source_id}} = socket.assigns
+
+    flash =
+      case Chat.forward_message(scope, source_id, conversation_id, root_id) do
+        {:ok, _message} -> {:info, gettext("Forwarded.")}
+        {:error, _reason} -> {:error, gettext("Couldn't forward that message.")}
+      end
+
+    {:noreply,
+     socket
+     |> assign(pending_forward: nil)
+     |> push_event("carry_clear", %{})
+     |> put_flash(elem(flash, 0), elem(flash, 1))}
+  end
 
   defp send_text(socket, scope, conversation_id, body, client_id, reply_to_id) do
     attrs = %{"body" => body, "client_id" => client_id, "reply_to_id" => reply_to_id}
