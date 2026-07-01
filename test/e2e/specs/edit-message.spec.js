@@ -102,6 +102,40 @@ test("an author edits a photo message via the media modal: adds a photo + captio
   await expect(bob.locator(".ed-edited").first()).toBeVisible()
 })
 
+// #164 regression: in the edit-media modal, typing a caption then removing a tile must
+// KEEP the caption (the input is server-tracked via @edit_media.caption, so the
+// edit_media_remove re-render doesn't reset it to the original body).
+test("edit-media modal: removing a tile keeps the typed caption (#164)", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  // A 2-photo album, so removing one leaves one (Save stays enabled).
+  await alice
+    .locator('#composer input[type="file"]')
+    .setInputFiles([fix("sample1.png"), fix("sample2.png")])
+  await expect(alice.locator("[data-upload-preview]")).toBeVisible()
+  await alice.locator('[data-upload-preview] button[type="submit"]').click()
+  const bubble = alice.locator("#messages .ed-bubble").last()
+  await expect(bubble.locator("img").first()).toBeVisible({ timeout: 10000 })
+
+  // Open the media modal, type a caption, then remove one tile.
+  const menu = await openMenu(alice, bubble)
+  await menu.locator(".ed-menu__item", { hasText: "Edit" }).click()
+  await expect(alice.locator("#dlg-edit-media .ed-editmedia__tile")).toHaveCount(2)
+  const cap = `keep me ${Date.now()}`
+  await alice.fill('#dlg-edit-media input[name="message[body]"]', cap)
+  await alice.locator("#dlg-edit-media .ed-editmedia__x").first().click()
+  await expect(alice.locator("#dlg-edit-media .ed-editmedia__tile")).toHaveCount(1)
+
+  // The caption survived the tile removal.
+  await expect(alice.locator('#dlg-edit-media input[name="message[body]"]')).toHaveValue(cap)
+})
+
 // #164 text→media: editing a TEXT message and attaching media converts it into a media
 // message — the edit text seeds the caption, and the same row becomes a photo + "edited".
 test("editing a text message + attaching media converts it to a media message (#164)", async ({

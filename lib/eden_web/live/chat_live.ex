@@ -1718,7 +1718,13 @@ defmodule EdenWeb.ChatLive do
 
       match?([_ | _], message.attachments) ->
         {:noreply,
-         assign(socket, edit_media: %{message: message, kept: initial_kept_ids(message)})}
+         assign(socket,
+           edit_media: %{
+             message: message,
+             kept: initial_kept_ids(message),
+             caption: message.body
+           }
+         )}
 
       not is_nil(message.root_id) ->
         # A thread reply (rooms-only, #57) edits in the THREAD composer, not the main one —
@@ -1775,10 +1781,19 @@ defmodule EdenWeb.ChatLive do
     {:noreply, cancel_upload(socket, :edit_media, ref)}
   end
 
-  # The upload form's phx-change: LiveView validates staged entries here (caps/accept). The
-  # caption rides message[body] on submit, so nothing to persist on change.
-  def handle_event("validate_edit_media", _params, socket) do
-    {:noreply, socket}
+  # The upload form's phx-change: LiveView validates staged entries here (caps/accept). Also
+  # persist the typed caption into @edit_media so it's server-tracked — otherwise removing a
+  # tile (edit_media_remove re-renders the modal) resets the caption input to the original
+  # body and the in-progress caption is lost (like #compose-caption's @form[:caption]).
+  def handle_event("validate_edit_media", params, socket) do
+    case socket.assigns.edit_media do
+      %{} = em ->
+        caption = params |> Map.get("message", %{}) |> Map.get("body", em.caption)
+        {:noreply, assign(socket, edit_media: %{em | caption: caption})}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("close_edit_media", _params, socket) do
@@ -7970,7 +7985,7 @@ defmodule EdenWeb.ChatLive do
           <input
             type="text"
             name="message[body]"
-            value={@edit_media.message.body}
+            value={@edit_media.caption}
             maxlength={Eden.Chat.Message.max_body()}
             class="ed-input w-full"
             placeholder={gettext("Add a caption…")}
