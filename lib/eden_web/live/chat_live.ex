@@ -1859,6 +1859,11 @@ defmodule EdenWeb.ChatLive do
     entries = socket.assigns.uploads.thread_attachment.entries
 
     cond do
+      # #164 text→media: editing a thread reply + attached media converts it to media (parity
+      # with the main composer) — before the plain edit branch, else the media is stranded.
+      socket.assigns.thread_editing && all_uploads_done?(entries) ->
+        save_thread_edit_to_media(socket, body)
+
       # #164: an active thread-reply edit routes send_reply to edit_message, not a new reply.
       socket.assigns.thread_editing ->
         save_thread_edit(socket, body)
@@ -1981,11 +1986,16 @@ defmodule EdenWeb.ChatLive do
       # like restream_root_if_loaded): a bare stream_insert of a paginated-out message would
       # APPEND it to the bottom, out of order. It re-renders edited when scrolled into view.
       open?(socket, message.conversation_id) and Map.has_key?(socket.assigns.compacts, message.id) ->
-        message = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
-        {:noreply, socket |> stream_insert(:messages, message) |> refresh_sidebar()}
+        streamed = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
+
+        {:noreply,
+         socket
+         |> stream_insert(:messages, streamed)
+         |> maybe_update_thread_root(message)
+         |> refresh_sidebar()}
 
       open?(socket, message.conversation_id) ->
-        {:noreply, refresh_sidebar(socket)}
+        {:noreply, socket |> maybe_update_thread_root(message) |> refresh_sidebar()}
 
       true ->
         {:noreply, refresh_sidebar(socket)}
@@ -11224,6 +11234,15 @@ defmodule EdenWeb.ChatLive do
   # Re-stream a root ONLY when it's in the loaded message window (tracked by the
   # `compacts` map). The `:messages` stream is unbounded with manual paging, so
   # inserting a paged-out root would resurrect it out of order at the stream end.
+  # #164: keep an open thread panel's root header live when the root message itself is edited
+  # (it renders from @thread_root, not the :messages stream).
+  defp maybe_update_thread_root(socket, %{id: mid} = message) do
+    case socket.assigns.thread_root do
+      %{id: ^mid} -> assign(socket, thread_root: message)
+      _ -> socket
+    end
+  end
+
   defp restream_root_if_loaded(socket, root) do
     if Map.has_key?(socket.assigns.compacts, root.id),
       do: stream_insert(socket, :messages, restore_compact(socket, root)),
@@ -11803,6 +11822,39 @@ defmodule EdenWeb.ChatLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
+    end
+  end
+
+  # #164 text→media in a thread: attaching media while editing a text reply converts it to a
+  # media reply — the reply input (its own caption) becomes the caption. Mirrors
+  # save_edit_to_media; the {:message_edited} broadcast routes the row to the :thread stream.
+  #
+  # Same false positive as send_thread_album: `path` is the LiveView upload temp, `stable` the
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp save_thread_edit_to_media(socket, caption) do
+    %{current_scope: scope, thread_editing: %{id: id}} = socket.assigns
+
+    sources =
+      consume_uploaded_entries(socket, :thread_attachment, fn %{path: path}, entry ->
+        stable = Path.join(System.tmp_dir!(), "eden-thread-edit-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
+      end)
+
+    try do
+      case Chat.edit_message_media(scope, id, [], sources, %{body: caption}) do
+        {:ok, _edited} ->
+          {:noreply,
+           socket
+           |> assign(thread_editing: nil)
+           |> push_event("set_thread_composer_body", %{body: ""})}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, edit_media_error(reason))}
+      end
+    after
+      Enum.each(sources, &File.rm(&1.path))
     end
   end
 
