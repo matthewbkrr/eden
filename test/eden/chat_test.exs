@@ -1051,6 +1051,55 @@ defmodule Eden.ChatTest do
       assert Chat.channel_unread_counts(scope(alice)) == %{}
     end
 
+    test "forwarding a message INTO a thread lands as a reply and bumps the root", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      Chat.subscribe(conv.id)
+      {:ok, source} = Chat.create_message(scope(bob), conv.id, %{"body" => "carry me"})
+
+      assert {:ok, fwd} = Chat.forward_message(scope(alice), source.id, conv.id, root.id)
+      assert fwd.root_id == root.id
+      assert fwd.body == "carry me"
+      assert fwd.forwarded_from_id == source.id
+
+      assert_receive {:thread_reply, fresh_root, ^fwd}
+      assert fresh_root.reply_count == 1
+
+      # A reply, out of the main stream.
+      {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
+      refute Enum.any?(messages, &(&1.id == fwd.id))
+    end
+
+    test "forwarding INTO a room (no root) lands top-level in that room", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      {:ok, source} = Chat.create_message(scope(bob), conv.id, %{"body" => "to the room"})
+
+      assert {:ok, fwd} = Chat.forward_message(scope(alice), source.id, conv.id)
+      assert is_nil(fwd.root_id)
+      assert fwd.forwarded_from_id == source.id
+      {:ok, messages} = Chat.list_messages(scope(alice), conv.id)
+      assert Enum.any?(messages, &(&1.id == fwd.id))
+    end
+
+    test "forwarding into a non-root (a reply) is rejected", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "a reply"})
+      {:ok, source} = Chat.create_message(scope(bob), conv.id, %{"body" => "x"})
+
+      assert {:error, :not_a_root} =
+               Chat.forward_message(scope(alice), source.id, conv.id, reply.id)
+    end
+
     test "create_album_reply attaches an album to a thread reply, delivered as a reply (#104)", %{
       alice: alice,
       bob: bob,

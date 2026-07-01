@@ -3034,13 +3034,16 @@ defmodule Eden.Chat do
   end
 
   @doc """
-  Forwards a message into another conversation the scoped user belongs to: a new
-  message copying the body and (re-referencing) the attachment, attributed to the
-  forwarder. The copied attachment points at the same blob; serving stays
-  authorized by the target conversation's membership. `{:error, :not_found |
-  :deleted}`.
+  Forwards a message into another conversation the scoped user belongs to (DM, group, or
+  room): a new message copying the body and (re-referencing) the attachments, attributed to
+  the original author. When `root_id` is given, the forward lands INSIDE that thread as a
+  reply (rooms-only, #26) — the root's counters + follow tracking update like a normal reply,
+  and the root's room is the target (its membership authorizes serving). The copied attachment
+  points at the same blob. `{:error, :not_found | :deleted | :not_a_root}`.
   """
-  def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id) do
+  def forward_message(scope, message_id, target_conversation_id, root_id \\ nil)
+
+  def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id, nil) do
     with {:ok, source} <- fetch_message(scope, message_id),
          :ok <- ensure_not_deleted(source),
          target_id when is_integer(target_id) <- safe_id(target_conversation_id),
@@ -3048,6 +3051,20 @@ defmodule Eden.Chat do
       do_forward(user, target_id, Repo.preload(source, :attachments))
     else
       :error -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  def forward_message(%Scope{user: user} = scope, message_id, _target_conversation_id, root_id) do
+    with {:ok, source} <- fetch_message(scope, message_id),
+         :ok <- ensure_not_deleted(source),
+         {:ok, root} <- fetch_message(scope, root_id),
+         :ok <- ensure_not_deleted(root),
+         :ok <- ensure_root(root),
+         :ok <- ensure_threaded(root.conversation_id) do
+      do_forward_reply(user, root, Repo.preload(source, :attachments))
+    else
+      # Every step returns a tagged {:error, _} (no safe_id guard here, unlike the /3 head).
       error -> error
     end
   end
@@ -3066,6 +3083,34 @@ defmodule Eden.Chat do
         {:ok, message}
       end
     end)
+  end
+
+  # Forward INTO a thread: insert the copy as a reply under `root`, then run the same
+  # root-bump + follow tracking + broadcast as create_reply (deliver_reply).
+  defp do_forward_reply(user, root, source) do
+    result =
+      Repo.transact(fn ->
+        with {:ok, reply} <- insert_forward_reply(user, root, source),
+             :ok <- copy_attachments(reply.id, source.attachments) do
+          {:ok, reply}
+        end
+      end)
+
+    case result do
+      {:ok, reply} -> {:ok, deliver_reply(root, reply)}
+      error -> error
+    end
+  end
+
+  defp insert_forward_reply(user, root, source) do
+    %Message{
+      conversation_id: root.conversation_id,
+      sender_id: user.id,
+      root_id: root.id,
+      forwarded_from_id: source.forwarded_from_id || source.id
+    }
+    |> Message.photo_changeset(%{"body" => source.body || ""})
+    |> Repo.insert()
   end
 
   # Fetches a message in a conversation the scoped user belongs to (authorization).

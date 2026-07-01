@@ -55,9 +55,16 @@ design — built incrementally as features land.)
     Lifecycle: **delete for me** hides it for one user (`message_deletions` join,
     filtered out of `list_messages/3`); **delete for both** (sender only)
     soft-deletes via `deleted_at`, removing the message for everyone, and cleans up
-    every attachment's unshared blobs; **forward** copies it into another
-    conversation (re-referencing the same blobs in order, `forwarded_from_id` for
-    attribution); **edit** (`#164`, author-only) revises a message's text or, for a
+    every attachment's unshared blobs; **forward** copies it into another conversation
+    (re-referencing the same blobs in order, `forwarded_from_id` for attribution) —
+    `forward_message/4` takes any conversation the user belongs to (DM, group, **or room**)
+    and, with a `root_id`, drops the copy **inside a thread** as a reply (bumping the root +
+    follow tracking, like `create_reply`). The UI is **carry-and-drop** (Mattermost-style,
+    not a target modal): "Forward" picks the message up (a plaque on the composer, `pending_forward`),
+    the `.ForwardCarry` hook mirrors the id to sessionStorage so the plaque survives navigation
+    across DMs/rooms/channels (each mount re-hydrates via `forward_prompt`), and Send drops it —
+    from the main composer into the open conversation, from the thread composer into that thread;
+    **edit** (`#164`, author-only) revises a message's text or, for a
     media message, replaces its album AND/OR caption (`edit_message` / `edit_message_media`
     — keep/drop existing attachments + append new, order preserved, forward-safe blob
     cleanup; rejects a tombstone/system message), stamping `edited_at` (no window,

@@ -1598,7 +1598,7 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ "gone"
     end
 
-    test "forward copies the message into the chosen conversation", ctx do
+    test "carry-and-drop forward copies the message into the open conversation", ctx do
       carol = user_fixture(%{username: "carolfwd"})
       {:ok, target} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
 
@@ -1608,12 +1608,14 @@ defmodule EdenWeb.ChatLiveTest do
         })
 
       conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      # Open the DESTINATION, then carry the message from the other conversation.
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{target.id}")
 
       render_click(view, "forward_prompt", %{"id" => to_string(msg.id)})
-      assert render(view) =~ "Forward to"
+      assert render(view) =~ "Forwarding"
 
-      render_click(view, "forward", %{"target" => to_string(target.id)})
+      # Send drops the carried message into the open conversation.
+      render_submit(view, "send", %{"message" => %{"body" => ""}})
 
       {:ok, [forwarded]} = Chat.list_messages(Scope.for_user(ctx.alice), target.id)
       assert forwarded.body == "share me"
