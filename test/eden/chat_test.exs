@@ -751,6 +751,24 @@ defmodule Eden.ChatTest do
       :ok = Chat.delete_message_for_both(scope(alice), m.id)
       assert {:error, :not_found} = Chat.edit_message(scope(alice), m.id, "back")
     end
+
+    test "a system message can't be edited (kind guard, not just author)", %{
+      alice: alice,
+      conv: conv
+    } do
+      # A system row is authored by no one; force alice as the sender so ensure_sender passes
+      # and the rejection is isolated to ensure_editable's kind guard.
+      system =
+        Eden.Repo.insert!(%Message{
+          conversation_id: conv.id,
+          sender_id: alice.id,
+          kind: "system",
+          body: "",
+          meta: %{"action" => "member_added"}
+        })
+
+      assert {:error, :forbidden} = Chat.edit_message(scope(alice), system.id, "tampered")
+    end
   end
 
   describe "edit_message_media/5 (#164 PR-2)" do
@@ -784,7 +802,11 @@ defmodule Eden.ChatTest do
                  %{body: "trip 2"}
                )
 
-      keys = edited.attachments |> Enum.sort_by(& &1.position) |> Enum.map(& &1.storage_key)
+      ordered = Enum.sort_by(edited.attachments, & &1.position)
+      # Order preserved: the kept photo stays first (position 0), the new one is appended (1).
+      assert Enum.map(ordered, & &1.position) == [0, 1]
+      assert hd(ordered).storage_key == a.storage_key
+      keys = Enum.map(ordered, & &1.storage_key)
       assert length(keys) == 2
       assert a.storage_key in keys
       refute b.storage_key in keys

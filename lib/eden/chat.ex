@@ -2374,9 +2374,8 @@ defmodule Eden.Chat do
          {:ok, prepared} <- prepare_album(new_sources) do
       apply_media_edit(message, kept, prepared, opts)
     else
-      false -> {:error, :not_found}
-      nil -> {:error, :not_found}
-      :error -> {:error, :not_found}
+      # Every failing step (fetch_message, ensure_*, prepare_album) returns a tagged
+      # {:error, _} — the bare-value clauses were unreachable.
       {:error, _} = error -> error
     end
   end
