@@ -2490,7 +2490,7 @@ defmodule Eden.Chat do
   @doc """
   Multi-select delete-for-me (#multiselect): hides each of `ids` for the scoped user in one
   `insert_all` (unauthorized/already-hidden ids drop out via `get_messages`), then broadcasts a
-  hide per affected message. Always `:ok`.
+  hide per affected message. Returns the number hidden.
   """
   def delete_messages_for_me(%Scope{user: user} = scope, ids) when is_list(ids) do
     messages = get_messages(scope, ids)
@@ -2509,18 +2509,17 @@ defmodule Eden.Chat do
       )
     end)
 
-    :ok
+    length(messages)
   end
 
   @doc """
   Multi-select delete-for-everyone (#multiselect): soft-deletes each of `ids`. Each call
   re-checks authorship (sender only) and refuses a root with replies, so a non-owned or
-  undeletable id is simply skipped — the "for everyone" option is offered in the UI only when
-  every selected message is the user's own. Always `:ok`.
+  undeletable id is skipped — the UI only offers "for everyone" when every selected message is
+  the user's own AND none is a root with replies. Returns the number actually deleted.
   """
   def delete_messages_for_both(%Scope{} = scope, ids) when is_list(ids) do
-    Enum.each(ids, &delete_message_for_both(scope, &1))
-    :ok
+    Enum.count(ids, &(delete_message_for_both(scope, &1) == :ok))
   end
 
   defp ensure_no_replies(%Message{reply_count: count}) when count > 0,

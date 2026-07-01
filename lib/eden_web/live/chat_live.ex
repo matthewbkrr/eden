@@ -1576,8 +1576,14 @@ defmodule EdenWeb.ChatLive do
       %MapSet{} = sel ->
         me = socket.assigns.current_scope.user.id
         messages = Chat.get_messages(socket.assigns.current_scope, MapSet.to_list(sel))
-        all_mine = messages != [] and Enum.all?(messages, &(&1.sender_id == me))
-        {:noreply, assign(socket, sel_delete: %{count: MapSet.size(sel), all_mine: all_mine})}
+        # "Delete for everyone" is available only when every selected message is the user's own
+        # AND none is a root with replies (delete_message_for_both refuses those) — so the
+        # option we offer never silently skips a message.
+        for_all =
+          messages != [] and
+            Enum.all?(messages, &(&1.sender_id == me and not root_with_replies?(&1)))
+
+        {:noreply, assign(socket, sel_delete: %{count: MapSet.size(sel), for_all: for_all})}
 
       _ ->
         {:noreply, socket}
@@ -1592,15 +1598,22 @@ defmodule EdenWeb.ChatLive do
     ids = (socket.assigns.selection || MapSet.new()) |> MapSet.to_list()
     user = socket.assigns.current_scope
 
-    case scope do
-      "both" -> Chat.delete_messages_for_both(user, ids)
-      _ -> Chat.delete_messages_for_me(user, ids)
-    end
+    deleted =
+      case scope do
+        "both" -> Chat.delete_messages_for_both(user, ids)
+        _ -> Chat.delete_messages_for_me(user, ids)
+      end
 
-    {:noreply,
-     socket
-     |> assign(selection: nil, sel_delete: nil)
-     |> put_flash(:info, gettext("Deleted."))}
+    socket = assign(socket, selection: nil, sel_delete: nil)
+
+    # Honest feedback: the bulk delete is best-effort (a vanished/undeletable id is skipped), so
+    # only claim "Deleted." when something actually was.
+    socket =
+      if deleted > 0,
+        do: put_flash(socket, :info, gettext("Deleted.")),
+        else: put_flash(socket, :error, gettext("Those messages couldn't be deleted."))
+
+    {:noreply, socket}
   end
 
   def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
@@ -8943,10 +8956,10 @@ defmodule EdenWeb.ChatLive do
 
   # Multi-select click-catcher (Telegram-style): a full-row overlay that toggles this message's
   # selection — suppressing the normal click (lightbox, reactions, profile) — with a leading
-  # checkbox. Rendered ALWAYS but inert (pointer-events:none) until the #messages container
-  # carries `.selecting` (server-driven); the row's `--selected` wash + the check glyph + the
-  # button's aria-pressed are reflected onto the row by the .SelectSync hook, because
-  # phx-update="stream" rows don't re-render on a plain @selection change.
+  # checkbox. Rendered ALWAYS but hidden (`display:none`) until the #messages container carries
+  # `.selecting` (server-driven), which flips it to `display:block`; the row's `--selected` wash
+  # + the check glyph + the button's aria-pressed are reflected onto the row by the .SelectSync
+  # hook, because phx-update="stream" rows don't re-render on a plain @selection change.
   defp select_overlay(assigns) do
     ~H"""
     <button
@@ -9176,7 +9189,7 @@ defmodule EdenWeb.ChatLive do
           </h2>
           <div class="flex flex-col gap-2">
             <button
-              :if={@sel_delete.all_mine}
+              :if={@sel_delete.for_all}
               type="button"
               class="ed-btn ed-btn--danger w-full"
               phx-click="delete_selection"
@@ -9186,8 +9199,8 @@ defmodule EdenWeb.ChatLive do
             </button>
             <button
               type="button"
-              class={["ed-btn w-full", (@sel_delete.all_mine && "ed-btn--ghost") || "ed-btn--danger"]}
-              style={@sel_delete.all_mine && "color: var(--ed-danger-strong);"}
+              class={["ed-btn w-full", (@sel_delete.for_all && "ed-btn--ghost") || "ed-btn--danger"]}
+              style={@sel_delete.for_all && "color: var(--ed-danger-strong);"}
               phx-click="delete_selection"
               phx-value-scope="me"
             >
@@ -12066,6 +12079,11 @@ defmodule EdenWeb.ChatLive do
 
   # Staged uploads are ready to consume: at least one entry, and every one finished. A
   # consume on an in-progress entry raises, so this gates every consume_uploaded_entries path.
+  # A thread root that still has replies — delete_message_for_both refuses it, so the delete
+  # dialog gates "for everyone" off when any selected message is one (#multiselect).
+  defp root_with_replies?(%{root_id: nil, reply_count: n}) when is_integer(n) and n > 0, do: true
+  defp root_with_replies?(_), do: false
+
   defp all_uploads_done?([]), do: false
   defp all_uploads_done?(entries), do: Enum.all?(entries, & &1.done?)
 

@@ -960,7 +960,7 @@ defmodule Eden.ChatTest do
       a1: a1,
       b1: b1
     } do
-      assert :ok = Chat.delete_messages_for_me(scope(bob), [a1.id, b1.id])
+      assert 2 = Chat.delete_messages_for_me(scope(bob), [a1.id, b1.id])
 
       {:ok, for_bob} = Chat.list_messages(scope(bob), conv.id)
       refute Enum.any?(for_bob, &(&1.id in [a1.id, b1.id]))
@@ -978,7 +978,8 @@ defmodule Eden.ChatTest do
       b1: b1,
       a2: a2
     } do
-      assert :ok = Chat.delete_messages_for_both(scope(alice), [a1.id, b1.id, a2.id])
+      # 2 deleted (alice's a1, a2); bob's b1 skipped (she isn't its author).
+      assert 2 = Chat.delete_messages_for_both(scope(alice), [a1.id, b1.id, a2.id])
 
       {:ok, msgs} = Chat.list_messages(scope(alice), conv.id)
       ids = Enum.map(msgs, & &1.id)
@@ -1159,6 +1160,18 @@ defmodule Eden.ChatTest do
 
       assert {:error, :not_a_root} =
                Chat.forward_message(scope(alice), source.id, conv.id, reply.id)
+    end
+
+    test "bulk delete-for-everyone skips a root that has replies (#multiselect)", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, _reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "keeps the root alive"})
+
+      # alice authored the root, but it has a reply → delete_message_for_both refuses it, so the
+      # bulk count is 0 (nothing deleted). The UI gates "for everyone" off for exactly this.
+      assert 0 = Chat.delete_messages_for_both(scope(alice), [root.id])
     end
 
     test "create_album_reply attaches an album to a thread reply, delivered as a reply (#104)", %{
