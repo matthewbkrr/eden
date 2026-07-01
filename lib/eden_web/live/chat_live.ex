@@ -87,6 +87,9 @@ defmodule EdenWeb.ChatLive do
         # (may be empty while the mode stays on). Scoped to the open conversation; the bottom
         # action bar (forward/copy/delete) replaces the composer while it's non-nil.
         selection: nil,
+        # The delete-selection confirm sheet: nil, or %{count, all_mine} (whether every selected
+        # message is the user's own, which gates the "delete for everyone" option).
+        sel_delete: nil,
         people: [],
         has_more: false,
         oldest_id: nil,
@@ -1538,11 +1541,46 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  def handle_event("exit_select", _params, socket), do: {:noreply, assign(socket, selection: nil)}
+  def handle_event("exit_select", _params, socket),
+    do: {:noreply, assign(socket, selection: nil, sel_delete: nil)}
 
   # The client copied the selection (assembled + written within the gesture) — confirm + exit.
   def handle_event("selection_copied", _params, socket) do
-    {:noreply, socket |> assign(selection: nil) |> put_flash(:info, gettext("Copied."))}
+    {:noreply,
+     socket |> assign(selection: nil, sel_delete: nil) |> put_flash(:info, gettext("Copied."))}
+  end
+
+  # Delete the selection: open a confirm sheet. "Delete for everyone" is offered only when every
+  # selected message is the user's own (the context re-checks per message regardless).
+  def handle_event("delete_prompt", _params, socket) do
+    case socket.assigns.selection do
+      %MapSet{} = sel ->
+        me = socket.assigns.current_scope.user.id
+        messages = Chat.get_messages(socket.assigns.current_scope, MapSet.to_list(sel))
+        all_mine = messages != [] and Enum.all?(messages, &(&1.sender_id == me))
+        {:noreply, assign(socket, sel_delete: %{count: MapSet.size(sel), all_mine: all_mine})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_delete", _params, socket),
+    do: {:noreply, assign(socket, sel_delete: nil)}
+
+  def handle_event("delete_selection", %{"scope" => scope}, socket) do
+    ids = socket.assigns.selection |> MapSet.to_list()
+    user = socket.assigns.current_scope
+
+    case scope do
+      "both" -> Chat.delete_messages_for_both(user, ids)
+      _ -> Chat.delete_messages_for_me(user, ids)
+    end
+
+    {:noreply,
+     socket
+     |> assign(selection: nil, sel_delete: nil)
+     |> put_flash(:info, gettext("Deleted."))}
   end
 
   def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
@@ -3859,6 +3897,7 @@ defmodule EdenWeb.ChatLive do
       />
       <.invites_modal :if={@invites_open && @channel} invites={@invites} new_url={@new_invite_url} />
       <.edit_media_modal :if={@edit_media} edit_media={@edit_media} upload={@uploads.edit_media} />
+      <.delete_confirm :if={@sel_delete} sel_delete={@sel_delete} />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyUrl">
         // Copies data-url to the clipboard and briefly flips the label to
@@ -8962,6 +9001,15 @@ defmodule EdenWeb.ChatLive do
       >
         <.icon name="hero-clipboard-document-micro" class="size-4" /> {gettext("Copy")}
       </button>
+      <button
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
+        style="color: var(--ed-danger);"
+        phx-click="delete_prompt"
+        disabled={@count == 0}
+      >
+        <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete")}
+      </button>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".CopySelection">
         export default {
           mounted() {
@@ -8998,6 +9046,71 @@ defmodule EdenWeb.ChatLive do
           },
         }
       </script>
+    </div>
+    """
+  end
+
+  attr :sel_delete, :map, required: true
+
+  # Confirm sheet for deleting the selection. "Delete for everyone" is offered only when every
+  # selected message is the user's own (all_mine); otherwise just "Delete for me". The context
+  # re-checks authorship per message regardless of what the UI offers.
+  defp delete_confirm(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30" id="delete-confirm">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: var(--ed-scrim);"
+        phx-click="cancel_delete"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="cancel_delete"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+          aria-label={gettext("Delete messages")}
+          id="dlg-delete"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
+        >
+          <h2 style="font-weight:600;">
+            {ngettext(
+              "Delete %{count} message?",
+              "Delete %{count} messages?",
+              @sel_delete.count
+            )}
+          </h2>
+          <div class="flex flex-col gap-2">
+            <button
+              :if={@sel_delete.all_mine}
+              type="button"
+              class="ed-btn ed-btn--danger w-full"
+              phx-click="delete_selection"
+              phx-value-scope="both"
+            >
+              {gettext("Delete for everyone")}
+            </button>
+            <button
+              type="button"
+              class={["ed-btn w-full", (@sel_delete.all_mine && "ed-btn--ghost") || "ed-btn--danger"]}
+              style={@sel_delete.all_mine && "color: var(--ed-danger);"}
+              phx-click="delete_selection"
+              phx-value-scope="me"
+            >
+              {gettext("Delete for me")}
+            </button>
+            <button type="button" class="ed-btn ed-btn--ghost w-full" phx-click="cancel_delete">
+              {gettext("Cancel")}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
     """
   end
@@ -10787,6 +10900,7 @@ defmodule EdenWeb.ChatLive do
       edit_media: nil,
       # Multi-select is per-conversation — exit it on a chat switch.
       selection: nil,
+      sel_delete: nil,
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,

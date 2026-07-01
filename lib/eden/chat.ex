@@ -1902,6 +1902,26 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Fetches the given messages the scoped user can see (membership-scoped, not tombstoned, not
+  hidden-for-me), ordered oldest-first — for multi-select actions (copy/forward/delete). Unknown
+  or unauthorized ids are simply absent from the result. `sender`/`attachments` preloaded.
+  """
+  def get_messages(%Scope{user: user}, ids) when is_list(ids) do
+    ids = ids |> Enum.map(&safe_id/1) |> Enum.filter(&is_integer/1)
+
+    from(m in Message,
+      join: mem in Membership,
+      on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: m.id in ^ids and is_nil(m.deleted_at) and is_nil(d.id),
+      order_by: [asc: m.id],
+      preload: [:sender, :attachments]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Posts a message carrying one attachment — a thin wrapper over
   `create_album_message/4` for a single source (kept for callers/tests that send
   one file). `source` is a map with `:path` and optional `:filename`, `:body`,
@@ -2465,6 +2485,26 @@ defmodule Eden.Chat do
       notify_members(message.conversation_id)
       :ok
     end
+  end
+
+  @doc """
+  Multi-select delete-for-me (#multiselect): hides each of `ids` for the scoped user.
+  Best-effort — an id that's already gone/unauthorized is skipped. Always `:ok`.
+  """
+  def delete_messages_for_me(%Scope{} = scope, ids) when is_list(ids) do
+    Enum.each(ids, &delete_message_for_me(scope, &1))
+    :ok
+  end
+
+  @doc """
+  Multi-select delete-for-everyone (#multiselect): soft-deletes each of `ids`. Each call
+  re-checks authorship (sender only) and refuses a root with replies, so a non-owned or
+  undeletable id is simply skipped — the "for everyone" option is offered in the UI only when
+  every selected message is the user's own. Always `:ok`.
+  """
+  def delete_messages_for_both(%Scope{} = scope, ids) when is_list(ids) do
+    Enum.each(ids, &delete_message_for_both(scope, &1))
+    :ok
   end
 
   defp ensure_no_replies(%Message{reply_count: count}) when count > 0,
