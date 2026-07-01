@@ -71,10 +71,6 @@ defmodule Eden.Chat.Message do
   def deleted?(%__MODULE__{deleted_at: nil}), do: false
   def deleted?(%__MODULE__{}), do: true
 
-  @doc "Whether the message has been edited (#164)."
-  def edited?(%__MODULE__{edited_at: nil}), do: false
-  def edited?(%__MODULE__{}), do: true
-
   @doc "Changeset for a text message: a non-blank body is required."
   def changeset(message, attrs) do
     message

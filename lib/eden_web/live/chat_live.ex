@@ -1850,13 +1850,22 @@ defmodule EdenWeb.ChatLive do
   end
 
   # #164: a message's text/caption was edited — update the row in place (same dom id, no
-  # reorder), preserving its flat-run `compact` flag, and refresh the sidebar preview.
+  # reorder) and refresh the sidebar preview. A thread reply (rooms-only, #57) lives in the
+  # :thread stream, NOT the main one — route it there so an edited reply doesn't leak into
+  # the main chat (and updates where it actually renders).
   def handle_info({:message_edited, message}, socket) do
-    if open?(socket, message.conversation_id) do
-      message = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
-      {:noreply, socket |> stream_insert(:messages, message) |> refresh_sidebar()}
-    else
-      {:noreply, refresh_sidebar(socket)}
+    cond do
+      not is_nil(message.root_id) ->
+        if thread_open_for?(socket, message.root_id),
+          do: {:noreply, stream_insert(socket, :thread, message)},
+          else: {:noreply, socket}
+
+      open?(socket, message.conversation_id) ->
+        message = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
+        {:noreply, socket |> stream_insert(:messages, message) |> refresh_sidebar()}
+
+      true ->
+        {:noreply, refresh_sidebar(socket)}
     end
   end
 
@@ -11373,11 +11382,15 @@ defmodule EdenWeb.ChatLive do
   # forbidden/missing message surfaces a flash.
   defp save_edit(socket, body) do
     %{current_scope: scope, editing: %{id: id}} = socket.assigns
-    socket = socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})
 
     case Chat.edit_message(scope, id, body) do
-      {:ok, _edited} -> {:noreply, socket}
-      {:error, _} -> {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
+      {:ok, _edited} ->
+        # Clear edit mode + the input ONLY on success, so a rejected edit (e.g. past the
+        # 4000-char cap) keeps the banner + the typed text for the user to fix.
+        {:noreply, socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
     end
   end
 
