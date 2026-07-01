@@ -2306,6 +2306,45 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Edits the author's own message text/caption (#164) — author only (mirrors
+  `delete_message_for_both/2`). No edit window (Telegram-style). A deleted (tombstone)
+  or system message can't be edited; a text-only message can't be blanked (delete it
+  instead), but a media caption may. Stamps `edited_at` and broadcasts
+  `{:message_edited, message}`. A no-op (unchanged body) returns `{:ok, message}` and
+  doesn't mark it edited. `{:error, :not_found | :forbidden | %Ecto.Changeset{}}`.
+  """
+  def edit_message(%Scope{user: user} = scope, message_id, body) do
+    with {:ok, message} <- fetch_message(scope, message_id),
+         :ok <- ensure_sender(message, user.id),
+         :ok <- ensure_editable(message) do
+      message = Repo.preload(message, :attachments)
+      changeset = Message.edit_changeset(message, %{body: body})
+
+      cond do
+        not changeset.valid? ->
+          {:error, changeset}
+
+        not Map.has_key?(changeset.changes, :body) ->
+          # Unchanged — don't stamp "edited" or broadcast for an empty edit.
+          {:ok, Repo.preload(message, @message_preloads)}
+
+        true ->
+          {:ok, edited} =
+            changeset |> Ecto.Changeset.put_change(:edited_at, now()) |> Repo.update()
+
+          edited = Repo.preload(edited, @message_preloads)
+          broadcast(message.conversation_id, {:message_edited, edited})
+          {:ok, edited}
+      end
+    end
+  end
+
+  # A tombstone has no body to edit; a system message is context-authored, not the user's.
+  defp ensure_editable(%Message{deleted_at: dt}) when not is_nil(dt), do: {:error, :not_found}
+  defp ensure_editable(%Message{kind: "system"}), do: {:error, :forbidden}
+  defp ensure_editable(%Message{}), do: :ok
+
+  @doc """
   Deletes a message for everyone ("delete for both") — sender only. Soft-deletes
   the row (tombstone: `deleted_at` set, body cleared, attachment removed),
   deletes the attachment's blobs unless another attachment still references them

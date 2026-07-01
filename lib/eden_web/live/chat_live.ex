@@ -197,6 +197,9 @@ defmodule EdenWeb.ChatLive do
         # same for the thread panel's own composer (a quote within the thread).
         reply_to: nil,
         thread_reply_to: nil,
+        # The message currently being edited (#164), or nil — drives the composer's
+        # edit banner + pre-fill and routes "send" to edit_message. `%{id, body}`.
+        editing: nil,
         # Knock window (#41): a private room you're not in, reached by link.
         knock_room: nil,
         knock_pending: false,
@@ -574,6 +577,10 @@ defmodule EdenWeb.ChatLive do
     entries = live_entries(socket.assigns.uploads.attachment)
 
     cond do
+      # #164: an active edit routes "send" to edit_message, not a new send.
+      socket.assigns.editing ->
+        save_edit(socket, body)
+
       is_nil(conversation) ->
         {:noreply, socket}
 
@@ -1670,6 +1677,20 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("cancel_reply", _params, socket), do: {:noreply, assign(socket, reply_to: nil)}
 
+  # #164: enter edit mode — pre-fill the chat input with the message's current body and
+  # show the edit banner. The menu only offers this for your own non-system messages;
+  # edit_message re-checks on save. A staged reply is dropped (you're editing, not replying).
+  def handle_event("start_edit", %{"id" => id, "body" => body}, socket) do
+    {:noreply,
+     socket
+     |> assign(editing: %{id: id, body: body}, reply_to: nil)
+     |> push_event("set_composer_body", %{body: body})}
+  end
+
+  def handle_event("cancel_edit", _params, socket) do
+    {:noreply, socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+  end
+
   # Quote-reply from inside the thread panel: stages the target in the THREAD
   # composer, so the reply posts into the thread (not the room).
   def handle_event("reply_in_thread", %{"id" => id}, socket) do
@@ -1826,6 +1847,26 @@ defmodule EdenWeb.ChatLive do
      |> stream_insert(:messages, message)
      # #136: keep an open profile gallery live — surface the message's matching-kind media.
      |> maybe_prepend_gallery(message)}
+  end
+
+  # #164: a message's text/caption was edited — update the row in place (same dom id, no
+  # reorder) and refresh the sidebar preview. A thread reply (rooms-only, #57) lives in the
+  # :thread stream, NOT the main one — route it there so an edited reply doesn't leak into
+  # the main chat (and updates where it actually renders).
+  def handle_info({:message_edited, message}, socket) do
+    cond do
+      not is_nil(message.root_id) ->
+        if thread_open_for?(socket, message.root_id),
+          do: {:noreply, stream_insert(socket, :thread, message)},
+          else: {:noreply, socket}
+
+      open?(socket, message.conversation_id) ->
+        message = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
+        {:noreply, socket |> stream_insert(:messages, message) |> refresh_sidebar()}
+
+      true ->
+        {:noreply, refresh_sidebar(socket)}
+    end
   end
 
   # A reply landed in a thread of the open conversation: refresh the root's
@@ -3045,6 +3086,27 @@ defmodule EdenWeb.ChatLive do
             class="flex flex-col gap-2 p-3 border-t shrink-0"
             style="border-color: var(--ed-border);"
           >
+            <%!-- Edit tray (#164): the message being edited. data-edit-active defers the
+                  send to the server (edit_message) — an edit updates an existing row, so
+                  there's no optimistic node and no hidden field (the id lives in @editing). --%>
+            <div :if={@editing} class="ed-reply-bar ed-reply-bar--edit" data-edit-active>
+              <span class="ed-reply-bar__accent" aria-hidden="true"></span>
+              <div class="ed-reply-bar__body">
+                <span class="ed-reply-bar__name">
+                  <.icon name="hero-pencil-square-micro" class="size-3.5" />
+                  {gettext("Editing")}
+                </span>
+                <span class="ed-reply-bar__text">{@editing.body}</span>
+              </div>
+              <button
+                type="button"
+                class="ed-btn--icon shrink-0"
+                phx-click="cancel_edit"
+                aria-label={gettext("Cancel edit")}
+              >
+                <.icon name="hero-x-mark-micro" class="size-4" />
+              </button>
+            </div>
             <%!-- Quote-reply tray (#71): shows the message being replied to. The
                   hidden input rides the send (form + hook paths); data-reply-active
                   tells the SendQueue hook to defer to the server (no optimistic). --%>
@@ -5161,6 +5223,18 @@ defmodule EdenWeb.ChatLive do
           mounted() {
             this.connected = true
             this.convId = this.el.dataset.conversationId
+            // Edit (#164): the server pre-fills (start) / clears (cancel|save) the chat input
+            // directly — setting value= via render fights LiveView's controlled input.
+            this.handleEvent("set_composer_body", ({ body }) => {
+              const input = this.el.querySelector('input[name="message[body]"]')
+              if (!input) return
+              input.value = body
+              input.dispatchEvent(new Event("input", { bubbles: true }))
+              if (body) {
+                input.focus()
+                try { input.setSelectionRange(body.length, body.length) } catch (_e) {}
+              }
+            })
             this.queue = []
             // Upload queue (#119): File batches picked WHILE a media send is uploading.
             // They can't enter the shared :attachment config (would merge into the in-flight
@@ -5475,8 +5549,9 @@ defmodule EdenWeb.ChatLive do
             }
             // A quote-reply (#71) also defers to the server path so the reply_to_id
             // rides along and the quote renders at the right height (no optimistic
-            // node that would pop taller when the real row streams in).
-            if (this.el.querySelector("[data-reply-active]")) {
+            // node that would pop taller when the real row streams in). An edit (#164)
+            // defers too — it updates an existing row, so there's no optimistic node.
+            if (this.el.querySelector("[data-reply-active], [data-edit-active]")) {
               window.dispatchEvent(new CustomEvent("ed:after-send"))
               return
             }
@@ -8533,6 +8608,7 @@ defmodule EdenWeb.ChatLive do
             {@message.sender.display_name}
           </button>
           <span :if={!@message.sender} class="ed-flat__name">{gettext("Deleted account")}</span>
+          <span :if={@message.edited_at} class="ed-edited">{gettext("edited")}</span>
           <span class="ed-flat__time"><.local_time at={@message.inserted_at} /></span>
         </div>
         <.quoted_reply message={@message} />
@@ -8709,13 +8785,23 @@ defmodule EdenWeb.ChatLive do
               <%!-- Time overlays the photo only when there's NO caption; with a caption it
                     rides in the caption line below (Telegram-style). --%>
               <span :if={@message.body == ""} class="ed-media-time">
-                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+                <.msg_meta
+                  at={@message.inserted_at}
+                  ticks={@mine and not @group}
+                  read={@read}
+                  edited={not is_nil(@message.edited_at)}
+                />
               </span>
             </div>
             <div :if={@message.body != ""} class="ed-bubble__cap ed-bubble__cap--media">
               <span class="break-words">{Markup.to_iodata(@message.body)}</span>
               <span class="ed-bubble__meta">
-                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+                <.msg_meta
+                  at={@message.inserted_at}
+                  ticks={@mine and not @group}
+                  read={@read}
+                  edited={not is_nil(@message.edited_at)}
+                />
               </span>
             </div>
           <% else %>
@@ -8745,7 +8831,12 @@ defmodule EdenWeb.ChatLive do
                 {Markup.to_iodata(@message.body)}
               </span>
               <span class="ed-bubble__meta">
-                <.msg_meta at={@message.inserted_at} ticks={@mine and not @group} read={@read} />
+                <.msg_meta
+                  at={@message.inserted_at}
+                  ticks={@mine and not @group}
+                  read={@read}
+                  edited={not is_nil(@message.edited_at)}
+                />
               </span>
             </div>
           <% end %>
@@ -8769,11 +8860,14 @@ defmodule EdenWeb.ChatLive do
   # 1:1 "me" rows show delivery ticks; group rows don't (#142).
   attr :ticks, :boolean, default: false
   attr :read, :boolean, default: false
+  # Edited marker (#164).
+  attr :edited, :boolean, default: false
 
   # The time + (1:1) delivery ticks line, shared by the text-bubble meta and the
   # overlay pill on media bubbles.
   defp msg_meta(assigns) do
     ~H"""
+    <span :if={@edited} class="ed-edited">{gettext("edited")}</span>
     <.local_time at={@at} />
     <span :if={@ticks} class="inline-flex items-center" style="margin-left:2px;">
       <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
@@ -8853,6 +8947,18 @@ defmodule EdenWeb.ChatLive do
         phx-value-id={@message.id}
       >
         <.icon name="hero-chat-bubble-left-micro" class="size-4" /> {gettext("Reply in thread")}
+      </button>
+      <%!-- Edit (#164): your own, non-system, non-deleted messages. The server re-checks. --%>
+      <button
+        :if={@mine and @message.kind != "system" and is_nil(@message.deleted_at)}
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="start_edit"
+        phx-value-id={@message.id}
+        phx-value-body={@message.body}
+      >
+        <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("Edit")}
       </button>
       <button
         :if={@message.body != ""}
@@ -10223,6 +10329,8 @@ defmodule EdenWeb.ChatLive do
     |> drop_staged_on_switch()
     |> assign(
       selected: conversation,
+      # An edit is bound to a specific message — drop it when the chat changes (#164).
+      editing: nil,
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
@@ -11265,6 +11373,24 @@ defmodule EdenWeb.ChatLive do
       [a] -> gettext("%{name} is typing…", name: a)
       [a, b] -> gettext("%{a} and %{b} are typing…", a: a, b: b)
       _ -> gettext("Several people are typing…")
+    end
+  end
+
+  # #164: save an edit. Clears edit mode + the input, then calls edit_message (which
+  # re-authorizes and broadcasts {:message_edited} — that updates the row everywhere,
+  # incl. this session, so we don't touch the stream here). A blank text-only edit or a
+  # forbidden/missing message surfaces a flash.
+  defp save_edit(socket, body) do
+    %{current_scope: scope, editing: %{id: id}} = socket.assigns
+
+    case Chat.edit_message(scope, id, body) do
+      {:ok, _edited} ->
+        # Clear edit mode + the input ONLY on success, so a rejected edit (e.g. past the
+        # 4000-char cap) keeps the banner + the typed text for the user to fix.
+        {:noreply, socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
     end
   end
 

@@ -688,6 +688,71 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "edit_message/3 (#164)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      %{conv: conv}
+    end
+
+    test "the author edits text; body changes and edited_at is stamped", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "helo"})
+      assert is_nil(m.edited_at)
+
+      assert {:ok, edited} = Chat.edit_message(scope(alice), m.id, "hello")
+      assert edited.body == "hello"
+      assert edited.edited_at
+    end
+
+    test "a non-author can't edit", %{alice: alice, bob: bob, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      assert {:error, :forbidden} = Chat.edit_message(scope(bob), m.id, "hacked")
+    end
+
+    test "a non-member can't edit (not_found)", %{alice: alice, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      stranger = user_fixture(%{username: "stranger_edit"})
+      assert {:error, :not_found} = Chat.edit_message(scope(stranger), m.id, "x")
+    end
+
+    test "a text-only message can't be blanked (delete instead)", %{alice: alice, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      assert {:error, %Ecto.Changeset{}} = Chat.edit_message(scope(alice), m.id, "   ")
+    end
+
+    test "a media caption may be edited and blanked", %{alice: alice, conv: conv} do
+      {:ok, m} =
+        Chat.create_album_message(
+          scope(alice),
+          conv.id,
+          [%{path: real_png(), filename: "a.png"}],
+          %{
+            body: "trip"
+          }
+        )
+
+      assert {:ok, edited} = Chat.edit_message(scope(alice), m.id, "vacation")
+      assert edited.body == "vacation"
+      assert {:ok, blanked} = Chat.edit_message(scope(alice), m.id, "")
+      assert blanked.body == ""
+      assert blanked.edited_at
+    end
+
+    test "an unchanged edit is a no-op (not marked edited)", %{alice: alice, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "same"})
+      assert {:ok, edited} = Chat.edit_message(scope(alice), m.id, "same")
+      assert is_nil(edited.edited_at)
+    end
+
+    test "a tombstone can't be edited", %{alice: alice, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "bye"})
+      :ok = Chat.delete_message_for_both(scope(alice), m.id)
+      assert {:error, :not_found} = Chat.edit_message(scope(alice), m.id, "back")
+    end
+  end
+
   describe "delete_message_for_me/2" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

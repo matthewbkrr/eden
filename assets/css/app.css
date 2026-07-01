@@ -534,6 +534,17 @@ html {
     font: 500 0.6875rem/1 var(--ed-mono);
     opacity: 0.7;
   }
+  /* "edited" marker (#164): muted standalone (flat rows / file meta); inside a bubble it
+     inherits the meta's per-bubble colour + dim so it stays legible on the cobalt "mine". */
+  .ed-edited {
+    font-size: 0.6875rem;
+    font-style: italic;
+    color: var(--ed-muted);
+  }
+  .ed-bubble__meta .ed-edited {
+    color: inherit;
+    font-size: inherit;
+  }
   .ed-bubble--system {
     margin: 0 auto;
     background: var(--ed-surface-2);
