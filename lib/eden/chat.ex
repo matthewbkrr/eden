@@ -2345,14 +2345,16 @@ defmodule Eden.Chat do
   defp ensure_editable(%Message{}), do: :ok
 
   @doc """
-  Replaces a media message's album (#164, PR-2) — author only, same rules as
-  `edit_message/3`. `kept_ids` are the message's existing attachments to keep (in their
-  current order); `new_sources` are freshly uploaded files, appended after. Removed
-  attachments' rows go and their blobs are reclaimed forward-safe (a blob a surviving
-  attachment or a forward still references is spared). The album can't be emptied (delete
-  the message instead) or exceed the cap. Caption rides `opts[:body]`. Stamps `edited_at`
-  and broadcasts `{:message_edited}`. `{:error, :not_found | :forbidden | :empty | :too_many
-  | :too_large | :unprocessable | %Ecto.Changeset{}}`.
+  Replaces a message's album (#164, PR-2) — author only, same rules as `edit_message/3`.
+  `kept_ids` are the message's existing attachments to keep (in their current order);
+  `new_sources` are freshly uploaded files, appended after. Removed attachments' rows go
+  and their blobs are reclaimed forward-safe (a blob a surviving attachment or a forward
+  still references is spared). A **text** message (no attachments, so `kept_ids` resolve to
+  none) is converted to a media message when `new_sources` are supplied — the composer's
+  edit text becomes the caption. The album can't be emptied (delete the message instead) or
+  exceed the cap. Caption rides `opts[:body]`. Stamps `edited_at` and broadcasts
+  `{:message_edited}`. `{:error, :not_found | :forbidden | :empty | :too_many | :too_large
+  | :unprocessable | %Ecto.Changeset{}}`.
   """
   def edit_message_media(
         %Scope{user: user} = scope,
@@ -2368,7 +2370,8 @@ defmodule Eden.Chat do
          :ok <- ensure_sender(message, user.id),
          :ok <- ensure_editable(message),
          message = Repo.preload(message, :attachments),
-         :ok <- ensure_media_message(message),
+         # No ensure_media_message: a text message (kept resolves to none) converts to media
+         # when new_sources are supplied; ensure_edit_album_size still forbids an empty result.
          kept = Enum.filter(message.attachments, &(&1.id in kept_ids)),
          :ok <- ensure_edit_album_size(length(kept) + length(new_sources)),
          {:ok, prepared} <- prepare_album(new_sources) do
@@ -2381,9 +2384,6 @@ defmodule Eden.Chat do
   end
 
   # Media-editing is only for a message that already has an album (text uses edit_message/3).
-  defp ensure_media_message(%Message{attachments: [_ | _]}), do: :ok
-  defp ensure_media_message(%Message{}), do: {:error, :not_found}
-
   # The album can't be emptied and can't exceed the cap (kept + new).
   defp ensure_edit_album_size(0), do: {:error, :empty}
   defp ensure_edit_album_size(n) when n > @max_album_entries, do: {:error, :too_many}
@@ -2411,7 +2411,9 @@ defmodule Eden.Chat do
         with :ok <- insert_attachments(message.id, prepared),
              {:ok, updated} <-
                message
-               |> Message.edit_changeset(%{body: Map.get(opts, :body, message.body)})
+               # A media edit always yields ≥1 attachment, so the body is an optional caption
+               # (caption_edit_changeset) — even when converting a former text message.
+               |> Message.caption_edit_changeset(%{body: Map.get(opts, :body, message.body)})
                |> Ecto.Changeset.put_change(:edited_at, now())
                |> Repo.update() do
           {:ok, Repo.preload(updated, @message_preloads, force: true)}

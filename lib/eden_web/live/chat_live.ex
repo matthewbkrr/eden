@@ -595,6 +595,11 @@ defmodule EdenWeb.ChatLive do
     entries = live_entries(socket.assigns.uploads.attachment)
 
     cond do
+      # #164 text→media: an edit with staged media (all done) converts the message into a
+      # media message — must precede the plain edit branch, else the media is stranded.
+      socket.assigns.editing && all_uploads_done?(entries) ->
+        save_edit_to_media(socket, msg)
+
       # #164: an active edit routes "send" to edit_message, not a new send.
       socket.assigns.editing ->
         save_edit(socket, body)
@@ -609,7 +614,7 @@ defmodule EdenWeb.ChatLive do
       # crashes the LiveView — losing the upload + its optimistic node. Such a send
       # falls through to the text path; the upload keeps going and lands on its own
       # later "send" when every entry is done.
-      entries != [] and Enum.all?(entries, & &1.done?) ->
+      all_uploads_done?(entries) ->
         # The client_id AND caption rode the socket (media_sending), captured by the hook
         # at submit — NOT the form/@composer. media_sending closes the overlay (removing
         # #compose-caption) before the form serializes, and a composer_changed during the
@@ -5549,6 +5554,14 @@ defmodule EdenWeb.ChatLive do
             // beat (it only fires once the overlay is gone). One guarded path, sequential.
             const sm = this.el.dataset.sendingMedia === "true"
             const composeOpen = !!this.el.querySelector("[data-upload-preview]")
+            // #164 text→media: when the overlay OPENS during a text edit, seed its caption with
+            // the edit text (in #composer-body) so the conversion's caption defaults to the
+            // message text — editable + blankable there. On the open transition only, so later
+            // patches never clobber the user's caption edits.
+            if (composeOpen && !this.prevComposeOpen && this.el.querySelector("[data-edit-active]")) {
+              const cap = this.el.querySelector("#compose-caption")
+              if (cap && !cap.value && this.input) cap.value = this.input.value
+            }
             const configFree = !sm && !composeOpen
             // Never stay gated once the config is genuinely free (else a lost media_sending
             // would leave mediaInFlight stuck true and silently queue every later pick).
@@ -5573,6 +5586,24 @@ defmodule EdenWeb.ChatLive do
             // until a pushEvent ack re-fired it; that ack path was the fragile bit
             // that stalled real uploads in prod (the spinner-forever bug).
             const overlay = this.el.querySelector("[data-upload-preview]")
+            // #164 text→media: editing a text message + attached media → convert. Unlike a
+            // normal media send, an edit updates an EXISTING row (via {:message_edited}), so
+            // draw NO optimistic node and push NO media_sending — just close the overlay and
+            // let the native submit upload the :attachment entries + fire "send" (the server
+            // routes editing+media to edit_message_media). Keep a client-side error visible.
+            if (overlay && this.el.querySelector("[data-edit-active]")) {
+              if (overlay.querySelector(".ed-attach-err")) {
+                e.preventDefault()
+                return
+              }
+              overlay.querySelectorAll("video").forEach((v) => {
+                try { v.pause() } catch (_e) {}
+              })
+              this.sending = true
+              overlay.style.display = "none"
+              window.dispatchEvent(new CustomEvent("ed:after-send"))
+              return
+            }
             if (overlay) {
               // A staged entry with a client-side error (e.g. a video over the size
               // cap) won't upload. Don't close the overlay (media_sending) — that
@@ -11672,6 +11703,44 @@ defmodule EdenWeb.ChatLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
+    end
+  end
+
+  # Staged uploads are ready to consume: at least one entry, and every one finished. A
+  # consume on an in-progress entry raises, so this gates every consume_uploaded_entries path.
+  defp all_uploads_done?([]), do: false
+  defp all_uploads_done?(entries), do: Enum.all?(entries, & &1.done?)
+
+  # #164 text→media: an edit where the author attached media converts the (text) message into
+  # a media message — consume the :attachment uploads into sources and hand them to
+  # edit_message_media (kept=[]). The overlay caption (seeded with the edit text) becomes the
+  # caption. Mirrors save_edit_media's temp cleanup; clears edit mode on success.
+  #
+  # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable` the
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp save_edit_to_media(socket, msg) do
+    %{current_scope: scope, editing: %{id: id}} = socket.assigns
+    caption = Map.get(msg, "caption", "")
+
+    sources =
+      consume_uploaded_entries(socket, :attachment, fn %{path: path}, entry ->
+        stable = Path.join(System.tmp_dir!(), "eden-edit-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name}}
+      end)
+
+    try do
+      case Chat.edit_message_media(scope, id, [], sources, %{body: caption}) do
+        {:ok, _edited} ->
+          {:noreply,
+           socket |> assign(editing: nil) |> push_event("set_composer_body", %{body: ""})}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, edit_media_error(reason))}
+      end
+    after
+      Enum.each(sources, &File.rm(&1.path))
     end
   end
 

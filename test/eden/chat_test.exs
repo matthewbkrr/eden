@@ -836,17 +836,31 @@ defmodule Eden.ChatTest do
       assert {:error, :forbidden} = Chat.edit_message_media(scope(bob), m.id, [a.id], [], %{})
     end
 
-    test "a text message isn't a media message", %{alice: alice, conv: conv} do
-      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+    test "a text message converts to media, keeping the text as the caption (text→media)", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "привет"})
 
-      assert {:error, :not_found} =
+      assert {:ok, edited} =
                Chat.edit_message_media(
                  scope(alice),
                  m.id,
                  [],
                  [%{path: real_png(), filename: "a.png"}],
-                 %{}
+                 %{body: "привет"}
                )
+
+      assert edited.body == "привет"
+      assert edited.edited_at
+      assert [att] = edited.attachments
+      assert att.kind == "image"
+      assert att.position == 0
+    end
+
+    test "converting text→media still can't produce an empty album", %{alice: alice, conv: conv} do
+      {:ok, m} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      assert {:error, :empty} = Chat.edit_message_media(scope(alice), m.id, [], [], %{body: "hi"})
     end
 
     test "a dropped blob a forward still references is spared (forward-safe)", %{

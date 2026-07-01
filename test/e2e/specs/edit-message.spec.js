@@ -101,3 +101,40 @@ test("an author edits a photo message via the media modal: adds a photo + captio
   })
   await expect(bob.locator(".ed-edited").first()).toBeVisible()
 })
+
+// #164 text→media: editing a TEXT message and attaching media converts it into a media
+// message — the edit text seeds the caption, and the same row becomes a photo + "edited".
+test("editing a text message + attaching media converts it to a media message (#164)", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
+
+  const text = `text2pic ${Date.now()}`
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await send(alice, text)
+  const bubble = alice.locator(".ed-bubble", { hasText: text }).first()
+  await expect(bubble).toBeVisible()
+
+  // Edit → the composer enters text-edit mode (banner + pre-fill).
+  const menu = await openMenu(alice, bubble)
+  await menu.locator(".ed-menu__item", { hasText: "Edit" }).click()
+  await expect(alice.locator(".ed-reply-bar--edit")).toBeVisible()
+  await expect(alice.locator("#composer-body")).toHaveValue(text)
+
+  // Attach a photo → the overlay opens and its caption is seeded with the edit text.
+  await alice.locator('#composer input[type="file"]').setInputFiles(fix("sample1.png"))
+  await expect(alice.locator("[data-upload-preview]")).toBeVisible()
+  await expect(alice.locator("#compose-caption")).toHaveValue(text)
+
+  // Send → the SAME message becomes media: a photo, the text as caption, an "edited" marker;
+  // the edit banner and overlay are gone (no stray separate message stuck on a progress bar).
+  await alice.locator('[data-upload-preview] button[type="submit"]').click()
+  const converted = alice.locator(".ed-bubble", { hasText: text }).first()
+  await expect(converted.locator("img").first()).toBeVisible({ timeout: 10000 })
+  await expect(alice.locator(".ed-edited").first()).toBeVisible()
+  await expect(alice.locator(".ed-reply-bar--edit")).toHaveCount(0)
+  await expect(alice.locator("[data-upload-preview]")).toBeHidden()
+})
