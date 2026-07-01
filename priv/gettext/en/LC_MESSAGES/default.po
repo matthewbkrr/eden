@@ -27,10 +27,10 @@ msgstr ""
 msgid "Attempting to reconnect"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2929
-#: lib/eden_web/live/chat_live.ex:3467
-#: lib/eden_web/live/chat_live.ex:3812
-#: lib/eden_web/live/chat_live.ex:10178
+#: lib/eden_web/live/chat_live.ex:2932
+#: lib/eden_web/live/chat_live.ex:3480
+#: lib/eden_web/live/chat_live.ex:3825
+#: lib/eden_web/live/chat_live.ex:10468
 #: lib/eden_web/live/settings_live.ex:110
 #, elixir-autogen, elixir-format
 msgid "Back"
@@ -216,117 +216,118 @@ msgid "You were invited. Pick a username and password."
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:66
-#: lib/eden_web/live/chat_live.ex:2750
-#: lib/eden_web/live/chat_live.ex:7647
+#: lib/eden_web/live/chat_live.ex:2753
+#: lib/eden_web/live/chat_live.ex:7661
 #, elixir-autogen, elixir-format
 msgid "Chats"
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:234
 #: lib/eden_web/components/shell_components.ex:253
-#: lib/eden_web/live/chat_live.ex:3091
-#: lib/eden_web/live/chat_live.ex:3522
-#: lib/eden_web/live/chat_live.ex:3826
-#: lib/eden_web/live/chat_live.ex:7986
-#: lib/eden_web/live/chat_live.ex:8011
-#: lib/eden_web/live/chat_live.ex:8132
-#: lib/eden_web/live/chat_live.ex:8157
-#: lib/eden_web/live/chat_live.ex:8336
-#: lib/eden_web/live/chat_live.ex:8357
-#: lib/eden_web/live/chat_live.ex:8451
-#: lib/eden_web/live/chat_live.ex:8470
-#: lib/eden_web/live/chat_live.ex:8538
-#: lib/eden_web/live/chat_live.ex:8557
-#: lib/eden_web/live/chat_live.ex:8640
-#: lib/eden_web/live/chat_live.ex:8659
-#: lib/eden_web/live/chat_live.ex:9922
-#: lib/eden_web/live/chat_live.ex:9941
-#: lib/eden_web/live/chat_live.ex:10003
-#: lib/eden_web/live/chat_live.ex:10022
-#: lib/eden_web/live/chat_live.ex:10088
-#: lib/eden_web/live/chat_live.ex:10189
+#: lib/eden_web/live/chat_live.ex:3094
+#: lib/eden_web/live/chat_live.ex:3535
+#: lib/eden_web/live/chat_live.ex:3839
+#: lib/eden_web/live/chat_live.ex:8000
+#: lib/eden_web/live/chat_live.ex:8025
+#: lib/eden_web/live/chat_live.ex:8146
+#: lib/eden_web/live/chat_live.ex:8171
+#: lib/eden_web/live/chat_live.ex:8350
+#: lib/eden_web/live/chat_live.ex:8371
+#: lib/eden_web/live/chat_live.ex:8465
+#: lib/eden_web/live/chat_live.ex:8484
+#: lib/eden_web/live/chat_live.ex:8552
+#: lib/eden_web/live/chat_live.ex:8571
+#: lib/eden_web/live/chat_live.ex:8654
+#: lib/eden_web/live/chat_live.ex:8673
+#: lib/eden_web/live/chat_live.ex:9153
+#: lib/eden_web/live/chat_live.ex:10212
+#: lib/eden_web/live/chat_live.ex:10231
+#: lib/eden_web/live/chat_live.ex:10293
+#: lib/eden_web/live/chat_live.ex:10312
+#: lib/eden_web/live/chat_live.ex:10378
+#: lib/eden_web/live/chat_live.ex:10479
 #, elixir-autogen, elixir-format
 msgid "Close"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:377
-#: lib/eden_web/live/chat_live.ex:427
-#: lib/eden_web/live/chat_live.ex:485
+#: lib/eden_web/live/chat_live.ex:384
+#: lib/eden_web/live/chat_live.ex:434
+#: lib/eden_web/live/chat_live.ex:492
 #, elixir-autogen, elixir-format
 msgid "Conversation not found."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1919
-#: lib/eden_web/live/chat_live.ex:1939
+#: lib/eden_web/live/chat_live.ex:1916
+#: lib/eden_web/live/chat_live.ex:1936
 #, elixir-autogen, elixir-format
 msgid "Couldn't start the conversation."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9956
+#: lib/eden_web/live/chat_live.ex:10246
 #, elixir-autogen, elixir-format
 msgid "Group name (optional)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11331
+#: lib/eden_web/live/chat_live.ex:11624
 #, elixir-autogen, elixir-format
 msgid "Just you"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3349
-#: lib/eden_web/live/chat_live.ex:10142
+#: lib/eden_web/live/chat_live.ex:3362
+#: lib/eden_web/live/chat_live.ex:10432
 #, elixir-autogen, elixir-format
 msgid "Message"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2754
-#: lib/eden_web/live/chat_live.ex:2881
-#: lib/eden_web/live/chat_live.ex:3442
-#: lib/eden_web/live/chat_live.ex:9934
-#: lib/eden_web/live/chat_live.ex:9940
+#: lib/eden_web/live/chat_live.ex:2757
+#: lib/eden_web/live/chat_live.ex:2884
+#: lib/eden_web/live/chat_live.ex:3455
+#: lib/eden_web/live/chat_live.ex:10224
+#: lib/eden_web/live/chat_live.ex:10230
 #, elixir-autogen, elixir-format
 msgid "New conversation"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3437
+#: lib/eden_web/live/chat_live.ex:3450
 #, elixir-autogen, elixir-format
 msgid "No conversation selected"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9948
+#: lib/eden_web/live/chat_live.ex:10238
 #, elixir-autogen, elixir-format
 msgid "No one else has joined yet."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3439
+#: lib/eden_web/live/chat_live.ex:3452
 #, elixir-autogen, elixir-format
 msgid "Pick a chat or start a new one."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1936
-#: lib/eden_web/live/chat_live.ex:1944
+#: lib/eden_web/live/chat_live.ex:1933
+#: lib/eden_web/live/chat_live.ex:1941
 #, elixir-autogen, elixir-format
 msgid "Pick at least one person."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3388
-#: lib/eden_web/live/chat_live.ex:3771
-#: lib/eden_web/live/chat_live.ex:9634
+#: lib/eden_web/live/chat_live.ex:3401
+#: lib/eden_web/live/chat_live.ex:3784
+#: lib/eden_web/live/chat_live.ex:9924
 #, elixir-autogen, elixir-format
 msgid "Send"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9981
+#: lib/eden_web/live/chat_live.ex:10271
 #, elixir-autogen, elixir-format
 msgid "Start"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3137
-#: lib/eden_web/live/chat_live.ex:8741
+#: lib/eden_web/live/chat_live.ex:3144
+#: lib/eden_web/live/chat_live.ex:8755
 #, elixir-autogen, elixir-format
 msgid "No messages yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10661
+#: lib/eden_web/live/chat_live.ex:10951
 #: lib/eden_web/presence_helpers.ex:29
 #, elixir-autogen, elixir-format
 msgid "offline"
@@ -337,7 +338,7 @@ msgstr ""
 msgid "online"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11955
+#: lib/eden_web/live/chat_live.ex:12375
 #, elixir-autogen, elixir-format
 msgid "Message is too long (up to 4000 characters)."
 msgstr ""
@@ -347,7 +348,7 @@ msgstr ""
 msgid "Images only"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12459
+#: lib/eden_web/live/chat_live.ex:12879
 #: lib/eden_web/live/settings_live.ex:891
 #, elixir-autogen, elixir-format
 msgid "Invalid file"
@@ -359,12 +360,12 @@ msgstr ""
 msgid "Remove"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8791
-#: lib/eden_web/live/chat_live.ex:8796
-#: lib/eden_web/live/chat_live.ex:9795
-#: lib/eden_web/live/chat_live.ex:9812
-#: lib/eden_web/live/chat_live.ex:10548
-#: lib/eden_web/live/chat_live.ex:10593
+#: lib/eden_web/live/chat_live.ex:8805
+#: lib/eden_web/live/chat_live.ex:8810
+#: lib/eden_web/live/chat_live.ex:10085
+#: lib/eden_web/live/chat_live.ex:10102
+#: lib/eden_web/live/chat_live.ex:10838
+#: lib/eden_web/live/chat_live.ex:10883
 #, elixir-autogen, elixir-format
 msgid "Photo"
 msgstr ""
@@ -380,16 +381,17 @@ msgid "About you"
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:299
-#: lib/eden_web/live/chat_live.ex:8094
-#: lib/eden_web/live/chat_live.ex:9474
-#: lib/eden_web/live/chat_live.ex:10322
+#: lib/eden_web/live/chat_live.ex:8108
+#: lib/eden_web/live/chat_live.ex:9197
+#: lib/eden_web/live/chat_live.ex:9764
+#: lib/eden_web/live/chat_live.ex:10612
 #: lib/eden_web/live/settings_live.ex:172
 #, elixir-autogen, elixir-format
 msgid "Cancel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1045
-#: lib/eden_web/live/chat_live.ex:11468
+#: lib/eden_web/live/chat_live.ex:991
+#: lib/eden_web/live/chat_live.ex:11761
 #: lib/eden_web/live/settings_live.ex:879
 #, elixir-autogen, elixir-format
 msgid "Couldn't process that image."
@@ -400,9 +402,9 @@ msgstr ""
 msgid "One photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10100
-#: lib/eden_web/live/chat_live.ex:10169
-#: lib/eden_web/live/chat_live.ex:10183
+#: lib/eden_web/live/chat_live.ex:10390
+#: lib/eden_web/live/chat_live.ex:10459
+#: lib/eden_web/live/chat_live.ex:10473
 #: lib/eden_web/live/settings_live.ex:124
 #, elixir-autogen, elixir-format
 msgid "Profile"
@@ -413,10 +415,10 @@ msgstr ""
 msgid "Profile saved."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3882
-#: lib/eden_web/live/chat_live.ex:3891
-#: lib/eden_web/live/chat_live.ex:8102
-#: lib/eden_web/live/chat_live.ex:10315
+#: lib/eden_web/live/chat_live.ex:3895
+#: lib/eden_web/live/chat_live.ex:3904
+#: lib/eden_web/live/chat_live.ex:8116
+#: lib/eden_web/live/chat_live.ex:10605
 #: lib/eden_web/live/settings_live.ex:221
 #, elixir-autogen, elixir-format
 msgid "Save"
@@ -438,200 +440,204 @@ msgstr ""
 msgid "Upload photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3010
-#: lib/eden_web/live/chat_live.ex:10333
+#: lib/eden_web/live/chat_live.ex:3013
+#: lib/eden_web/live/chat_live.ex:10623
 #, elixir-autogen, elixir-format
 msgid "%{count} member"
 msgid_plural "%{count} members"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:8310
+#: lib/eden_web/live/chat_live.ex:8324
 #, elixir-autogen, elixir-format
 msgid "(you)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2588
-#: lib/eden_web/live/chat_live.ex:8144
-#: lib/eden_web/live/chat_live.ex:8151
-#: lib/eden_web/live/chat_live.ex:10346
+#: lib/eden_web/live/chat_live.ex:2591
+#: lib/eden_web/live/chat_live.ex:8158
+#: lib/eden_web/live/chat_live.ex:8165
+#: lib/eden_web/live/chat_live.ex:10636
 #, elixir-autogen, elixir-format
 msgid "Members"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:738
+#: lib/eden_web/live/chat_live.ex:684
 #, elixir-autogen, elixir-format
 msgid "Profile unavailable."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2984
-#: lib/eden_web/live/chat_live.ex:8174
-#: lib/eden_web/live/chat_live.ex:8299
-#: lib/eden_web/live/chat_live.ex:9006
+#: lib/eden_web/live/chat_live.ex:2987
+#: lib/eden_web/live/chat_live.ex:8188
+#: lib/eden_web/live/chat_live.ex:8313
+#: lib/eden_web/live/chat_live.ex:9286
 #, elixir-autogen, elixir-format
 msgid "View profile"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3330
-#: lib/eden_web/live/chat_live.ex:3749
+#: lib/eden_web/live/chat_live.ex:3343
+#: lib/eden_web/live/chat_live.ex:3762
 #, elixir-autogen, elixir-format
 msgid "Attach a file"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12451
+#: lib/eden_web/live/chat_live.ex:12871
 #, elixir-autogen, elixir-format
 msgid "Couldn't send that file."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8794
-#: lib/eden_web/live/chat_live.ex:8798
-#: lib/eden_web/live/chat_live.ex:9898
+#: lib/eden_web/live/chat_live.ex:8808
+#: lib/eden_web/live/chat_live.ex:8812
+#: lib/eden_web/live/chat_live.ex:10188
 #, elixir-autogen, elixir-format
 msgid "File"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12454
+#: lib/eden_web/live/chat_live.ex:12874
 #, elixir-autogen, elixir-format
 msgid "File too large"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12445
+#: lib/eden_web/live/chat_live.ex:12865
 #, elixir-autogen, elixir-format
 msgid "That file is too large."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8792
-#: lib/eden_web/live/chat_live.ex:8797
-#: lib/eden_web/live/chat_live.ex:9537
-#: lib/eden_web/live/chat_live.ex:10575
-#: lib/eden_web/live/chat_live.ex:10594
+#: lib/eden_web/live/chat_live.ex:8806
+#: lib/eden_web/live/chat_live.ex:8811
+#: lib/eden_web/live/chat_live.ex:9827
+#: lib/eden_web/live/chat_live.ex:10865
+#: lib/eden_web/live/chat_live.ex:10884
 #, elixir-autogen, elixir-format
 msgid "Video"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9783
-#: lib/eden_web/live/chat_live.ex:9892
+#: lib/eden_web/live/chat_live.ex:10073
+#: lib/eden_web/live/chat_live.ex:10182
 #, elixir-autogen, elixir-format
 msgid "Download %{name}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9892
+#: lib/eden_web/live/chat_live.ex:10182
 #, elixir-autogen, elixir-format
 msgid "file"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12446
+#: lib/eden_web/live/chat_live.ex:12866
 #, elixir-autogen, elixir-format
 msgid "That file is empty."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1609
+#: lib/eden_web/live/chat_live.ex:1569
+#: lib/eden_web/live/chat_live.ex:1637
 #, elixir-autogen, elixir-format
 msgid "Copied."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7930
-#: lib/eden_web/live/chat_live.ex:9400
+#: lib/eden_web/live/chat_live.ex:7944
+#: lib/eden_web/live/chat_live.ex:9681
 #, elixir-autogen, elixir-format
 msgid "Copy link"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9391
+#: lib/eden_web/live/chat_live.ex:9672
 #, elixir-autogen, elixir-format
 msgid "Copy text"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:843
+#: lib/eden_web/live/chat_live.ex:789
 #, elixir-autogen, elixir-format
 msgid "Couldn't delete that message."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11927
+#: lib/eden_web/live/chat_live.ex:12348
 #, elixir-autogen, elixir-format
 msgid "Couldn't forward that message."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9429
+#: lib/eden_web/live/chat_live.ex:9185
+#: lib/eden_web/live/chat_live.ex:9719
 #, elixir-autogen, elixir-format
 msgid "Delete for everyone"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9418
+#: lib/eden_web/live/chat_live.ex:9194
+#: lib/eden_web/live/chat_live.ex:9708
 #, elixir-autogen, elixir-format
 msgid "Delete for me"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9427
+#: lib/eden_web/live/chat_live.ex:9717
 #, elixir-autogen, elixir-format
 msgid "Delete this message for everyone?"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9409
+#: lib/eden_web/live/chat_live.ex:9077
+#: lib/eden_web/live/chat_live.ex:9690
 #, elixir-autogen, elixir-format
 msgid "Forward"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10069
+#: lib/eden_web/live/chat_live.ex:10359
 #, elixir-autogen, elixir-format
 msgid "Forwarded"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10067
+#: lib/eden_web/live/chat_live.ex:10357
 #, elixir-autogen, elixir-format
 msgid "Forwarded from %{name}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11926
+#: lib/eden_web/live/chat_live.ex:12347
 #, elixir-autogen, elixir-format
 msgid "Forwarded."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1606
+#: lib/eden_web/live/chat_live.ex:1634
 #, elixir-autogen, elixir-format
 msgid "Link copied."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1896
+#: lib/eden_web/live/chat_live.ex:1893
 #, elixir-autogen, elixir-format
 msgid "That message is unavailable."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:860
+#: lib/eden_web/live/chat_live.ex:806
 #, elixir-autogen, elixir-format
 msgid "Couldn't delete that chat."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7620
+#: lib/eden_web/live/chat_live.ex:7634
 #, elixir-autogen, elixir-format
 msgid "Delete chat"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7618
+#: lib/eden_web/live/chat_live.ex:7632
 #, elixir-autogen, elixir-format
 msgid "Delete this chat? It will be removed from your list."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2879
+#: lib/eden_web/live/chat_live.ex:2882
 #, elixir-autogen, elixir-format
 msgid "No chats yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8431
-#: lib/eden_web/live/chat_live.ex:8519
-#: lib/eden_web/live/chat_live.ex:8955
-#: lib/eden_web/live/chat_live.ex:10343
+#: lib/eden_web/live/chat_live.ex:8445
+#: lib/eden_web/live/chat_live.ex:8533
+#: lib/eden_web/live/chat_live.ex:9234
+#: lib/eden_web/live/chat_live.ex:10633
 #: lib/eden_web/live/settings_live.ex:554
 #, elixir-autogen, elixir-format
 msgid "Add"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2809
+#: lib/eden_web/live/chat_live.ex:2812
 #: lib/eden_web/live/settings_live.ex:487
 #, elixir-autogen, elixir-format
 msgid "All Chats"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2794
+#: lib/eden_web/live/chat_live.ex:2797
 #: lib/eden_web/live/settings_live.ex:468
 #, elixir-autogen, elixir-format
 msgid "Chat folders"
@@ -658,18 +664,18 @@ msgstr ""
 msgid "Folder name"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10032
+#: lib/eden_web/live/chat_live.ex:10322
 #, elixir-autogen, elixir-format
 msgid "Manage folders"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10015
-#: lib/eden_web/live/chat_live.ex:10021
+#: lib/eden_web/live/chat_live.ex:10305
+#: lib/eden_web/live/chat_live.ex:10311
 #, elixir-autogen, elixir-format
 msgid "Move to folder"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7609
+#: lib/eden_web/live/chat_live.ex:7623
 #, elixir-autogen, elixir-format
 msgid "Move to folder…"
 msgstr ""
@@ -679,7 +685,7 @@ msgstr ""
 msgid "New folder name"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10029
+#: lib/eden_web/live/chat_live.ex:10319
 #, elixir-autogen, elixir-format
 msgid "You don't have any folders yet."
 msgstr ""
@@ -695,12 +701,12 @@ msgstr ""
 msgid "Couldn't save that folder."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2874
+#: lib/eden_web/live/chat_live.ex:2877
 #, elixir-autogen, elixir-format
 msgid "No chats in this folder"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2876
+#: lib/eden_web/live/chat_live.ex:2879
 #, elixir-autogen, elixir-format
 msgid "Right-click a chat to move it here."
 msgstr ""
@@ -715,78 +721,78 @@ msgstr ""
 msgid "Folder renamed."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7600
-#: lib/eden_web/live/chat_live.ex:7921
+#: lib/eden_web/live/chat_live.ex:7614
+#: lib/eden_web/live/chat_live.ex:7935
 #, elixir-autogen, elixir-format
 msgid "Mute"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2846
+#: lib/eden_web/live/chat_live.ex:2849
 #, elixir-autogen, elixir-format
 msgid "Mute folder"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7600
-#: lib/eden_web/live/chat_live.ex:7921
+#: lib/eden_web/live/chat_live.ex:7614
+#: lib/eden_web/live/chat_live.ex:7935
 #, elixir-autogen, elixir-format
 msgid "Unmute"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2846
+#: lib/eden_web/live/chat_live.ex:2849
 #, elixir-autogen, elixir-format
 msgid "Unmute folder"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:985
+#: lib/eden_web/live/chat_live.ex:931
 #, elixir-autogen, elixir-format
 msgid "Couldn't update that chat."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:995
+#: lib/eden_web/live/chat_live.ex:941
 #, elixir-autogen, elixir-format
 msgid "Couldn't update that folder."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2827
-#: lib/eden_web/live/chat_live.ex:7559
-#: lib/eden_web/live/chat_live.ex:7873
+#: lib/eden_web/live/chat_live.ex:2830
+#: lib/eden_web/live/chat_live.ex:7573
+#: lib/eden_web/live/chat_live.ex:7887
 #, elixir-autogen, elixir-format
 msgid "Muted"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2671
-#: lib/eden_web/live/chat_live.ex:2784
+#: lib/eden_web/live/chat_live.ex:2674
+#: lib/eden_web/live/chat_live.ex:2787
 #, elixir-autogen, elixir-format
 msgid "Clear search"
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:47
 #: lib/eden_web/components/shell_components.ex:51
-#: lib/eden_web/live/chat_live.ex:7667
-#: lib/eden_web/live/chat_live.ex:7739
+#: lib/eden_web/live/chat_live.ex:7681
+#: lib/eden_web/live/chat_live.ex:7753
 #, elixir-autogen, elixir-format
 msgid "Messages"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3057
-#: lib/eden_web/live/chat_live.ex:3567
-#: lib/eden_web/live/chat_live.ex:7643
-#: lib/eden_web/live/chat_live.ex:7721
+#: lib/eden_web/live/chat_live.ex:3060
+#: lib/eden_web/live/chat_live.ex:3580
+#: lib/eden_web/live/chat_live.ex:7657
+#: lib/eden_web/live/chat_live.ex:7735
 #, elixir-autogen, elixir-format
 msgid "No results for “%{query}”"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2773
+#: lib/eden_web/live/chat_live.ex:2776
 #, elixir-autogen, elixir-format
 msgid "Search"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2777
+#: lib/eden_web/live/chat_live.ex:2780
 #, elixir-autogen, elixir-format
 msgid "Search chats and messages"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2892
+#: lib/eden_web/live/chat_live.ex:2895
 #, elixir-autogen, elixir-format
 msgid "Type at least %{count} characters to search."
 msgstr ""
@@ -796,12 +802,12 @@ msgstr ""
 msgid "About (optional)"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1102
+#: lib/eden_web/live/chat_live.ex:1048
 #, elixir-autogen, elixir-format
 msgid "Channel deleted."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2572
+#: lib/eden_web/live/chat_live.ex:2575
 #, elixir-autogen, elixir-format
 msgid "Channel menu"
 msgstr ""
@@ -811,50 +817,50 @@ msgstr ""
 msgid "Channel name"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:316
+#: lib/eden_web/live/chat_live.ex:323
 #, elixir-autogen, elixir-format
 msgid "Channel not found."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1106
+#: lib/eden_web/live/chat_live.ex:1052
 #, elixir-autogen, elixir-format
 msgid "Couldn't delete that channel."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1059
+#: lib/eden_web/live/chat_live.ex:1005
 #, elixir-autogen, elixir-format
 msgid "Couldn't update that channel."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3873
+#: lib/eden_web/live/chat_live.ex:3886
 #, elixir-autogen, elixir-format
 msgid "Create channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2646
+#: lib/eden_web/live/chat_live.ex:2649
 #, elixir-autogen, elixir-format
 msgid "Delete channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2644
+#: lib/eden_web/live/chat_live.ex:2647
 #, elixir-autogen, elixir-format
 msgid "Delete this channel for everyone? This cannot be undone."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2615
-#: lib/eden_web/live/chat_live.ex:3878
+#: lib/eden_web/live/chat_live.ex:2618
+#: lib/eden_web/live/chat_live.ex:3891
 #, elixir-autogen, elixir-format
 msgid "Edit channel"
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:132
 #: lib/eden_web/components/shell_components.ex:133
-#: lib/eden_web/live/chat_live.ex:3869
+#: lib/eden_web/live/chat_live.ex:3882
 #, elixir-autogen, elixir-format
 msgid "New channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2263
+#: lib/eden_web/live/chat_live.ex:2260
 #, elixir-autogen, elixir-format
 msgid "This channel was deleted."
 msgstr ""
@@ -869,215 +875,216 @@ msgstr ""
 msgid "You can have up to %{count} channels."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1168
+#: lib/eden_web/live/chat_live.ex:1114
 #, elixir-autogen, elixir-format
 msgid "Couldn't delete that room."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1158
+#: lib/eden_web/live/chat_live.ex:1104
 #, elixir-autogen, elixir-format
 msgid "Couldn't save that room."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3891
+#: lib/eden_web/live/chat_live.ex:3904
 #, elixir-autogen, elixir-format
 msgid "Create room"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7963
+#: lib/eden_web/live/chat_live.ex:7977
 #, elixir-autogen, elixir-format
 msgid "Delete room"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7961
+#: lib/eden_web/live/chat_live.ex:7975
 #, elixir-autogen, elixir-format
 msgid "Delete this room and all its messages? This cannot be undone."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2624
-#: lib/eden_web/live/chat_live.ex:2726
-#: lib/eden_web/live/chat_live.ex:3889
+#: lib/eden_web/live/chat_live.ex:2627
+#: lib/eden_web/live/chat_live.ex:2729
+#: lib/eden_web/live/chat_live.ex:3902
 #, elixir-autogen, elixir-format
 msgid "New room"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2733
+#: lib/eden_web/live/chat_live.ex:2736
 #, elixir-autogen, elixir-format
 msgid "No rooms yet."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3433
+#: lib/eden_web/live/chat_live.ex:3446
 #, elixir-autogen, elixir-format
 msgid "Pick a room to start reading."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7951
+#: lib/eden_web/live/chat_live.ex:7965
 #, elixir-autogen, elixir-format
 msgid "Rename room"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8667
+#: lib/eden_web/live/chat_live.ex:8681
 #, elixir-autogen, elixir-format
 msgid "Room name"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8593
+#: lib/eden_web/live/chat_live.ex:8607
 #, elixir-autogen, elixir-format
 msgid "Active links"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2597
-#: lib/eden_web/live/chat_live.ex:7941
-#: lib/eden_web/live/chat_live.ex:8463
-#: lib/eden_web/live/chat_live.ex:8469
-#: lib/eden_web/live/chat_live.ex:10340
+#: lib/eden_web/live/chat_live.ex:2600
+#: lib/eden_web/live/chat_live.ex:7955
+#: lib/eden_web/live/chat_live.ex:8477
+#: lib/eden_web/live/chat_live.ex:8483
+#: lib/eden_web/live/chat_live.ex:10630
 #, elixir-autogen, elixir-format
 msgid "Add members"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8372
-#: lib/eden_web/live/chat_live.ex:8575
+#: lib/eden_web/live/chat_live.ex:8386
+#: lib/eden_web/live/chat_live.ex:8589
 #, elixir-autogen, elixir-format
 msgid "Copied!"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8374
-#: lib/eden_web/live/chat_live.ex:8577
+#: lib/eden_web/live/chat_live.ex:8388
+#: lib/eden_web/live/chat_live.ex:8591
+#: lib/eden_web/live/chat_live.ex:9090
 #, elixir-autogen, elixir-format
 msgid "Copy"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8565
+#: lib/eden_web/live/chat_live.ex:8579
 #, elixir-autogen, elixir-format
 msgid "Copy this link now — it won't be shown again."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1249
-#: lib/eden_web/live/chat_live.ex:1461
+#: lib/eden_web/live/chat_live.ex:1195
+#: lib/eden_web/live/chat_live.ex:1407
 #, elixir-autogen, elixir-format
 msgid "Couldn't add those members."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:887
-#: lib/eden_web/live/chat_live.ex:1485
+#: lib/eden_web/live/chat_live.ex:833
+#: lib/eden_web/live/chat_live.ex:1431
 #, elixir-autogen, elixir-format
 msgid "Couldn't change that role."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1265
-#: lib/eden_web/live/chat_live.ex:1543
+#: lib/eden_web/live/chat_live.ex:1211
+#: lib/eden_web/live/chat_live.ex:1489
 #, elixir-autogen, elixir-format
 msgid "Couldn't create an invite link."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1516
+#: lib/eden_web/live/chat_live.ex:1462
 #, elixir-autogen, elixir-format
 msgid "Couldn't leave the channel."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:874
-#: lib/eden_web/live/chat_live.ex:1471
+#: lib/eden_web/live/chat_live.ex:820
+#: lib/eden_web/live/chat_live.ex:1417
 #, elixir-autogen, elixir-format
 msgid "Couldn't remove that member."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1553
+#: lib/eden_web/live/chat_live.ex:1499
 #, elixir-autogen, elixir-format
 msgid "Couldn't revoke that link."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:901
-#: lib/eden_web/live/chat_live.ex:1495
+#: lib/eden_web/live/chat_live.ex:847
+#: lib/eden_web/live/chat_live.ex:1441
 #, elixir-autogen, elixir-format
 msgid "Couldn't transfer ownership."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8383
-#: lib/eden_web/live/chat_live.ex:8588
+#: lib/eden_web/live/chat_live.ex:8397
+#: lib/eden_web/live/chat_live.ex:8602
 #, elixir-autogen, elixir-format
 msgid "Create invite link"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8388
-#: lib/eden_web/live/chat_live.ex:8476
+#: lib/eden_web/live/chat_live.ex:8402
+#: lib/eden_web/live/chat_live.ex:8490
 #, elixir-autogen, elixir-format
 msgid "Everyone is already here."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8229
+#: lib/eden_web/live/chat_live.ex:8243
 #, elixir-autogen, elixir-format
 msgid "Hand this channel over? You will become an admin."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2606
+#: lib/eden_web/live/chat_live.ex:2609
 #, elixir-autogen, elixir-format
 msgid "Invite link"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8550
-#: lib/eden_web/live/chat_live.ex:8556
+#: lib/eden_web/live/chat_live.ex:8564
+#: lib/eden_web/live/chat_live.ex:8570
 #, elixir-autogen, elixir-format
 msgid "Invite links"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2634
+#: lib/eden_web/live/chat_live.ex:2637
 #, elixir-autogen, elixir-format
 msgid "Leave channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2632
+#: lib/eden_web/live/chat_live.ex:2635
 #, elixir-autogen, elixir-format
 msgid "Leave this channel?"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8201
-#: lib/eden_web/live/chat_live.ex:8202
-#: lib/eden_web/live/chat_live.ex:10373
+#: lib/eden_web/live/chat_live.ex:8215
+#: lib/eden_web/live/chat_live.ex:8216
+#: lib/eden_web/live/chat_live.ex:10663
 #, elixir-autogen, elixir-format
 msgid "Make admin"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8213
-#: lib/eden_web/live/chat_live.ex:8214
-#: lib/eden_web/live/chat_live.ex:10384
+#: lib/eden_web/live/chat_live.ex:8227
+#: lib/eden_web/live/chat_live.ex:8228
+#: lib/eden_web/live/chat_live.ex:10674
 #, elixir-autogen, elixir-format
 msgid "Remove admin"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8237
-#: lib/eden_web/live/chat_live.ex:8238
+#: lib/eden_web/live/chat_live.ex:8251
+#: lib/eden_web/live/chat_live.ex:8252
 #, elixir-autogen, elixir-format
 msgid "Remove from channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8241
+#: lib/eden_web/live/chat_live.ex:8255
 #, elixir-autogen, elixir-format
 msgid "Remove this member from the channel?"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8616
+#: lib/eden_web/live/chat_live.ex:8630
 #, elixir-autogen, elixir-format
 msgid "Revoke"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8614
+#: lib/eden_web/live/chat_live.ex:8628
 #, elixir-autogen, elixir-format
 msgid "Revoke this link? Anyone holding it loses access."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8225
-#: lib/eden_web/live/chat_live.ex:8226
-#: lib/eden_web/live/chat_live.ex:10397
+#: lib/eden_web/live/chat_live.ex:8239
+#: lib/eden_web/live/chat_live.ex:8240
+#: lib/eden_web/live/chat_live.ex:10687
 #, elixir-autogen, elixir-format
 msgid "Transfer ownership"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1512
+#: lib/eden_web/live/chat_live.ex:1458
 #, elixir-autogen, elixir-format
 msgid "Transfer ownership or delete the channel before leaving."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8602
+#: lib/eden_web/live/chat_live.ex:8616
 #, elixir-autogen, elixir-format
 msgid "Uses: %{used}%{cap}"
 msgstr ""
@@ -1087,100 +1094,100 @@ msgstr ""
 msgid "Welcome to %{name}!"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1504
+#: lib/eden_web/live/chat_live.ex:1450
 #, elixir-autogen, elixir-format
 msgid "You left the channel."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2292
+#: lib/eden_web/live/chat_live.ex:2289
 #, elixir-autogen, elixir-format
 msgid "You no longer have access to this channel."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8255
+#: lib/eden_web/live/chat_live.ex:8269
 #, elixir-autogen, elixir-format
 msgid "admin"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8605
+#: lib/eden_web/live/chat_live.ex:8619
 #, elixir-autogen, elixir-format
 msgid "expires"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8256
+#: lib/eden_web/live/chat_live.ex:8270
 #, elixir-autogen, elixir-format
 msgid "member"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8254
+#: lib/eden_web/live/chat_live.ex:8268
 #, elixir-autogen, elixir-format
 msgid "owner"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8186
-#: lib/eden_web/live/chat_live.ex:8906
+#: lib/eden_web/live/chat_live.ex:8200
+#: lib/eden_web/live/chat_live.ex:8920
 #, elixir-autogen, elixir-format
 msgid "you"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3610
-#: lib/eden_web/live/chat_live.ex:9062
+#: lib/eden_web/live/chat_live.ex:3623
+#: lib/eden_web/live/chat_live.ex:9342
 #, elixir-autogen, elixir-format
 msgid "%{count} reply"
 msgid_plural "%{count} replies"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:3068
-#: lib/eden_web/live/chat_live.ex:3578
-#: lib/eden_web/live/chat_live.ex:8754
-#: lib/eden_web/live/chat_live.ex:9029
+#: lib/eden_web/live/chat_live.ex:3071
+#: lib/eden_web/live/chat_live.ex:3591
+#: lib/eden_web/live/chat_live.ex:8768
+#: lib/eden_web/live/chat_live.ex:9309
 #, elixir-autogen, elixir-format
 msgid "Deleted account"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7885
-#: lib/eden_web/live/chat_live.ex:7886
-#: lib/eden_web/live/chat_live.ex:9104
-#: lib/eden_web/live/chat_live.ex:9105
+#: lib/eden_web/live/chat_live.ex:7899
+#: lib/eden_web/live/chat_live.ex:7900
+#: lib/eden_web/live/chat_live.ex:9384
+#: lib/eden_web/live/chat_live.ex:9385
 #, elixir-autogen, elixir-format
 msgid "More actions"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3760
-#: lib/eden_web/live/chat_live.ex:9094
-#: lib/eden_web/live/chat_live.ex:9095
-#: lib/eden_web/live/chat_live.ex:9358
+#: lib/eden_web/live/chat_live.ex:3773
+#: lib/eden_web/live/chat_live.ex:9374
+#: lib/eden_web/live/chat_live.ex:9375
+#: lib/eden_web/live/chat_live.ex:9639
 #, elixir-autogen, elixir-format
 msgid "Reply"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9082
-#: lib/eden_web/live/chat_live.ex:9083
-#: lib/eden_web/live/chat_live.ex:9368
+#: lib/eden_web/live/chat_live.ex:9362
+#: lib/eden_web/live/chat_live.ex:9363
+#: lib/eden_web/live/chat_live.ex:9649
 #, elixir-autogen, elixir-format
 msgid "Reply in thread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3759
+#: lib/eden_web/live/chat_live.ex:3772
 #, elixir-autogen, elixir-format
 msgid "Reply…"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12352
-#: lib/eden_web/live/chat_live.ex:12376
+#: lib/eden_web/live/chat_live.ex:12772
+#: lib/eden_web/live/chat_live.ex:12796
 #, elixir-autogen, elixir-format
 msgid "That reply can't be sent."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3456
-#: lib/eden_web/live/chat_live.ex:3472
+#: lib/eden_web/live/chat_live.ex:3469
+#: lib/eden_web/live/chat_live.ex:3485
 #, elixir-autogen, elixir-format
 msgid "Thread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11216
-#: lib/eden_web/live/chat_live.ex:12381
+#: lib/eden_web/live/chat_live.ex:11509
+#: lib/eden_web/live/chat_live.ex:12801
 #, elixir-autogen, elixir-format
 msgid "Thread not found."
 msgstr ""
@@ -1200,241 +1207,241 @@ msgstr ""
 msgid "Unmute channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10134
+#: lib/eden_web/live/chat_live.ex:10424
 #, elixir-autogen, elixir-format
 msgid "Edit profile"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3513
-#: lib/eden_web/live/chat_live.ex:3514
+#: lib/eden_web/live/chat_live.ex:3526
+#: lib/eden_web/live/chat_live.ex:3527
 #, elixir-autogen, elixir-format
 msgid "Go to message"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8946
+#: lib/eden_web/live/chat_live.ex:9225
 #, elixir-autogen, elixir-format
 msgid "%{name} requested to join"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8967
+#: lib/eden_web/live/chat_live.ex:9246
 #, elixir-autogen, elixir-format
 msgid "Added"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1354
+#: lib/eden_web/live/chat_live.ex:1300
 #, elixir-autogen, elixir-format
 msgid "Couldn't add that member."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1342
+#: lib/eden_web/live/chat_live.ex:1288
 #, elixir-autogen, elixir-format
 msgid "Couldn't send the request."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3424
+#: lib/eden_web/live/chat_live.ex:3437
 #, elixir-autogen, elixir-format
 msgid "Request sent."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3421
+#: lib/eden_web/live/chat_live.ex:3434
 #, elixir-autogen, elixir-format
 msgid "Request to join"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3414
+#: lib/eden_web/live/chat_live.ex:3427
 #, elixir-autogen, elixir-format
 msgid "This room is private. Request access, or wait for an admin to add you."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8348
-#: lib/eden_web/live/chat_live.ex:8355
+#: lib/eden_web/live/chat_live.ex:8362
+#: lib/eden_web/live/chat_live.ex:8369
 #, elixir-autogen, elixir-format
 msgid "Add to %{room}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:1277
+#: lib/eden_web/live/chat_live.ex:1223
 #, elixir-autogen, elixir-format
 msgid "Couldn't decline."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8964
+#: lib/eden_web/live/chat_live.ex:9243
 #, elixir-autogen, elixir-format
 msgid "Decline"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8970
+#: lib/eden_web/live/chat_live.ex:9249
 #, elixir-autogen, elixir-format
 msgid "Declined"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7867
-#: lib/eden_web/live/chat_live.ex:7869
-#: lib/eden_web/live/chat_live.ex:7908
+#: lib/eden_web/live/chat_live.ex:7881
+#: lib/eden_web/live/chat_live.ex:7883
+#: lib/eden_web/live/chat_live.ex:7922
 #, elixir-autogen, elixir-format
 msgid "Favorite"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2698
+#: lib/eden_web/live/chat_live.ex:2701
 #, elixir-autogen, elixir-format
 msgid "Favorites"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7587
-#: lib/eden_web/live/chat_live.ex:7898
+#: lib/eden_web/live/chat_live.ex:7601
+#: lib/eden_web/live/chat_live.ex:7912
 #, elixir-autogen, elixir-format
 msgid "Mark as read"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2709
-#: lib/eden_web/live/chat_live.ex:7725
+#: lib/eden_web/live/chat_live.ex:2712
+#: lib/eden_web/live/chat_live.ex:7739
 #, elixir-autogen, elixir-format
 msgid "Rooms"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7908
+#: lib/eden_web/live/chat_live.ex:7922
 #, elixir-autogen, elixir-format
 msgid "Unfavorite"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8676
+#: lib/eden_web/live/chat_live.ex:8690
 #, elixir-autogen, elixir-format
 msgid "Access"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8690
+#: lib/eden_web/live/chat_live.ex:8704
 #, elixir-autogen, elixir-format
 msgid "Anyone with the link joins instantly."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8706
+#: lib/eden_web/live/chat_live.ex:8720
 #, elixir-autogen, elixir-format
 msgid "Hidden from the sidebar; entry by invite, admin add, or request."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8687
+#: lib/eden_web/live/chat_live.ex:8701
 #, elixir-autogen, elixir-format
 msgid "Open"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8703
+#: lib/eden_web/live/chat_live.ex:8717
 #, elixir-autogen, elixir-format
 msgid "Private"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3889
+#: lib/eden_web/live/chat_live.ex:3902
 #, elixir-autogen, elixir-format
 msgid "Room settings"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3046
-#: lib/eden_web/live/chat_live.ex:3556
+#: lib/eden_web/live/chat_live.ex:3049
+#: lib/eden_web/live/chat_live.ex:3569
 #, elixir-autogen, elixir-format
 msgid "Close search"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2660
+#: lib/eden_web/live/chat_live.ex:2663
 #, elixir-autogen, elixir-format
 msgid "Search channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3035
+#: lib/eden_web/live/chat_live.ex:3038
 #, elixir-autogen, elixir-format
 msgid "Search in %{room}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2972
-#: lib/eden_web/live/chat_live.ex:2973
-#: lib/eden_web/live/chat_live.ex:3040
+#: lib/eden_web/live/chat_live.ex:2975
+#: lib/eden_web/live/chat_live.ex:2976
+#: lib/eden_web/live/chat_live.ex:3043
 #, elixir-autogen, elixir-format
 msgid "Search in room"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2664
+#: lib/eden_web/live/chat_live.ex:2667
 #, elixir-autogen, elixir-format
 msgid "Search this channel"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9658
+#: lib/eden_web/live/chat_live.ex:9948
 #, elixir-autogen, elixir-format
 msgid "%{count} attachment"
 msgid_plural "%{count} attachments"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:3739
-#: lib/eden_web/live/chat_live.ex:8054
-#: lib/eden_web/live/chat_live.ex:9550
-#: lib/eden_web/live/chat_live.ex:9588
+#: lib/eden_web/live/chat_live.ex:3752
+#: lib/eden_web/live/chat_live.ex:8068
+#: lib/eden_web/live/chat_live.ex:9840
+#: lib/eden_web/live/chat_live.ex:9878
 #, elixir-autogen, elixir-format
 msgid "Remove %{name}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12449
+#: lib/eden_web/live/chat_live.ex:12869
 #, elixir-autogen, elixir-format
 msgid "Too many files (up to %{n})."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12457
+#: lib/eden_web/live/chat_live.ex:12877
 #, elixir-autogen, elixir-format
 msgid "Up to %{n} files"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8805
-#: lib/eden_web/live/chat_live.ex:9655
+#: lib/eden_web/live/chat_live.ex:8819
+#: lib/eden_web/live/chat_live.ex:9945
 #, elixir-autogen, elixir-format
 msgid "%{count} file"
 msgid_plural "%{count} files"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:8803
-#: lib/eden_web/live/chat_live.ex:9650
+#: lib/eden_web/live/chat_live.ex:8817
+#: lib/eden_web/live/chat_live.ex:9940
 #, elixir-autogen, elixir-format
 msgid "%{count} photo"
 msgid_plural "%{count} photos"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:8804
-#: lib/eden_web/live/chat_live.ex:9651
+#: lib/eden_web/live/chat_live.ex:8818
+#: lib/eden_web/live/chat_live.ex:9941
 #, elixir-autogen, elixir-format
 msgid "%{count} video"
 msgid_plural "%{count} videos"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:8079
-#: lib/eden_web/live/chat_live.ex:9611
+#: lib/eden_web/live/chat_live.ex:8093
+#: lib/eden_web/live/chat_live.ex:9901
 #, elixir-autogen, elixir-format
 msgid "Add a caption…"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9479
+#: lib/eden_web/live/chat_live.ex:9769
 #, elixir-autogen, elixir-format
 msgid "Add more"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9463
+#: lib/eden_web/live/chat_live.ex:9753
 #, elixir-autogen, elixir-format
 msgid "Attachment preview"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9565
+#: lib/eden_web/live/chat_live.ex:9855
 #, elixir-autogen, elixir-format
 msgid "Files send as separate messages."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3368
+#: lib/eden_web/live/chat_live.ex:3381
 #, elixir-autogen, elixir-format
 msgid "Emoji"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9342
+#: lib/eden_web/live/chat_live.ex:9623
 #, elixir-autogen, elixir-format
 msgid "More emoji"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9323
+#: lib/eden_web/live/chat_live.ex:9604
 #, elixir-autogen, elixir-format
 msgid "React"
 msgstr ""
@@ -1464,132 +1471,132 @@ msgstr ""
 msgid "Reset to default"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8910
+#: lib/eden_web/live/chat_live.ex:8924
 #, elixir-autogen, elixir-format
 msgid "%{emoji}: %{count} reaction"
 msgid_plural "%{emoji}: %{count} reactions"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:8793
-#: lib/eden_web/live/chat_live.ex:10596
+#: lib/eden_web/live/chat_live.ex:8807
+#: lib/eden_web/live/chat_live.ex:10886
 #, elixir-autogen, elixir-format
 msgid "Audio"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3308
-#: lib/eden_web/live/chat_live.ex:3713
+#: lib/eden_web/live/chat_live.ex:3321
+#: lib/eden_web/live/chat_live.ex:3726
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Cancel reply"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3233
+#: lib/eden_web/live/chat_live.ex:3246
 #, elixir-autogen, elixir-format
 msgid "Cancel upload"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3234
+#: lib/eden_web/live/chat_live.ex:3247
 #, elixir-autogen, elixir-format
 msgid "In queue"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8756
+#: lib/eden_web/live/chat_live.ex:8770
 #, elixir-autogen, elixir-format
 msgid "Message deleted"
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:363
-#: lib/eden_web/live/chat_live.ex:11469
+#: lib/eden_web/live/chat_live.ex:11762
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Couldn't upload that image."
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:362
-#: lib/eden_web/live/chat_live.ex:11467
+#: lib/eden_web/live/chat_live.ex:11760
 #, elixir-autogen, elixir-format
 msgid "Pick a single image."
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:360
-#: lib/eden_web/live/chat_live.ex:11465
+#: lib/eden_web/live/chat_live.ex:11758
 #, elixir-autogen, elixir-format
 msgid "That image is too large (up to 5 MB)."
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:361
-#: lib/eden_web/live/chat_live.ex:11466
+#: lib/eden_web/live/chat_live.ex:11759
 #, elixir-autogen, elixir-format
 msgid "Use a JPEG, PNG, GIF or WebP image."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3195
+#: lib/eden_web/live/chat_live.ex:3202
 #, elixir-autogen, elixir-format
 msgid "Add reaction"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3496
-#: lib/eden_web/live/chat_live.ex:3498
+#: lib/eden_web/live/chat_live.ex:3509
+#: lib/eden_web/live/chat_live.ex:3511
 #, elixir-autogen, elixir-format
 msgid "Follow thread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3496
-#: lib/eden_web/live/chat_live.ex:3498
+#: lib/eden_web/live/chat_live.ex:3509
+#: lib/eden_web/live/chat_live.ex:3511
 #, elixir-autogen, elixir-format
 msgid "Following"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2951
-#: lib/eden_web/live/chat_live.ex:2958
-#: lib/eden_web/live/chat_live.ex:3802
-#: lib/eden_web/live/chat_live.ex:3817
+#: lib/eden_web/live/chat_live.ex:2954
+#: lib/eden_web/live/chat_live.ex:2961
+#: lib/eden_web/live/chat_live.ex:3815
+#: lib/eden_web/live/chat_live.ex:3830
 #, elixir-autogen, elixir-format
 msgid "Threads"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9067
+#: lib/eden_web/live/chat_live.ex:9347
 #, elixir-autogen, elixir-format
 msgid "%{count} unread reply"
 msgid_plural "%{count} unread replies"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/eden_web/live/chat_live.ex:3853
+#: lib/eden_web/live/chat_live.ex:3866
 #, elixir-autogen, elixir-format
 msgid "No followed threads yet. Reply to one to follow it."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2955
+#: lib/eden_web/live/chat_live.ex:2958
 #, elixir-autogen, elixir-format
 msgid "Threads, %{count} unread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8924
+#: lib/eden_web/live/chat_live.ex:8938
 #, elixir-autogen, elixir-format
 msgid "%{names} and %{last}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11751
+#: lib/eden_web/live/chat_live.ex:12044
 #, elixir-autogen, elixir-format
 msgid "%{a} and %{b} are typing…"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11750
+#: lib/eden_web/live/chat_live.ex:12043
 #, elixir-autogen, elixir-format
 msgid "%{name} is typing…"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11752
+#: lib/eden_web/live/chat_live.ex:12045
 #, elixir-autogen, elixir-format
 msgid "Several people are typing…"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3093
+#: lib/eden_web/live/chat_live.ex:3096
 #, elixir-autogen, elixir-format
 msgid "Next"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3092
+#: lib/eden_web/live/chat_live.ex:3095
 #, elixir-autogen, elixir-format
 msgid "Previous"
 msgstr ""
@@ -1639,12 +1646,12 @@ msgstr ""
 msgid "Status"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3122
+#: lib/eden_web/live/chat_live.ex:3129
 #, elixir-autogen, elixir-format
 msgid "Today"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3123
+#: lib/eden_web/live/chat_live.ex:3130
 #, elixir-autogen, elixir-format
 msgid "Yesterday"
 msgstr ""
@@ -1664,149 +1671,150 @@ msgstr ""
 msgid "do not disturb"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10647
+#: lib/eden_web/live/chat_live.ex:10937
 #, elixir-autogen, elixir-format
 msgid "last seen"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3230
-#: lib/eden_web/live/chat_live.ex:3641
+#: lib/eden_web/live/chat_live.ex:3243
+#: lib/eden_web/live/chat_live.ex:3654
+#: lib/eden_web/live/chat_live.ex:9099
 #, elixir-autogen, elixir-format
 msgid "Delete"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3228
-#: lib/eden_web/live/chat_live.ex:3639
+#: lib/eden_web/live/chat_live.ex:3241
+#: lib/eden_web/live/chat_live.ex:3652
 #, elixir-autogen, elixir-format
 msgid "Not delivered"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3229
-#: lib/eden_web/live/chat_live.ex:3640
+#: lib/eden_web/live/chat_live.ex:3242
+#: lib/eden_web/live/chat_live.ex:3653
 #, elixir-autogen, elixir-format
 msgid "Resend"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3231
-#: lib/eden_web/live/chat_live.ex:3642
+#: lib/eden_web/live/chat_live.ex:3244
+#: lib/eden_web/live/chat_live.ex:3655
 #, elixir-autogen, elixir-format
 msgid "Resend {count} messages"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3232
+#: lib/eden_web/live/chat_live.ex:3245
 #, elixir-autogen, elixir-format
 msgid "Sending {name}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9627
+#: lib/eden_web/live/chat_live.ex:9917
 #, elixir-autogen, elixir-format
 msgid "Send as an uncompressed file"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9626
+#: lib/eden_web/live/chat_live.ex:9916
 #, elixir-autogen, elixir-format
 msgid "Send as file"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9783
+#: lib/eden_web/live/chat_live.ex:10073
 #, elixir-autogen, elixir-format, fuzzy
 msgid "photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10595
+#: lib/eden_web/live/chat_live.ex:10885
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Files"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10603
+#: lib/eden_web/live/chat_live.ex:10893
 #, elixir-autogen, elixir-format
 msgid "No audio in this chat yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10602
+#: lib/eden_web/live/chat_live.ex:10892
 #, elixir-autogen, elixir-format
 msgid "No files in this chat yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10600
+#: lib/eden_web/live/chat_live.ex:10890
 #, elixir-autogen, elixir-format
 msgid "No photos in this chat yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10601
+#: lib/eden_web/live/chat_live.ex:10891
 #, elixir-autogen, elixir-format
 msgid "No videos in this chat yet"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10429
+#: lib/eden_web/live/chat_live.ex:10719
 #, elixir-autogen, elixir-format
 msgid "Shared media"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10466
+#: lib/eden_web/live/chat_live.ex:10756
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Load more"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8278
+#: lib/eden_web/live/chat_live.ex:8292
 #, elixir-autogen, elixir-format
 msgid "%{name} was added to the group"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8281
+#: lib/eden_web/live/chat_live.ex:8295
 #, elixir-autogen, elixir-format
 msgid "%{name} was removed from the group"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10395
+#: lib/eden_web/live/chat_live.ex:10685
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Hand this group over? You will become an admin."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10410
+#: lib/eden_web/live/chat_live.ex:10700
 #, elixir-autogen, elixir-format
 msgid "Remove from group"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10408
+#: lib/eden_web/live/chat_live.ex:10698
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Remove this member from the group?"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:857
+#: lib/eden_web/live/chat_live.ex:803
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Transfer ownership before leaving the group."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2305
+#: lib/eden_web/live/chat_live.ex:2302
 #, elixir-autogen, elixir-format
 msgid "You were removed from the group."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:922
+#: lib/eden_web/live/chat_live.ex:868
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Couldn't rename the group."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10309
-#: lib/eden_web/live/chat_live.ex:10310
+#: lib/eden_web/live/chat_live.ex:10599
+#: lib/eden_web/live/chat_live.ex:10600
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Group name"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10292
-#: lib/eden_web/live/chat_live.ex:10293
+#: lib/eden_web/live/chat_live.ex:10582
+#: lib/eden_web/live/chat_live.ex:10583
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Rename group"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:916
+#: lib/eden_web/live/chat_live.ex:862
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Group renamed."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10358
-#: lib/eden_web/live/chat_live.ex:10359
+#: lib/eden_web/live/chat_live.ex:10648
+#: lib/eden_web/live/chat_live.ex:10649
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Member actions"
 msgstr ""
@@ -1842,7 +1850,7 @@ msgstr ""
 msgid "Dismiss"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3139
+#: lib/eden_web/live/chat_live.ex:3146
 #, elixir-autogen, elixir-format
 msgid "Be the first to post in #%{room}."
 msgstr ""
@@ -1862,35 +1870,35 @@ msgstr ""
 msgid "Double-clicking a message reacts with this emoji. Pick one from your quick-react row."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3458
+#: lib/eden_web/live/chat_live.ex:3471
 #, elixir-autogen, elixir-format
 msgid "Drop files into the thread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:2920
+#: lib/eden_web/live/chat_live.ex:2923
 #, elixir-autogen, elixir-format
 msgid "Drop files to send"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9849
+#: lib/eden_web/live/chat_live.ex:10139
 #, elixir-autogen, elixir-format
 msgid "Play %{name}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3484
-#: lib/eden_web/live/chat_live.ex:3485
-#: lib/eden_web/live/chat_live.ex:3545
-#: lib/eden_web/live/chat_live.ex:3550
+#: lib/eden_web/live/chat_live.ex:3497
+#: lib/eden_web/live/chat_live.ex:3498
+#: lib/eden_web/live/chat_live.ex:3558
+#: lib/eden_web/live/chat_live.ex:3563
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Search in thread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:572
+#: lib/eden_web/live/chat_live.ex:579
 #, elixir-autogen, elixir-format
 msgid "You can attach at most %{count} files at once."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9849
+#: lib/eden_web/live/chat_live.ex:10139
 #, elixir-autogen, elixir-format, fuzzy
 msgid "video"
 msgstr ""
@@ -1946,7 +1954,7 @@ msgstr ""
 msgid "Messages, %{count} unread"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8782
+#: lib/eden_web/live/chat_live.ex:8796
 #, elixir-autogen, elixir-format
 msgid "New message"
 msgstr ""
@@ -1977,106 +1985,162 @@ msgstr ""
 msgid "Welcome to ihichat, %{name}!"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10239
-#: lib/eden_web/live/chat_live.ex:10240
+#: lib/eden_web/live/chat_live.ex:10529
+#: lib/eden_web/live/chat_live.ex:10530
 #, elixir-autogen, elixir-format
 msgid "Change group photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:10266
+#: lib/eden_web/live/chat_live.ex:10556
 #, elixir-autogen, elixir-format
 msgid "Remove photo"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3289
-#: lib/eden_web/live/chat_live.ex:3696
+#: lib/eden_web/live/chat_live.ex:3302
+#: lib/eden_web/live/chat_live.ex:3709
 #, elixir-autogen, elixir-format
 msgid "Cancel edit"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11770
-#: lib/eden_web/live/chat_live.ex:11825
-#: lib/eden_web/live/chat_live.ex:11917
+#: lib/eden_web/live/chat_live.ex:12063
+#: lib/eden_web/live/chat_live.ex:12118
+#: lib/eden_web/live/chat_live.ex:12210
 #, elixir-autogen, elixir-format
 msgid "Couldn't save the edit."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9381
+#: lib/eden_web/live/chat_live.ex:9662
 #, elixir-autogen, elixir-format
 msgid "Edit"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3281
-#: lib/eden_web/live/chat_live.ex:3688
+#: lib/eden_web/live/chat_live.ex:3294
+#: lib/eden_web/live/chat_live.ex:3701
 #, elixir-autogen, elixir-format
 msgid "Editing"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9030
-#: lib/eden_web/live/chat_live.ex:9289
+#: lib/eden_web/live/chat_live.ex:9310
+#: lib/eden_web/live/chat_live.ex:9570
 #, elixir-autogen, elixir-format
 msgid "edited"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8060
+#: lib/eden_web/live/chat_live.ex:8074
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Add photos"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:11915
+#: lib/eden_web/live/chat_live.ex:12208
 #, elixir-autogen, elixir-format
 msgid "An album can hold at most %{count} items."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8080
+#: lib/eden_web/live/chat_live.ex:8094
 #, elixir-autogen, elixir-format
 msgid "Caption"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:7998
-#: lib/eden_web/live/chat_live.ex:8006
+#: lib/eden_web/live/chat_live.ex:8012
+#: lib/eden_web/live/chat_live.ex:8020
 #, elixir-autogen, elixir-format
 msgid "Edit media"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8091
-#: lib/eden_web/live/chat_live.ex:11912
+#: lib/eden_web/live/chat_live.ex:8105
+#: lib/eden_web/live/chat_live.ex:12205
 #, elixir-autogen, elixir-format
 msgid "Keep or add at least one photo."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:9489
+#: lib/eden_web/live/chat_live.ex:9779
 #, elixir-autogen, elixir-format
 msgid "Editing this message"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8024
+#: lib/eden_web/live/chat_live.ex:8038
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Photo %{n}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8034
+#: lib/eden_web/live/chat_live.ex:8048
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Remove photo %{n}"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:8100
+#: lib/eden_web/live/chat_live.ex:8114
 #, elixir-autogen, elixir-format
 msgid "Saving…"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3262
-#: lib/eden_web/live/chat_live.ex:3669
+#: lib/eden_web/live/chat_live.ex:3275
+#: lib/eden_web/live/chat_live.ex:3682
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Cancel forward"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3254
+#: lib/eden_web/live/chat_live.ex:3267
 #, elixir-autogen, elixir-format
 msgid "Forwarding: pick a chat and send"
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:3661
+#: lib/eden_web/live/chat_live.ex:3674
 #, elixir-autogen, elixir-format
 msgid "Forwarding: send to add it here"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:9068
+#, elixir-autogen, elixir-format, fuzzy
+msgid "%{count} selected"
+msgid_plural "%{count} selected"
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/eden_web/live/chat_live.ex:9063
+#, elixir-autogen, elixir-format, fuzzy
+msgid "Cancel selection"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:9699
+#, elixir-autogen, elixir-format
+msgid "Select"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:8961
+#, elixir-autogen, elixir-format
+msgid "Select message"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:8994
+#, elixir-autogen, elixir-format
+msgid "Selection"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:9171
+#, elixir-autogen, elixir-format
+msgid "Delete %{count} message?"
+msgid_plural "Delete %{count} messages?"
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/eden_web/live/chat_live.ex:9165
+#, elixir-autogen, elixir-format
+msgid "Delete messages"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:1603
+#, elixir-autogen, elixir-format, fuzzy
+msgid "Deleted."
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:12320
+#, elixir-autogen, elixir-format, fuzzy
+msgid "%{count} message"
+msgid_plural "%{count} messages"
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/eden_web/live/chat_live.ex:8960
+#, elixir-autogen, elixir-format
+msgid "Select: %{preview}"
 msgstr ""

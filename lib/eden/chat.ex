@@ -1902,6 +1902,26 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Fetches the given messages the scoped user can see (membership-scoped, not tombstoned, not
+  hidden-for-me), ordered oldest-first — for multi-select actions (copy/forward/delete). Unknown
+  or unauthorized ids are simply absent from the result. `sender`/`attachments` preloaded.
+  """
+  def get_messages(%Scope{user: user}, ids) when is_list(ids) do
+    ids = ids |> Enum.map(&safe_id/1) |> Enum.filter(&is_integer/1)
+
+    from(m in Message,
+      join: mem in Membership,
+      on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      left_join: d in MessageDeletion,
+      on: d.message_id == m.id and d.user_id == ^user.id,
+      where: m.id in ^ids and is_nil(m.deleted_at) and is_nil(d.id),
+      order_by: [asc: m.id],
+      preload: [:sender, :attachments]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Posts a message carrying one attachment — a thin wrapper over
   `create_album_message/4` for a single source (kept for callers/tests that send
   one file). `source` is a map with `:path` and optional `:filename`, `:body`,
@@ -2465,6 +2485,41 @@ defmodule Eden.Chat do
       notify_members(message.conversation_id)
       :ok
     end
+  end
+
+  @doc """
+  Multi-select delete-for-me (#multiselect): hides each of `ids` for the scoped user in one
+  `insert_all` (unauthorized/already-hidden ids drop out via `get_messages`), then broadcasts a
+  hide per affected message. Returns the number hidden.
+  """
+  def delete_messages_for_me(%Scope{user: user} = scope, ids) when is_list(ids) do
+    messages = get_messages(scope, ids)
+    rows = Enum.map(messages, &%{message_id: &1.id, user_id: user.id, inserted_at: now()})
+
+    Repo.insert_all(MessageDeletion, rows,
+      on_conflict: :nothing,
+      conflict_target: [:message_id, :user_id]
+    )
+
+    Enum.each(messages, fn m ->
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        user_topic(user.id),
+        {:message_hidden, m.conversation_id, m.id}
+      )
+    end)
+
+    length(messages)
+  end
+
+  @doc """
+  Multi-select delete-for-everyone (#multiselect): soft-deletes each of `ids`. Each call
+  re-checks authorship (sender only) and refuses a root with replies, so a non-owned or
+  undeletable id is skipped — the UI only offers "for everyone" when every selected message is
+  the user's own AND none is a root with replies. Returns the number actually deleted.
+  """
+  def delete_messages_for_both(%Scope{} = scope, ids) when is_list(ids) do
+    Enum.count(ids, &(delete_message_for_both(scope, &1) == :ok))
   end
 
   defp ensure_no_replies(%Message{reply_count: count}) when count > 0,

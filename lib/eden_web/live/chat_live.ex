@@ -83,6 +83,13 @@ defmodule EdenWeb.ChatLive do
         # is mirrored to sessionStorage by the .ForwardCarry hook, so the plaque survives
         # navigation/remount — every mount re-hydrates via forward_prompt. Send drops it here.
         pending_forward: nil,
+        # Multi-select (Telegram-style): nil = off, else a MapSet of selected message ids
+        # (may be empty while the mode stays on). Scoped to the open conversation; the bottom
+        # action bar (forward/copy/delete) replaces the composer while it's non-nil.
+        selection: nil,
+        # The delete-selection confirm sheet: nil, or %{count, all_mine} (whether every selected
+        # message is the user's own, which gates the "delete for everyone" option).
+        sel_delete: nil,
         people: [],
         has_more: false,
         oldest_id: nil,
@@ -1496,22 +1503,117 @@ defmodule EdenWeb.ChatLive do
   # Carry-and-drop forward: "Forward" picks the message up (plaque on the composer) instead of
   # opening a target modal. The .ForwardCarry hook re-fires this on every mount with the id it
   # kept in sessionStorage, so the carry survives navigation across DMs, rooms and channels.
-  def handle_event("forward_prompt", %{"id" => id}, socket) do
-    case Chat.get_message(socket.assigns.current_scope, id) do
-      %{} = message ->
-        {:noreply,
-         socket
-         |> assign(pending_forward: message, editing: nil, reply_to: nil, thread_editing: nil)
-         |> push_event("carry_set", %{id: message.id})}
+  # "Forward" from a single message's menu — carry just that one.
+  def handle_event("forward_prompt", %{"id" => id}, socket), do: {:noreply, carry(socket, [id])}
 
-      # Gone / not visible (also clears a stale sessionStorage id on re-hydrate).
-      _ ->
-        {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
-    end
+  # "Forward" from the multi-select bar — carry the whole selection (ordered) and exit select.
+  def handle_event("forward_selection", _params, socket) do
+    ids = socket.assigns.selection |> then(&((&1 && MapSet.to_list(&1)) || []))
+    {:noreply, socket |> assign(selection: nil, sel_delete: nil) |> carry(ids)}
   end
+
+  # Re-hydrate the carry after a navigation/remount (the .ForwardCarry hook replays the ids it
+  # kept in sessionStorage). Gone/unauthorized ids drop out; an empty result clears the plaque.
+  def handle_event("forward_rehydrate", %{"ids" => ids}, socket) when is_list(ids),
+    do: {:noreply, carry(socket, ids)}
+
+  def handle_event("forward_rehydrate", _params, socket), do: {:noreply, socket}
 
   def handle_event("cancel_forward", _params, socket) do
     {:noreply, socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})}
+  end
+
+  # Multi-select (Telegram-style). "Select" from the message menu enters the mode with this
+  # message picked; tapping a row toggles it; the mode ends on Close / Escape / chat switch.
+  def handle_event("enter_select", %{"id" => id}, socket) do
+    case safe_int(id) do
+      nil -> {:noreply, socket}
+      mid -> {:noreply, assign(socket, selection: MapSet.new([mid]))}
+    end
+  end
+
+  def handle_event("toggle_select", %{"id" => id}, socket) do
+    case {socket.assigns.selection, safe_int(id)} do
+      {%MapSet{} = sel, mid} when is_integer(mid) ->
+        sel = if MapSet.member?(sel, mid), do: MapSet.delete(sel, mid), else: MapSet.put(sel, mid)
+        # Deselecting the last one exits the mode (Telegram-style) — no dead bar of disabled
+        # actions.
+        {:noreply, assign(socket, selection: if(MapSet.size(sel) == 0, do: nil, else: sel))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  # Shift-click range: the .SelectSync hook computes the ids between the anchor and the clicked
+  # row (DOM order) and adds them all at once.
+  def handle_event("select_range", %{"ids" => ids}, socket) when is_list(ids) do
+    case socket.assigns.selection do
+      %MapSet{} = sel ->
+        add = ids |> Enum.map(&safe_int/1) |> Enum.filter(&is_integer/1) |> MapSet.new()
+        {:noreply, assign(socket, selection: MapSet.union(sel, add))}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_range", _params, socket), do: {:noreply, socket}
+
+  def handle_event("exit_select", _params, socket),
+    do: {:noreply, assign(socket, selection: nil, sel_delete: nil)}
+
+  # The client copied the selection (assembled + written within the gesture) — confirm + exit.
+  def handle_event("selection_copied", _params, socket) do
+    {:noreply,
+     socket |> assign(selection: nil, sel_delete: nil) |> put_flash(:info, gettext("Copied."))}
+  end
+
+  # Delete the selection: open a confirm sheet. "Delete for everyone" is offered only when every
+  # selected message is the user's own (the context re-checks per message regardless).
+  def handle_event("delete_prompt", _params, socket) do
+    case socket.assigns.selection do
+      %MapSet{} = sel ->
+        me = socket.assigns.current_scope.user.id
+        messages = Chat.get_messages(socket.assigns.current_scope, MapSet.to_list(sel))
+        # "Delete for everyone" is available only when every selected message is the user's own
+        # AND none is a root with replies (delete_message_for_both refuses those) — so the
+        # option we offer never silently skips a message.
+        for_all =
+          messages != [] and
+            Enum.all?(messages, &(&1.sender_id == me and not root_with_replies?(&1)))
+
+        {:noreply, assign(socket, sel_delete: %{count: MapSet.size(sel), for_all: for_all})}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_delete", _params, socket),
+    do: {:noreply, assign(socket, sel_delete: nil)}
+
+  def handle_event("delete_selection", %{"scope" => scope}, socket) do
+    # Guard a stale/forged event arriving after the selection was cleared (nil isn't a MapSet).
+    ids = (socket.assigns.selection || MapSet.new()) |> MapSet.to_list()
+    user = socket.assigns.current_scope
+
+    deleted =
+      case scope do
+        "both" -> Chat.delete_messages_for_both(user, ids)
+        _ -> Chat.delete_messages_for_me(user, ids)
+      end
+
+    socket = assign(socket, selection: nil, sel_delete: nil)
+
+    # Honest feedback: the bulk delete is best-effort (a vanished/undeletable id is skipped), so
+    # only claim "Deleted." when something actually was.
+    socket =
+      if deleted > 0,
+        do: put_flash(socket, :info, gettext("Deleted.")),
+        else: put_flash(socket, :error, gettext("Those messages couldn't be deleted."))
+
+    {:noreply, socket}
   end
 
   def handle_event("move_to_folder_prompt", %{"id" => id}, socket) do
@@ -2394,10 +2496,16 @@ defmodule EdenWeb.ChatLive do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ForwardCarry">
         export default {
           mounted() {
-            // Re-hydrate: if a message is being carried, re-arm the server-side plaque.
-            const id = sessionStorage.getItem("ed:carry")
-            if (id) this.pushEvent("forward_prompt", { id })
-            this.handleEvent("carry_set", ({ id }) => sessionStorage.setItem("ed:carry", id))
+            // Re-hydrate: if messages are being carried, re-arm the server-side plaque with
+            // the ids kept across this navigation/remount.
+            let ids = []
+            try { ids = JSON.parse(sessionStorage.getItem("ed:carry") || "[]") } catch (_e) {}
+            // Tolerate a malformed / legacy single-id value (JSON.parse("123") → a number).
+            if (!Array.isArray(ids)) ids = ids ? [ids] : []
+            if (ids.length) this.pushEvent("forward_rehydrate", { ids })
+            this.handleEvent("carry_set", ({ ids }) =>
+              sessionStorage.setItem("ed:carry", JSON.stringify(ids)),
+            )
             this.handleEvent("carry_clear", () => sessionStorage.removeItem("ed:carry"))
           },
         }
@@ -3022,7 +3130,11 @@ defmodule EdenWeb.ChatLive do
                   Intl(locale) + gettext Today/Yesterday — gettext is unreachable in the
                   hook, so they ride as data-*. --%>
             <div
-              class={["flex flex-col", (@selected.channel_id && "ed-flat-list") || "gap-2"]}
+              class={[
+                "flex flex-col",
+                (@selected.channel_id && "ed-flat-list") || "gap-2",
+                @selection != nil && "selecting"
+              ]}
               id="messages"
               phx-update="stream"
               phx-hook=".DateRail"
@@ -3119,6 +3231,12 @@ defmodule EdenWeb.ChatLive do
                 their own indicator in the thread panel (#103). --%>
           <.typing_row typers={@typing_users} />
 
+          <.selection_bar
+            :if={@selection != nil}
+            selection={@selection}
+            confirming={@sel_delete != nil}
+          />
+
           <.form
             for={@composer}
             id="composer"
@@ -3142,7 +3260,7 @@ defmodule EdenWeb.ChatLive do
             data-queued-label={gettext("In queue")}
             phx-submit="send"
             phx-change="composer_changed"
-            class="flex flex-col gap-2 p-3 border-t shrink-0"
+            class={["flex flex-col gap-2 p-3 border-t shrink-0", @selection != nil && "hidden"]}
             style="border-color: var(--ed-border);"
           >
             <%!-- Forward carry: the message being carried. data-forward-active defers the send
@@ -3161,7 +3279,7 @@ defmodule EdenWeb.ChatLive do
                   <.icon name="hero-arrow-uturn-right-micro" class="size-3.5" />
                   {gettext("Forwarding: pick a chat and send")}
                 </span>
-                <span class="ed-reply-bar__text">{reply_snippet(@pending_forward)}</span>
+                <span class="ed-reply-bar__text">{forward_plaque_label(@pending_forward)}</span>
               </div>
               <button
                 type="button"
@@ -3568,7 +3686,7 @@ defmodule EdenWeb.ChatLive do
                 <.icon name="hero-arrow-uturn-right-micro" class="size-3.5" />
                 {gettext("Forwarding: send to add it here")}
               </span>
-              <span class="ed-reply-bar__text">{reply_snippet(@pending_forward)}</span>
+              <span class="ed-reply-bar__text">{forward_plaque_label(@pending_forward)}</span>
             </div>
             <button
               type="button"
@@ -3822,6 +3940,7 @@ defmodule EdenWeb.ChatLive do
       />
       <.invites_modal :if={@invites_open && @channel} invites={@invites} new_url={@new_invite_url} />
       <.edit_media_modal :if={@edit_media} edit_media={@edit_media} upload={@uploads.edit_media} />
+      <.delete_confirm :if={@sel_delete} sel_delete={@sel_delete} />
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyUrl">
         // Copies data-url to the clipboard and briefly flips the label to
@@ -8832,6 +8951,271 @@ defmodule EdenWeb.ChatLive do
     gettext("%{names} and %{last}", names: Enum.join(leading, ", "), last: last)
   end
 
+  attr :id, :any, required: true
+  attr :preview, :string, default: nil
+
+  # Multi-select click-catcher (Telegram-style): a full-row overlay that toggles this message's
+  # selection — suppressing the normal click (lightbox, reactions, profile) — with a leading
+  # checkbox. Rendered ALWAYS but hidden (`display:none`) until the #messages container carries
+  # `.selecting` (server-driven), which flips it to `display:block`; the row's `--selected` wash
+  # + the check glyph + the button's aria-pressed are reflected onto the row by the .SelectSync
+  # hook, because phx-update="stream" rows don't re-render on a plain @selection change.
+  defp select_overlay(assigns) do
+    ~H"""
+    <button
+      type="button"
+      class="ed-select-hit"
+      phx-click="toggle_select"
+      phx-value-id={@id}
+      data-select-id={@id}
+      aria-pressed="false"
+      aria-label={
+        (@preview && gettext("Select: %{preview}", preview: @preview)) ||
+          gettext("Select message")
+      }
+    >
+      <span class="ed-select-check" aria-hidden="true">
+        <.icon name="hero-check-micro" class="size-3" />
+      </span>
+    </button>
+    """
+  end
+
+  # A short body preview for the select overlay's accessible label (media/empty → generic).
+  defp select_preview(%{body: body}) when is_binary(body) and body != "",
+    do: String.slice(body, 0, 40)
+
+  defp select_preview(_), do: nil
+
+  attr :selection, :any, required: true
+  attr :confirming, :boolean, default: false
+
+  # The bottom action bar shown in place of the composer while selecting (Telegram-style):
+  # a count + the actions on the selected messages (forward / copy / delete).
+  defp selection_bar(assigns) do
+    assigns = assign(assigns, :count, MapSet.size(assigns.selection))
+
+    ~H"""
+    <div
+      class="ed-selbar"
+      id="selbar"
+      phx-hook=".SelectSync"
+      data-selected={Jason.encode!(MapSet.to_list(@selection))}
+      phx-window-keydown={not @confirming && "exit_select"}
+      phx-key="Escape"
+      role="toolbar"
+      aria-label={gettext("Selection")}
+    >
+      <%!-- Reflect the server's selected set onto the stream rows: phx-update="stream" rows
+            don't re-render on a plain @selection change, so this hook toggles the row wash +
+            check + aria-pressed to match data-selected on every change, and clears them when it
+            unmounts. It also handles shift-click range selection (capture phase) while it lives
+            (= only while selecting). --%>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectSync">
+        export default {
+          mounted() {
+            this.anchor = null
+            // Shift-click a row → select the whole range from the last-clicked row to this one.
+            // Capture phase so we can pre-empt the overlay's normal toggle for a shift-click.
+            this.onClick = (e) => {
+              const hit = e.target.closest(".ed-select-hit")
+              if (!hit) return
+              const id = hit.dataset.selectId
+              if (e.shiftKey && this.anchor && this.anchor !== id) {
+                e.preventDefault()
+                e.stopImmediatePropagation()
+                this.pushEvent("select_range", { ids: this.range(this.anchor, id) })
+              }
+              this.anchor = id
+            }
+            document.addEventListener("click", this.onClick, true)
+            this.sync()
+          },
+          updated() { this.sync() },
+          destroyed() {
+            document.removeEventListener("click", this.onClick, true)
+            this.clear()
+          },
+          range(a, b) {
+            const hits = [...document.querySelectorAll("#messages .ed-select-hit")]
+            const ids = hits.map((h) => h.dataset.selectId)
+            let i = ids.indexOf(a), j = ids.indexOf(b)
+            if (i < 0 || j < 0) return [b]
+            if (i > j) [i, j] = [j, i]
+            return ids.slice(i, j + 1)
+          },
+          sync() {
+            let ids = []
+            try { ids = JSON.parse(this.el.dataset.selected || "[]") } catch (_e) {}
+            // Seed the shift-range anchor from the message that entered select mode.
+            if (!this.anchor && ids.length) this.anchor = String(ids[ids.length - 1])
+            const set = new Set(ids.map(String))
+            const mark = (sel, cls) =>
+              document.querySelectorAll("#messages " + sel).forEach((r) => {
+                const hit = r.querySelector(".ed-select-hit")
+                const on = !!hit && set.has(String(hit.dataset.selectId))
+                r.classList.toggle(cls, on)
+                if (hit) hit.setAttribute("aria-pressed", on ? "true" : "false")
+              })
+            mark(".ed-msg", "ed-msg--selected")
+            mark(".ed-flat", "ed-flat--selected")
+          },
+          clear() {
+            document.querySelectorAll("#messages .ed-select-hit[aria-pressed=true]")
+              .forEach((h) => h.setAttribute("aria-pressed", "false"))
+            document
+              .querySelectorAll("#messages .ed-msg--selected, #messages .ed-flat--selected")
+              .forEach((r) => r.classList.remove("ed-msg--selected", "ed-flat--selected"))
+          },
+        }
+      </script>
+      <button
+        type="button"
+        class="ed-btn--icon shrink-0"
+        phx-click="exit_select"
+        aria-label={gettext("Cancel selection")}
+      >
+        <.icon name="hero-x-mark-mini" class="size-5" />
+      </button>
+      <span class="ed-selbar__count" aria-live="polite">
+        {ngettext("%{count} selected", "%{count} selected", @count)}
+      </span>
+      <button
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
+        phx-click="forward_selection"
+        disabled={@count == 0}
+      >
+        <.icon name="hero-arrow-uturn-right-micro" class="size-4" />
+        <span class="hidden sm:inline">{gettext("Forward")}</span>
+      </button>
+      <%!-- Copy assembles the selected rows' text CLIENT-SIDE within the click gesture
+            (Firefox blocks navigator.clipboard.writeText after a server round-trip), then
+            pings the server to flash + exit. Disabled with nothing selected. --%>
+      <button
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm shrink-0"
+        phx-hook=".CopySelection"
+        id="selbar-copy"
+        disabled={@count == 0}
+      >
+        <.icon name="hero-clipboard-document-micro" class="size-4" />
+        <span class="hidden sm:inline">{gettext("Copy")}</span>
+      </button>
+      <button
+        type="button"
+        class="ed-btn ed-btn--ghost ed-btn--sm ed-selbar__danger shrink-0"
+        phx-click="delete_prompt"
+        disabled={@count == 0}
+      >
+        <.icon name="hero-trash-micro" class="size-4" />
+        <span class="hidden sm:inline">{gettext("Delete")}</span>
+      </button>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".CopySelection">
+        export default {
+          mounted() {
+            this.el.addEventListener("click", () => {
+              // Selected rows in chronological (document) order, both layouts.
+              const rows = document.querySelectorAll(
+                "#messages .ed-flat--selected, #messages .ed-msg--selected",
+              )
+              const parts = []
+              rows.forEach((r) => {
+                const el = r.querySelector(".ed-flat__body, .ed-bubble__cap .break-words")
+                const t = (el?.textContent || "").trim()
+                if (t) parts.push(t)
+              })
+              const text = parts.join("\n\n")
+              const done = () => this.pushEvent("selection_copied", {})
+              if (!text) return done()
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(done).catch(() => this.legacy(text, done))
+              } else {
+                this.legacy(text, done)
+              }
+            })
+          },
+          legacy(text, done) {
+            const ta = document.createElement("textarea")
+            ta.value = text
+            ta.style.position = "fixed"
+            ta.style.opacity = "0"
+            document.body.appendChild(ta)
+            ta.focus()
+            ta.select()
+            try { if (document.execCommand("copy")) done() } finally { ta.remove() }
+          },
+        }
+      </script>
+    </div>
+    """
+  end
+
+  attr :sel_delete, :map, required: true
+
+  # Confirm sheet for deleting the selection. "Delete for everyone" is offered only when every
+  # selected message is the user's own (all_mine); otherwise just "Delete for me". The context
+  # re-checks authorship per message regardless of what the UI offers.
+  defp delete_confirm(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-30" id="delete-confirm">
+      <button
+        class="absolute inset-0 w-full h-full"
+        style="background: var(--ed-scrim);"
+        phx-click="cancel_delete"
+        aria-label={gettext("Close")}
+        tabindex="-1"
+      >
+      </button>
+      <div class="absolute inset-0 grid place-items-center p-4 pointer-events-none">
+        <div
+          class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-5 space-y-4 pointer-events-auto"
+          style="background: var(--ed-surface); border-color: var(--ed-border);"
+          phx-window-keydown="cancel_delete"
+          phx-key="Escape"
+          role="dialog"
+          aria-modal="true"
+          aria-label={gettext("Delete messages")}
+          id="dlg-delete"
+          phx-hook=".FocusTrap"
+          tabindex="-1"
+        >
+          <h2 style="font-weight:600;">
+            {ngettext(
+              "Delete %{count} message?",
+              "Delete %{count} messages?",
+              @sel_delete.count
+            )}
+          </h2>
+          <div class="flex flex-col gap-2">
+            <button
+              :if={@sel_delete.for_all}
+              type="button"
+              class="ed-btn ed-btn--danger w-full"
+              phx-click="delete_selection"
+              phx-value-scope="both"
+            >
+              {gettext("Delete for everyone")}
+            </button>
+            <button
+              type="button"
+              class={["ed-btn w-full", (@sel_delete.for_all && "ed-btn--ghost") || "ed-btn--danger"]}
+              style={@sel_delete.for_all && "color: var(--ed-danger-strong);"}
+              phx-click="delete_selection"
+              phx-value-scope="me"
+            >
+              {gettext("Delete for me")}
+            </button>
+            <button type="button" class="ed-btn ed-btn--ghost w-full" phx-click="cancel_delete">
+              {gettext("Cancel")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   attr :id, :string, required: true
   attr :message, :map, required: true
   attr :conversation_id, :any, required: true
@@ -8903,6 +9287,7 @@ defmodule EdenWeb.ChatLive do
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
     >
+      <.select_overlay id={@message.id} preview={select_preview(@message)} />
       <div class="ed-flat__gutter">
         <button
           :if={!@message.compact && @message.sender}
@@ -9068,6 +9453,7 @@ defmodule EdenWeb.ChatLive do
       data-client-id={@mine && @message.client_id}
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
     >
+      <.select_overlay id={@message.id} preview={select_preview(@message)} />
       <%!-- Bubble + reactions stack in a column so reactions hang UNDER the bubble
             (aligned to its side), not inside it (#107). Inside the bubble their chip
             outline + count blended into the bubble fill and read as a bare emoji. --%>
@@ -9315,6 +9701,15 @@ defmodule EdenWeb.ChatLive do
         phx-value-id={@message.id}
       >
         <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
+      </button>
+      <button
+        type="button"
+        class="ed-menu__item"
+        role="menuitem"
+        phx-click="enter_select"
+        phx-value-id={@message.id}
+      >
+        <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Select")}
       </button>
       <button
         type="button"
@@ -10604,6 +10999,9 @@ defmodule EdenWeb.ChatLive do
       # An edit is bound to a specific message — drop it when the chat changes (#164).
       editing: nil,
       edit_media: nil,
+      # Multi-select is per-conversation — exit it on a chat switch.
+      selection: nil,
+      sel_delete: nil,
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
@@ -11681,6 +12079,11 @@ defmodule EdenWeb.ChatLive do
 
   # Staged uploads are ready to consume: at least one entry, and every one finished. A
   # consume on an in-progress entry raises, so this gates every consume_uploaded_entries path.
+  # A thread root that still has replies — delete_message_for_both refuses it, so the delete
+  # dialog gates "for everyone" off when any selected message is one (#multiselect).
+  defp root_with_replies?(%{root_id: nil, reply_count: n}) when is_integer(n) and n > 0, do: true
+  defp root_with_replies?(_), do: false
+
   defp all_uploads_done?([]), do: false
   defp all_uploads_done?(entries), do: Enum.all?(entries, & &1.done?)
 
@@ -11928,14 +12331,39 @@ defmodule EdenWeb.ChatLive do
 
   # Carry-and-drop: drop the carried message into `conversation_id` (or into a thread when
   # `root_id` is given). Clears the plaque + the client's sessionStorage on either outcome.
+  # The forward plaque body: a single carried message shows its snippet; several show a count.
+  defp forward_plaque_label([message]), do: reply_snippet(message)
+
+  defp forward_plaque_label(messages),
+    do: ngettext("%{count} message", "%{count} messages", length(messages))
+
+  # Pick up messages to carry: fetch them (scoped, visible, oldest-first) and stash on
+  # pending_forward, mirroring the ids to the client so the plaque survives navigation. An empty
+  # result clears the plaque. Carrying clears the composer's edit/reply state.
+  defp carry(socket, ids) do
+    case Chat.get_messages(socket.assigns.current_scope, ids) do
+      [] ->
+        socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})
+
+      messages ->
+        socket
+        |> assign(pending_forward: messages, editing: nil, reply_to: nil, thread_editing: nil)
+        |> push_event("carry_set", %{ids: Enum.map(messages, & &1.id)})
+    end
+  end
+
+  # Drop the carried messages into `conversation_id` (or a thread when `root_id` is given), in
+  # order. Clears the plaque + the client's sessionStorage afterwards.
   defp drop_forward(socket, conversation_id, root_id \\ nil) do
-    %{current_scope: scope, pending_forward: %{id: source_id}} = socket.assigns
+    %{current_scope: scope, pending_forward: messages} = socket.assigns
+
+    results =
+      Enum.map(messages, fn m -> Chat.forward_message(scope, m.id, conversation_id, root_id) end)
 
     flash =
-      case Chat.forward_message(scope, source_id, conversation_id, root_id) do
-        {:ok, _message} -> {:info, gettext("Forwarded.")}
-        {:error, _reason} -> {:error, gettext("Couldn't forward that message.")}
-      end
+      if Enum.all?(results, &match?({:ok, _}, &1)),
+        do: {:info, gettext("Forwarded.")},
+        else: {:error, gettext("Couldn't forward that message.")}
 
     {:noreply,
      socket

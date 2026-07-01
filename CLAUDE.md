@@ -62,8 +62,15 @@ design — built incrementally as features land.)
     follow tracking, like `create_reply`). The UI is **carry-and-drop** (Mattermost-style,
     not a target modal): "Forward" picks the message up (a plaque on the composer, `pending_forward`),
     the `.ForwardCarry` hook mirrors the id to sessionStorage so the plaque survives navigation
-    across DMs/rooms/channels (each mount re-hydrates via `forward_prompt`), and Send drops it —
-    from the main composer into the open conversation, from the thread composer into that thread;
+    across DMs/rooms/channels (each mount re-hydrates via `forward_rehydrate`), and Send drops it —
+    from the main composer into the open conversation, from the thread composer into that thread.
+    **Multi-select** (Telegram-style) reuses this: the context-menu "Select" opens a selection
+    mode over the main stream (`selection` MapSet, server-owned; the `.SelectSync` hook reflects
+    it onto `phx-update="stream"` rows, which don't re-render on a plain assign change), with a
+    bottom action bar — **Forward** (carries the whole ordered selection, `pending_forward` is a
+    list; `forward_message/4` per id), **Copy** (assembled client-side within the click gesture,
+    Firefox-safe), and **Delete** (a confirm sheet: "for everyone" only when every selected
+    message is the user's own, `delete_messages_for_both/2` re-checks authorship per message).
     **edit** (`#164`, author-only) revises a message's text or, for a
     media message, replaces its album AND/OR caption (`edit_message` / `edit_message_media`
     — keep/drop existing attachments + append new, order preserved, forward-safe blob

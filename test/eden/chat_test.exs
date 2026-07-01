@@ -929,6 +929,68 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "multi-select (#multiselect)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, a1} = Chat.create_message(scope(alice), conv.id, %{"body" => "one"})
+      {:ok, b1} = Chat.create_message(scope(bob), conv.id, %{"body" => "two"})
+      {:ok, a2} = Chat.create_message(scope(alice), conv.id, %{"body" => "three"})
+      %{conv: conv, a1: a1, b1: b1, a2: a2}
+    end
+
+    test "get_messages returns visible messages oldest-first, skipping unknown/hidden", %{
+      alice: alice,
+      conv: conv,
+      a1: a1,
+      b1: b1,
+      a2: a2
+    } do
+      :ok = Chat.delete_message_for_me(scope(alice), b1.id)
+
+      got = Chat.get_messages(scope(alice), [a2.id, a1.id, b1.id, 9_999_999])
+      # b1 hidden-for-alice and the bogus id are dropped; the rest oldest-first.
+      assert Enum.map(got, & &1.id) == [a1.id, a2.id]
+      _ = conv
+    end
+
+    test "delete_messages_for_me hides all of them for that user only", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      a1: a1,
+      b1: b1
+    } do
+      assert 2 = Chat.delete_messages_for_me(scope(bob), [a1.id, b1.id])
+
+      {:ok, for_bob} = Chat.list_messages(scope(bob), conv.id)
+      refute Enum.any?(for_bob, &(&1.id in [a1.id, b1.id]))
+
+      # Hidden only for bob — alice still sees both of her own + bob's.
+      {:ok, for_alice} = Chat.list_messages(scope(alice), conv.id)
+      assert Enum.any?(for_alice, &(&1.id == a1.id))
+      assert Enum.any?(for_alice, &(&1.id == b1.id))
+    end
+
+    test "delete_messages_for_both tombstones own messages, skips others' (best-effort)", %{
+      alice: alice,
+      conv: conv,
+      a1: a1,
+      b1: b1,
+      a2: a2
+    } do
+      # 2 deleted (alice's a1, a2); bob's b1 skipped (she isn't its author).
+      assert 2 = Chat.delete_messages_for_both(scope(alice), [a1.id, b1.id, a2.id])
+
+      {:ok, msgs} = Chat.list_messages(scope(alice), conv.id)
+      ids = Enum.map(msgs, & &1.id)
+      # alice's two are gone for everyone; bob's stays (she isn't its author).
+      refute a1.id in ids
+      refute a2.id in ids
+      assert b1.id in ids
+      _ = conv
+    end
+  end
+
   describe "delete_message_for_both/2" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
@@ -1098,6 +1160,18 @@ defmodule Eden.ChatTest do
 
       assert {:error, :not_a_root} =
                Chat.forward_message(scope(alice), source.id, conv.id, reply.id)
+    end
+
+    test "bulk delete-for-everyone skips a root that has replies (#multiselect)", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, _reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "keeps the root alive"})
+
+      # alice authored the root, but it has a reply → delete_message_for_both refuses it, so the
+      # bulk count is 0 (nothing deleted). The UI gates "for everyone" off for exactly this.
+      assert 0 = Chat.delete_messages_for_both(scope(alice), [root.id])
     end
 
     test "create_album_reply attaches an album to a thread reply, delivered as a reply (#104)", %{
