@@ -12434,16 +12434,19 @@ defmodule EdenWeb.ChatLive do
     results =
       Enum.map(messages, fn m -> Chat.forward_message(scope, m.id, conversation_id, root_id) end)
 
-    flash =
-      if Enum.all?(results, &match?({:ok, _}, &1)),
-        do: {:info, gettext("Forwarded.")},
-        else: {:error, gettext("Couldn't forward that message.")}
+    socket =
+      socket
+      |> assign(pending_forward: nil)
+      |> push_event("carry_clear", %{})
 
-    {:noreply,
-     socket
-     |> assign(pending_forward: nil)
-     |> push_event("carry_clear", %{})
-     |> put_flash(elem(flash, 0), elem(flash, 1))}
+    # No success flash: the copy lands visibly at the bottom of the open stream, so a
+    # confirmation toast is just noise. Only a failure warrants interrupting.
+    socket =
+      if Enum.all?(results, &match?({:ok, _}, &1)),
+        do: socket,
+        else: put_flash(socket, :error, gettext("Couldn't forward that message."))
+
+    {:noreply, socket}
   end
 
   defp send_text(socket, scope, conversation_id, body, client_id, reply_to_id) do
@@ -12451,11 +12454,13 @@ defmodule EdenWeb.ChatLive do
 
     case Chat.create_message(scope, conversation_id, attrs) do
       {:ok, _message} ->
-        # The form path clears the input via the composer assign; the hook path
-        # (client_id present) already cleared it client-side, so leave the assign
-        # alone to avoid clobbering text typed during a slow round-trip. A reply
-        # always clears the tray.
-        socket = if client_id, do: socket, else: assign(socket, composer: empty_composer())
+        # Reset the composer assign on BOTH paths. The hook path (client_id) already cleared
+        # the DOM input, but leaving the assign stale meant any form re-render (the forward /
+        # reply plaque appearing) patched the unfocused textarea BACK to the last-sent text.
+        # Typing during a slow round-trip is safe: LiveView never patches the focused input,
+        # and composer_changed re-syncs the assign on every keystroke. A reply always clears
+        # the tray.
+        socket = assign(socket, composer: empty_composer())
         socket = if reply_to_id, do: assign(socket, reply_to: nil), else: socket
         # Just sent → reset the typing throttle so the next keystroke re-broadcasts
         # "typing" at once instead of waiting out the window (#94 review).

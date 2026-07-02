@@ -104,3 +104,31 @@ test("sends + forwards land at the BOTTOM of a multi-day room, incl. after reloa
   await alice.waitForTimeout(800)
   await check("MOUNT-2")
 })
+
+// Regression: picking up a forward must NOT resurrect the last-sent text in the composer.
+// The hook send path cleared the input client-side only; the stale @composer assign then
+// got patched back into the (unfocused) textarea when the carry plaque re-rendered the form.
+// Also: a successful drop shows NO flash (the copy lands visibly at the bottom).
+test("forward pickup keeps the composer empty and drop shows no success flash (#forward)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const msg = `stale-input ${Date.now()}`
+  await send(alice, msg)
+  const bubble = alice.locator(".ed-bubble", { hasText: msg }).first()
+  await expect(bubble).toBeVisible()
+
+  // Pick up the forward → the plaque re-renders the form; the input must stay EMPTY.
+  const menu = await openMenu(alice, bubble)
+  await menu.locator(".ed-menu__item", { hasText: "Forward" }).click()
+  await expect(alice.locator(".ed-reply-bar--forward").first()).toBeVisible()
+  await expect(alice.locator("#composer-body")).toHaveValue("")
+
+  // Drop it → lands at the bottom, and NO success flash appears.
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  await expect(alice.locator(".ed-bubble", { hasText: msg })).toHaveCount(2, { timeout: 8000 })
+  await expect(alice.locator("#flash-info, .ed-flash--info, [role=alert]:has-text('Forwarded')")).toHaveCount(0)
+  await expect(alice.locator("#composer-body")).toHaveValue("")
+})
