@@ -3107,6 +3107,21 @@ defmodule Eden.ChatTest do
       membership = Repo.get_by!(Membership, conversation_id: conv.id, user_id: alice.id)
       assert membership.last_read_at
     end
+
+    test "a non-member cannot forge a read receipt", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      mallory = user_fixture(%{username: "mallory_read"})
+
+      Chat.subscribe(conv.id)
+      assert :ok = Chat.mark_read(scope(mallory), conv.id)
+
+      # No {:read, ...} may reach the conversation topic: the membership-scoped
+      # update touched zero rows, so the broadcast is suppressed.
+      refute_receive {:read, _reader_id, _read_at}
+
+      # And nothing was written for the non-member.
+      refute Repo.get_by(Membership, conversation_id: conv.id, user_id: mallory.id)
+    end
   end
 
   describe "folders" do
