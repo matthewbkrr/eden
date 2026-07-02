@@ -216,3 +216,70 @@ test("shift-click selects the whole range (#multiselect)", async ({ alice, seed 
     await expect(alice.locator(".ed-msg", { hasText: t }).first()).toHaveClass(/ed-msg--selected/)
   }
 })
+
+test("selecting in a thread opens select mode IN THE THREAD, not the room (#multiselect)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/channels/${seed.channel_id}/r/${seed.general_room_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  // A root + open its thread + post a reply.
+  const rootText = `sel-root ${Date.now()}`
+  await send(alice, rootText)
+  const rootRow = alice.locator("#messages .ed-flat", { hasText: rootText }).first()
+  const rmenu = await openMenu(alice, rootRow)
+  await rmenu.getByText("Reply in thread", { exact: true }).click()
+  await expect(alice.locator("#reply-composer")).toBeVisible()
+  const reply = `sel-reply ${Date.now()}`
+  await alice.locator("#reply-body").fill(reply)
+  await alice.locator("#reply-composer").evaluate((f) => f.requestSubmit())
+  const replyRow = alice.locator("#thread-replies .ed-flat", { hasText: reply }).first()
+  await expect(replyRow).toBeVisible({ timeout: 12_000 })
+
+  // Select the reply → the bar appears; the THREAD container enters select mode, the ROOM does not.
+  const smenu = await openMenu(alice, replyRow)
+  await smenu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await expect(alice.locator(".ed-selbar")).toBeVisible()
+  await expect(alice.locator("#thread-replies")).toHaveClass(/ed-selecting/)
+  await expect(alice.locator("#messages")).not.toHaveClass(/ed-selecting/)
+  await expect(replyRow).toHaveClass(/ed-flat--selected/)
+  // The bar sits in the thread panel (its container targets #thread-replies).
+  await expect(alice.locator(".ed-selbar")).toHaveAttribute("data-container", "#thread-replies")
+
+  // Escape exits.
+  await alice.keyboard.press("Escape")
+  await expect(alice.locator(".ed-selbar")).toHaveCount(0)
+  await expect(alice.locator("#reply-composer")).toBeVisible()
+})
+
+test("forwarding from a thread carries into the room, not back into the thread (#multiselect)", async ({ alice, seed }) => {
+  await alice.goto(`/channels/${seed.channel_id}/r/${seed.general_room_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const root = `vf-root ${Date.now()}`
+  await send(alice, root)
+  const rmenu = await openMenu(alice, alice.locator("#messages .ed-flat", { hasText: root }).first())
+  await rmenu.getByText("Reply in thread", { exact: true }).click()
+  await expect(alice.locator("#reply-composer")).toBeVisible()
+  const rep = `vf-reply ${Date.now()}`
+  await alice.locator("#reply-body").fill(rep)
+  await alice.locator("#reply-composer").evaluate((f) => f.requestSubmit())
+  await expect(alice.locator("#thread-replies .ed-flat", { hasText: rep }).first()).toBeVisible({ timeout: 12000 })
+
+  // Select in thread, Forward from the thread bar.
+  const m = await openMenu(alice, alice.locator("#thread-replies .ed-flat", { hasText: rep }).first())
+  await m.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await alice.locator('.ed-selbar button').filter({ hasText: "Forward" }).click().catch(async () => {
+    await alice.locator('.ed-selbar button').nth(1).click()  // icon-only: Forward is the 2nd button
+  })
+
+  // The thread auto-closed → we're in the room, plaque on the main composer.
+  await expect(alice.locator("#reply-composer")).toHaveCount(0)
+  await expect(alice.locator("#composer [data-forward-active]")).toBeVisible()
+
+  // Send in the room → the reply is forwarded as a top-level room message.
+  const before = await alice.locator("#messages .ed-flat", { hasText: rep }).count()
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  await expect(alice.locator("#messages .ed-flat", { hasText: rep })).toHaveCount(before + 1, { timeout: 10000 })
+  await expect(alice.locator(".ed-reply-bar--forward")).toHaveCount(0)
+})

@@ -60,3 +60,47 @@ test("forward a message INTO a specific thread (#forward)", async ({ alice, seed
     timeout: 12_000,
   })
 })
+
+// Regression (#stream-append): in a MULTI-DAY room (DateRail separators present), a new
+// message/forward must land at the BOTTOM of the stream — not merely exist in the DOM.
+// A non-stream child inside #messages used to poison LiveView's append anchoring, landing
+// appends at the TOP (off-screen → "only shows after refresh"), incl. after a reload.
+const lastRowId = (page) => page.evaluate(() => {
+  const rows = [...document.querySelectorAll('#messages [id^="messages-"]')]
+  return rows.length ? rows[rows.length - 1].id : null
+})
+
+test("sends + forwards land at the BOTTOM of a multi-day room, incl. after reload (#forward)", async ({
+  alice,
+  seed,
+}) => {
+  const room = `/channels/${seed.channel_id}/r/${seed.general_room_id}`
+  const check = async (label) => {
+    const msg = `${label} ${Date.now()}`
+    await send(alice, msg)
+    const row = alice.locator("#messages .ed-flat", { hasText: msg }).first()
+    await expect(row).toBeVisible({ timeout: 10000 })
+    expect(await row.getAttribute("id"), `${label}: send must be the last row`).toBe(await lastRowId(alice))
+    const beforeFwd = await lastRowId(alice)
+    const menu = await openMenu(alice, row)
+    await menu.locator(".ed-menu__item", { hasText: "Forward" }).click()
+    await expect(alice.locator(".ed-reply-bar--forward").first()).toBeVisible()
+    await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+    await expect
+      .poll(async () => (await lastRowId(alice)) !== beforeFwd, { timeout: 8000 })
+      .toBe(true)
+    const last = await lastRowId(alice)
+    expect(
+      await alice.evaluate((id) => !!document.getElementById(id)?.querySelector(".ed-forwarded"), last),
+      `${label}: forwarded copy must be the last row`,
+    ).toBe(true)
+  }
+  await alice.goto(room)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await alice.waitForTimeout(800)
+  await check("MOUNT-1")
+  await alice.reload()
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await alice.waitForTimeout(800)
+  await check("MOUNT-2")
+})
