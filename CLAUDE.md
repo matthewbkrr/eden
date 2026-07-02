@@ -363,3 +363,21 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   both": `delete_message_for_both/2` deletes the `storage_key` + `thumbnail_key`
   blobs (after the tombstone commits, and only if no forwarded copy still
   references them). Any new delete path must do the same.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (`matthewbkrr/eden`, via the `gh` CLI); external
+PRs are NOT a triage surface. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default names (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`) — distinct from the existing
+type/priority axes (`bug`/`feature`, `P0:`–`P3:`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` at the repo root + ADRs in `docs/adr/`.
+See `docs/agents/domain.md`.
