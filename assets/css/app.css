@@ -2040,31 +2040,32 @@ html {
   /* Multi-select (Telegram-style): in select mode the rows shift right to reveal a leading
      checkbox, a full-row click-catcher toggles it, and the selected row lifts to a cobalt wash
      (never darkens into --ed-bg). Shared by flat rows and DM bubbles. The overlay is always in
-     the DOM but inert (display:none) until #messages carries `.selecting`; the `--selected`
-     wash + check are applied to rows by the .SelectSync hook (streams don't re-render rows). */
+     the DOM but hidden (display:none) until its stream container (#messages OR #thread-replies)
+     carries `.ed-selecting`; the `--selected` wash + check are applied by the .SelectSync hook
+     (streams don't re-render rows). */
   .ed-select-hit { display: none; }
-  #messages.selecting .ed-flat,
-  #messages.selecting .ed-msg {
+  .ed-selecting .ed-flat,
+  .ed-selecting .ed-msg {
     position: relative;
     padding-left: 2.75rem;
     cursor: pointer;
   }
-  #messages.selecting .ed-msg {
+  .ed-selecting .ed-msg {
     border-radius: var(--ed-radius);
     padding-top: 0.125rem;
     padding-bottom: 0.125rem;
   }
-  #messages.selecting .ed-msg:hover,
-  #messages.selecting .ed-flat:hover {
+  .ed-selecting .ed-msg:hover,
+  .ed-selecting .ed-flat:hover {
     background: color-mix(in oklab, var(--ed-primary) 6%, transparent);
   }
   .ed-flat--selected,
-  #messages.selecting .ed-flat--selected:hover,
+  .ed-selecting .ed-flat--selected:hover,
   .ed-msg--selected,
-  #messages.selecting .ed-msg--selected:hover {
+  .ed-selecting .ed-msg--selected:hover {
     background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
   }
-  #messages.selecting .ed-select-hit {
+  .ed-selecting .ed-select-hit {
     display: block;
     position: absolute;
     inset: 0;
@@ -2076,10 +2077,10 @@ html {
   }
   /* Keyboard focus lands on the full-row overlay button; ring its checkbox so the focused row
      is obvious (the overlay itself is transparent). */
-  #messages.selecting .ed-select-hit:focus-visible {
+  .ed-selecting .ed-select-hit:focus-visible {
     outline: none;
   }
-  #messages.selecting .ed-select-hit:focus-visible .ed-select-check {
+  .ed-selecting .ed-select-hit:focus-visible .ed-select-check {
     outline: 2px solid var(--ed-ring);
     outline-offset: 2px;
   }
@@ -2121,6 +2122,10 @@ html {
     font-size: 0.9375rem;
     font-weight: 500;
     color: var(--ed-ink);
+    /* Never wrap to a second line / never push the actions out of a narrow thread panel. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   /* Danger-colored text (bar "Delete", the "Delete for me" ghost) uses the darkened token so it
      clears AA on the surface; the solid danger buttons keep white-on-red. */
@@ -2692,16 +2697,23 @@ html {
     line-height: 1.5;
   }
 
-  /* Room empty-state (#154): a calm placeholder for a room with no messages.
-     Visibility is toggled by the stream's `only:block` (sole child of #messages);
-     this just styles it to match the muted language of .ed-thread-empty and the
-     "No conversation selected" branch. Floats down from the top so it doesn't
-     hug the header. */
+  /* Room empty-state (#154): a calm placeholder for a room with no messages, styled to
+     match the muted language of .ed-thread-empty and the "No conversation selected"
+     branch. Floats down from the top so it doesn't hug the header. */
   .ed-room-empty {
     margin-inline: auto;
     max-width: 20rem;
     padding: clamp(2.5rem, 12vh, 5.5rem) 1.5rem 2rem;
     text-align: center;
+    /* Hidden while the stream holds rows. The empty-state must live OUTSIDE the
+       phx-update="stream" container (see the template comment), so the reveal is a
+       sibling :has() check instead of the in-container only:block pattern. */
+    display: none;
+  }
+  /* Any streamed row (flat, bubble, or system notice) carries id="messages-N"; DateRail's
+     injected separators are "ds-messages-N" and don't match the prefix. */
+  #messages:not(:has([id^="messages-"])) + .ed-room-empty {
+    display: block;
   }
   .ed-room-empty__medallion {
     width: 3.5rem;
