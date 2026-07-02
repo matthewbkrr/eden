@@ -60,3 +60,75 @@ test("forward a message INTO a specific thread (#forward)", async ({ alice, seed
     timeout: 12_000,
   })
 })
+
+// Regression (#stream-append): in a MULTI-DAY room (DateRail separators present), a new
+// message/forward must land at the BOTTOM of the stream — not merely exist in the DOM.
+// A non-stream child inside #messages used to poison LiveView's append anchoring, landing
+// appends at the TOP (off-screen → "only shows after refresh"), incl. after a reload.
+const lastRowId = (page) => page.evaluate(() => {
+  const rows = [...document.querySelectorAll('#messages [id^="messages-"]')]
+  return rows.length ? rows[rows.length - 1].id : null
+})
+
+test("sends + forwards land at the BOTTOM of a multi-day room, incl. after reload (#forward)", async ({
+  alice,
+  seed,
+}) => {
+  const room = `/channels/${seed.channel_id}/r/${seed.general_room_id}`
+  const check = async (label) => {
+    const msg = `${label} ${Date.now()}`
+    await send(alice, msg)
+    const row = alice.locator("#messages .ed-flat", { hasText: msg }).first()
+    await expect(row).toBeVisible({ timeout: 10000 })
+    expect(await row.getAttribute("id"), `${label}: send must be the last row`).toBe(await lastRowId(alice))
+    const beforeFwd = await lastRowId(alice)
+    const menu = await openMenu(alice, row)
+    await menu.locator(".ed-menu__item", { hasText: "Forward" }).click()
+    await expect(alice.locator(".ed-reply-bar--forward").first()).toBeVisible()
+    await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+    await expect
+      .poll(async () => (await lastRowId(alice)) !== beforeFwd, { timeout: 8000 })
+      .toBe(true)
+    const last = await lastRowId(alice)
+    expect(
+      await alice.evaluate((id) => !!document.getElementById(id)?.querySelector(".ed-forwarded"), last),
+      `${label}: forwarded copy must be the last row`,
+    ).toBe(true)
+  }
+  await alice.goto(room)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await alice.waitForTimeout(800)
+  await check("MOUNT-1")
+  await alice.reload()
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await alice.waitForTimeout(800)
+  await check("MOUNT-2")
+})
+
+// Regression: picking up a forward must NOT resurrect the last-sent text in the composer.
+// The hook send path cleared the input client-side only; the stale @composer assign then
+// got patched back into the (unfocused) textarea when the carry plaque re-rendered the form.
+// Also: a successful drop shows NO flash (the copy lands visibly at the bottom).
+test("forward pickup keeps the composer empty and drop shows no success flash (#forward)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  const msg = `stale-input ${Date.now()}`
+  await send(alice, msg)
+  const bubble = alice.locator(".ed-bubble", { hasText: msg }).first()
+  await expect(bubble).toBeVisible()
+
+  // Pick up the forward → the plaque re-renders the form; the input must stay EMPTY.
+  const menu = await openMenu(alice, bubble)
+  await menu.locator(".ed-menu__item", { hasText: "Forward" }).click()
+  await expect(alice.locator(".ed-reply-bar--forward").first()).toBeVisible()
+  await expect(alice.locator("#composer-body")).toHaveValue("")
+
+  // Drop it → lands at the bottom, and NO success flash appears.
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  await expect(alice.locator(".ed-bubble", { hasText: msg })).toHaveCount(2, { timeout: 8000 })
+  await expect(alice.locator("#flash-info, .ed-flash--info, [role=alert]:has-text('Forwarded')")).toHaveCount(0)
+  await expect(alice.locator("#composer-body")).toHaveValue("")
+})

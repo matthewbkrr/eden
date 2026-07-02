@@ -87,6 +87,10 @@ defmodule EdenWeb.ChatLive do
         # (may be empty while the mode stays on). Scoped to the open conversation; the bottom
         # action bar (forward/copy/delete) replaces the composer while it's non-nil.
         selection: nil,
+        # Which surface the selection lives in — :main (room/DM stream) or :thread (the open
+        # thread panel). Drives which container gets `.ed-selecting` + which composer the bar
+        # replaces, so selecting in a thread stays in the thread.
+        select_surface: nil,
         # The delete-selection confirm sheet: nil, or %{count, all_mine} (whether every selected
         # message is the user's own, which gates the "delete for everyone" option).
         sel_delete: nil,
@@ -1503,13 +1507,29 @@ defmodule EdenWeb.ChatLive do
   # Carry-and-drop forward: "Forward" picks the message up (plaque on the composer) instead of
   # opening a target modal. The .ForwardCarry hook re-fires this on every mount with the id it
   # kept in sessionStorage, so the carry survives navigation across DMs, rooms and channels.
-  # "Forward" from a single message's menu — carry just that one.
-  def handle_event("forward_prompt", %{"id" => id}, socket), do: {:noreply, carry(socket, [id])}
+  # "Forward" from a single message's menu — carry just that one. Forwarding from a thread reply
+  # closes the thread panel (like the bar's forward_selection), so the plaque lands on the room's
+  # main composer and the drop is visible there — not hidden behind the still-open thread panel.
+  def handle_event("forward_prompt", %{"id" => id} = params, socket) do
+    socket = if params["surface"] == "thread", do: close_thread_panel(socket), else: socket
+    {:noreply, carry(socket, [id])}
+  end
 
   # "Forward" from the multi-select bar — carry the whole selection (ordered) and exit select.
+  # Carrying FROM a thread also closes the thread panel, so the plaque lands on the room's main
+  # composer: Send then drops into the room (or navigate elsewhere). Otherwise a Send in the
+  # thread composer would just re-drop the carry back into the same thread — never the room.
   def handle_event("forward_selection", _params, socket) do
     ids = socket.assigns.selection |> then(&((&1 && MapSet.to_list(&1)) || []))
-    {:noreply, socket |> assign(selection: nil, sel_delete: nil) |> carry(ids)}
+    from_thread? = socket.assigns.select_surface == :thread
+
+    socket =
+      socket
+      |> assign(selection: nil, sel_delete: nil, select_surface: nil)
+      |> then(&if(from_thread?, do: close_thread_panel(&1), else: &1))
+      |> carry(ids)
+
+    {:noreply, socket}
   end
 
   # Re-hydrate the carry after a navigation/remount (the .ForwardCarry hook replays the ids it
@@ -1524,11 +1544,16 @@ defmodule EdenWeb.ChatLive do
   end
 
   # Multi-select (Telegram-style). "Select" from the message menu enters the mode with this
-  # message picked; tapping a row toggles it; the mode ends on Close / Escape / chat switch.
-  def handle_event("enter_select", %{"id" => id}, socket) do
+  # message picked; tapping a row toggles it; the mode ends on Close / Escape / chat switch. The
+  # `surface` ("thread" | "main") keeps a thread selection in the thread panel.
+  def handle_event("enter_select", %{"id" => id} = params, socket) do
     case safe_int(id) do
-      nil -> {:noreply, socket}
-      mid -> {:noreply, assign(socket, selection: MapSet.new([mid]))}
+      nil ->
+        {:noreply, socket}
+
+      mid ->
+        surface = if params["surface"] == "thread", do: :thread, else: :main
+        {:noreply, assign(socket, selection: MapSet.new([mid]), select_surface: surface)}
     end
   end
 
@@ -1561,12 +1586,14 @@ defmodule EdenWeb.ChatLive do
   def handle_event("select_range", _params, socket), do: {:noreply, socket}
 
   def handle_event("exit_select", _params, socket),
-    do: {:noreply, assign(socket, selection: nil, sel_delete: nil)}
+    do: {:noreply, assign(socket, selection: nil, sel_delete: nil, select_surface: nil)}
 
   # The client copied the selection (assembled + written within the gesture) — confirm + exit.
   def handle_event("selection_copied", _params, socket) do
     {:noreply,
-     socket |> assign(selection: nil, sel_delete: nil) |> put_flash(:info, gettext("Copied."))}
+     socket
+     |> assign(selection: nil, sel_delete: nil, select_surface: nil)
+     |> put_flash(:info, gettext("Copied."))}
   end
 
   # Delete the selection: open a confirm sheet. "Delete for everyone" is offered only when every
@@ -1604,7 +1631,7 @@ defmodule EdenWeb.ChatLive do
         _ -> Chat.delete_messages_for_me(user, ids)
       end
 
-    socket = assign(socket, selection: nil, sel_delete: nil)
+    socket = assign(socket, selection: nil, sel_delete: nil, select_surface: nil)
 
     # Honest feedback: the bulk delete is best-effort (a vanished/undeletable id is skipped), so
     # only claim "Deleted." when something actually was.
@@ -1656,12 +1683,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_thread", _params, socket) do
-    {:noreply,
-     socket
-     |> cancel_staged_thread_attachments()
-     |> clear_thread_typing()
-     |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
-     |> reset_thread_search()}
+    {:noreply, socket |> reset_thread_select() |> close_thread_panel()}
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
@@ -3133,7 +3155,7 @@ defmodule EdenWeb.ChatLive do
               class={[
                 "flex flex-col",
                 (@selected.channel_id && "ed-flat-list") || "gap-2",
-                @selection != nil && "selecting"
+                (@selection != nil and @select_surface == :main) && "ed-selecting"
               ]}
               id="messages"
               phx-update="stream"
@@ -3142,23 +3164,6 @@ defmodule EdenWeb.ChatLive do
               data-today={gettext("Today")}
               data-yesterday={gettext("Yesterday")}
             >
-              <%!-- Room empty-state (#154): the canonical LiveView stream empty pattern —
-                    `only:block` reveals it only while #messages holds no streamed rows.
-                    Rooms only (DMs / threads carry their own placeholders). --%>
-              <div
-                :if={@selected.channel_id}
-                id="messages-empty"
-                role="status"
-                class="ed-room-empty hidden only:block"
-              >
-                <div class="ed-room-empty__medallion" aria-hidden="true">
-                  <.icon name="hero-chat-bubble-left-right" class="size-7" />
-                </div>
-                <p class="ed-room-empty__title">{gettext("No messages yet")}</p>
-                <p class="ed-room-empty__sub">
-                  {gettext("Be the first to post in #%{room}.", room: @selected.name)}
-                </p>
-              </div>
               <%= for {dom_id, message} <- @streams.messages do %>
                 <%= if @selected.channel_id do %>
                   <.flat_message
@@ -3186,6 +3191,21 @@ defmodule EdenWeb.ChatLive do
                   />
                 <% end %>
               <% end %>
+            </div>
+            <%!-- Room empty-state (#154), shown while #messages holds no streamed rows. It MUST
+                  live OUTSIDE the stream container (CSS :has() on the sibling reveals it): a
+                  non-stream child inside #messages breaks LiveView's append anchoring — with
+                  .DateRail's ds-* separators present, appended messages land at the TOP of the
+                  list instead of the bottom (the "forward/message only shows after refresh"
+                  bug). Rooms only (DMs / threads carry their own placeholders). --%>
+            <div :if={@selected.channel_id} id="messages-empty" role="status" class="ed-room-empty">
+              <div class="ed-room-empty__medallion" aria-hidden="true">
+                <.icon name="hero-chat-bubble-left-right" class="size-7" />
+              </div>
+              <p class="ed-room-empty__title">{gettext("No messages yet")}</p>
+              <p class="ed-room-empty__sub">
+                {gettext("Be the first to post in #%{room}.", room: @selected.name)}
+              </p>
             </div>
             <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
             <div class="flex flex-col gap-2 mt-2" id="pending-messages" phx-update="ignore"></div>
@@ -3232,9 +3252,10 @@ defmodule EdenWeb.ChatLive do
           <.typing_row typers={@typing_users} />
 
           <.selection_bar
-            :if={@selection != nil}
+            :if={@selection != nil and @select_surface == :main}
             selection={@selection}
             confirming={@sel_delete != nil}
+            container="#messages"
           />
 
           <.form
@@ -3260,7 +3281,10 @@ defmodule EdenWeb.ChatLive do
             data-queued-label={gettext("In queue")}
             phx-submit="send"
             phx-change="composer_changed"
-            class={["flex flex-col gap-2 p-3 border-t shrink-0", @selection != nil && "hidden"]}
+            class={[
+              "flex flex-col gap-2 p-3 border-t shrink-0",
+              (@selection != nil and @select_surface == :main) && "hidden"
+            ]}
             style="border-color: var(--ed-border);"
           >
             <%!-- Forward carry: the message being carried. data-forward-active defers the send
@@ -3635,7 +3659,14 @@ defmodule EdenWeb.ChatLive do
           <div class="ed-thread__sep">
             {ngettext("%{count} reply", "%{count} replies", @thread_root.reply_count)}
           </div>
-          <div class="flex flex-col ed-flat-list" id="thread-replies" phx-update="stream">
+          <div
+            class={[
+              "flex flex-col ed-flat-list",
+              (@selection != nil and @select_surface == :thread) && "ed-selecting"
+            ]}
+            id="thread-replies"
+            phx-update="stream"
+          >
             <.flat_message
               :for={{dom_id, reply} <- @streams.thread}
               id={dom_id}
@@ -3657,6 +3688,16 @@ defmodule EdenWeb.ChatLive do
         <%!-- Thread typing indicator (#103): only peers typing IN THIS thread. --%>
         <.typing_row typers={@thread_typing_users} />
 
+        <%!-- Multi-select in the thread panel: the bar replaces the reply composer, and drives
+              #thread-replies (not the room's #messages). --%>
+        <.selection_bar
+          :if={@selection != nil and @select_surface == :thread}
+          selection={@selection}
+          confirming={@sel_delete != nil}
+          container="#thread-replies"
+          compact
+        />
+
         <.form
           for={@reply_composer}
           id="reply-composer"
@@ -3668,7 +3709,10 @@ defmodule EdenWeb.ChatLive do
           data-resend-many={gettext("Resend {count} messages")}
           phx-change="reply_changed"
           phx-submit="send_reply"
-          class="flex flex-col gap-2 p-3 border-t shrink-0"
+          class={[
+            "flex flex-col gap-2 p-3 border-t shrink-0",
+            (@selection != nil and @select_surface == :thread) && "hidden"
+          ]}
           style="border-color: var(--ed-border);"
         >
           <%!-- Forward carry in a thread: dropping from here forwards INTO this thread.
@@ -8989,6 +9033,10 @@ defmodule EdenWeb.ChatLive do
 
   attr :selection, :any, required: true
   attr :confirming, :boolean, default: false
+  attr :container, :string, default: "#messages"
+  # compact = always icon-only (the thread panel is a narrow column even on desktop, where a
+  # viewport-based `sm:` label reveal would overflow it). The main composer bar stays responsive.
+  attr :compact, :boolean, default: false
 
   # The bottom action bar shown in place of the composer while selecting (Telegram-style):
   # a count + the actions on the selected messages (forward / copy / delete).
@@ -9000,6 +9048,7 @@ defmodule EdenWeb.ChatLive do
       class="ed-selbar"
       id="selbar"
       phx-hook=".SelectSync"
+      data-container={@container}
       data-selected={Jason.encode!(MapSet.to_list(@selection))}
       phx-window-keydown={not @confirming && "exit_select"}
       phx-key="Escape"
@@ -9014,11 +9063,13 @@ defmodule EdenWeb.ChatLive do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectSync">
         export default {
           mounted() {
+            // The stream container this bar drives (#messages OR #thread-replies).
+            this.c = this.el.dataset.container || "#messages"
             this.anchor = null
             // Shift-click a row → select the whole range from the last-clicked row to this one.
             // Capture phase so we can pre-empt the overlay's normal toggle for a shift-click.
             this.onClick = (e) => {
-              const hit = e.target.closest(".ed-select-hit")
+              const hit = e.target.closest(this.c + " .ed-select-hit")
               if (!hit) return
               const id = hit.dataset.selectId
               if (e.shiftKey && this.anchor && this.anchor !== id) {
@@ -9037,7 +9088,7 @@ defmodule EdenWeb.ChatLive do
             this.clear()
           },
           range(a, b) {
-            const hits = [...document.querySelectorAll("#messages .ed-select-hit")]
+            const hits = [...document.querySelectorAll(this.c + " .ed-select-hit")]
             const ids = hits.map((h) => h.dataset.selectId)
             let i = ids.indexOf(a), j = ids.indexOf(b)
             if (i < 0 || j < 0) return [b]
@@ -9051,7 +9102,7 @@ defmodule EdenWeb.ChatLive do
             if (!this.anchor && ids.length) this.anchor = String(ids[ids.length - 1])
             const set = new Set(ids.map(String))
             const mark = (sel, cls) =>
-              document.querySelectorAll("#messages " + sel).forEach((r) => {
+              document.querySelectorAll(this.c + " " + sel).forEach((r) => {
                 const hit = r.querySelector(".ed-select-hit")
                 const on = !!hit && set.has(String(hit.dataset.selectId))
                 r.classList.toggle(cls, on)
@@ -9061,10 +9112,10 @@ defmodule EdenWeb.ChatLive do
             mark(".ed-flat", "ed-flat--selected")
           },
           clear() {
-            document.querySelectorAll("#messages .ed-select-hit[aria-pressed=true]")
+            document.querySelectorAll(this.c + " .ed-select-hit[aria-pressed=true]")
               .forEach((h) => h.setAttribute("aria-pressed", "false"))
             document
-              .querySelectorAll("#messages .ed-msg--selected, #messages .ed-flat--selected")
+              .querySelectorAll(this.c + " .ed-msg--selected, " + this.c + " .ed-flat--selected")
               .forEach((r) => r.classList.remove("ed-msg--selected", "ed-flat--selected"))
           },
         }
@@ -9087,7 +9138,7 @@ defmodule EdenWeb.ChatLive do
         disabled={@count == 0}
       >
         <.icon name="hero-arrow-uturn-right-micro" class="size-4" />
-        <span class="hidden sm:inline">{gettext("Forward")}</span>
+        <span class={["hidden", not @compact && "sm:inline"]}>{gettext("Forward")}</span>
       </button>
       <%!-- Copy assembles the selected rows' text CLIENT-SIDE within the click gesture
             (Firefox blocks navigator.clipboard.writeText after a server round-trip), then
@@ -9100,7 +9151,7 @@ defmodule EdenWeb.ChatLive do
         disabled={@count == 0}
       >
         <.icon name="hero-clipboard-document-micro" class="size-4" />
-        <span class="hidden sm:inline">{gettext("Copy")}</span>
+        <span class={["hidden", not @compact && "sm:inline"]}>{gettext("Copy")}</span>
       </button>
       <button
         type="button"
@@ -9109,15 +9160,17 @@ defmodule EdenWeb.ChatLive do
         disabled={@count == 0}
       >
         <.icon name="hero-trash-micro" class="size-4" />
-        <span class="hidden sm:inline">{gettext("Delete")}</span>
+        <span class={["hidden", not @compact && "sm:inline"]}>{gettext("Delete")}</span>
       </button>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".CopySelection">
         export default {
           mounted() {
             this.el.addEventListener("click", () => {
+              // The bar's stream container (#messages OR #thread-replies).
+              const c = this.el.closest(".ed-selbar")?.dataset.container || "#messages"
               // Selected rows in chronological (document) order, both layouts.
               const rows = document.querySelectorAll(
-                "#messages .ed-flat--selected, #messages .ed-msg--selected",
+                c + " .ed-flat--selected, " + c + " .ed-msg--selected",
               )
               const parts = []
               rows.forEach((r) => {
@@ -9699,6 +9752,7 @@ defmodule EdenWeb.ChatLive do
         role="menuitem"
         phx-click="forward_prompt"
         phx-value-id={@message.id}
+        phx-value-surface={(@in_thread && "thread") || "main"}
       >
         <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
       </button>
@@ -9708,6 +9762,7 @@ defmodule EdenWeb.ChatLive do
         role="menuitem"
         phx-click="enter_select"
         phx-value-id={@message.id}
+        phx-value-surface={(@in_thread && "thread") || "main"}
       >
         <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Select")}
       </button>
@@ -11002,6 +11057,7 @@ defmodule EdenWeb.ChatLive do
       # Multi-select is per-conversation — exit it on a chat switch.
       selection: nil,
       sel_delete: nil,
+      select_surface: nil,
       subscribed_id: conversation.id,
       other_read_at: other_read_at(conversation, scope.user),
       has_more: length(messages) == @page,
@@ -11483,6 +11539,23 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # A thread selection is bound to the open thread — drop it when the thread opens/closes/switches
+  # (a main-stream selection is left alone).
+  defp reset_thread_select(%{assigns: %{select_surface: :thread}} = socket),
+    do: assign(socket, selection: nil, sel_delete: nil, select_surface: nil)
+
+  defp reset_thread_select(socket), do: socket
+
+  # Tear down the open thread panel (composer, staged attachments, typing, search). Does NOT
+  # touch a selection — callers decide (close_thread drops it, forward_selection kept the carry).
+  defp close_thread_panel(socket) do
+    socket
+    |> cancel_staged_thread_attachments()
+    |> clear_thread_typing()
+    |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
+    |> reset_thread_search()
+  end
+
   defp open_thread(socket, root_id) do
     scope = socket.assigns.current_scope
 
@@ -11513,6 +11586,7 @@ defmodule EdenWeb.ChatLive do
           thread_typing_users: %{},
           last_thread_typing_at: nil
         )
+        |> reset_thread_select()
         |> stream(:thread, replies, reset: true)
         |> restream_root_if_loaded(root)
         # Fresh thread (or a jump to a thread-search result) → search starts closed (#189).
@@ -12360,16 +12434,19 @@ defmodule EdenWeb.ChatLive do
     results =
       Enum.map(messages, fn m -> Chat.forward_message(scope, m.id, conversation_id, root_id) end)
 
-    flash =
-      if Enum.all?(results, &match?({:ok, _}, &1)),
-        do: {:info, gettext("Forwarded.")},
-        else: {:error, gettext("Couldn't forward that message.")}
+    socket =
+      socket
+      |> assign(pending_forward: nil)
+      |> push_event("carry_clear", %{})
 
-    {:noreply,
-     socket
-     |> assign(pending_forward: nil)
-     |> push_event("carry_clear", %{})
-     |> put_flash(elem(flash, 0), elem(flash, 1))}
+    # No success flash: the copy lands visibly at the bottom of the open stream, so a
+    # confirmation toast is just noise. Only a failure warrants interrupting.
+    socket =
+      if Enum.all?(results, &match?({:ok, _}, &1)),
+        do: socket,
+        else: put_flash(socket, :error, gettext("Couldn't forward that message."))
+
+    {:noreply, socket}
   end
 
   defp send_text(socket, scope, conversation_id, body, client_id, reply_to_id) do
@@ -12377,11 +12454,13 @@ defmodule EdenWeb.ChatLive do
 
     case Chat.create_message(scope, conversation_id, attrs) do
       {:ok, _message} ->
-        # The form path clears the input via the composer assign; the hook path
-        # (client_id present) already cleared it client-side, so leave the assign
-        # alone to avoid clobbering text typed during a slow round-trip. A reply
-        # always clears the tray.
-        socket = if client_id, do: socket, else: assign(socket, composer: empty_composer())
+        # Reset the composer assign on BOTH paths. The hook path (client_id) already cleared
+        # the DOM input, but leaving the assign stale meant any form re-render (the forward /
+        # reply plaque appearing) patched the unfocused textarea BACK to the last-sent text.
+        # Typing during a slow round-trip is safe: LiveView never patches the focused input,
+        # and composer_changed re-syncs the assign on every keystroke. A reply always clears
+        # the tray.
+        socket = assign(socket, composer: empty_composer())
         socket = if reply_to_id, do: assign(socket, reply_to: nil), else: socket
         # Just sent → reset the typing throttle so the next keystroke re-broadcasts
         # "typing" at once instead of waiting out the window (#94 review).
