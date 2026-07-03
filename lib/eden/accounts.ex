@@ -49,6 +49,9 @@ defmodule Eden.Accounts do
   @doc "True if the user holds a platform admin role (`admin` or `super_admin`, #174)."
   def admin?(%User{} = user), do: User.admin?(user)
 
+  @doc "True if the user is a platform `super_admin` (#174) — may assign roles."
+  def super_admin?(%User{} = user), do: User.super_admin?(user)
+
   @doc """
   Sets a user's platform role (#174). **Super-admin only** — enforced here, not
   just in the UI. An actor can't change their own role (no self-lockout / no

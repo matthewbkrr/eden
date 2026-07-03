@@ -121,6 +121,24 @@ defmodule EdenWeb.SettingsLive do
         <.ed_flash flash={@flash} />
 
         <div class="space-y-6">
+          <%!-- Admin panel entry-point (#174), only for platform admins. --%>
+          <.link
+            :if={@profile_user && Accounts.admin?(@profile_user)}
+            navigate={~p"/admin"}
+            class="flex items-center gap-3 rounded-[var(--ed-radius-lg)] border p-4 ed-btn--ghost"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
+            <span style="color: var(--ed-primary);" aria-hidden="true">
+              <.icon name="hero-shield-check-micro" class="size-5" />
+            </span>
+            <span class="flex-1 font-medium" style="font-size:0.9375rem;">
+              {gettext("Admin panel")}
+            </span>
+            <span style="color: var(--ed-muted);" aria-hidden="true">
+              <.icon name="hero-chevron-right-mini" class="size-5" />
+            </span>
+          </.link>
+
           <section
             :if={@profile_user}
             class="rounded-[var(--ed-radius-lg)] border p-5"

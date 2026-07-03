@@ -65,6 +65,13 @@ defmodule EdenWeb.Router do
       live "/channels/:channel_id/r/:id/m/:message_id", ChatLive
     end
 
+    # Admin panel (#174) — gated to platform admins/super_admins by :require_admin
+    # (checked at mount AND on every patch, since patches don't re-run plugs).
+    live_session :admin,
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_admin}] do
+      live "/admin", AdminLive
+    end
+
     # Device preferences — available signed out (current_scope may be nil).
     live_session :default,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}] do

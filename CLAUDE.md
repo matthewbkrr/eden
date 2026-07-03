@@ -46,7 +46,11 @@ design — built incrementally as features land.)
   `owner|admin|member` roles; it gates the admin panel and is set only via
   `set_user_role/3` (super-admin-only; the **last** super_admin can't be removed —
   locked `FOR UPDATE` — so admin can never be locked out; a `role` CHECK constraint
-  backs the changeset). `admin?/1` is the gate predicate.
+  backs the changeset). `admin?/1` is the gate predicate. The **admin panel**
+  (`/admin`, `EdenWeb.AdminLive`, `:require_admin` on_mount — enforced at mount
+  AND every patch) is where admins edit people's managed fields
+  (`apply_managed_fields/2`) and a super_admin assigns roles
+  (`set_user_role/3`); a shielded link surfaces it in Settings for admins only.
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.

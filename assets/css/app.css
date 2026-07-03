@@ -3644,6 +3644,13 @@ html {
   .ed-btn, .ed-input, .ed-convo { transition: none; }
   .ed-folder-indicator, .ed-search { transition: none; }
   .ed-lightbox__nav, .ed-lightbox__close, .ed-compose__remove { transition: none; }
+  .ed-admin-row { transition: none; }
 }
+
+/* Admin people list (#174): selectable rows. Lift on hover / selection (surface-2,
+   then a cobalt wash) — never darken into the background. */
+.ed-admin-row { transition: background 0.16s var(--ed-ease); }
+.ed-admin-row:hover { background: var(--ed-surface-2); }
+.ed-admin-row.is-selected { background: color-mix(in oklch, var(--ed-primary) 14%, transparent); }
 
 /* This file is for your main application CSS */
