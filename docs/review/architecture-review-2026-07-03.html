@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eden — архитектурный разбор · 2026-07-03</title>
+<style>
+  :root {
+    --bg: #0f1115; --surface: #171a21; --surface2: #1e222b; --line: #2a2f3a;
+    --text: #e8eaf0; --muted: #9aa3b2; --accent: #5b8def;
+    --strong: #34d399; --explore: #fbbf24; --spec: #a78bfa; --danger: #f87171;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.65 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 0 0 6px; }
+  h2 { font-size: 21px; margin: 56px 0 16px; padding-top: 24px; border-top: 1px solid var(--line); }
+  h3 { font-size: 17px; margin: 28px 0 10px; }
+  p { margin: 10px 0; }
+  .sub { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+  .sub b { color: var(--text); font-weight: 600; }
+  code { font-family: var(--mono); font-size: 13.5px; background: var(--surface2);
+    padding: 1.5px 6px; border-radius: 5px; color: #c9d4e8; white-space: nowrap; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 22px; margin: 14px 0; }
+  .tldr { border-left: 3px solid var(--accent); }
+  .tldr ol { margin: 8px 0 4px; padding-left: 22px; }
+  .tldr li { margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14.5px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12.5px;
+    text-transform: uppercase; letter-spacing: .04em; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .tag { display: inline-block; font-size: 11.5px; font-weight: 700; letter-spacing: .05em;
+    text-transform: uppercase; padding: 2px 9px; border-radius: 99px; white-space: nowrap; }
+  .t-strong  { background: rgba(52,211,153,.14); color: var(--strong); }
+  .t-explore { background: rgba(251,191,36,.14); color: var(--explore); }
+  .t-spec    { background: rgba(167,139,250,.14); color: var(--spec); }
+  .t-risk    { background: rgba(248,113,113,.14); color: var(--danger); }
+  .finding { border-left: 3px solid var(--line); padding-left: 18px; margin: 22px 0; }
+  .finding.f-strong  { border-color: var(--strong); }
+  .finding.f-explore { border-color: var(--explore); }
+  .finding.f-spec    { border-color: var(--spec); }
+  .finding h3 { margin: 0 0 6px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ev { color: var(--muted); font-size: 13.5px; }
+  .ev code { background: transparent; padding: 0; color: #7f8b9f; }
+  .bar { display: flex; height: 26px; border-radius: 8px; overflow: hidden;
+    font-size: 12px; font-weight: 600; margin: 12px 0 4px; }
+  .bar div { display: flex; align-items: center; justify-content: center; color: #0f1115; min-width: 0; overflow: hidden; white-space: nowrap; }
+  .legend { color: var(--muted); font-size: 13px; }
+  .grade { font-family: var(--mono); font-weight: 700; }
+  .g-a { color: var(--strong); } .g-b { color: var(--explore); } .g-c { color: var(--danger); }
+  ul { margin: 8px 0; padding-left: 22px; } li { margin: 5px 0; }
+  .meta-note { color: var(--muted); font-size: 13.5px; font-style: italic; }
+  .num { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>eden — архитектурный разбор</h1>
+<p class="sub">
+  Phase 2 многотрекового ревью · <b>2026-07-03</b> · метод: <b>deep modules</b>
+  (глубина интерфейсов, размещение швов, deletion test) · зоны:
+  Accounts/auth · Chat · Channels · Storage/media · LiveView-слой ·
+  классификация: <span class="tag t-strong">Strong</span> — уверенный вывод с доказательствами ·
+  <span class="tag t-explore">Worth exploring</span> — правдоподобно, требует обсуждения ·
+  <span class="tag t-spec">Speculative</span> — идея, низкая определённость
+</p>
+
+<div class="card tldr">
+  <strong>TL;DR</strong>
+  <ol>
+    <li><b>Контекстный слой — сильный.</b> Accounts, Chat, Channels, Storage — глубокие модули
+        с чистыми швами: веб-слой ни разу не обращается к <code>Repo</code> напрямую (проверено: 0 вхождений),
+        авторизация через <code>%Scope{}</code> повсеместна, транзакционность инвариантов на месте.</li>
+    <li><b>Весь архитектурный долг сконцентрирован в одном файле:</b> <code>chat_live.ex</code> —
+        <span class="num">13 052</span> строки, 54% кода приложения, <span class="num">134</span> обработчика событий,
+        render на ~5 000 строк, 61 встроенный компонент, 32 JS-хука. Это не «плохой код» —
+        это несколько несепарированных модулей в одном намespace.</li>
+    <li><b>Storage — образцовый шов:</b> настоящая двухадаптерная граница (Local + S3),
+        SigV4 изолирован, обходов фасада нет, свап на R2 через одну env-переменную безопасен
+        (все Local-only допущения обработаны фолбэками).</li>
+    <li><b>Два системных риска внутри Chat:</b> фильтрация видимости сообщений не полностью
+        централизована (поиск пересобирает фильтры вручную) и PubSub-рассылка размазана по
+        21+ точкам с двумя параллельными реализациями «кого уведомлять».</li>
+    <li><b>Org-слой ляжет без перестройки:</b> все три контекста впитывают <code>org_id</code>
+        расширением Scope; сопротивления форма кода не оказывает.</li>
+  </ol>
+</div>
+
+<h2>Карта зон</h2>
+<table>
+  <tr><th>Зона</th><th>Размер</th><th>Интерфейс</th><th>Глубина</th><th>Вердикт</th></tr>
+  <tr>
+    <td><b>Eden.Accounts</b><br><span class="ev">+ UserToken, Invite, Scope, UserAuth</span></td>
+    <td class="num">293 + 380</td>
+    <td class="num">23 функции</td>
+    <td><span class="grade g-a">глубокий</span></td>
+    <td>Криптография (SHA-256 at rest, timing-safe bcrypt), транзакционное погашение инвайтов
+        (<code>FOR UPDATE</code>) — всё спрятано за маленьким интерфейсом.</td>
+  </tr>
+  <tr>
+    <td><b>Eden.Chat</b><br><span class="ev">+ 11 схем</span></td>
+    <td class="num">4 140</td>
+    <td class="num">117 функций</td>
+    <td><span class="grade g-a">широкий, но глубокий</span></td>
+    <td>4 квази-независимых домена в одном файле (разговоры/админ, сообщения/треды,
+        медиа/блобы, prefs/поиск). Когезия внутри доменов высокая, дублирования нет.</td>
+  </tr>
+  <tr>
+    <td><b>Eden.Channels</b></td>
+    <td class="num">981</td>
+    <td class="num">39 функций</td>
+    <td><span class="grade g-a">глубокий</span></td>
+    <td>Единая матрица ролей (<code>ensure_removable/2</code>), системная защита от гонок
+        (stale_error_field, FOR UPDATE, атомарный transfer), чистый шов с Chat — 28 вызовов API,
+        ноль прямых запросов к чужим схемам.</td>
+  </tr>
+  <tr>
+    <td><b>Eden.Storage</b><br><span class="ev">+ Local, S3, SigV4, Images</span></td>
+    <td class="num">~440</td>
+    <td class="num">6 колбэков</td>
+    <td><span class="grade g-a">образцовый</span></td>
+    <td>Два адаптера = настоящий шов. Асимметрия <code>local_path/1</code> (S3 её не имеет)
+        обработана явно на фасаде, а не протекает к вызывающим.</td>
+  </tr>
+  <tr>
+    <td><b>ChatLive</b><br><span class="ev">lib/eden_web/live/chat_live.ex</span></td>
+    <td class="num">13 052</td>
+    <td class="num">134 события · 62 assigns · 32 хука</td>
+    <td><span class="grade g-c">мелкий гигант</span></td>
+    <td>6 роутов, 2 режима лейаута (DM-пузыри / flat-румы), 11 модалок и панель тредов —
+        всё в одних callbacks. Интерфейс почти такой же сложный, как реализация.</td>
+  </tr>
+</table>
+
+<div class="bar" title="Доля строк кода lib/">
+  <div style="flex:13052; background:#f87171;">chat_live.ex — 54%</div>
+  <div style="flex:4140; background:#fbbf24;">chat.ex — 17%</div>
+  <div style="flex:981; background:#34d399;">channels</div>
+  <div style="flex:6053; background:#5b8def;">всё остальное — 25%</div>
+</div>
+<p class="legend">Распределение 24 226 строк <code>lib/</code>. Один веб-модуль весит больше, чем весь доменный слой вместе взятый.</p>
+
+<h2>Findings — Strong</h2>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S1. ChatLive — концентрация всего архитектурного долга</h3>
+  <p class="ev">chat_live.ex: 134 × <code>handle_event</code>, 33 × <code>handle_info</code>, render ≈ 5 049 строк (2510–7559), 61 компонент, 32 хука; роуты router.ex:57-65</p>
+  <p>Один LiveView обслуживает шесть URL-форм и два режима рендера. Ветвление
+     <code>@selected.channel_id</code> (flat vs bubble) встречается 13+ раз, включая контракт хука
+     (<code>data-layout</code>, стр. 3266) и целые ветки рендера (3168–3192). Цена уже проявилась:
+     оба недавних P0 (stream-ordering, композер) жили именно здесь; любые
+     параллельные PR сталкиваются в одном файле; каждое изменение перекомпилирует
+     все 13k строк. При этом дисциплина внутри хорошая (см. S2) — проблема именно
+     в несепарированности, а не в качестве кода.</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S2. Граница веб → контекст соблюдена безупречно</h3>
+  <p class="ev">grep <code>Repo\.</code> / <code>from(</code> по lib/eden_web — 0 вхождений; UI-проверки ролей дублируют, но не заменяют контекстные (chat_live.ex:952 ↔ channels.ex ensure_role)</p>
+  <p>Веб-слой не строит Ecto-запросов, не переопределяет доменные правила и не вызывает
+     приватные функции контекстов. Проверки прав в UI — только для показа/скрытия кнопок;
+     настоящая авторизация всегда в контексте. Это редкая дисциплина для кодовой базы такого размера.</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S3. Storage: настоящий двухадаптерный шов, готовый к R2-свапу</h3>
+  <p class="ev">storage.ex:25-44 (фасад), s3.ex + local.ex (оба реализуют behaviour), config/runtime.exs:95-104 (свап одной env), sigv4_test.exs:6-39 (сверка с образцом AWS)</p>
+  <p>Прямых обращений к адаптерам мимо фасада — ноль. Все четыре потенциально
+     Local-only допущения проверены и закрыты: sendfile → фолбэк на байтовую нарезку
+     (file_controller.ex:91), ffmpeg-у нужен файл → <code>with_local_source/2</code> скачивает
+     во временный (chat.ex:3974-3991), в БД хранятся только опаковые ключи, размер
+     ограничен капами до чтения в память. Деплойный «аварийный выход» на R2 при
+     нехватке диска — реально одна строка конфига.</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S4. Фильтрация видимости не полностью централизована — единственный найденный «протекающий» инвариант</h3>
+  <p class="ev">chat.ex:1790-1799 (<code>visible_messages</code> — 4 вызывающих), но поиск (1412-1436) и поиск в тредах (1461-1475) пересобирают те же фильтры вручную</p>
+  <p>«Пользователь видит сообщение X» — самый дорогой инвариант мессенджера (членство +
+     left_at + delete-for-me + tombstone). Сейчас он живёт в одном билдере запроса, но не все
+     пути через него ходят. Новый message-запрос, забывший один фильтр, = утечка данных.
+     Тесты это сегодня ловят, но структурной защиты нет.
+     <b>Рекомендация:</b> сделать <code>visible_messages</code> (или параметризованный
+     <code>apply_visibility/3</code>) единственным допустимым источником фильтров и провести
+     через него оба поисковых пути.</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S5. PubSub-контракт когерентен, но рассылка размазана</h3>
+  <p class="ev">14 типов сообщений, 21+ точка broadcast в chat.ex; два параллельных «кого уведомлять»: <code>direct_recipient_ids/1</code> (3491-3510) и <code>thread_recipient_ids/1</code> (3515-3528)</p>
+  <p>Топики именуются последовательно (<code>conversation:id</code>, <code>user:id:chat</code>), но
+     контракт «топик + форма payload» нигде не записан — вызывающие восстанавливают его чтением кода.
+     Фильтрация уведомлений (mute напрямую / через папку / DND / фолловеры треда) реализована
+     дважды с разной логикой. Любой новый тип события требует правок в 2+ местах.
+     Это ровно тот функционал, который ADR-0001 уже планирует вынести в контекст
+     <code>Eden.Notifications</code> — централизацию стоит сделать его первым шагом
+     (Web-адаптер), а не отдельной работой.</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S6. Скрытые инварианты интерфейса Chat задокументированы только прозой (или вообще никак)</h3>
+  <p class="ev">broadcast как скрытый side-effect <code>create_message</code> (deliver/2, chat.ex:3646); гарантии preload'ов (@message_preloads:40-48) не указаны в @doc; «вышедший из группы может форвардить» (ensure_member:3193-3195) — намеренно, но нигде не записано</p>
+  <p>Интерфейс — это всё, что должен знать вызывающий, а не только сигнатуры. Три
+     обнаруженных неочевидности безопасны сегодня, но каждая — будущий баг при появлении
+     нового вызывающего (например, Notifications-контекста или REST API).
+     <b>Рекомендация:</b> зафиксировать в moduledoc Chat: side-эффекты broadcast'ов,
+     гарантированные preload'ы, семантику left-членства.</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S7. Org-слой впитывается без перестройки</h3>
+  <p class="ev">Scope пронизывает 117 функций Chat + 39 Channels; visible_messages — единая точка для org-фильтра; Channels не трогает чужие таблицы (28 вызовов через API Chat)</p>
+  <p>Проверка «что будет сопротивляться org_id» дала пустой список: точки добавления
+     фильтра механические (existing_direct, unread-агрегаты, поиск), шов уже проложен через
+     Scope. Единственное открытое моделирование — org-уровневые роли (OrgMembership как
+     отдельная таблица, ChannelMembership не трогается). Совпадает с выводом auth-сессии
+     (ADR-0002: глобальный аккаунт + членства).</p>
+</div>
+
+<div class="finding f-strong">
+  <h3><span class="tag t-strong">Strong</span> S8. Сильные стороны, которые стоит беречь как паттерны</h3>
+  <p class="ev">accounts.ex:236-282, user.ex:128-137, chat.ex:3220-3287, channels.ex:118-851</p>
+  <ul>
+    <li>Токены (сессии, инвайты) — только SHA-256-хеши в БД; сырой токен живёт один показ.</li>
+    <li>Timing-safe вход: <code>Bcrypt.no_user_verify()</code> на несуществующем юзере — перечисление имён невозможно.</li>
+    <li>Валидность инвайта — вычисляемая, не хранимая (expires_at + used_count + revoked_at): рассинхрон исключён конструкцией.</li>
+    <li>Forward-safe GC блобов: форвард переиспользует ключ, delete щадит разделяемые блобы — редкая аккуратность.</li>
+    <li>Классификация вложений по магическим байтам, никогда — по client content-type; двухслойная защита от decompression bomb.</li>
+    <li>Channels: гонки закрыты системно (FOR UPDATE на последнем использовании инвайта, атомарный transfer_ownership, stale_error_field).</li>
+    <li>Извлечённые <code>album_layout.ex</code> и <code>rail_hook.ex</code> — доказательство, что экстракция из ChatLive в этой кодовой базе работает.</li>
+  </ul>
+</div>
+
+<h2>Findings — Worth exploring</h2>
+
+<div class="finding f-explore">
+  <h3><span class="tag t-explore">Worth exploring</span> W1. Первая экстракция из ChatLive: панель тредов</h3>
+  <p class="ev">события 1679–1927, рендер 3618–3738, хелперы 11551–12051; ~11 assigns полностью своих</p>
+  <p>Из трёх кандидатов (треды / мультиселект / композер) у тредов лучшее соотношение
+     выигрыша к риску: состояние самодостаточно (<code>@thread_*</code> не пересекается с главным
+     стримом), события и broadcasts очерчены, рендер уже собран в один компонент.
+     Мультиселект (<code>@selection</code>, @select_surface, SelectSync) — второй кандидат, тоже
+     ортогонален. Композер — самый ценный и самый рискованный (сцеплён с edit/reply/forward),
+     его — третьим, вместе со снятием дублирования <code>send_dispatch</code> ↔
+     <code>send_reply_dispatch</code> (12304 ↔ 12370 — зеркальные копии, что уже потребовало
+     «зеркального» P0-фикса).</p>
+</div>
+
+<div class="finding f-explore">
+  <h3><span class="tag t-explore">Worth exploring</span> W2. Третий токен-флоу — момент для общего token-модуля</h3>
+  <p class="ev">Accounts.Invite ↔ Channels.Invite: параллельные валидации (~50 строк каждая), общие только build_token/hash_token (channels.ex:779,790)</p>
+  <p>Сегодня дублирование приемлемое (два разных контекста, свои поля). Но ADR-0002 добавляет
+     третий флоу — reset-ссылки — с той же механикой (хеш, expiry, одноразовость, FOR UPDATE).
+     Правило «два адаптера = настоящий шов» здесь превращается в «три использования = пора
+     извлекать»: при постройке reset-ссылок стоит вынести общий
+     <code>Eden.Tokens</code>-паттерн (генерация/хеш/валидация/lock), оставив каждому контексту свою схему.</p>
+</div>
+
+<div class="finding f-explore">
+  <h3><span class="tag t-explore">Worth exploring</span> W3. Chat.ex: 117 функций — созревает выделение Threads</h3>
+  <p class="ev">треды: ~9 публичных функций + ThreadMembership + денормализованные счётчики, слабая связь с остальным (только deliver_reply)</p>
+  <p>В отличие от ChatLive, chat.ex не горит: домены внутри когезивны, тесты идут через
+     публичный интерфейс (38 describe-блоков по фичам). Но если файл продолжит расти,
+     первым выделяется <code>Eden.Chat.Threads</code> — он уже почти автономен. Не делать
+     превентивно; делать при следующей крупной тредовой фиче.</p>
+</div>
+
+<div class="finding f-explore">
+  <h3><span class="tag t-explore">Worth exploring</span> W4. blob_shared_outside? — O(n) запросов при массовом удалении</h3>
+  <p class="ev">chat.ex:3230-3235 — один запрос на каждый ключ; GC разговора с 1000 сообщений = 1000+ запросов</p>
+  <p>Корректно, но не масштабно. Лечится одним батч-запросом
+     (<code>WHERE storage_key IN (...) AND id NOT IN (...)</code>). Не срочно — станет заметно
+     только на больших GC; зафиксировать как оптимизацию с известным рецептом.</p>
+</div>
+
+<div class="finding f-explore">
+  <h3><span class="tag t-explore">Worth exploring</span> W5. Подготовка Scope к org_id — дёшево сделать заранее</h3>
+  <p class="ev">scope.ex — единственный конструктор for_user/1; расширение до %Scope{user, org} затрагивает только новые вызовы</p>
+  <p>Слот <code>org_id</code> в Scope (пусть пока nil) + привычка прописывать его в тестовых
+     фикстурах снимет половину механики org-фазы. Согласуется с рекомендацией RFC §1
+     (Repo.prepare_query-бэкстоп — на самой org-фазе, не сейчас).</p>
+</div>
+
+<div class="finding f-explore">
+  <h3><span class="tag t-explore">Worth exploring</span> W6. Мелочи гигиены</h3>
+  <p class="ev">accounts_test.exs:14-17 (инлайн-фикстура мимо контекста, дублирует support-фикстуру); контракты hooks (data-*) — только в render, без единого справочника</p>
+  <p>Обе — не production-риски: выровнять фикстуру на <code>register_user_with_invite</code>;
+     контракты нагруженных хуков (SendQueue, SelectSync) описать одним комментарием-шапкой
+     при ближайшем касании.</p>
+</div>
+
+<h2>Findings — Speculative</h2>
+
+<div class="finding f-spec">
+  <h3><span class="tag t-spec">Speculative</span> P1. ChannelSurface: канальный режим как отдельная поверхность</h3>
+  <p>~29 событий CRUD каналов/румов/участников/инвайтов (949–1228) — отдельный домен внутри
+     ChatLive. Экстракция возможна, но режимы делят стрим и композер — риск выше, чем у
+     тредов/селекта. Рассматривать только если канальные фичи продолжат расти (админ-панель
+     эпика #172 может, наоборот, забрать часть этого в собственный LiveView).</p>
+</div>
+
+<div class="finding f-spec">
+  <h3><span class="tag t-spec">Speculative</span> P2. Компile-time защита Scope</h3>
+  <p>Идея @enforce_scope-макроса (или Credo-чека), требующего Scope-аргумент у публичных
+     функций контекстов. Прозаичная альтернатива — пункт в чеклист PR-ревью. Ценность
+     вырастет вместе с org_id, когда забытый фильтр станет кросс-тенантной утечкой.</p>
+</div>
+
+<div class="finding f-spec">
+  <h3><span class="tag t-spec">Speculative</span> P3. Presence как переиспользуемый модуль</h3>
+  <p>Presence/typing-кластер (7 assigns, ~10 обработчиков) ортогонален и мог бы стать
+     attachable-хуком в духе RailHook — но пока он нужен только ChatLive, второго потребителя
+     нет. Один адаптер = гипотетический шов; ждать реального второго потребителя.</p>
+</div>
+
+<h2>Deletion test — сводка</h2>
+<table>
+  <tr><th>Модуль</th><th>Удаляем — что происходит</th><th>Вердикт</th></tr>
+  <tr><td><code>Eden.Accounts</code></td><td>Логика auth расползается по 6 LiveView + 3 контроллерам</td><td class="grade g-a">заслуживает место</td></tr>
+  <tr><td><code>UserToken</code></td><td>Выбор хеша, окно валидности и запросы инлайнятся в Accounts</td><td class="grade g-a">заслуживает место</td></tr>
+  <tr><td><code>%Scope{}</code></td><td>Сложность не возвращается — тонкий носитель намерения</td><td class="grade g-b">мелкий, но стилистически оправдан</td></tr>
+  <tr><td><code>Eden.Chat</code></td><td>117 функций доменной логики — очевидно незаменим</td><td class="grade g-a">заслуживает место</td></tr>
+  <tr><td><code>delete_unreferenced_blobs</code></td><td>6 точек вызова теряют GC; блобы текут деньгами в S3</td><td class="grade g-a">обязательный шов</td></tr>
+  <tr><td><code>visible_messages</code></td><td>4 функции ломаются, 2 поисковых пути уже пересобирают её вручную</td><td class="grade g-b">глубокий, но недоиспользуемый (S4)</td></tr>
+  <tr><td><code>Eden.Channels</code></td><td>Матрица ролей, гонко-безопасные инвайты, каскады — расползлись бы в веб</td><td class="grade g-a">заслуживает место</td></tr>
+  <tr><td><code>Eden.Storage</code> (фасад)</td><td>Каждый вызывающий узнаёт про адаптеры и local_path-асимметрию</td><td class="grade g-a">заслуживает место</td></tr>
+  <tr><td><code>SigV4</code></td><td>Импортируется только S3-адаптером — изоляция идеальна</td><td class="grade g-a">заслуживает место</td></tr>
+  <tr><td><code>ChatLive</code> (как единица)</td><td>Приложение исчезает — но его внутренние кластеры проходят deletion test как <i>отдельные</i> модули, что и доказывает: это несколько модулей без швов</td><td class="grade g-c">разделить (S1/W1)</td></tr>
+</table>
+
+<h2>Рекомендуемый порядок работ</h2>
+<div class="card">
+<ol>
+  <li><b>Централизовать видимость</b> (S4) — маленький PR, закрывает единственный найденный путь к утечке данных.</li>
+  <li><b>Панель тредов из ChatLive</b> (W1) — первая экстракция, по лекалам album_layout/rail_hook; следом мультиселект.</li>
+  <li><b>Reset-ссылки (ADR-0002) вместе с общим token-паттерном</b> (W2) — фича и рефакторинг совпадают по месту.</li>
+  <li><b>Eden.Notifications: Web-адаптер + централизация fan-out</b> (S5) — первый шаг уже принятого ADR-0001, попутно снимает двойную логику получателей.</li>
+  <li><b>Композер</b> (W1, третий) — после того как треды/селект отработают механику экстракции.</li>
+  <li><b>Слот org_id в Scope</b> (W5) — перед стартом org-фазы эпика #172.</li>
+</ol>
+<p class="meta-note">Пункты 1–3 самостоятельны и небольшие; 4–6 привязаны к уже запланированным фичам, чтобы рефакторинг ехал на фичевой работе, а не отдельным «стоп-миром».</p>
+</div>
+
+<h2>Методика</h2>
+<p class="legend">
+Пять параллельных исследователей (по зоне каждый) с единой линзой: модуль/интерфейс/шов по
+Ousterhout–Feathers, deletion test на каждом ключевом модуле, обязательные file:line-доказательства.
+Количественные утверждения выборочно перепроверены на живом коде (134 handle_event,
+117/39 публичных функций, 0 Repo-вхождений в веб-слое — подтверждены).
+Ревью read-only: ни одна строка кода не менялась. Связанные документы:
+<code>docs/adr/0001-notifications-delivery.md</code>, <code>docs/adr/0002-auth-model.md</code>,
+<code>docs/rfc-orgs-identity-admin.md</code>, <code>CONTEXT.md</code>.
+</p>
+
+</div>
+</body>
+</html>
