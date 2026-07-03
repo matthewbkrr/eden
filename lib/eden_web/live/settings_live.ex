@@ -89,7 +89,12 @@ defmodule EdenWeb.SettingsLive do
     case socket.assigns[:current_scope] do
       %{user: %User{} = user} ->
         socket
-        |> assign(profile_user: user, profile_form: to_form(Accounts.change_profile(user)))
+        |> assign(
+          profile_user: user,
+          profile_form: to_form(Accounts.change_profile(user)),
+          username_form: to_form(Accounts.change_username(user)),
+          username_hint: nil
+        )
         |> allow_upload(:avatar,
           accept: ~w(.png .jpg .jpeg .gif .webp),
           max_entries: 1,
@@ -216,6 +221,76 @@ defmodule EdenWeb.SettingsLive do
                   {msg}
                 </span>
               </label>
+
+              <div class="flex justify-end">
+                <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
+              </div>
+            </.form>
+          </section>
+
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
+            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Username")}</h2>
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext(
+                "Your public @tag, and the name you log in with. Letters, numbers and underscores."
+              )}
+            </p>
+
+            <.form
+              for={@username_form}
+              id="username-form"
+              phx-change="validate_username"
+              phx-submit="save_username"
+              class="space-y-3"
+            >
+              <label class="block">
+                <span class="sr-only">{gettext("Username")}</span>
+                <div class="relative">
+                  <span
+                    aria-hidden="true"
+                    class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                    style="color: var(--ed-muted);"
+                  >
+                    @
+                  </span>
+                  <input
+                    type="text"
+                    name={@username_form[:username].name}
+                    id={@username_form[:username].id}
+                    value={Phoenix.HTML.Form.normalize_value("text", @username_form[:username].value)}
+                    class="ed-input"
+                    style="padding-left: 1.75rem;"
+                    phx-debounce="400"
+                    autocomplete="off"
+                    autocapitalize="none"
+                    spellcheck="false"
+                    maxlength="30"
+                    aria-describedby="username-feedback"
+                  />
+                </div>
+              </label>
+
+              <%!-- One aria-live region carries both the positive hint and errors so a
+                    screen reader announces the debounced result; min-height avoids a
+                    layout shift as it fills. --%>
+              <div id="username-feedback" aria-live="polite" style="min-height:1rem;">
+                <span
+                  :if={@username_hint == :available}
+                  style="color: var(--ed-online); font-size:0.75rem;"
+                >
+                  {gettext("Available")}
+                </span>
+                <span
+                  :for={msg <- Enum.map(@username_form[:username].errors, &translate_error/1)}
+                  style="color: var(--ed-danger); font-size:0.75rem;"
+                >
+                  {msg}
+                </span>
+              </div>
 
               <div class="flex justify-end">
                 <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
@@ -688,6 +763,45 @@ defmodule EdenWeb.SettingsLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, profile_form: to_form(changeset))}
+    end
+  end
+
+  # Username rename (#173). Authenticated self-edit, so the uniqueness probe is on
+  # (debounced client-side); enumeration isn't a concern for a logged-in user, who
+  # already sees usernames in member lists. The positive "available" hint shows only
+  # when the entry is a valid, actually-changed, free name.
+  def handle_event("validate_username", %{"user" => params}, socket) do
+    changeset =
+      socket.assigns.profile_user
+      |> Accounts.change_username(params, validate_unique: true)
+      |> Map.put(:action, :validate)
+
+    hint =
+      if changeset.valid? and Ecto.Changeset.get_change(changeset, :username),
+        do: :available,
+        else: nil
+
+    {:noreply, assign(socket, username_form: to_form(changeset), username_hint: hint)}
+  end
+
+  def handle_event("save_username", %{"user" => params}, socket) do
+    case Accounts.update_username(socket.assigns.profile_user, params) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> assign(
+           profile_user: updated,
+           username_form: to_form(Accounts.change_username(updated)),
+           username_hint: nil
+         )
+         |> put_flash(:info, gettext("Username updated."))}
+
+      {:error, changeset} ->
+        {:noreply,
+         assign(socket,
+           username_form: to_form(Map.put(changeset, :action, :validate)),
+           username_hint: nil
+         )}
     end
   end
 

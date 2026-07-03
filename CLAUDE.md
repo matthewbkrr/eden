@@ -33,13 +33,20 @@ design — built incrementally as features land.)
 - **Accounts** — users, authentication, profiles. A profile is editable
   `display_name` + `bio` (`profile_changeset`) plus an avatar: the upload is
   processed (center-cropped square JPEG, metadata stripped) and persisted through
-  **Storage** as `avatar_key`; `username` stays immutable (it is the login).
-  Users carry a global **platform role** (`member | admin | super_admin`, #174) —
-  distinct from the per-channel `owner|admin|member` roles; it gates the admin
-  panel and is set only via `set_user_role/3` (super-admin-only; the **last**
-  super_admin can't be removed — locked `FOR UPDATE` — so admin can never be
-  locked out; a `role` CHECK constraint backs the changeset). `admin?/1` is the
-  gate predicate.
+  **Storage** as `avatar_key`. `username` is both the login **and** the public
+  `@tag`; it is **self-chosen and renameable** (`username_changeset` /
+  `update_username/2`, #173 — re-validated unique, sessions survive since tokens
+  reference the user id). **Managed identity fields** (`corp_email`, `position`
+  (Должность), `structure`, + the `external_id`/`identity_source`/`managed_by`/
+  `directory_synced_at` sync seams, #173) are **admin-/sync-owned**: written ONLY
+  through `managed_changeset` / `apply_managed_fields/2` (the admin panel #174 or a
+  future directory sync), never the user's profile form — the split is the eden-as-
+  system-of-record model of ADR-0002/#172. Users also carry a global **platform
+  role** (`member | admin | super_admin`, #174) — distinct from the per-channel
+  `owner|admin|member` roles; it gates the admin panel and is set only via
+  `set_user_role/3` (super-admin-only; the **last** super_admin can't be removed —
+  locked `FOR UPDATE` — so admin can never be locked out; a `role` CHECK constraint
+  backs the changeset). `admin?/1` is the gate predicate.
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.

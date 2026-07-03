@@ -136,6 +136,43 @@ defmodule Eden.Accounts do
   end
 
   @doc """
+  Changeset for the username-rename form (#173); skips the per-keystroke DB probe
+  (`validate_unique: false`) — the unique constraint still enforces it atomically on
+  save, and skipping the probe avoids a query per keystroke.
+  """
+  def change_username(%User{} = user, attrs \\ %{}, opts \\ [validate_unique: false]),
+    do: User.username_changeset(user, attrs, opts)
+
+  @doc """
+  Renames the user's `username` — the login handle and public `@tag` (#173).
+  Re-validates format + uniqueness; on success broadcasts `{:user_updated, user}` so
+  every view showing `@username` refreshes. Sessions survive (tokens reference the
+  user id, not the name). Returns `{:ok, user}` or `{:error, changeset}`.
+  """
+  def update_username(%User{} = user, attrs) do
+    with {:ok, updated} <- user |> User.username_changeset(attrs) |> Repo.update() do
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  @doc "Changeset for the managed identity fields (#173) — for the admin-panel (#174) form."
+  def change_managed_fields(%User{} = user, attrs \\ %{}),
+    do: User.managed_changeset(user, attrs)
+
+  @doc """
+  Writes the admin-/sync-managed identity fields (#173): corp email, Должность,
+  org structure, and the directory-sync seams. This is the **only** write path for
+  those fields — called by the admin panel (#174) or a future sync, never by a
+  user-facing form. Broadcasts `{:user_updated, user}` so open profile cards refresh.
+  Returns `{:ok, user}` or `{:error, changeset}`.
+  """
+  def apply_managed_fields(%User{} = user, attrs) do
+    with {:ok, updated} <- user |> User.managed_changeset(attrs) |> Repo.update() do
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  @doc """
   Sets the user's manual presence status (#102) and notifies their own sessions
   on the per-user presence topic. `status` is one of `User.presence_statuses/0`;
   an invalid value returns the changeset error.
