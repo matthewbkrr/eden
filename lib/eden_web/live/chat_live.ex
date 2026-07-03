@@ -10482,6 +10482,8 @@ defmodule EdenWeb.ChatLive do
           >
             {@user.bio}
           </p>
+
+          <.managed_identity user={@user} compact />
         </div>
 
         <.link
@@ -10501,6 +10503,49 @@ defmodule EdenWeb.ChatLive do
         </button>
       </div>
     </div>
+    """
+  end
+
+  # Admin-managed identity rows (#173) — shared by the full profile panel and the
+  # popover so both stay consistent. Read-only; renders only when a field is set
+  # (filled by the admin panel #174 / a future sync). `compact` (the popover) shows
+  # only the headline field (position) to stay light; the full panel shows all.
+  #
+  # Spacing logic: the value is pinned tight under its label (small margin + tight
+  # leading — the default 1.5 line-height was what made the pairs look loose), and
+  # the gap BETWEEN rows is clearly larger, so it reads as grouped pairs.
+  attr :user, :map, required: true
+  attr :compact, :boolean, default: false
+
+  defp managed_identity(assigns) do
+    all = [
+      {gettext("Position"), assigns.user.position},
+      {gettext("Structure"), assigns.user.structure},
+      {gettext("Corporate email"), assigns.user.corp_email}
+    ]
+
+    fields =
+      if(assigns.compact, do: Enum.take(all, 1), else: all)
+      |> Enum.filter(fn {_label, value} -> value end)
+
+    assigns = assign(assigns, :fields, fields)
+
+    ~H"""
+    <dl
+      :if={@fields != []}
+      class="mt-4 w-full text-left border-t pt-3 flex flex-col gap-3"
+      style="border-color: var(--ed-border);"
+    >
+      <div :for={{label, value} <- @fields}>
+        <dt class="leading-tight" style="color: var(--ed-muted); font-size:0.75rem;">{label}</dt>
+        <dd
+          class="mt-0.5 leading-snug break-words"
+          style="font-size:0.875rem; color: var(--ed-ink); overflow-wrap: anywhere;"
+        >
+          {value}
+        </dd>
+      </div>
+    </dl>
     """
   end
 
@@ -10576,33 +10621,7 @@ defmodule EdenWeb.ChatLive do
           >
             {@peer.bio}
           </p>
-          <%!-- Admin-managed identity (#173): read-only, shown only when set (populated
-                by the admin panel #174 / a future sync). --%>
-          <dl
-            :if={@peer.position || @peer.structure || @peer.corp_email}
-            class="mt-4 w-full text-left border-t pt-3 space-y-2.5"
-            style="border-color: var(--ed-border);"
-          >
-            <div
-              :for={
-                {label, value} <-
-                  [
-                    {gettext("Position"), @peer.position},
-                    {gettext("Structure"), @peer.structure},
-                    {gettext("Corporate email"), @peer.corp_email}
-                  ]
-              }
-              :if={value}
-            >
-              <dt style="color: var(--ed-muted); font-size:0.75rem;">{label}</dt>
-              <dd
-                class="mt-0.5 break-words whitespace-pre-line"
-                style="font-size:0.875rem; color: var(--ed-ink);"
-              >
-                {value}
-              </dd>
-            </div>
-          </dl>
+          <.managed_identity user={@peer} />
         </div>
 
         <%!-- Group: the group's card + the member list (tap a member for their profile). --%>
