@@ -2,7 +2,7 @@ defmodule Eden.AccountsTest do
   use Eden.DataCase, async: true
 
   alias Eden.Accounts
-  alias Eden.Accounts.{Invite, User}
+  alias Eden.Accounts.{Invite, Scope, User}
 
   defp user_fixture(attrs \\ %{}) do
     base = %{
@@ -18,6 +18,9 @@ defmodule Eden.AccountsTest do
 
     user
   end
+
+  # role isn't cast by registration_changeset (it's admin-managed, #174), so set it directly.
+  defp promote(user, role), do: user |> Ecto.Changeset.change(role: role) |> Repo.update!()
 
   defp valid_attrs(overrides \\ %{}) do
     Map.merge(
@@ -327,6 +330,78 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "platform roles / set_user_role/3 (#174)" do
+    test "admin?/1 reflects the platform role" do
+      assert Accounts.admin?(promote(user_fixture(), "admin"))
+      assert Accounts.admin?(promote(user_fixture(), "super_admin"))
+      refute Accounts.admin?(user_fixture())
+    end
+
+    test "a super_admin can change another user's role, broadcasting the change" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+      :ok = Accounts.subscribe_user_updates()
+
+      assert {:ok, updated} = Accounts.set_user_role(Scope.for_user(actor), target, "admin")
+      assert updated.role == "admin"
+      assert_receive {:user_updated, %User{role: "admin"}}
+    end
+
+    test "a non-super-admin cannot change roles" do
+      admin = promote(user_fixture(), "admin")
+      member = user_fixture()
+
+      assert {:error, :forbidden} =
+               Accounts.set_user_role(Scope.for_user(admin), user_fixture(), "admin")
+
+      assert {:error, :forbidden} =
+               Accounts.set_user_role(Scope.for_user(member), user_fixture(), "admin")
+    end
+
+    test "cannot remove the last super_admin (no admin lockout)" do
+      actor = promote(user_fixture(), "super_admin")
+
+      assert {:error, :last_super_admin} =
+               Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+
+      assert Repo.get!(User, actor.id).role == "super_admin"
+    end
+
+    test "a super_admin may step down while another super_admin remains" do
+      actor = promote(user_fixture(), "super_admin")
+      _peer = promote(user_fixture(), "super_admin")
+
+      assert {:ok, stepped} = Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+      assert stepped.role == "member"
+    end
+
+    test "a super_admin may demote a peer, then the remaining last one is protected" do
+      actor = promote(user_fixture(), "super_admin")
+      peer = promote(user_fixture(), "super_admin")
+
+      assert {:ok, demoted} = Accounts.set_user_role(Scope.for_user(actor), peer, "member")
+      assert demoted.role == "member"
+
+      assert {:error, :last_super_admin} =
+               Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+    end
+
+    test "rejects an unknown role" do
+      actor = promote(user_fixture(), "super_admin")
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.set_user_role(Scope.for_user(actor), user_fixture(), "wizard")
+    end
+
+    test "list_users/0 returns every user" do
+      a = user_fixture()
+      b = user_fixture()
+      ids = Accounts.list_users() |> Enum.map(& &1.id)
+      assert a.id in ids
+      assert b.id in ids
+    end
+  end
+
   describe "set_presence_status/2 (#102)" do
     test "defaults to auto and persists each allowed status" do
       user = user_fixture()
@@ -358,6 +433,7 @@ defmodule Eden.AccountsTest do
 
     test "broadcasts on the user's own presence topic, not the global one" do
       user = user_fixture()
+      user_id = user.id
       scope = Eden.Accounts.Scope.for_user(user)
       :ok = Accounts.subscribe_presence(scope)
       :ok = Accounts.subscribe_user_updates()
@@ -365,7 +441,9 @@ defmodule Eden.AccountsTest do
       {:ok, _updated} = Accounts.set_presence_status(user, "dnd")
 
       assert_receive {:presence_status_changed, "dnd"}
-      refute_received {:user_updated, _user}
+      # Pin THIS user's id: async siblings broadcast :user_updated for their own
+      # users on the shared global topic, which must not trip this assertion.
+      refute_received {:user_updated, %User{id: ^user_id}}
     end
   end
 

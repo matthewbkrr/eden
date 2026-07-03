@@ -14,6 +14,9 @@ defmodule Eden.Accounts.User do
   # to others while staying connected. Persisted so the choice survives reconnect.
   @presence_statuses ~w(auto away dnd invisible)
 
+  # Global platform roles (#174), lowest → highest privilege.
+  @roles ~w(member admin super_admin)
+
   schema "users" do
     field :username, :string
     field :display_name, :string
@@ -23,6 +26,11 @@ defmodule Eden.Accounts.User do
     field :presence_status, :string, default: "auto"
     # When the user last fully disconnected (#102), for "last seen" on offline peers.
     field :last_active_at, :utc_datetime
+
+    # Global platform role (#174): member | admin | super_admin. Distinct from the
+    # per-channel owner|admin|member roles; gates the admin panel. Written only via
+    # role_changeset/2 (through Accounts.set_user_role/3, super-admin-restricted).
+    field :role, :string, default: "member"
 
     # Managed identity fields (#173, RFC Phase 1): admin-/sync-owned, written ONLY
     # via managed_changeset/2 (the admin panel #174 or a future directory sync),
@@ -43,6 +51,26 @@ defmodule Eden.Accounts.User do
 
   @doc "The allowed manual presence statuses (#102)."
   def presence_statuses, do: @presence_statuses
+
+  @doc "The platform roles (#174)."
+  def roles, do: @roles
+
+  @doc "True if the user holds a platform admin role (`admin` or `super_admin`, #174)."
+  def admin?(%__MODULE__{role: role}), do: role in ~w(admin super_admin)
+
+  @doc "True if the user is a `super_admin` (#174)."
+  def super_admin?(%__MODULE__{role: role}), do: role == "super_admin"
+
+  @doc """
+  Admin-only changeset for a user's platform role (#174). The write path
+  (`Accounts.set_user_role/3`) restricts who may call it (super-admin only).
+  """
+  def role_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:role])
+    |> validate_required([:role])
+    |> validate_inclusion(:role, @roles)
+  end
 
   @doc """
   Changeset for creating an account (used when accepting an invite).

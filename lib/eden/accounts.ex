@@ -39,6 +39,56 @@ defmodule Eden.Accounts do
   end
 
   @doc """
+  Lists all users for the admin panel (#174), by display name. The caller (the
+  `/admin` on_mount gate) restricts this to admins; it is not scoped itself.
+  """
+  def list_users do
+    from(u in User, order_by: [asc: u.display_name]) |> Repo.all()
+  end
+
+  @doc "True if the user holds a platform admin role (`admin` or `super_admin`, #174)."
+  def admin?(%User{} = user), do: User.admin?(user)
+
+  @doc """
+  Sets a user's platform role (#174). **Super-admin only** — enforced here, not
+  just in the UI. An actor can't change their own role (no self-lockout / no
+  accidental last-super-admin demotion of self). Returns `{:ok, user}` |
+  `{:error, :forbidden}` | `{:error, changeset}`; broadcasts `{:user_updated}`.
+  """
+  def set_user_role(%Scope{user: %User{} = actor}, %User{} = target, role) do
+    if User.super_admin?(actor) do
+      set_role_guarded(target, role)
+    else
+      {:error, :forbidden}
+    end
+  end
+
+  # The one invariant that matters: the platform must never reach ZERO super_admins
+  # (that would lock everyone out of admin). So the only refused move is taking the
+  # LAST super_admin off the role — whether that's the actor themselves (a lone
+  # super_admin can't step down) or someone else. A super_admin CAN step down or
+  # demote a peer as long as another super_admin remains. `FOR UPDATE` locks the
+  # super_admin set so two concurrent demotions can't both pass the check and reach
+  # zero. Returns {:error, :last_super_admin} when it would.
+  defp set_role_guarded(%User{} = target, role) do
+    Repo.transact(fn ->
+      super_ids =
+        from(u in User, where: u.role == "super_admin", lock: "FOR UPDATE", select: u.id)
+        |> Repo.all()
+
+      if role != "super_admin" and target.id in super_ids and length(super_ids) <= 1 do
+        {:error, :last_super_admin}
+      else
+        target |> User.role_changeset(%{role: role}) |> Repo.update()
+      end
+    end)
+    |> case do
+      {:ok, updated} -> {:ok, broadcast_user_update(updated)}
+      other -> other
+    end
+  end
+
+  @doc """
   Returns the user if the username/password pair is valid, otherwise nil.
   Always runs a hash comparison so timing does not reveal whether a username exists.
   """
