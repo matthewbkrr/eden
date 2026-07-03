@@ -68,6 +68,15 @@ defmodule EdenWeb.AdminLiveTest do
       refute html =~ "Platform role"
     end
 
+    test "generates a one-time reset link for a person (#232)", %{conn: conn} do
+      worker = user_fixture(%{username: "worker6"})
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, worker)
+
+      html = view |> element(~s(button[phx-click="reset_link"])) |> render_click()
+      assert html =~ "/reset/"
+    end
+
     test "an external update to the open person refreshes the list and the edit form", %{
       conn: conn
     } do

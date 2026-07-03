@@ -72,10 +72,12 @@ defmodule EdenWeb.Router do
       live "/admin", AdminLive
     end
 
-    # Device preferences — available signed out (current_scope may be nil).
+    # Device preferences + the password-reset link — available signed out
+    # (current_scope may be nil; a reset link stands on its own token, #232).
     live_session :default,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}] do
       live "/settings", SettingsLive
+      live "/reset/:token", ResetLive
     end
   end
 

@@ -325,6 +325,18 @@ defmodule Eden.Accounts do
     Repo.transact(fn -> redeem_reset(hashed, new_password) end)
   end
 
+  @doc """
+  True if a reset token is currently redeemable (exists + unexpired). A read-only
+  peek for the `/reset/:token` page to show the form vs an \"expired\" state; the
+  redeem path (`reset_password_with_token/2`) re-checks under a lock.
+  """
+  def reset_token_valid?(raw_token) when is_binary(raw_token) do
+    case Repo.get_by(PasswordResetToken, hashed_token: Eden.Tokens.hash(raw_token)) do
+      nil -> false
+      %PasswordResetToken{expires_at: at} -> DateTime.before?(DateTime.utc_now(), at)
+    end
+  end
+
   defp redeem_reset(hashed, new_password) do
     with %PasswordResetToken{} = token <- Repo.one(locked_reset_query(hashed)),
          false <- reset_expired?(token) do
