@@ -3321,14 +3321,23 @@ defmodule Eden.Chat do
     end
   end
 
-  @doc "Marks the conversation read up to now for the scoped user, broadcasting a read receipt."
+  @doc """
+  Marks the conversation read up to now for the scoped user. The read receipt is
+  broadcast **only when the user is actually a member** — the membership-scoped
+  `update_all` touches zero rows for a non-member, so a non-participant who guesses
+  a conversation id can't forge a "✓✓ read" receipt into a chat they don't belong to.
+  Returns `:ok` either way (a non-member call is a silent no-op, leaking nothing).
+  """
   def mark_read(%Scope{user: user}, conversation_id) do
     read_at = now()
 
-    from(m in Membership, where: m.conversation_id == ^conversation_id and m.user_id == ^user.id)
-    |> Repo.update_all(set: [last_read_at: read_at])
+    {updated, _} =
+      from(m in Membership,
+        where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
+      )
+      |> Repo.update_all(set: [last_read_at: read_at])
 
-    broadcast(conversation_id, {:read, user.id, read_at})
+    if updated > 0, do: broadcast(conversation_id, {:read, user.id, read_at})
     :ok
   end
 
