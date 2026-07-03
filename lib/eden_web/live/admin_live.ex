@@ -10,6 +10,7 @@ defmodule EdenWeb.AdminLive do
   use EdenWeb, :live_view
 
   alias Eden.Accounts
+  alias Eden.Accounts.User
 
   @impl true
   def mount(_params, _session, socket) do
@@ -42,10 +43,7 @@ defmodule EdenWeb.AdminLive do
   def handle_event("save", %{"user" => params}, socket) do
     case Accounts.apply_managed_fields(socket.assigns.selected, params) do
       {:ok, updated} ->
-        {:noreply,
-         socket
-         |> assign(selected: updated, managed_form: managed_form(updated))
-         |> put_flash(:info, gettext("Saved."))}
+        {:noreply, socket |> refresh_user(updated) |> put_flash(:info, gettext("Saved."))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, managed_form: to_form(changeset))}
@@ -55,8 +53,7 @@ defmodule EdenWeb.AdminLive do
   def handle_event("set_role", %{"role" => role}, socket) do
     case Accounts.set_user_role(socket.assigns.current_scope, socket.assigns.selected, role) do
       {:ok, updated} ->
-        {:noreply,
-         socket |> assign(selected: updated) |> put_flash(:info, gettext("Role updated."))}
+        {:noreply, socket |> refresh_user(updated) |> put_flash(:info, gettext("Role updated."))}
 
       {:error, :last_super_admin} ->
         {:noreply, put_flash(socket, :error, gettext("Can't remove the last super-admin."))}
@@ -67,21 +64,29 @@ defmodule EdenWeb.AdminLive do
   end
 
   @impl true
-  def handle_info({:user_updated, user}, socket) do
-    users = Enum.map(socket.assigns.users, &if(&1.id == user.id, do: user, else: &1))
-
-    selected =
-      if socket.assigns.selected && socket.assigns.selected.id == user.id,
-        do: user,
-        else: socket.assigns.selected
-
-    {:noreply, assign(socket, users: users, selected: selected)}
-  end
+  def handle_info({:user_updated, user}, socket), do: {:noreply, refresh_user(socket, user)}
 
   defp select_user(socket, id) do
     case Enum.find(socket.assigns.users, &(to_string(&1.id) == to_string(id))) do
       nil -> socket
       user -> assign(socket, selected: user, managed_form: managed_form(user))
+    end
+  end
+
+  # Keep the local view consistent after ANY change to a user — our own save /
+  # role change, or another admin's arriving via the {:user_updated} broadcast:
+  # swap the row in the list, and when it's the open person refresh both the
+  # header struct AND the edit form, so an open form never shows (or, on save,
+  # writes back) stale values. Refreshing the form does drop the current admin's
+  # unsaved edits when the person is changed underneath them — the safe trade
+  # (show/save the truth, not clobber a concurrent change).
+  defp refresh_user(socket, %User{} = user) do
+    users = Enum.map(socket.assigns.users, &if(&1.id == user.id, do: user, else: &1))
+
+    if socket.assigns.selected && socket.assigns.selected.id == user.id do
+      assign(socket, users: users, selected: user, managed_form: managed_form(user))
+    else
+      assign(socket, users: users)
     end
   end
 
@@ -233,7 +238,10 @@ defmodule EdenWeb.AdminLive do
 
   defp avatar_src(_user), do: nil
 
-  defp initials(name), do: name |> String.first() |> String.upcase()
+  defp initials(name) when is_binary(name) and name != "",
+    do: name |> String.first() |> String.upcase()
+
+  defp initials(_), do: "?"
 
   attr :role, :string, required: true
 

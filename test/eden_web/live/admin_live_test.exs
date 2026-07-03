@@ -67,6 +67,21 @@ defmodule EdenWeb.AdminLiveTest do
       html = select(view, worker)
       refute html =~ "Platform role"
     end
+
+    test "an external update to the open person refreshes the list and the edit form", %{
+      conn: conn
+    } do
+      worker = user_fixture(%{username: "worker5", display_name: "Worker Five"})
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, worker)
+
+      # Another admin / a sync changes this person's managed fields under us.
+      send(view.pid, {:user_updated, %{worker | position: "Externally Set"}})
+
+      # The open edit form (not just the list) reflects it — so a later save can't
+      # write the stale value back.
+      assert render(view) =~ "Externally Set"
+    end
   end
 
   describe "as a super_admin" do
