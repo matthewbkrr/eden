@@ -307,6 +307,19 @@ defmodule Eden.AccountsTest do
                Accounts.apply_managed_fields(user, %{"identity_source" => "martian"})
     end
 
+    test "bounds external_id and constrains managed_by (the remaining seams)" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.apply_managed_fields(user, %{"external_id" => String.duplicate("x", 256)})
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.apply_managed_fields(user, %{"managed_by" => "the_wind"})
+
+      assert {:ok, u} = Accounts.apply_managed_fields(user, %{"managed_by" => "directory"})
+      assert u.managed_by == "directory"
+    end
+
     test "a blank managed field clears to nil" do
       {:ok, user} = Accounts.apply_managed_fields(user_fixture(), %{"position" => "Analyst"})
       assert {:ok, cleared} = Accounts.apply_managed_fields(user, %{"position" => "  "})

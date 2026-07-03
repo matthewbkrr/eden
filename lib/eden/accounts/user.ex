@@ -107,6 +107,11 @@ defmodule Eden.Accounts.User do
       message: "must be a valid email"
     )
     |> validate_inclusion(:identity_source, ~w(local directory ihi))
+    # The remaining sync seams: bound external_id (an opaque upstream key) and
+    # constrain managed_by to its documented set (RFC §2.2) so no seam is unchecked.
+    |> update_change(:external_id, &normalize_text/1)
+    |> validate_length(:external_id, max: 255)
+    |> validate_inclusion(:managed_by, ~w(user directory admin))
   end
 
   @doc "Changeset for the user's manual presence status (#102); separate from the profile."
