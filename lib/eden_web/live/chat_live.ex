@@ -10576,6 +10576,33 @@ defmodule EdenWeb.ChatLive do
           >
             {@peer.bio}
           </p>
+          <%!-- Admin-managed identity (#173): read-only, shown only when set (populated
+                by the admin panel #174 / a future sync). --%>
+          <dl
+            :if={@peer.position || @peer.structure || @peer.corp_email}
+            class="mt-4 w-full text-left border-t pt-3 space-y-2.5"
+            style="border-color: var(--ed-border);"
+          >
+            <div
+              :for={
+                {label, value} <-
+                  [
+                    {gettext("Position"), @peer.position},
+                    {gettext("Structure"), @peer.structure},
+                    {gettext("Corporate email"), @peer.corp_email}
+                  ]
+              }
+              :if={value}
+            >
+              <dt style="color: var(--ed-muted); font-size:0.75rem;">{label}</dt>
+              <dd
+                class="mt-0.5 break-words whitespace-pre-line"
+                style="font-size:0.875rem; color: var(--ed-ink);"
+              >
+                {value}
+              </dd>
+            </div>
+          </dl>
         </div>
 
         <%!-- Group: the group's card + the member list (tap a member for their profile). --%>
