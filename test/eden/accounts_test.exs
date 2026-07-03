@@ -517,6 +517,16 @@ defmodule Eden.AccountsTest do
       assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 0
     end
 
+    test "invalidates any pending admin reset link (no 24h backdoor)" do
+      user = user_fixture(%{username: "pwuser2", password: "password123"})
+      raw = mint_reset(user)
+
+      assert {:ok, _} = Accounts.change_password(user, "password123", "newpassword456")
+
+      refute Accounts.reset_token_valid?(raw)
+      assert {:error, :invalid} = Accounts.reset_password_with_token(raw, "yetanother123")
+    end
+
     test "rejects a wrong current password" do
       user = user_fixture(%{password: "password123"})
 
@@ -543,6 +553,17 @@ defmodule Eden.AccountsTest do
 
       # single-use: the row is gone, a replay fails
       assert {:error, :invalid} = Accounts.reset_password_with_token(raw, "another123456")
+    end
+
+    test "minting a new link supersedes the previous one (one live link per person)" do
+      user = user_fixture(%{username: "resettwice", password: "password123"})
+      first = mint_reset(user)
+      second = mint_reset(user)
+
+      refute Accounts.reset_token_valid?(first)
+      assert Accounts.reset_token_valid?(second)
+      assert {:error, :invalid} = Accounts.reset_password_with_token(first, "whatever123456")
+      assert {:ok, _} = Accounts.reset_password_with_token(second, "brandnewpass789")
     end
 
     test "rejects an unknown token" do

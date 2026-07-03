@@ -287,6 +287,9 @@ defmodule Eden.Accounts do
       with {:ok, updated} <-
              user |> User.password_changeset(%{password: new_password}) |> Repo.update() do
         revoke_all_user_sessions(updated)
+        # A self-chosen password kills any pending admin reset link — otherwise
+        # that link stays a 24h backdoor to the account.
+        delete_reset_tokens(updated.id)
         {:ok, updated}
       end
     else
@@ -319,6 +322,10 @@ defmodule Eden.Accounts do
           DateTime.utc_now()
           |> DateTime.add(@reset_ttl_hours, :hour)
           |> DateTime.truncate(:second)
+
+        # One live link per person: minting a new one supersedes any outstanding
+        # link, so a superseded (or stale) link can't still redeem.
+        delete_reset_tokens(target.id)
 
         Repo.insert!(%PasswordResetToken{
           user_id: target.id,
@@ -383,11 +390,16 @@ defmodule Eden.Accounts do
   defp apply_reset(%PasswordResetToken{} = token, new_password) do
     with {:ok, updated} <-
            token.user |> User.password_changeset(%{password: new_password}) |> Repo.update() do
-      Repo.delete!(token)
+      # Delete every reset token for this user, not just the redeemed one — a
+      # redemption single-uses this link AND invalidates any sibling links.
+      delete_reset_tokens(token.user_id)
       revoke_all_user_sessions(updated)
       {:ok, updated}
     end
   end
+
+  defp delete_reset_tokens(user_id),
+    do: Repo.delete_all(from(t in PasswordResetToken, where: t.user_id == ^user_id))
 
   ## Invites
 
