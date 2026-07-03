@@ -34,6 +34,10 @@ design — built incrementally as features land.)
   `display_name` + `bio` (`profile_changeset`) plus an avatar: the upload is
   processed (center-cropped square JPEG, metadata stripped) and persisted through
   **Storage** as `avatar_key`; `username` stays immutable (it is the login).
+  Users carry a global **platform role** (`member | admin | super_admin`, #174) —
+  distinct from the per-channel `owner|admin|member` roles; it gates the admin
+  panel and is set only via `set_user_role/3` (super-admin-only, self-change
+  refused). `admin?/1` is the gate predicate.
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.

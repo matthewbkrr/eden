@@ -39,6 +39,38 @@ defmodule Eden.Accounts do
   end
 
   @doc """
+  Lists all users for the admin panel (#174), by display name. The caller (the
+  `/admin` on_mount gate) restricts this to admins; it is not scoped itself.
+  """
+  def list_users do
+    from(u in User, order_by: [asc: u.display_name]) |> Repo.all()
+  end
+
+  @doc "True if the user holds a platform admin role (`admin` or `super_admin`, #174)."
+  def admin?(%User{} = user), do: User.admin?(user)
+
+  @doc """
+  Sets a user's platform role (#174). **Super-admin only** — enforced here, not
+  just in the UI. An actor can't change their own role (no self-lockout / no
+  accidental last-super-admin demotion of self). Returns `{:ok, user}` |
+  `{:error, :forbidden}` | `{:error, changeset}`; broadcasts `{:user_updated}`.
+  """
+  def set_user_role(%Scope{user: %User{} = actor}, %User{} = target, role) do
+    cond do
+      not User.super_admin?(actor) ->
+        {:error, :forbidden}
+
+      actor.id == target.id ->
+        {:error, :forbidden}
+
+      true ->
+        with {:ok, updated} <- target |> User.role_changeset(%{role: role}) |> Repo.update() do
+          {:ok, broadcast_user_update(updated)}
+        end
+    end
+  end
+
+  @doc """
   Returns the user if the username/password pair is valid, otherwise nil.
   Always runs a hash comparison so timing does not reveal whether a username exists.
   """
