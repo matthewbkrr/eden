@@ -23,6 +23,18 @@ defmodule Eden.Accounts.User do
     field :presence_status, :string, default: "auto"
     # When the user last fully disconnected (#102), for "last seen" on offline peers.
     field :last_active_at, :utc_datetime
+
+    # Managed identity fields (#173, RFC Phase 1): admin-/sync-owned, written ONLY
+    # via managed_changeset/2 (the admin panel #174 or a future directory sync),
+    # never through the user's profile form. Read-only to the person on their card.
+    field :corp_email, :string
+    field :position, :string
+    field :structure, :string
+    field :external_id, :string
+    field :identity_source, :string, default: "local"
+    field :managed_by, :string
+    field :directory_synced_at, :utc_datetime
+
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
 
@@ -54,8 +66,47 @@ defmodule Eden.Accounts.User do
     # rather than being dropped; display_name "" then fails validate_required below.
     |> cast(attrs, [:display_name, :bio], empty_values: [])
     |> validate_display_name()
-    |> update_change(:bio, &normalize_bio/1)
+    |> update_change(:bio, &normalize_text/1)
     |> validate_length(:bio, max: @max_bio, count: :codepoints)
+  end
+
+  @doc """
+  Changeset for renaming the login handle (#173). `username` is both the login and
+  the public `@tag`, so it stays self-chosen and unique — this reuses the exact
+  registration-time `validate_username/2` (format, length, uniqueness). A rename
+  changes the name typed at login, but sessions survive (tokens reference the user
+  id, not the name). `opts[:validate_unique]` gates the early DB probe (pass `false`
+  for live per-keystroke validation).
+  """
+  def username_changeset(user, attrs, opts \\ []) do
+    user
+    |> cast(attrs, [:username])
+    |> validate_username(opts)
+  end
+
+  @managed_fields ~w(corp_email position structure external_id identity_source managed_by directory_synced_at)a
+
+  @doc """
+  Admin-/sync-only changeset for the managed identity fields (#173): corp email,
+  Должность (`position`), org `structure`, and the directory-sync seams. Kept
+  strictly separate from `profile_changeset/2` (display_name + bio) so a user can
+  never set their own managed fields through the profile form — only the admin
+  panel (#174) or a future sync calls this. Text is trimmed + NUL-stripped; a blank
+  clears to nil.
+  """
+  def managed_changeset(user, attrs) do
+    user
+    |> cast(attrs, @managed_fields, empty_values: [])
+    |> update_change(:corp_email, &normalize_text/1)
+    |> update_change(:position, &normalize_text/1)
+    |> update_change(:structure, &normalize_text/1)
+    |> validate_length(:corp_email, max: 160)
+    |> validate_length(:position, max: 120)
+    |> validate_length(:structure, max: 160)
+    |> validate_format(:corp_email, ~r/^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+      message: "must be a valid email"
+    )
+    |> validate_inclusion(:identity_source, ~w(local directory ihi))
   end
 
   @doc "Changeset for the user's manual presence status (#102); separate from the profile."
@@ -66,11 +117,12 @@ defmodule Eden.Accounts.User do
     |> validate_inclusion(:presence_status, @presence_statuses)
   end
 
-  # Strip NUL bytes (Postgres rejects them) and trim; a blank bio becomes nil.
-  defp normalize_bio(nil), do: nil
+  # Strip NUL bytes (Postgres rejects them) and trim; a blank string becomes nil.
+  # Shared by the free-text profile/managed fields (bio, position, structure, …).
+  defp normalize_text(nil), do: nil
 
-  defp normalize_bio(bio) do
-    case bio |> String.replace("\0", "") |> String.trim() do
+  defp normalize_text(text) do
+    case text |> String.replace("\0", "") |> String.trim() do
       "" -> nil
       trimmed -> trimmed
     end

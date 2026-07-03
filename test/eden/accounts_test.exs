@@ -224,6 +224,94 @@ defmodule Eden.AccountsTest do
       assert_receive {:user_updated, %User{id: id, display_name: "Renamed"}}
       assert id == updated.id
     end
+
+    test "cannot set managed identity fields through the profile form (#173)" do
+      user = user_fixture()
+
+      # A user submitting managed keys via the profile changeset must not touch them.
+      assert {:ok, u} =
+               Accounts.update_profile(user, %{
+                 "display_name" => "Ok",
+                 "corp_email" => "evil@corp.ru",
+                 "position" => "CEO",
+                 "identity_source" => "directory"
+               })
+
+      assert u.corp_email == nil
+      assert u.position == nil
+      assert u.identity_source == "local"
+    end
+  end
+
+  describe "update_username/2 (#173)" do
+    test "renames the login handle and broadcasts" do
+      user = user_fixture(%{username: "old_name"})
+      :ok = Accounts.subscribe_user_updates()
+
+      assert {:ok, u} = Accounts.update_username(user, %{"username" => "new_name"})
+      assert u.username == "new_name"
+      assert_receive {:user_updated, %User{username: "new_name"}}
+
+      # The rename is the login now.
+      assert %User{} = Accounts.get_user_by_username_and_password("new_name", "password123")
+      assert Accounts.get_user_by_username_and_password("old_name", "password123") == nil
+    end
+
+    test "rejects a taken username and a malformed one" do
+      _taken = user_fixture(%{username: "taken_one"})
+      user = user_fixture(%{username: "mover"})
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.update_username(user, %{"username" => "taken_one"})
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.update_username(user, %{"username" => "bad name!"})
+    end
+
+    test "renaming to the same username is a no-op, not a false collision" do
+      user = user_fixture(%{username: "samename"})
+      assert {:ok, u} = Accounts.update_username(user, %{"username" => "samename"})
+      assert u.username == "samename"
+    end
+  end
+
+  describe "apply_managed_fields/2 (#173)" do
+    test "sets managed fields (trimmed, NUL-stripped) and broadcasts" do
+      user = user_fixture()
+      :ok = Accounts.subscribe_user_updates()
+
+      assert {:ok, u} =
+               Accounts.apply_managed_fields(user, %{
+                 "corp_email" => "  ivan@rwb.ru ",
+                 "position" => " Руководитель" <> <<0>> <> " блока ",
+                 "structure" => "ЦФО • Склад Обухово",
+                 "identity_source" => "directory",
+                 "managed_by" => "admin"
+               })
+
+      assert u.corp_email == "ivan@rwb.ru"
+      assert u.position == "Руководитель блока"
+      assert u.structure == "ЦФО • Склад Обухово"
+      assert u.identity_source == "directory"
+      assert u.managed_by == "admin"
+      assert_receive {:user_updated, %User{corp_email: "ivan@rwb.ru"}}
+    end
+
+    test "rejects a malformed corp email and an unknown identity_source" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.apply_managed_fields(user, %{"corp_email" => "not-an-email"})
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.apply_managed_fields(user, %{"identity_source" => "martian"})
+    end
+
+    test "a blank managed field clears to nil" do
+      {:ok, user} = Accounts.apply_managed_fields(user_fixture(), %{"position" => "Analyst"})
+      assert {:ok, cleared} = Accounts.apply_managed_fields(user, %{"position" => "  "})
+      assert cleared.position == nil
+    end
   end
 
   describe "set_presence_status/2 (#102)" do
