@@ -91,6 +91,7 @@ defmodule EdenWeb.UserAuth do
   on_mount hooks:
     * `:mount_current_scope` - assigns `current_scope` (may be nil)
     * `:require_authenticated` - assigns it and halts to /login if absent
+    * `:require_admin` - like `:require_authenticated`, plus halts non-admins to the app (#174)
     * `:redirect_if_authenticated` - sends signed-in users to the home page
   """
   def on_mount(:mount_current_scope, _params, session, socket) do
@@ -109,6 +110,29 @@ defmodule EdenWeb.UserAuth do
         |> Phoenix.LiveView.redirect(to: ~p"/login")
 
       {:halt, socket}
+    end
+  end
+
+  def on_mount(:require_admin, _params, session, socket) do
+    socket = mount_current_scope(socket, session)
+
+    cond do
+      is_nil(socket.assigns.current_scope) ->
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
+         |> Phoenix.LiveView.redirect(to: ~p"/login")}
+
+      Accounts.admin?(socket.assigns.current_scope.user) ->
+        {:cont, socket}
+
+      true ->
+        # Authenticated but not an admin — bounce to the app without confirming the
+        # admin panel even exists.
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(:error, "You don't have access to that page.")
+         |> Phoenix.LiveView.redirect(to: signed_in_path(socket))}
     end
   end
 
