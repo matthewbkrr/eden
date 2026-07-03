@@ -90,8 +90,8 @@ defmodule Eden.Accounts do
   (`validate_unique: false`) — the unique constraint still enforces it atomically on
   save, and skipping the probe avoids a query per keystroke.
   """
-  def change_username(%User{} = user, attrs \\ %{}),
-    do: User.username_changeset(user, attrs, validate_unique: false)
+  def change_username(%User{} = user, attrs \\ %{}, opts \\ [validate_unique: false]),
+    do: User.username_changeset(user, attrs, opts)
 
   @doc """
   Renames the user's `username` — the login handle and public `@tag` (#173).
