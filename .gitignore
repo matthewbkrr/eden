@@ -51,3 +51,7 @@ npm-debug.log
 
 # graphify knowledge-graph tooling output (local, not part of the app).
 /graphify-out/
+
+# Local scratch / debug artifacts (never part of the app).
+/test/e2e/scratch/
+/.impeccable/
