@@ -2,7 +2,7 @@ defmodule Eden.AccountsTest do
   use Eden.DataCase, async: true
 
   alias Eden.Accounts
-  alias Eden.Accounts.{Invite, Scope, User}
+  alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
 
   defp user_fixture(attrs \\ %{}) do
     base = %{
@@ -491,6 +491,72 @@ defmodule Eden.AccountsTest do
       File.write!(path, "definitely not an image")
       on_exit(fn -> File.rm(path) end)
       assert {:error, _} = Accounts.set_avatar(user_fixture(), path)
+    end
+  end
+
+  describe "change_password/3 (#232)" do
+    test "verifies the current password, sets a new one, and revokes every session" do
+      user = user_fixture(%{username: "pwuser", password: "password123"})
+      _ = Accounts.generate_user_session_token(user)
+      _ = Accounts.generate_user_session_token(user)
+
+      assert {:ok, updated} = Accounts.change_password(user, "password123", "newpassword456")
+      assert User.valid_password?(updated, "newpassword456")
+      refute User.valid_password?(updated, "password123")
+      assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 0
+    end
+
+    test "rejects a wrong current password" do
+      user = user_fixture(%{password: "password123"})
+
+      assert {:error, :invalid_current_password} =
+               Accounts.change_password(user, "wrong-one", "newpassword456")
+    end
+
+    test "rejects a too-short new password" do
+      user = user_fixture(%{password: "password123"})
+      assert {:error, %Ecto.Changeset{}} = Accounts.change_password(user, "password123", "short")
+    end
+  end
+
+  describe "password reset links (#232)" do
+    test "mint → redeem sets the new password, is single-use, and revokes sessions" do
+      user = user_fixture(%{username: "resetme", password: "password123"})
+      _ = Accounts.generate_user_session_token(user)
+
+      assert {:ok, raw} = Accounts.create_password_reset(user)
+      assert {:ok, updated} = Accounts.reset_password_with_token(raw, "brandnewpass789")
+      assert updated.id == user.id
+      assert User.valid_password?(updated, "brandnewpass789")
+      assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 0
+
+      # single-use: the row is gone, a replay fails
+      assert {:error, :invalid} = Accounts.reset_password_with_token(raw, "another123456")
+    end
+
+    test "rejects an unknown token" do
+      assert {:error, :invalid} = Accounts.reset_password_with_token("nope", "whatever123456")
+    end
+
+    test "rejects an expired token" do
+      user = user_fixture()
+      {:ok, raw} = Accounts.create_password_reset(user)
+
+      Repo.update_all(from(t in PasswordResetToken, where: t.user_id == ^user.id),
+        set: [
+          expires_at: DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
+        ]
+      )
+
+      assert {:error, :expired} = Accounts.reset_password_with_token(raw, "whatever123456")
+    end
+
+    test "rejects a too-short new password without consuming the token" do
+      user = user_fixture()
+      {:ok, raw} = Accounts.create_password_reset(user)
+      assert {:error, %Ecto.Changeset{}} = Accounts.reset_password_with_token(raw, "short")
+      # token survives (the transaction rolled back), so a valid retry still works
+      assert {:ok, _} = Accounts.reset_password_with_token(raw, "validpass1234")
     end
   end
 end

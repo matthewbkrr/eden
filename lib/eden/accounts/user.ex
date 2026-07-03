@@ -87,6 +87,17 @@ defmodule Eden.Accounts.User do
     |> validate_password(opts)
   end
 
+  @doc """
+  Changeset for setting a new password (a self-change or an admin-issued reset,
+  #232) — casts and validates just the password (min 8 / max 72 bytes) and hashes
+  it. Verifying any *current* password is the caller's job (`change_password/3`).
+  """
+  def password_changeset(user, attrs, opts \\ []) do
+    user
+    |> cast(attrs, [:password])
+    |> validate_password(opts)
+  end
+
   @doc "Changeset for editing the profile (display name + bio; no credentials)."
   def profile_changeset(user, attrs) do
     user
