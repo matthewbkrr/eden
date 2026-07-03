@@ -1420,8 +1420,6 @@ defmodule Eden.Chat do
           is_nil(mem.left_at),
       join: c in Conversation,
       on: c.id == m.conversation_id,
-      left_join: d in MessageDeletion,
-      on: d.message_id == m.id and d.user_id == ^user.id,
       where: not is_nil(c.channel_id),
       # Only real messages — join-request system rows (kind "system") carry an
       # empty body and a meta payload, never something a user means to find.
@@ -1429,10 +1427,13 @@ defmodule Eden.Chat do
       # Main-stream only (#189): thread replies (root_id set) are searched separately
       # via search_thread/3 — they don't belong in the room's main-stream results.
       where: is_nil(m.root_id),
-      where: is_nil(m.deleted_at) and is_nil(d.id),
       limit: @search_limit,
       preload: [:sender, :conversation]
     )
+    # Tombstone + delete-for-me visibility (#233): the single authority, shared
+    # with the main stream. Added before room_search_scope so its [m, mem, c]
+    # positional bindings are unaffected (the :deletion join is named).
+    |> exclude_invisible(user)
     |> where(^body_match(term))
   end
 
@@ -1464,14 +1465,13 @@ defmodule Eden.Chat do
       on:
         mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
           is_nil(mem.left_at),
-      left_join: d in MessageDeletion,
-      on: d.message_id == m.id and d.user_id == ^user.id,
       where: m.root_id == ^root_id,
       where: m.kind == "user",
-      where: is_nil(m.deleted_at) and is_nil(d.id),
       limit: @search_limit,
       preload: [:sender]
     )
+    # Tombstone + delete-for-me visibility (#233), shared with the main stream.
+    |> exclude_invisible(user)
     |> where(^body_match(term))
   end
 
@@ -1525,14 +1525,13 @@ defmodule Eden.Chat do
           is_nil(mem.left_at),
       join: c in Conversation,
       on: c.id == m.conversation_id,
-      left_join: d in MessageDeletion,
-      on: d.message_id == m.id and d.user_id == ^user.id,
       # Room messages join search with #32 (need channel-aware presentation).
       where: is_nil(c.channel_id),
-      where: is_nil(m.deleted_at) and is_nil(d.id),
       limit: @search_limit,
       preload: [:sender, conversation: [memberships: :user]]
     )
+    # Tombstone + delete-for-me visibility (#233), shared with the main stream.
+    |> exclude_invisible(user)
     |> where(^body_match(term))
     |> order_by(^search_order(term))
     |> run_search(term)
@@ -1786,16 +1785,32 @@ defmodule Eden.Chat do
   end
 
   # Shared base query for a conversation's main-stream messages visible to `user`:
-  # excludes thread replies, hard-deleted rows, and ones this user hid (delete-for-me).
+  # excludes thread replies, plus the per-user invisibility centralized in
+  # exclude_invisible/2.
   defp visible_messages(user, conversation_id) do
     Message
     |> where([m], m.conversation_id == ^conversation_id)
     # Replies live only inside their thread panel, never the main stream.
     |> where([m], is_nil(m.root_id))
-    # Drop "deleted for everyone" rows entirely, and ones this user hid.
+    |> exclude_invisible(user)
+  end
+
+  # The single authority for per-user message *content* visibility (#233): drops
+  # "deleted for everyone" tombstones and rows this user hid (delete-for-me).
+  # Every main-stream listing / search query pipes through this so a new query
+  # can't silently forget a filter and surface a hidden/deleted message. Uses a
+  # named binding (`:deletion`) so it composes onto any query with `Message` as
+  # the first binding, regardless of what else is joined. Membership /
+  # authorization scoping stays the caller's job — it legitimately varies
+  # (per-conversation vs cross-conversation search), so it isn't folded in here.
+  defp exclude_invisible(query, user) do
+    query
     |> where([m], is_nil(m.deleted_at))
-    |> join(:left, [m], d in MessageDeletion, on: d.message_id == m.id and d.user_id == ^user.id)
-    |> where([_m, d], is_nil(d.id))
+    |> join(:left, [m], d in MessageDeletion,
+      as: :deletion,
+      on: d.message_id == m.id and d.user_id == ^user.id
+    )
+    |> where([deletion: d], is_nil(d.id))
   end
 
   @doc """
