@@ -295,24 +295,44 @@ defmodule Eden.Accounts do
   end
 
   @doc """
-  Mints an admin-issued password-reset link for `user` (#232, ADR-0002 Decision 6):
-  stores only the hash, expires in #{@reset_ttl_hours}h, single-use. Returns
-  `{:ok, raw_token}` — the raw token is shown once (in the link), never stored.
+  Mints an admin-issued password-reset link for `target` (#232, ADR-0002 Decision
+  6): stores only the hash, expires in #{@reset_ttl_hours}h, single-use. Returns
+  `{:ok, raw_token}` (shown once, never stored) | `{:error, :forbidden}`.
+
+  Authorized here, not just in the UI: the actor must be an admin, and a **plain
+  admin may not reset a `super_admin`** — minting that link would let them redeem
+  it and seize the account (privilege escalation). Only a super_admin resets a
+  super_admin.
   """
-  def create_password_reset(%User{} = user) do
-    raw = Eden.Tokens.generate()
+  def create_password_reset(%Scope{user: %User{} = actor}, %User{} = target) do
+    cond do
+      not User.admin?(actor) ->
+        {:error, :forbidden}
 
-    expires_at =
-      DateTime.utc_now() |> DateTime.add(@reset_ttl_hours, :hour) |> DateTime.truncate(:second)
+      User.super_admin?(target) and not User.super_admin?(actor) ->
+        {:error, :forbidden}
 
-    Repo.insert!(%PasswordResetToken{
-      user_id: user.id,
-      hashed_token: Eden.Tokens.hash(raw),
-      expires_at: expires_at
-    })
+      true ->
+        raw = Eden.Tokens.generate()
 
-    {:ok, raw}
+        expires_at =
+          DateTime.utc_now()
+          |> DateTime.add(@reset_ttl_hours, :hour)
+          |> DateTime.truncate(:second)
+
+        Repo.insert!(%PasswordResetToken{
+          user_id: target.id,
+          hashed_token: Eden.Tokens.hash(raw),
+          expires_at: expires_at
+        })
+
+        {:ok, raw}
+    end
   end
+
+  @doc "True if `actor` may mint a reset link for `target` (#232) — see `create_password_reset/2`."
+  def can_reset_password?(%User{} = actor, %User{} = target),
+    do: User.admin?(actor) and (not User.super_admin?(target) or User.super_admin?(actor))
 
   @doc """
   Redeems a reset link (#232): under a row lock, if the token is valid and
@@ -333,7 +353,9 @@ defmodule Eden.Accounts do
   def reset_token_valid?(raw_token) when is_binary(raw_token) do
     case Repo.get_by(PasswordResetToken, hashed_token: Eden.Tokens.hash(raw_token)) do
       nil -> false
-      %PasswordResetToken{expires_at: at} -> DateTime.before?(DateTime.utc_now(), at)
+      # The SAME predicate the redeem path uses, so the peek and the redeem never
+      # disagree at the exact expiry instant.
+      %PasswordResetToken{} = token -> not reset_expired?(token)
     end
   end
 

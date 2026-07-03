@@ -31,8 +31,13 @@ defmodule EdenWeb.AdminLive do
     do: {:noreply, assign(socket, selected: nil, managed_form: nil, reset_link: nil)}
 
   def handle_event("reset_link", _params, socket) do
-    {:ok, raw} = Accounts.create_password_reset(socket.assigns.selected)
-    {:noreply, assign(socket, reset_link: url(~p"/reset/#{raw}"))}
+    case Accounts.create_password_reset(socket.assigns.current_scope, socket.assigns.selected) do
+      {:ok, raw} ->
+        {:noreply, assign(socket, reset_link: url(~p"/reset/#{raw}"))}
+
+      {:error, :forbidden} ->
+        {:noreply, put_flash(socket, :error, gettext("You can't reset that person's access."))}
+    end
   end
 
   def handle_event("validate", %{"user" => params}, socket) do
@@ -211,8 +216,13 @@ defmodule EdenWeb.AdminLive do
               </div>
             </div>
 
-            <%!-- Reset access (#232): any admin can mint a one-time link. --%>
-            <div class="mt-5 pt-5 border-t" style="border-color: var(--ed-border);">
+            <%!-- Reset access (#232): mint a one-time link. Hidden when the acting
+                  admin may not reset this person (a plain admin ↛ a super_admin). --%>
+            <div
+              :if={Accounts.can_reset_password?(@current_scope.user, @selected)}
+              class="mt-5 pt-5 border-t"
+              style="border-color: var(--ed-border);"
+            >
               <h3 style="font-size:0.8125rem; color: var(--ed-muted);">{gettext("Reset access")}</h3>
               <p class="mt-1" style="font-size:0.75rem; color: var(--ed-muted);">
                 {gettext(

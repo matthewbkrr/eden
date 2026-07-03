@@ -22,6 +22,17 @@ defmodule Eden.AccountsTest do
   # role isn't cast by registration_changeset (it's admin-managed, #174), so set it directly.
   defp promote(user, role), do: user |> Ecto.Changeset.change(role: role) |> Repo.update!()
 
+  # A reset link minted by a super_admin (create_password_reset/2 is authorized).
+  defp mint_reset(target) do
+    {:ok, raw} =
+      Accounts.create_password_reset(
+        Scope.for_user(promote(user_fixture(), "super_admin")),
+        target
+      )
+
+    raw
+  end
+
   defp valid_attrs(overrides \\ %{}) do
     Map.merge(
       %{username: "newbie", display_name: "New Person", password: "password123"},
@@ -524,7 +535,7 @@ defmodule Eden.AccountsTest do
       user = user_fixture(%{username: "resetme", password: "password123"})
       _ = Accounts.generate_user_session_token(user)
 
-      assert {:ok, raw} = Accounts.create_password_reset(user)
+      raw = mint_reset(user)
       assert {:ok, updated} = Accounts.reset_password_with_token(raw, "brandnewpass789")
       assert updated.id == user.id
       assert User.valid_password?(updated, "brandnewpass789")
@@ -540,7 +551,7 @@ defmodule Eden.AccountsTest do
 
     test "rejects an expired token" do
       user = user_fixture()
-      {:ok, raw} = Accounts.create_password_reset(user)
+      raw = mint_reset(user)
 
       Repo.update_all(from(t in PasswordResetToken, where: t.user_id == ^user.id),
         set: [
@@ -553,10 +564,29 @@ defmodule Eden.AccountsTest do
 
     test "rejects a too-short new password without consuming the token" do
       user = user_fixture()
-      {:ok, raw} = Accounts.create_password_reset(user)
+      raw = mint_reset(user)
       assert {:error, %Ecto.Changeset{}} = Accounts.reset_password_with_token(raw, "short")
       # token survives (the transaction rolled back), so a valid retry still works
       assert {:ok, _} = Accounts.reset_password_with_token(raw, "validpass1234")
+    end
+
+    test "a plain admin can't mint a reset for a super_admin (no privilege escalation)" do
+      admin = promote(user_fixture(), "admin")
+      target = promote(user_fixture(), "super_admin")
+
+      assert {:error, :forbidden} =
+               Accounts.create_password_reset(Scope.for_user(admin), target)
+
+      # a super_admin can
+      sa = promote(user_fixture(), "super_admin")
+      assert {:ok, _} = Accounts.create_password_reset(Scope.for_user(sa), target)
+    end
+
+    test "a non-admin can't mint a reset at all" do
+      member = user_fixture()
+
+      assert {:error, :forbidden} =
+               Accounts.create_password_reset(Scope.for_user(member), user_fixture())
     end
   end
 end

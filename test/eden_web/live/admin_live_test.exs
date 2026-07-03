@@ -77,6 +77,13 @@ defmodule EdenWeb.AdminLiveTest do
       assert html =~ "/reset/"
     end
 
+    test "hides the reset control when a plain admin selects a super_admin (#232)", %{conn: conn} do
+      sa = promote(user_fixture(%{username: "topdog"}), "super_admin")
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, sa)
+      refute html =~ "Generate reset link"
+    end
+
     test "an external update to the open person refreshes the list and the edit form", %{
       conn: conn
     } do

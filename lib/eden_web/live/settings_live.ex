@@ -94,7 +94,8 @@ defmodule EdenWeb.SettingsLive do
           profile_form: to_form(Accounts.change_profile(user)),
           username_form: to_form(Accounts.change_username(user)),
           username_hint: nil,
-          password_form: to_form(%{}, as: :password)
+          password_form: to_form(%{}, as: :password),
+          password_error: nil
         )
         |> allow_upload(:avatar,
           accept: ~w(.png .jpg .jpeg .gif .webp),
@@ -360,6 +361,9 @@ defmodule EdenWeb.SettingsLive do
                   required
                 />
               </label>
+              <p :if={@password_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                {@password_error}
+              </p>
               <div class="flex justify-end">
                 <button type="submit" class="ed-btn ed-btn--primary">
                   {gettext("Change password")}
@@ -909,12 +913,14 @@ defmodule EdenWeb.SettingsLive do
          |> put_flash(:info, gettext("Password changed. Please sign in again."))
          |> push_navigate(to: ~p"/login")}
 
+      # Errors render INLINE in the password section (a top-page flash is
+      # off-screen when the user is scrolled down to the form).
       {:error, :invalid_current_password} ->
-        {:noreply, put_flash(socket, :error, gettext("Current password is incorrect."))}
+        {:noreply, assign(socket, password_error: gettext("Current password is incorrect."))}
 
       {:error, %Ecto.Changeset{}} ->
         {:noreply,
-         put_flash(socket, :error, gettext("New password must be at least 8 characters."))}
+         assign(socket, password_error: gettext("New password must be at least 8 characters."))}
     end
   end
 
