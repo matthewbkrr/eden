@@ -11,5 +11,16 @@ defmodule Eden.Repo.Migrations.AddUserRole do
     alter table(:users) do
       add :role, :string, null: false, default: "member"
     end
+
+    # DB-level guard so an invalid role can't slip in via raw SQL / a future path
+    # that bypasses the changeset's inclusion validation (defense-in-depth).
+    create constraint(:users, :role_must_be_valid,
+             check: "role in ('member', 'admin', 'super_admin')"
+           )
+
+    # Both list_users/0 (admin panel) and list_other_users/1 (new-conversation
+    # picker) order by display_name — index it so the sort stays cheap as the user
+    # count grows instead of a scan + sort.
+    create index(:users, [:display_name])
   end
 end

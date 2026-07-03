@@ -257,9 +257,32 @@ defmodule Eden.AccountsTest do
                Accounts.set_user_role(Scope.for_user(member), user_fixture(), "admin")
     end
 
-    test "a super_admin cannot change their own role (no self-lockout)" do
+    test "cannot remove the last super_admin (no admin lockout)" do
       actor = promote(user_fixture(), "super_admin")
-      assert {:error, :forbidden} = Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+
+      assert {:error, :last_super_admin} =
+               Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+
+      assert Repo.get!(User, actor.id).role == "super_admin"
+    end
+
+    test "a super_admin may step down while another super_admin remains" do
+      actor = promote(user_fixture(), "super_admin")
+      _peer = promote(user_fixture(), "super_admin")
+
+      assert {:ok, stepped} = Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+      assert stepped.role == "member"
+    end
+
+    test "a super_admin may demote a peer, then the remaining last one is protected" do
+      actor = promote(user_fixture(), "super_admin")
+      peer = promote(user_fixture(), "super_admin")
+
+      assert {:ok, demoted} = Accounts.set_user_role(Scope.for_user(actor), peer, "member")
+      assert demoted.role == "member"
+
+      assert {:error, :last_super_admin} =
+               Accounts.set_user_role(Scope.for_user(actor), actor, "member")
     end
 
     test "rejects an unknown role" do
