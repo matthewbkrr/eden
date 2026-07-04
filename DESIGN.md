@@ -30,11 +30,11 @@ Tokens are semantic, not literal. Same names in both themes; values differ.
 | `--ed-border` | `oklch(0.32 0.014 261)` | hairline borders, dividers |
 | `--ed-ink` | `oklch(0.96 0.005 261)` | primary text (≥7:1) |
 | `--ed-muted` | `oklch(0.68 0.012 261)` | secondary text (≥4.5:1) |
-| `--ed-primary` | `oklch(0.62 0.16 261)` | actions, links, own bubble |
-| `--ed-primary-strong` | `oklch(0.68 0.16 261)` | hover/active |
+| `--ed-primary` | `oklch(0.55 0.16 261)` | actions, links, own bubble (white text ≥4.5:1, #257) |
+| `--ed-primary-strong` | `oklch(0.50 0.16 261)` | hover/active (deepens, like the light theme) |
 | `--ed-on-primary` | `oklch(0.99 0.01 261)` | text on cobalt fills |
 | `--ed-online` | `oklch(0.72 0.15 150)` | presence / success |
-| `--ed-danger` | `oklch(0.65 0.19 25)` | destructive / error |
+| `--ed-danger` | `oklch(0.58 0.19 25)` | destructive / error (white text ≥4.5:1, #257) |
 | `--ed-warning` | `oklch(0.78 0.14 75)` | warning |
 
 ### Light
