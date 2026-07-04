@@ -3356,21 +3356,25 @@ defmodule Eden.Chat do
   a conversation id can't forge a "✓✓ read" receipt into a chat they don't belong to.
   Returns `:ok` either way (a non-member call is a silent no-op, leaking nothing).
   """
-  def mark_read(%Scope{user: user} = scope, conversation_id) do
-    # A left group member must not stamp last_read or broadcast {:read} to the
-    # remaining members (#255); 1:1/room access rules ride in has_access?/2.
-    if has_access?(scope, conversation_id) do
-      read_at = now()
+  def mark_read(%Scope{user: user}, conversation_id) do
+    read_at = now()
 
-      {updated, _} =
-        from(m in Membership,
-          where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
-        )
-        |> Repo.update_all(set: [last_read_at: read_at])
+    # The #255 active-participation predicate is folded INTO the update (join the
+    # conversation) rather than a separate has_access?/2 probe first — mark_read is a
+    # hot path (every read receipt), so keep it to one query. A left group member's
+    # row simply isn't matched, so nothing is stamped and no {:read} is broadcast;
+    # 1:1 stays permissive and rooms hard-delete, exactly as has_access?/2 encodes.
+    {updated, _} =
+      from(m in Membership,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
+        where:
+          m.conversation_id == ^conversation_id and m.user_id == ^user.id and
+            (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id)))
+      )
+      |> Repo.update_all(set: [last_read_at: read_at])
 
-      if updated > 0, do: broadcast(conversation_id, {:read, user.id, read_at})
-    end
-
+    if updated > 0, do: broadcast(conversation_id, {:read, user.id, read_at})
     :ok
   end
 
