@@ -188,21 +188,28 @@ defmodule EdenWeb.UserAuth do
   # everywhere"), the already-open socket is booted to sign-in immediately instead
   # of surviving until the next reconnect. Runs here — the shared base of every
   # on_mount hook — so it covers ChatLive, AdminLive, and SettingsLive alike.
+  #
+  # Idempotent: `mount_current_scope` can run more than once on a connected socket
+  # (assign_new is re-entrant by design; live-navigation between routes of one
+  # live_session re-mounts), and `attach_hook/4` RAISES on a duplicate id — so guard
+  # on a flag and attach at most once.
   defp maybe_watch_sessions(socket) do
     scope = socket.assigns.current_scope
 
-    if (Phoenix.LiveView.connected?(socket) and scope) && scope.user do
-      Accounts.subscribe_user_sessions(scope)
-
-      Phoenix.LiveView.attach_hook(
-        socket,
-        :sessions_revoked,
-        :handle_info,
-        &on_sessions_revoked/2
-      )
-    else
-      socket
+    cond do
+      not Phoenix.LiveView.connected?(socket) -> socket
+      is_nil(scope) or is_nil(scope.user) -> socket
+      socket.assigns[:sessions_watched?] -> socket
+      true -> watch_sessions(socket, scope)
     end
+  end
+
+  defp watch_sessions(socket, scope) do
+    Accounts.subscribe_user_sessions(scope)
+
+    socket
+    |> Phoenix.Component.assign(:sessions_watched?, true)
+    |> Phoenix.LiveView.attach_hook(:sessions_revoked, :handle_info, &on_sessions_revoked/2)
   end
 
   defp on_sessions_revoked(:sessions_revoked, socket) do

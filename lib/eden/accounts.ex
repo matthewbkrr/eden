@@ -276,10 +276,15 @@ defmodule Eden.Accounts do
   the token hash, not the raw value it's built from — so we broadcast on a per-user
   topic that every authenticated LiveView subscribes to (see `EdenWeb.UserAuth`),
   which redirects them to sign in immediately.
+
+  `broadcast_from(self())` skips the **initiating** process: a self-service password
+  change / "log out everywhere" is driven from the user's own LiveView, whose handler
+  already navigates it to sign-in with a specific message — no need to also boot it
+  with the generic session-ended flash. Every OTHER live session still gets booted.
   """
   def revoke_all_user_sessions(%User{} = user) do
     Repo.delete_all(from t in UserToken, where: t.user_id == ^user.id and t.context == "session")
-    Phoenix.PubSub.broadcast(@pubsub, sessions_topic(user.id), :sessions_revoked)
+    Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user.id), :sessions_revoked)
     :ok
   end
 
