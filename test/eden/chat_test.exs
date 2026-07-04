@@ -2402,6 +2402,84 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "a removed/left group member loses access (#255, P0)" do
+    setup %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol255"})
+      {:ok, group} = Chat.create_conversation(scope(alice), [bob.id, carol.id], title: "Ops")
+
+      sources = [%{path: image_path(@png_signature <> "before"), filename: "before.png"}]
+
+      {:ok, before} =
+        Chat.create_album_message(scope(alice), group.id, sources, %{body: "before"})
+
+      [att] = before.attachments
+
+      :ok = Chat.remove_group_member(scope(alice), group.id, bob.id)
+
+      {:ok, after_msg} =
+        Chat.create_message(scope(alice), group.id, %{"body" => "after bob left"})
+
+      %{group: group, carol: carol, att: att, after_msg: after_msg}
+    end
+
+    test "can't read the conversation, history, media, or attachments", %{
+      bob: bob,
+      group: group,
+      att: att
+    } do
+      assert {:error, :not_found} = Chat.get_conversation(scope(bob), group.id)
+      assert {:error, :not_found} = Chat.list_messages(scope(bob), group.id)
+      assert {:error, :not_found} = Chat.list_conversation_media(scope(bob), group.id, "image")
+      assert {:error, :not_found} = Chat.fetch_attachment(scope(bob), att.id)
+    end
+
+    test "can't post text or media, and it never reaches the remaining members", %{
+      bob: bob,
+      group: group
+    } do
+      Chat.subscribe(group.id)
+      assert {:error, :not_found} = Chat.create_message(scope(bob), group.id, %{"body" => "here"})
+      sources = [%{path: image_path(@png_signature <> "y"), filename: "x.png"}]
+      assert {:error, :not_found} = Chat.create_album_message(scope(bob), group.id, sources, %{})
+      refute_receive {:new_message, _}
+    end
+
+    test "can't mark read (no {:read} to the remaining members)", %{bob: bob, group: group} do
+      Chat.subscribe(group.id)
+      assert :ok = Chat.mark_read(scope(bob), group.id)
+      refute_receive {:read, _, _}
+    end
+
+    test "can't forward the group's messages out (no exfil)", %{
+      alice: alice,
+      bob: bob,
+      after_msg: after_msg
+    } do
+      {:ok, escape} = Chat.create_conversation(scope(bob), [alice.id])
+      assert {:error, :not_found} = Chat.forward_message(scope(bob), after_msg.id, escape.id)
+    end
+
+    test "the remaining members keep full access", %{alice: alice, carol: carol, group: group} do
+      assert {:ok, _} = Chat.get_conversation(scope(carol), group.id)
+      assert {:ok, _} = Chat.create_message(scope(carol), group.id, %{"body" => "carol here"})
+      assert {:ok, msgs} = Chat.list_messages(scope(alice), group.id)
+      assert length(msgs) >= 3
+    end
+
+    test "control: a 1:1 stays permissive — a hidden DM resurfaces on a new message", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, dm} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(alice), dm.id, %{"body" => "hi"})
+      :ok = Chat.delete_conversation(scope(bob), dm.id)
+
+      # 1:1 is intentionally permissive: messaging back re-opens it (#255 must not regress).
+      assert {:ok, _} = Chat.create_message(scope(bob), dm.id, %{"body" => "back"})
+      assert {:ok, _} = Chat.get_conversation(scope(bob), dm.id)
+    end
+  end
+
   describe "create_attachment_message/3" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])

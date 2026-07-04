@@ -291,7 +291,9 @@ defmodule Eden.Chat do
     query =
       from c in Conversation,
         join: m in Membership,
-        on: m.conversation_id == c.id and m.user_id == ^user.id,
+        on:
+          m.conversation_id == c.id and m.user_id == ^user.id and
+            (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id))),
         where: c.id == ^id,
         preload: [memberships: :user]
 
@@ -1689,7 +1691,7 @@ defmodule Eden.Chat do
   is not a member.
   """
   def list_messages(%Scope{user: user} = scope, conversation_id, opts \\ []) do
-    if member?(scope, conversation_id) do
+    if has_access?(scope, conversation_id) do
       limit = Keyword.get(opts, :limit, @default_page)
 
       messages =
@@ -1729,7 +1731,7 @@ defmodule Eden.Chat do
     # safe_id first: anchor_id can be a raw URL/event string ("abc"), which would
     # otherwise raise Ecto.Query.CastError on the m.id comparisons below.
     with id when is_integer(id) <- safe_id(anchor_id),
-         true <- member?(scope, conversation_id) do
+         true <- has_access?(scope, conversation_id) do
       base = visible_messages(user, conversation_id)
       at_or_after = base |> where([m], m.id >= ^id) |> Repo.aggregate(:count)
       limit = at_or_after |> max(@default_page) |> min(@jump_window)
@@ -1776,7 +1778,7 @@ defmodule Eden.Chat do
     # m.id comparison would raise Ecto.Query.CastError and crash the LiveView.
     case safe_id(message_id) do
       id when is_integer(id) ->
-        member?(scope, conversation_id) and
+        has_access?(scope, conversation_id) and
           Repo.exists?(visible_messages(user, conversation_id) |> where([m], m.id == ^id))
 
       _ ->
@@ -1824,7 +1826,7 @@ defmodule Eden.Chat do
   """
   def list_conversation_media(%Scope{user: user} = scope, conversation_id, kind, opts \\ [])
       when kind in ~w(image video file audio) do
-    if member?(scope, conversation_id) do
+    if has_access?(scope, conversation_id) do
       limit = Keyword.get(opts, :limit, @default_page)
 
       attachments =
@@ -1860,7 +1862,7 @@ defmodule Eden.Chat do
   `{:new_message, message}`. `{:error, :not_found}` if not a member.
   """
   def create_message(%Scope{user: user} = scope, conversation_id, attrs) do
-    if member?(scope, conversation_id) do
+    if has_access?(scope, conversation_id) do
       reply_to_id =
         valid_reply_to_id(attrs["reply_to_id"] || attrs[:reply_to_id], conversation_id, user.id)
 
@@ -1971,7 +1973,7 @@ defmodule Eden.Chat do
         |> Map.put(:as_file, opts[:as_file] == true)
       end)
 
-    with true <- member?(scope, conversation_id),
+    with true <- has_access?(scope, conversation_id),
          {:ok, classified} <- preflight(sources) do
       {media, files} =
         Enum.split_with(classified, fn {_source, kind} -> kind in ~w(image video) end)
@@ -2098,7 +2100,7 @@ defmodule Eden.Chat do
   """
   def create_album_message(%Scope{user: user} = scope, conversation_id, sources, opts \\ %{})
       when is_list(sources) do
-    with true <- member?(scope, conversation_id),
+    with true <- has_access?(scope, conversation_id),
          :ok <- ensure_album_size(sources),
          {:ok, prepared} <- prepare_album(sources) do
       persist_album(user, conversation_id, prepared, opts)
@@ -3115,6 +3117,7 @@ defmodule Eden.Chat do
 
   def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id, nil) do
     with {:ok, source} <- fetch_message(scope, message_id),
+         :ok <- ensure_source_access(scope, source),
          :ok <- ensure_not_deleted(source),
          target_id when is_integer(target_id) <- safe_id(target_conversation_id),
          :ok <- ensure_member(scope, target_id) do
@@ -3127,6 +3130,7 @@ defmodule Eden.Chat do
 
   def forward_message(%Scope{user: user} = scope, message_id, _target_conversation_id, root_id) do
     with {:ok, source} <- fetch_message(scope, message_id),
+         :ok <- ensure_source_access(scope, source),
          :ok <- ensure_not_deleted(source),
          {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
@@ -3205,8 +3209,17 @@ defmodule Eden.Chat do
   defp ensure_not_deleted(message),
     do: if(Message.deleted?(message), do: {:error, :deleted}, else: :ok)
 
+  # Forward TARGET gate: dropping a forward into a conversation broadcasts to its
+  # members, so it requires active access (a left group member can't forward INTO the
+  # group they left, #255) — not just a lingering membership row.
   defp ensure_member(scope, conversation_id),
-    do: if(member?(scope, conversation_id), do: :ok, else: {:error, :not_found})
+    do: if(has_access?(scope, conversation_id), do: :ok, else: {:error, :not_found})
+
+  # Forward SOURCE gate (#255): forwarding copies content OUT, so a left group member
+  # must not exfiltrate a group's messages (incl. those posted after they left).
+  # fetch_message stays permissive for the other paths (edit/delete-your-own/reply).
+  defp ensure_source_access(scope, %Message{conversation_id: cid}),
+    do: if(has_access?(scope, cid), do: :ok, else: {:error, :not_found})
 
   # Tombstone the message and delete its attachment row inside one transaction,
   # returning the blob keys safe to delete afterwards (no side effects in the txn).
@@ -3343,16 +3356,21 @@ defmodule Eden.Chat do
   a conversation id can't forge a "✓✓ read" receipt into a chat they don't belong to.
   Returns `:ok` either way (a non-member call is a silent no-op, leaking nothing).
   """
-  def mark_read(%Scope{user: user}, conversation_id) do
-    read_at = now()
+  def mark_read(%Scope{user: user} = scope, conversation_id) do
+    # A left group member must not stamp last_read or broadcast {:read} to the
+    # remaining members (#255); 1:1/room access rules ride in has_access?/2.
+    if has_access?(scope, conversation_id) do
+      read_at = now()
 
-    {updated, _} =
-      from(m in Membership,
-        where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
-      )
-      |> Repo.update_all(set: [last_read_at: read_at])
+      {updated, _} =
+        from(m in Membership,
+          where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
+        )
+        |> Repo.update_all(set: [last_read_at: read_at])
 
-    if updated > 0, do: broadcast(conversation_id, {:read, user.id, read_at})
+      if updated > 0, do: broadcast(conversation_id, {:read, user.id, read_at})
+    end
+
     :ok
   end
 
@@ -3365,8 +3383,12 @@ defmodule Eden.Chat do
       from a in Attachment,
         join: m in Message,
         on: m.id == a.message_id,
+        join: c in Conversation,
+        on: c.id == m.conversation_id,
         join: mem in Membership,
-        on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+        on:
+          mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
+            (is_nil(mem.left_at) or not (c.is_group and is_nil(c.channel_id))),
         where: a.id == ^id
 
     case Repo.one(query) do
@@ -3400,6 +3422,29 @@ defmodule Eden.Chat do
     Repo.exists?(
       from m in Membership, where: m.conversation_id == ^conversation_id and m.user_id == ^user.id
     )
+  end
+
+  @doc false
+  # Active-participation gate (#255). A left/removed **personal-group** member keeps
+  # their membership row (left_at set) so forward/delete-of-a-specific-message still
+  # work — but they must NOT read history or send (which would broadcast to the
+  # remaining members). This is the authorization used by every participation path
+  # (read/list/send/mark-read/attachments/forward-target); `member?/2` stays the raw
+  # "row exists" check for the deliberately-permissive leave and forward-source paths.
+  #   - personal group (is_group AND no channel_id): blocked once `left_at` is set.
+  #   - 1:1 (not is_group): permissive — messaging back resurfaces the chat.
+  #   - room (channel_id): membership is hard-deleted on leave, so a left member has
+  #     no row and fails here anyway; an active member's row has `left_at` nil.
+  def has_access?(%Scope{user: user}, conversation_id),
+    do: Repo.exists?(access_query(user.id, conversation_id))
+
+  defp access_query(user_id, conversation_id) do
+    from m in Membership,
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
+      where:
+        m.conversation_id == ^conversation_id and m.user_id == ^user_id and
+          (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id)))
   end
 
   @doc """
