@@ -123,24 +123,37 @@ defmodule EdenWeb.UserAuth do
 
   def on_mount(:require_admin, _params, session, socket) do
     socket = mount_current_scope(socket, session)
+    user = socket.assigns.current_scope && socket.assigns.current_scope.user
 
     cond do
-      is_nil(socket.assigns.current_scope) ->
+      is_nil(user) ->
         {:halt,
          socket
          |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
          |> Phoenix.LiveView.redirect(to: ~p"/login")}
 
-      Accounts.admin?(socket.assigns.current_scope.user) ->
-        {:cont, socket}
-
-      true ->
+      not Accounts.admin?(user) ->
         # Authenticated but not an admin — bounce to the app without confirming the
         # admin panel even exists.
         {:halt,
          socket
          |> Phoenix.LiveView.put_flash(:error, "You don't have access to that page.")
          |> Phoenix.LiveView.redirect(to: signed_in_path(socket))}
+
+      not Accounts.totp_enrolled?(user) ->
+        # An admin's second factor is mandatory (#250, ADR-0002 Decision 7): they can
+        # hold a reset link for anyone, so hijacking an admin = hijacking everyone.
+        # Send them to Settings to enroll before any admin power is reachable.
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(
+           :error,
+           "Turn on two-factor authentication to use the admin panel."
+         )
+         |> Phoenix.LiveView.redirect(to: ~p"/settings")}
+
+      true ->
+        {:cont, socket}
     end
   end
 
