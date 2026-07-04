@@ -181,9 +181,10 @@ html {
   --ed-primary-strong: oklch(0.50 0.16 261);
   --ed-on-primary: oklch(0.99 0.01 261);
   --ed-online: oklch(0.72 0.15 150);
-  /* Darkened for WCAG AA on white danger-button labels (#257): static 4.57:1,
-     brightness(1.08) hover 4.30:1 (above the transient bar). */
-  --ed-danger: oklch(0.58 0.19 25);
+  /* Darkened so white labels clear WCAG AA at REST *and* on hover (#257): the
+     brightness(1.08) hover lightens the fill (text clamps to white), so the base
+     must leave headroom. Static 5.18:1, hover 4.89:1. */
+  --ed-danger: oklch(0.55 0.19 25);
   /* Danger as TEXT on a dark surface — lightened for contrast (the reverse of the light theme). */
   --ed-danger-strong: oklch(0.75 0.17 25);
   --ed-warning: oklch(0.78 0.14 75);
@@ -209,8 +210,8 @@ html {
     --ed-primary-strong: oklch(0.50 0.16 261);
     --ed-on-primary: oklch(0.99 0.01 261);
     --ed-online: oklch(0.72 0.15 150);
-    /* Darkened for WCAG AA on white danger labels (#257): static 4.57:1. */
-    --ed-danger: oklch(0.58 0.19 25);
+    /* WCAG AA on white labels at rest + hover (#257): static 5.18:1, hover 4.89:1. */
+    --ed-danger: oklch(0.55 0.19 25);
     --ed-danger-strong: oklch(0.75 0.17 25);
     --ed-warning: oklch(0.78 0.14 75);
     --ed-away: var(--ed-warning);

@@ -34,7 +34,7 @@ Tokens are semantic, not literal. Same names in both themes; values differ.
 | `--ed-primary-strong` | `oklch(0.50 0.16 261)` | hover/active (deepens, like the light theme) |
 | `--ed-on-primary` | `oklch(0.99 0.01 261)` | text on cobalt fills |
 | `--ed-online` | `oklch(0.72 0.15 150)` | presence / success |
-| `--ed-danger` | `oklch(0.58 0.19 25)` | destructive / error (white text ≥4.5:1, #257) |
+| `--ed-danger` | `oklch(0.55 0.19 25)` | destructive / error (white text ≥4.5:1 at rest + hover, #257) |
 | `--ed-warning` | `oklch(0.78 0.14 75)` | warning |
 
 ### Light
