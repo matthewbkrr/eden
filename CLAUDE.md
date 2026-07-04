@@ -68,8 +68,11 @@ design — built incrementally as features land.)
   `consume_backup_code/2` completes login; the challenge POST shares the #236 login
   throttle. The secret is **encrypted at rest** through `Eden.Vault` (hand-rolled
   AES-256-GCM, key from env — never the DB). `disable_totp/2` needs a valid code and
-  is **refused for admins** — their factor is mandatory (the gate-level enforcement
-  for admins-without-TOTP is the #250 follow-up).
+  is **refused for admins** — their factor is **mandatory**: the `:require_admin`
+  on_mount gate bounces an admin without TOTP to Settings to enroll before any admin
+  power is reachable. Lost-device recovery is admin-mediated — `admin_reset_totp/2`
+  (same authority as reset links: a plain admin can't touch a super_admin) clears a
+  person's factor from `/admin`, after which an admin target must re-enroll at the gate.
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.

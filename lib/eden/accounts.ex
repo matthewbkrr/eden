@@ -515,6 +515,24 @@ defmodule Eden.Accounts do
     end
   end
 
+  @doc """
+  Admin recovery for a user who lost their authenticator **and** backup codes (#250):
+  clears the target's TOTP so they can sign in with just their password and re-enroll.
+  Same authority as reset links (`can_reset_password?/2`) — an admin, and a plain admin
+  can't touch a super_admin. If the target is an admin, the `:require_admin` gate then
+  makes them re-enroll before using admin power. Returns `{:ok, user}` | `{:error, :forbidden}`.
+  """
+  def admin_reset_totp(%Scope{user: %User{} = actor}, %User{} = target) do
+    cond do
+      # No self-service: an admin clearing their OWN factor here would sidestep
+      # disable_totp/2's admin-refusal and shed a mandatory factor. Recovery is for
+      # OTHER people; an admin who's locked out is reset by another admin.
+      actor.id == target.id -> {:error, :forbidden}
+      can_reset_password?(actor, target) -> clear_totp(target)
+      true -> {:error, :forbidden}
+    end
+  end
+
   defp clear_totp(%User{} = user) do
     user
     |> Ecto.Changeset.change(

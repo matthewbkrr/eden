@@ -3,11 +3,26 @@ defmodule EdenWeb.AdminLiveTest do
 
   import Phoenix.LiveViewTest
 
+  alias Eden.Accounts
   alias Eden.Accounts.User
   alias Eden.Repo
 
   # role isn't cast by registration (it's admin-managed, #174); set it directly.
   defp promote(user, role), do: user |> Ecto.Changeset.change(role: role) |> Repo.update!()
+
+  # Enroll TOTP — admins must have a second factor to reach /admin (#250).
+  defp enroll_totp(user) do
+    {secret, _uri} = Accounts.setup_totp(user)
+
+    {:ok, user, _codes} =
+      Accounts.activate_totp(user, secret, NimbleTOTP.verification_code(secret))
+
+    user
+  end
+
+  # An admin/super_admin that can actually enter the panel (role + enrolled factor).
+  defp admin(attrs \\ %{}), do: user_fixture(attrs) |> promote("admin") |> enroll_totp()
+  defp super_admin(attrs), do: user_fixture(attrs) |> promote("super_admin") |> enroll_totp()
 
   defp select(view, user),
     do: element(view, ~s(button[phx-value-id="#{user.id}"])) |> render_click()
@@ -23,16 +38,20 @@ defmodule EdenWeb.AdminLiveTest do
     end
 
     test "lets an admin in", %{conn: conn} do
-      conn = log_in_user(conn, promote(user_fixture(), "admin"))
+      conn = log_in_user(conn, admin())
       assert {:ok, _view, html} = live(conn, ~p"/admin")
       assert html =~ "Admin"
+    end
+
+    test "redirects an admin without two-factor to Settings to enroll (#250)", %{conn: conn} do
+      conn = log_in_user(conn, promote(user_fixture(), "admin"))
+      assert {:error, {:redirect, %{to: "/settings"}}} = live(conn, ~p"/admin")
     end
   end
 
   describe "as an admin" do
     setup %{conn: conn} do
-      admin = promote(user_fixture(%{username: "boss", display_name: "Boss"}), "admin")
-      %{conn: log_in_user(conn, admin)}
+      %{conn: log_in_user(conn, admin(%{username: "boss", display_name: "Boss"}))}
     end
 
     test "lists everyone and edits a person's managed fields", %{conn: conn} do
@@ -84,6 +103,36 @@ defmodule EdenWeb.AdminLiveTest do
       refute html =~ "Generate reset link"
     end
 
+    test "resets a person's two-factor for lost-device recovery (#250)", %{conn: conn} do
+      worker = user_fixture(%{username: "lostdev"})
+      {secret, _} = Accounts.setup_totp(worker)
+
+      {:ok, worker, _} =
+        Accounts.activate_totp(worker, secret, NimbleTOTP.verification_code(secret))
+
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, worker)
+      assert html =~ "Reset two-factor"
+
+      view |> element(~s(button[phx-click="reset_totp"])) |> render_click()
+      refute Accounts.totp_enrolled?(Accounts.get_user!(worker.id))
+    end
+
+    test "shows no reset-two-factor control for a person without it (#250)", %{conn: conn} do
+      worker = user_fixture(%{username: "no2fa"})
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, worker)
+      refute html =~ "Reset two-factor"
+    end
+
+    test "a person-action event with nobody selected is a safe no-op (#250)", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      # Forged/stale events with no selection must not crash the LiveView.
+      render_click(view, "reset_totp", %{})
+      render_click(view, "reset_link", %{})
+      assert render(view) =~ "Select a person"
+    end
+
     test "an external update to the open person refreshes the list and the edit form", %{
       conn: conn
     } do
@@ -102,7 +151,7 @@ defmodule EdenWeb.AdminLiveTest do
 
   describe "as a super_admin" do
     setup %{conn: conn} do
-      %{conn: log_in_user(conn, promote(user_fixture(%{username: "superboss"}), "super_admin"))}
+      %{conn: log_in_user(conn, super_admin(%{username: "superboss"}))}
     end
 
     test "can change a person's platform role", %{conn: conn} do
