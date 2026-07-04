@@ -115,6 +115,9 @@ defmodule EdenWeb.SettingsLive do
   def render(assigns) do
     ~H"""
     <div class="ed-root min-h-screen">
+      <%!-- New-message chime/banner while you're in Settings (#272), honoring the
+            "alerts while a tab is open" promise below. Only when signed in. --%>
+      <.notifier :if={@notify_prefs} prefs={@notify_prefs} />
       <div class="mx-auto max-w-xl px-5 sm:px-6 py-10">
         <header class="flex items-center gap-3 mb-8">
           <.link navigate={~p"/app"} class="ed-btn--icon" aria-label={gettext("Back")}>

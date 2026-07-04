@@ -62,9 +62,11 @@ defmodule EdenWeb.Router do
       get "/channels/join/:token", ChannelJoinController, :join
     end
 
-    # Authenticated pages.
+    # Authenticated pages. NotifyHook (#272) rides every authed live_session — after
+    # UserAuth (needs current_scope) — so new-message chime/banner reaches any open
+    # page, not just ChatLive.
     live_session :authenticated,
-      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_authenticated}] do
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_authenticated}, EdenWeb.NotifyHook] do
       live "/app", ChatLive
       live "/app/c/:id", ChatLive
       # Permalink: open the conversation scrolled to a specific message.
@@ -79,14 +81,14 @@ defmodule EdenWeb.Router do
     # Admin panel (#174) — gated to platform admins/super_admins by :require_admin
     # (checked at mount AND on every patch, since patches don't re-run plugs).
     live_session :admin,
-      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_admin}] do
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :require_admin}, EdenWeb.NotifyHook] do
       live "/admin", AdminLive
     end
 
     # Device preferences + the password-reset link — available signed out
     # (current_scope may be nil; a reset link stands on its own token, #232).
     live_session :default,
-      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}] do
+      on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}, EdenWeb.NotifyHook] do
       live "/settings", SettingsLive
       live "/reset/:token", ResetLive
     end
