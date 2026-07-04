@@ -98,6 +98,9 @@ defmodule EdenWeb.Router do
   scope "/", EdenWeb do
     pipe_through [:browser, :redirect_if_authenticated, :throttle_login]
     post "/users/log_in", UserSessionController, :create
+    # Second-factor verify (#250); shares the login throttle so 6-digit codes can't
+    # be brute-forced.
+    post "/login/totp", UserSessionController, :totp
   end
 
   scope "/", EdenWeb do
@@ -111,6 +114,8 @@ defmodule EdenWeb.Router do
     live_session :redirect_if_authenticated,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :redirect_if_authenticated}] do
       live "/login", LoginLive
+      # Second-factor challenge (#250) — reached mid-login via the session's pending marker.
+      live "/login/totp", TotpLive
       live "/invite/:token", InviteLive
     end
   end

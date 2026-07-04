@@ -82,6 +82,9 @@ defmodule Eden.MixProject do
       {:image, "~> 0.54"},
       {:logger_json, "~> 7.0"},
       {:bcrypt_elixir, "~> 3.0"},
+      # TOTP 2FA (#250): RFC-6238 generate/verify (zero transitive deps) + QR render.
+      {:nimble_totp, "~> 1.0"},
+      {:eqrcode, "~> 0.2"},
 
       # Dev/test tooling (Phase 0 engineering harness)
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

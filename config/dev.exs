@@ -30,6 +30,9 @@ config :eden, EdenWeb.Endpoint,
     tailwind: {Tailwind, :install_and_run, [:eden, ~w(--watch)]}
   ]
 
+# Static encryption key for Eden.Vault (#250) in dev — a fixed non-secret value.
+config :eden, Eden.Vault, key: "dev-only-vault-key-not-a-secret"
+
 # ## SSL Support
 #
 # In order to use HTTPS in development, a self-signed

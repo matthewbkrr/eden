@@ -95,7 +95,10 @@ defmodule EdenWeb.SettingsLive do
           username_form: to_form(Accounts.change_username(user)),
           username_hint: nil,
           password_form: to_form(%{}, as: :password),
-          password_error: nil
+          password_error: nil,
+          totp_setup: nil,
+          totp_backup_codes: nil,
+          totp_error: nil
         )
         |> allow_upload(:avatar,
           accept: ~w(.png .jpg .jpeg .gif .webp),
@@ -386,6 +389,151 @@ defmodule EdenWeb.SettingsLive do
               >
                 {gettext("Log out everywhere")}
               </button>
+            </div>
+          </section>
+
+          <%!-- Two-factor authentication (#250) --%>
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
+            <div class="flex items-center gap-2">
+              <h2 style="font-size:0.9375rem; font-weight:600;">
+                {gettext("Two-factor authentication")}
+              </h2>
+              <span
+                :if={Accounts.totp_enrolled?(@profile_user)}
+                class="rounded-[var(--ed-radius-full)] px-2 py-0.5"
+                style="font-size:0.6875rem; font-weight:600; color: var(--ed-online); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
+              >
+                {gettext("On")}
+              </span>
+            </div>
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext("An authenticator app adds a second step at sign-in — a 6-digit code.")}
+            </p>
+
+            <%!-- Fresh backup codes, shown exactly once right after enrolling. --%>
+            <div :if={@totp_backup_codes} class="space-y-3">
+              <p style="font-size:0.875rem;">
+                {gettext(
+                  "Save these backup codes somewhere safe. Each works once if you lose your device."
+                )}
+              </p>
+              <ul
+                class="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-[var(--ed-radius)] p-3 font-mono"
+                style="background: var(--ed-surface-2); font-size:0.875rem; letter-spacing:0.04em;"
+              >
+                <li :for={c <- @totp_backup_codes}>{c}</li>
+              </ul>
+              <button type="button" phx-click="totp_dismiss_codes" class="ed-btn ed-btn--primary">
+                {gettext("I've saved them")}
+              </button>
+            </div>
+
+            <%!-- Enrolled (and not mid-code-reveal): offer disable. --%>
+            <div :if={Accounts.totp_enrolled?(@profile_user) and is_nil(@totp_backup_codes)}>
+              <p
+                :if={Accounts.admin?(@profile_user)}
+                style="font-size:0.8125rem; color: var(--ed-muted);"
+              >
+                {gettext(
+                  "Required for your admin role — it can't be turned off while you're an admin."
+                )}
+              </p>
+              <.form
+                :if={not Accounts.admin?(@profile_user)}
+                for={%{}}
+                as={:totp}
+                phx-submit="totp_disable"
+                class="flex flex-col gap-2 sm:flex-row sm:items-end"
+              >
+                <label class="block space-y-1.5 flex-1">
+                  <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                    {gettext("Enter a current code to turn it off")}
+                  </span>
+                  <input
+                    type="text"
+                    name="totp[code]"
+                    value=""
+                    inputmode="numeric"
+                    autocomplete="one-time-code"
+                    class="ed-input"
+                    required
+                  />
+                </label>
+                <button type="submit" class="ed-btn ed-btn--ghost">
+                  {gettext("Turn off")}
+                </button>
+              </.form>
+              <p :if={@totp_error} class="mt-2" style="color: var(--ed-danger); font-size:0.75rem;">
+                {@totp_error}
+              </p>
+            </div>
+
+            <%!-- Not enrolled, setup not started: the entry point. --%>
+            <button
+              :if={not Accounts.totp_enrolled?(@profile_user) and is_nil(@totp_setup)}
+              type="button"
+              phx-click="totp_setup"
+              class="ed-btn ed-btn--primary"
+            >
+              {gettext("Set up two-factor")}
+            </button>
+
+            <%!-- Mid-setup: QR + manual key + confirm-code form. --%>
+            <div :if={@totp_setup} class="space-y-4">
+              <p style="font-size:0.875rem;">
+                {gettext("Scan this with your authenticator app, then enter the code it shows.")}
+              </p>
+              <div class="flex flex-wrap items-start gap-4">
+                <div class="rounded-[var(--ed-radius)] p-2" style="background:#fff; width:184px;">
+                  {Phoenix.HTML.raw(@totp_setup.qr)}
+                </div>
+                <div class="space-y-1.5">
+                  <span style="font-size:0.75rem; color: var(--ed-muted);">
+                    {gettext("Or enter this key manually")}
+                  </span>
+                  <code
+                    class="block rounded-[var(--ed-radius)] px-2 py-1.5 font-mono break-all"
+                    style="background: var(--ed-surface-2); font-size:0.8125rem; letter-spacing:0.06em; max-width:16rem;"
+                  >
+                    {@totp_setup.key}
+                  </code>
+                </div>
+              </div>
+              <.form
+                for={%{}}
+                as={:totp}
+                phx-submit="totp_activate"
+                class="flex flex-col gap-2 sm:flex-row sm:items-end"
+              >
+                <label class="block space-y-1.5 flex-1">
+                  <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                    {gettext("6-digit code")}
+                  </span>
+                  <input
+                    type="text"
+                    name="totp[code]"
+                    value=""
+                    inputmode="numeric"
+                    autocomplete="one-time-code"
+                    class="ed-input"
+                    autofocus
+                    required
+                  />
+                </label>
+                <button type="submit" class="ed-btn ed-btn--primary">
+                  {gettext("Turn on")}
+                </button>
+                <button type="button" phx-click="totp_cancel" class="ed-btn ed-btn--ghost">
+                  {gettext("Cancel")}
+                </button>
+              </.form>
+              <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                {@totp_error}
+              </p>
             </div>
           </section>
 
@@ -931,6 +1079,64 @@ defmodule EdenWeb.SettingsLive do
      socket
      |> put_flash(:info, gettext("Signed out of all devices. Please sign in again."))
      |> push_navigate(to: ~p"/login")}
+  end
+
+  # TOTP 2FA (#250). The secret lives in the assign (never the DB) until a confirming
+  # code activates it, so an abandoned setup leaves nothing behind.
+  def handle_event("totp_setup", _params, socket) do
+    {secret, uri} = Accounts.setup_totp(socket.assigns.profile_user)
+
+    setup = %{
+      secret: secret,
+      key: Base.encode32(secret, padding: false),
+      qr: uri |> EQRCode.encode() |> EQRCode.svg(width: 168, viewbox: true)
+    }
+
+    {:noreply, assign(socket, totp_setup: setup, totp_error: nil)}
+  end
+
+  def handle_event("totp_cancel", _params, socket),
+    do: {:noreply, assign(socket, totp_setup: nil, totp_error: nil)}
+
+  def handle_event("totp_dismiss_codes", _params, socket),
+    do: {:noreply, assign(socket, totp_backup_codes: nil)}
+
+  def handle_event("totp_activate", %{"totp" => %{"code" => code}}, socket) do
+    case Accounts.activate_totp(
+           socket.assigns.profile_user,
+           socket.assigns.totp_setup.secret,
+           code
+         ) do
+      {:ok, user, backup_codes} ->
+        {:noreply,
+         socket
+         |> assign(
+           profile_user: user,
+           totp_setup: nil,
+           totp_error: nil,
+           totp_backup_codes: backup_codes
+         )
+         |> put_flash(:info, gettext("Two-factor authentication is on."))}
+
+      {:error, :invalid_code} ->
+        {:noreply, assign(socket, totp_error: gettext("That code didn't match. Try again."))}
+    end
+  end
+
+  def handle_event("totp_disable", %{"totp" => %{"code" => code}}, socket) do
+    case Accounts.disable_totp(socket.assigns.profile_user, code) do
+      {:ok, user} ->
+        {:noreply,
+         socket
+         |> assign(profile_user: user, totp_error: nil)
+         |> put_flash(:info, gettext("Two-factor authentication is off."))}
+
+      {:error, :required_for_admin} ->
+        {:noreply, assign(socket, totp_error: gettext("Admins must keep two-factor on."))}
+
+      {:error, :invalid_code} ->
+        {:noreply, assign(socket, totp_error: gettext("That code didn't match. Try again."))}
+    end
   end
 
   # Set the user's presence status (#102). The Accounts broadcast also reaches any

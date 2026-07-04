@@ -46,8 +46,19 @@ defmodule Eden.Accounts.User do
     field :password, :string, virtual: true, redact: true
     field :hashed_password, :string, redact: true
 
+    # TOTP 2FA (#250, ADR-0002 Decision 7). `totp_secret` is Eden.Vault-encrypted at
+    # rest; `totp_activated_at` nil = not enrolled; backup codes are hashed + single
+    # use; `totp_last_used_at` blocks replay of a code inside its validity window.
+    field :totp_secret, :binary, redact: true
+    field :totp_activated_at, :utc_datetime
+    field :totp_last_used_at, :utc_datetime
+    field :totp_backup_codes, {:array, :string}, default: [], redact: true
+
     timestamps(type: :utc_datetime)
   end
+
+  @doc "True if the user has an active TOTP factor (#250)."
+  def totp_enrolled?(%__MODULE__{totp_activated_at: at}), do: not is_nil(at)
 
   @doc "The allowed manual presence statuses (#102)."
   def presence_statuses, do: @presence_statuses

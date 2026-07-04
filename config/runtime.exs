@@ -52,6 +52,12 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
+  # Encryption-at-rest key for Eden.Vault (#250, TOTP secrets). Defaults to a value
+  # derived from SECRET_KEY_BASE so no new required env var — set EDEN_VAULT_KEY to a
+  # dedicated secret if you ever want to rotate it independently of the session key.
+  config :eden, Eden.Vault,
+    key: System.get_env("EDEN_VAULT_KEY") || secret_key_base <> "eden.vault"
+
   host =
     System.get_env("PHX_HOST") ||
       raise """
