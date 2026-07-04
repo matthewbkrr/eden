@@ -30,10 +30,28 @@ defmodule EdenWeb.AdminLive do
   def handle_event("deselect", _params, socket),
     do: {:noreply, assign(socket, selected: nil, managed_form: nil, reset_link: nil)}
 
+  # Every action below assumes a selected person. A forged/stale event with nobody
+  # selected would pass nil into a context function that expects a %User{} and crash
+  # the LiveView — no-op it once here instead.
+  def handle_event(event, _params, %{assigns: %{selected: nil}} = socket)
+      when event in ~w(reset_link reset_totp validate save set_role),
+      do: {:noreply, socket}
+
   def handle_event("reset_link", _params, socket) do
     case Accounts.create_password_reset(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, raw} ->
         {:noreply, assign(socket, reset_link: url(~p"/reset/#{raw}"))}
+
+      {:error, :forbidden} ->
+        {:noreply, put_flash(socket, :error, gettext("You can't reset that person's access."))}
+    end
+  end
+
+  def handle_event("reset_totp", _params, socket) do
+    case Accounts.admin_reset_totp(socket.assigns.current_scope, socket.assigns.selected) do
+      {:ok, updated} ->
+        {:noreply,
+         socket |> refresh_user(updated) |> put_flash(:info, gettext("Two-factor reset."))}
 
       {:error, :forbidden} ->
         {:noreply, put_flash(socket, :error, gettext("You can't reset that person's access."))}
@@ -247,6 +265,26 @@ defmodule EdenWeb.AdminLive do
                 <p style="font-size:0.6875rem; color: var(--ed-muted);">
                   {gettext("Copy it now — it won't be shown again.")}
                 </p>
+              </div>
+
+              <%!-- Reset two-factor (#250): recovery when the person lost their
+                    authenticator AND backup codes. Only shown if they have it on. --%>
+              <div
+                :if={Accounts.totp_enrolled?(@selected)}
+                class="mt-3 pt-3 border-t"
+                style="border-color: var(--ed-border);"
+              >
+                <p style="font-size:0.75rem; color: var(--ed-muted);">
+                  {gettext("This person has two-factor on. Reset it only if they've lost access.")}
+                </p>
+                <button
+                  type="button"
+                  phx-click="reset_totp"
+                  data-confirm={gettext("Turn off this person's two-factor authentication?")}
+                  class="ed-btn ed-btn--ghost text-sm mt-2"
+                >
+                  {gettext("Reset two-factor")}
+                </button>
               </div>
             </div>
           </section>

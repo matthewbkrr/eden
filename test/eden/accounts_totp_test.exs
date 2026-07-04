@@ -2,7 +2,7 @@ defmodule Eden.AccountsTotpTest do
   use Eden.DataCase, async: true
 
   alias Eden.Accounts
-  alias Eden.Accounts.User
+  alias Eden.Accounts.{Scope, User}
 
   import Eden.AccountsFixtures
 
@@ -87,6 +87,40 @@ defmodule Eden.AccountsTotpTest do
       admin = promote(user, "admin")
       assert {:error, :required_for_admin} = Accounts.disable_totp(admin, code(secret))
       assert %User{} = Accounts.get_user!(admin.id)
+      assert Accounts.totp_enrolled?(Accounts.get_user!(admin.id))
+    end
+  end
+
+  describe "admin reset (lost-device recovery, #250)" do
+    setup do
+      target = user_fixture(%{username: "victim"})
+      {secret, _} = Accounts.setup_totp(target)
+      {:ok, target, _} = Accounts.activate_totp(target, secret, code(secret))
+      %{target: target}
+    end
+
+    test "an admin clears a member's TOTP", %{target: target} do
+      admin = promote(user_fixture(%{username: "resetter"}), "admin")
+      assert {:ok, cleared} = Accounts.admin_reset_totp(Scope.for_user(admin), target)
+      refute Accounts.totp_enrolled?(cleared)
+    end
+
+    test "a plain admin can't reset a super_admin's TOTP" do
+      admin = promote(user_fixture(%{username: "plainadmin"}), "admin")
+      sa = promote(user_fixture(%{username: "bigboss"}), "super_admin")
+      {secret, _} = Accounts.setup_totp(sa)
+      {:ok, sa, _} = Accounts.activate_totp(sa, secret, code(secret))
+
+      assert {:error, :forbidden} = Accounts.admin_reset_totp(Scope.for_user(admin), sa)
+      assert Accounts.totp_enrolled?(Accounts.get_user!(sa.id))
+    end
+
+    test "an admin can't reset their OWN factor via the recovery path (no mandatory-2FA bypass)" do
+      admin = promote(user_fixture(%{username: "selfreset"}), "admin")
+      {secret, _} = Accounts.setup_totp(admin)
+      {:ok, admin, _} = Accounts.activate_totp(admin, secret, code(secret))
+
+      assert {:error, :forbidden} = Accounts.admin_reset_totp(Scope.for_user(admin), admin)
       assert Accounts.totp_enrolled?(Accounts.get_user!(admin.id))
     end
   end
