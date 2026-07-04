@@ -168,16 +168,58 @@ defmodule EdenWeb.UserAuth do
   end
 
   defp mount_current_scope(socket, session) do
-    Phoenix.Component.assign_new(socket, :current_scope, fn ->
-      user =
-        case session[@session_key] do
-          token when is_binary(token) -> Accounts.get_user_by_session_token(token)
-          _ -> nil
-        end
+    socket =
+      Phoenix.Component.assign_new(socket, :current_scope, fn ->
+        user =
+          case session[@session_key] do
+            token when is_binary(token) -> Accounts.get_user_by_session_token(token)
+            _ -> nil
+          end
 
-      Scope.for_user(user)
-    end)
+        Scope.for_user(user)
+      end)
+
+    maybe_watch_sessions(socket)
   end
+
+  # #256: on the CONNECTED mount, subscribe every authenticated LiveView to its
+  # user's session-revocation signal and attach a handle_info hook. So when
+  # `revoke_all_user_sessions/1` fires (password change / reset / "log out
+  # everywhere"), the already-open socket is booted to sign-in immediately instead
+  # of surviving until the next reconnect. Runs here — the shared base of every
+  # on_mount hook — so it covers ChatLive, AdminLive, and SettingsLive alike.
+  #
+  # Idempotent: `mount_current_scope` can run more than once on a connected socket
+  # (assign_new is re-entrant by design; live-navigation between routes of one
+  # live_session re-mounts), and `attach_hook/4` RAISES on a duplicate id — so guard
+  # on a flag and attach at most once.
+  defp maybe_watch_sessions(socket) do
+    scope = socket.assigns.current_scope
+
+    cond do
+      not Phoenix.LiveView.connected?(socket) -> socket
+      is_nil(scope) or is_nil(scope.user) -> socket
+      socket.assigns[:sessions_watched?] -> socket
+      true -> watch_sessions(socket, scope)
+    end
+  end
+
+  defp watch_sessions(socket, scope) do
+    Accounts.subscribe_user_sessions(scope)
+
+    socket
+    |> Phoenix.Component.assign(:sessions_watched?, true)
+    |> Phoenix.LiveView.attach_hook(:sessions_revoked, :handle_info, &on_sessions_revoked/2)
+  end
+
+  defp on_sessions_revoked(:sessions_revoked, socket) do
+    {:halt,
+     socket
+     |> Phoenix.LiveView.put_flash(:error, "Your session ended. Please sign in again.")
+     |> Phoenix.LiveView.redirect(to: ~p"/login")}
+  end
+
+  defp on_sessions_revoked(_message, socket), do: {:cont, socket}
 
   ## Internals
 

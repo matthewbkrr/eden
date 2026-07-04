@@ -269,11 +269,30 @@ defmodule Eden.Accounts do
   @doc """
   Deletes EVERY session token for the user (#232) — used by \"log out everywhere\"
   and after any password change/reset, so a stolen cookie dies immediately.
+
+  Deleting the tokens stops *new* mounts/requests, but an already-connected LiveView
+  is only re-checked on (re)connect, so it would keep working until the socket drops
+  (#256). We can't reuse the per-token `live_socket_id` disconnect — the DB holds only
+  the token hash, not the raw value it's built from — so we broadcast on a per-user
+  topic that every authenticated LiveView subscribes to (see `EdenWeb.UserAuth`),
+  which redirects them to sign in immediately.
+
+  `broadcast_from(self())` skips the **initiating** process: a self-service password
+  change / "log out everywhere" is driven from the user's own LiveView, whose handler
+  already navigates it to sign-in with a specific message — no need to also boot it
+  with the generic session-ended flash. Every OTHER live session still gets booted.
   """
   def revoke_all_user_sessions(%User{} = user) do
     Repo.delete_all(from t in UserToken, where: t.user_id == ^user.id and t.context == "session")
+    Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user.id), :sessions_revoked)
     :ok
   end
+
+  @doc "Subscribes a connected LiveView to its user's session-revocation signal (#256)."
+  def subscribe_user_sessions(%Scope{user: %User{id: id}}),
+    do: Phoenix.PubSub.subscribe(@pubsub, sessions_topic(id))
+
+  defp sessions_topic(id), do: "user:#{id}:sessions"
 
   ## Passwords & resets (#232)
 

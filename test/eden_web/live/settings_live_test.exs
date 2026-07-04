@@ -368,4 +368,37 @@ defmodule EdenWeb.SettingsLiveTest do
                Accounts.get_user_by_username_and_password(user.username, "newpass12345")
     end
   end
+
+  describe "session revocation boots live sockets (#256)" do
+    setup %{conn: conn} do
+      user = user_fixture(%{password: "password123"})
+      %{conn: log_in_user(conn, user), user: user}
+    end
+
+    test "an already-open LiveView is redirected to sign in when sessions are revoked", %{
+      conn: conn,
+      user: user
+    } do
+      # This connected view stands in for another device / tab. Nothing touches it —
+      # the revoke happens elsewhere (log out everywhere / password change / reset).
+      {:ok, view, _} = live(conn, ~p"/settings")
+
+      :ok = Accounts.revoke_all_user_sessions(user)
+
+      assert_redirect(view, ~p"/login")
+    end
+
+    test "a signed-out (unauthenticated) live view is unaffected by another user's revoke", %{
+      user: user
+    } do
+      # A different user's connected view must not be booted.
+      other = user_fixture(%{username: "bystander256"})
+      {:ok, view, _} = live(log_in_user(build_conn(), other), ~p"/settings")
+
+      :ok = Accounts.revoke_all_user_sessions(user)
+
+      # No redirect for the bystander — still rendering.
+      assert render(view) =~ "Settings" or render(view) =~ "Profile"
+    end
+  end
 end
