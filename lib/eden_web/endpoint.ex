@@ -42,9 +42,13 @@ defmodule EdenWeb.Endpoint do
 
   # Behind the prod reverse proxy (Caddy terminates TLS), trust its forwarded
   # headers so `conn.scheme` reflects the public scheme — this drives the session
-  # cookie's Secure flag in the HTTPS phase. Safe: the app port is never exposed
-  # directly (only Caddy reaches it), and in dev/test no proxy sets these headers.
-  plug Plug.RewriteOn, [:x_forwarded_proto, :x_forwarded_host, :x_forwarded_port]
+  # cookie's Secure flag in the HTTPS phase — and `conn.remote_ip` reflects the
+  # real client, which the #236 per-IP throttle keys on. Safe: the app port is
+  # never exposed directly (only Caddy reaches it), Caddy overwrites x-forwarded-for
+  # with the true peer (see deploy/Caddyfile, so a client can't spoof it), and in
+  # dev/test no proxy sets these headers.
+  plug Plug.RewriteOn,
+       [:x_forwarded_for, :x_forwarded_proto, :x_forwarded_host, :x_forwarded_port]
 
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]

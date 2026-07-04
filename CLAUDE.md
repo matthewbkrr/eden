@@ -387,6 +387,19 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   both": `delete_message_for_both/2` deletes the `storage_key` + `thumbnail_key`
   blobs (after the tombstone commits, and only if no forwarded copy still
   references them). Any new delete path must do the same.
+- ~~**Rate-limit login + invite endpoints**~~ — **resolved** (#236): `Eden.RateLimit`
+  is a hand-rolled fixed-window limiter (no dep — a GenServer owns one public ETS
+  table, callers hit it with an atomic `:ets.update_counter`, a periodic sweep GCs
+  stale buckets). The `EdenWeb.RateLimit` plug throttles the signed-out credential
+  POSTs **per client IP** — `/users/log_in` (10/5min) and `/invite/:token` (30/5min)
+  — halting over-limit requests before the auth path with a flash. Keys on
+  `conn.remote_ip`, which is the real client only because the endpoint trusts
+  `x-forwarded-for` (added to `Plug.RewriteOn`) and Caddy overwrites that header
+  with the true peer (`deploy/Caddyfile`). Failed logins are logged (username + IP,
+  no password). **Off in test** (`config :eden, EdenWeb.RateLimit, enabled: false`)
+  so the suite's many logins don't self-throttle; the limiter + plug are unit-tested
+  directly. Larger blast-radius controls (per-username lockout, captcha) are
+  deferred — see the issue.
 
 ## Agent skills
 

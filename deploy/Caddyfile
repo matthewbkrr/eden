@@ -17,5 +17,11 @@
 	encode zstd gzip
 	# HSTS — honored by browsers only over HTTPS, so it's inert in the IP phase.
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-	reverse_proxy app:4000
+	reverse_proxy app:4000 {
+		# Overwrite X-Forwarded-For with the true TCP peer so a client can't spoof
+		# it — the app trusts this header for conn.remote_ip, which the #236 per-IP
+		# login/invite throttle keys on. Caddy is the edge, so {remote_host} is the
+		# real client.
+		header_up X-Forwarded-For {remote_host}
+	}
 }
