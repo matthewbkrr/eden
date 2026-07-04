@@ -452,37 +452,54 @@ defmodule Eden.Accounts do
   Verifies a TOTP `code` for an enrolled user and stamps `totp_last_used_at` so the
   same code can't be replayed within its validity window. Returns `{:ok, user}` |
   `:error`.
+
+  The check-and-stamp runs under a `FOR UPDATE` row lock: two concurrent logins with
+  the same code serialize, and the second re-reads the freshly stamped
+  `totp_last_used_at`, so `NimbleTOTP.valid?` rejects the replay (no last-write-wins
+  TOCTOU).
   """
-  def verify_totp(%User{} = user, code) when is_binary(code) do
-    with true <- User.totp_enrolled?(user),
-         {:ok, secret} <- Eden.Vault.decrypt(user.totp_secret),
-         true <- NimbleTOTP.valid?(secret, String.trim(code), since: user.totp_last_used_at) do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-      {:ok, updated} = user |> Ecto.Changeset.change(totp_last_used_at: now) |> Repo.update()
-      {:ok, updated}
-    else
-      _ -> :error
-    end
+  def verify_totp(%User{id: id}, code) when is_binary(code) do
+    Repo.transact(fn ->
+      with %User{} = user <- lock_user(id),
+           true <- User.totp_enrolled?(user),
+           {:ok, secret} <- Eden.Vault.decrypt(user.totp_secret),
+           true <- NimbleTOTP.valid?(secret, String.trim(code), since: user.totp_last_used_at) do
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        user |> Ecto.Changeset.change(totp_last_used_at: now) |> Repo.update()
+      else
+        _ -> {:error, :invalid}
+      end
+    end)
+    |> totp_result()
   end
 
   @doc """
   Verifies and **consumes** a one-time backup code (recovery when the authenticator
   is unavailable). Returns `{:ok, user}` with the code removed | `:error`.
+
+  Runs under a `FOR UPDATE` row lock so a code can't be redeemed twice by concurrent
+  requests: the second sees the code already gone from the locked row.
   """
-  def consume_backup_code(%User{} = user, code) when is_binary(code) do
+  def consume_backup_code(%User{id: id}, code) when is_binary(code) do
     hash = Eden.Tokens.hash(normalize_backup(code))
 
-    if hash in user.totp_backup_codes do
-      remaining = List.delete(user.totp_backup_codes, hash)
-
-      {:ok, updated} =
+    Repo.transact(fn ->
+      with %User{} = user <- lock_user(id),
+           true <- hash in user.totp_backup_codes do
+        remaining = List.delete(user.totp_backup_codes, hash)
         user |> Ecto.Changeset.change(totp_backup_codes: remaining) |> Repo.update()
-
-      {:ok, updated}
-    else
-      :error
-    end
+      else
+        _ -> {:error, :invalid}
+      end
+    end)
+    |> totp_result()
   end
+
+  defp lock_user(id), do: Repo.one(from(u in User, where: u.id == ^id, lock: "FOR UPDATE"))
+
+  # Repo.transact unwraps {:ok, user}; collapse any error (rolled back) to :error.
+  defp totp_result({:ok, %User{} = user}), do: {:ok, user}
+  defp totp_result(_), do: :error
 
   @doc """
   Disables TOTP after the user proves possession with a valid current `code`.

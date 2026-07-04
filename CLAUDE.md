@@ -363,8 +363,10 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   (cheap, no DB). TLS terminates at Caddy (no app-level `force_ssl`, #85), so the
   probe hits plain HTTP without a redirect.
 - Required runtime env (see `config/runtime.exs`): `DATABASE_URL`,
-  `SECRET_KEY_BASE`, `PHX_HOST`; `EDEN_UPLOADS_ROOT` for the uploads volume;
-  `PORT` optional. **`PHX_SCHEME`/`PHX_PORT`** (#85) make the public URL
+  `SECRET_KEY_BASE`, `PHX_HOST`, **`EDEN_VAULT_KEY`** (encrypts TOTP secrets at rest,
+  #250 — a dedicated secret, independent of `SECRET_KEY_BASE` and kept stable, or
+  stored TOTP secrets become undecryptable); `EDEN_UPLOADS_ROOT` for the uploads
+  volume; `PORT` optional. **`PHX_SCHEME`/`PHX_PORT`** (#85) make the public URL
   http-by-IP or https-by-domain without a recompile — the same release flips
   phases by env (they drive URL generation + the LiveView socket `check_origin`).
 - CI's **release-smoke** job builds the prod release and runs migrations through

@@ -7,10 +7,6 @@ defmodule EdenWeb.UserSessionController do
   alias Eden.Accounts.User
   alias EdenWeb.UserAuth
 
-  # Keep in sync with EdenWeb.TotpLive: how long the password step's pending-2FA
-  # marker stays valid before the challenge sends the user back to /login.
-  @pending_ttl_seconds 300
-
   def create(conn, %{"user" => %{"username" => username, "password" => password}}) do
     case Accounts.get_user_by_username_and_password(username, password) do
       nil ->
@@ -79,7 +75,7 @@ defmodule EdenWeb.UserSessionController do
   defp pending_user_id(conn) do
     with id when is_integer(id) <- get_session(conn, :totp_pending_user_id),
          at when is_integer(at) <- get_session(conn, :totp_pending_at),
-         true <- System.system_time(:second) - at <= @pending_ttl_seconds do
+         true <- System.system_time(:second) - at <= UserAuth.totp_pending_ttl_seconds() do
       id
     else
       _ -> nil

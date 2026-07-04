@@ -14,6 +14,14 @@ defmodule EdenWeb.UserAuth do
 
   @session_key "user_token"
 
+  # How long a password-verified pending-2FA marker stays valid before the
+  # second-factor challenge (#250) expires and sends the user back to /login. Single
+  # source of truth for both the controller (which sets it) and TotpLive (which reads it).
+  @totp_pending_ttl_seconds 300
+
+  @doc "Seconds a pending-2FA (post-password) marker stays valid (#250)."
+  def totp_pending_ttl_seconds, do: @totp_pending_ttl_seconds
+
   @doc """
   Logs the user in: issues a session token, renews the session to prevent
   fixation, and redirects to the stored return path or the signed-in home.

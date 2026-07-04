@@ -9,9 +9,7 @@ defmodule EdenWeb.TotpLive do
   use EdenWeb, :live_view
 
   alias Eden.Accounts
-
-  # Must match UserSessionController's pending-2FA TTL.
-  @pending_ttl_seconds 300
+  alias EdenWeb.UserAuth
 
   def mount(_params, session, socket) do
     case pending_user(session) do
@@ -71,7 +69,7 @@ defmodule EdenWeb.TotpLive do
   defp pending_user(session) do
     with id when is_integer(id) <- session["totp_pending_user_id"],
          at when is_integer(at) <- session["totp_pending_at"],
-         true <- System.system_time(:second) - at <= @pending_ttl_seconds,
+         true <- System.system_time(:second) - at <= UserAuth.totp_pending_ttl_seconds(),
          %Accounts.User{} = user <- Accounts.get_user(id) do
       user
     else
