@@ -31,6 +31,17 @@ defmodule EdenWeb.Router do
     plug :require_authenticated_user
   end
 
+  # Per-IP throttles for the signed-out credential POSTs (#236). Login is the real
+  # target (guessable usernames); the invite endpoint gets a looser cap since its
+  # token entropy already resists guessing.
+  pipeline :throttle_login do
+    plug EdenWeb.RateLimit, scope: :login, limit: 10
+  end
+
+  pipeline :throttle_invite do
+    plug EdenWeb.RateLimit, scope: :invite, limit: 30
+  end
+
   scope "/", EdenWeb do
     pipe_through :browser
 
@@ -82,12 +93,20 @@ defmodule EdenWeb.Router do
   end
 
   # Signed-out flows: already-authenticated users are bounced to the app, both
-  # at the LiveView (on_mount) and the native POST controller routes (plug).
+  # at the LiveView (on_mount) and the native POST controller routes (plug). The
+  # credential POSTs also pass a per-IP throttle (#236); their pages don't.
+  scope "/", EdenWeb do
+    pipe_through [:browser, :redirect_if_authenticated, :throttle_login]
+    post "/users/log_in", UserSessionController, :create
+  end
+
+  scope "/", EdenWeb do
+    pipe_through [:browser, :redirect_if_authenticated, :throttle_invite]
+    post "/invite/:token", InviteController, :create
+  end
+
   scope "/", EdenWeb do
     pipe_through [:browser, :redirect_if_authenticated]
-
-    post "/users/log_in", UserSessionController, :create
-    post "/invite/:token", InviteController, :create
 
     live_session :redirect_if_authenticated,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :redirect_if_authenticated}] do

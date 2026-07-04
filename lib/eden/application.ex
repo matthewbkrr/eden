@@ -15,6 +15,8 @@ defmodule Eden.Application do
       Eden.Repo,
       {DNSCluster, query: Application.get_env(:eden, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Eden.PubSub},
+      # Owns the login/invite throttle ETS table (#236); must be up before the endpoint.
+      Eden.RateLimit,
       EdenWeb.Presence,
       {Oban, Application.fetch_env!(:eden, Oban)},
       # Start to serve requests, typically the last entry

@@ -1,12 +1,20 @@
 defmodule EdenWeb.UserSessionController do
   use EdenWeb, :controller
 
+  require Logger
+
   alias Eden.Accounts
   alias EdenWeb.UserAuth
 
   def create(conn, %{"user" => %{"username" => username, "password" => password}}) do
     case Accounts.get_user_by_username_and_password(username, password) do
       nil ->
+        # Logged for auditing brute-force attempts (#236); the throttle already
+        # capped the rate. No password is logged, and the username is inspected.
+        Logger.warning(
+          "Failed login for username=#{inspect(username)} from ip=#{format_ip(conn.remote_ip)}"
+        )
+
         conn
         |> put_flash(:error, gettext("Invalid username or password."))
         |> redirect(to: ~p"/login")
@@ -23,4 +31,7 @@ defmodule EdenWeb.UserSessionController do
     |> put_flash(:info, gettext("You have been logged out."))
     |> UserAuth.log_out_user()
   end
+
+  defp format_ip(ip) when is_tuple(ip), do: ip |> :inet.ntoa() |> to_string()
+  defp format_ip(ip), do: inspect(ip)
 end

@@ -40,6 +40,11 @@ config :eden, EdenWeb.Endpoint,
   secret_key_base: "pZ/7aP9o7RQJs/z9OTBQ/h2Hb9IghObb0/5saQGyumWBUez9HNq1jpVSy6WTSsNu",
   server: false
 
+# The login/invite throttle (#236) is OFF in test — the suite makes far more than
+# a real user's logins from the same 127.0.0.1, which would trip the limiter. The
+# limiter and its plug are unit-tested directly (RateLimit specs pass `enabled: true`).
+config :eden, EdenWeb.RateLimit, enabled: false
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 
