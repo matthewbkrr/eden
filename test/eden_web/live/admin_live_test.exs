@@ -125,6 +125,14 @@ defmodule EdenWeb.AdminLiveTest do
       refute html =~ "Reset two-factor"
     end
 
+    test "a person-action event with nobody selected is a safe no-op (#250)", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      # Forged/stale events with no selection must not crash the LiveView.
+      render_click(view, "reset_totp", %{})
+      render_click(view, "reset_link", %{})
+      assert render(view) =~ "Select a person"
+    end
+
     test "an external update to the open person refreshes the list and the edit form", %{
       conn: conn
     } do

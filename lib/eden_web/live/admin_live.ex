@@ -30,6 +30,13 @@ defmodule EdenWeb.AdminLive do
   def handle_event("deselect", _params, socket),
     do: {:noreply, assign(socket, selected: nil, managed_form: nil, reset_link: nil)}
 
+  # Every action below assumes a selected person. A forged/stale event with nobody
+  # selected would pass nil into a context function that expects a %User{} and crash
+  # the LiveView — no-op it once here instead.
+  def handle_event(event, _params, %{assigns: %{selected: nil}} = socket)
+      when event in ~w(reset_link reset_totp validate save set_role),
+      do: {:noreply, socket}
+
   def handle_event("reset_link", _params, socket) do
     case Accounts.create_password_reset(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, raw} ->
