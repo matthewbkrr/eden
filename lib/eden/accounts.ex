@@ -9,15 +9,17 @@ defmodule Eden.Accounts do
   """
   import Ecto.Query, warn: false
 
-  alias Eden.Accounts.{Invite, Scope, User, UserToken}
+  alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
   alias Eden.Repo
   alias Eden.Storage
 
   @pubsub Eden.PubSub
   @user_updates_topic "user_updates"
 
-  @token_bytes 32
   @default_ttl_days 7
+  # Admin-issued password-reset links are short-lived: handed to the user and
+  # redeemed promptly (#232), unlike a multi-day registration invite.
+  @reset_ttl_hours 24
 
   ## Users
 
@@ -264,6 +266,141 @@ defmodule Eden.Accounts do
     :ok
   end
 
+  @doc """
+  Deletes EVERY session token for the user (#232) — used by \"log out everywhere\"
+  and after any password change/reset, so a stolen cookie dies immediately.
+  """
+  def revoke_all_user_sessions(%User{} = user) do
+    Repo.delete_all(from t in UserToken, where: t.user_id == ^user.id and t.context == "session")
+    :ok
+  end
+
+  ## Passwords & resets (#232)
+
+  @doc """
+  Verifies the user's current password and sets a new one, then revokes ALL of
+  their sessions (including the current one — a password change kills every login).
+  Returns `{:ok, user}` | `{:error, :invalid_current_password | changeset}`.
+  """
+  def change_password(%User{} = user, current_password, new_password) do
+    if User.valid_password?(user, current_password) do
+      with {:ok, updated} <-
+             user |> User.password_changeset(%{password: new_password}) |> Repo.update() do
+        revoke_all_user_sessions(updated)
+        # A self-chosen password kills any pending admin reset link — otherwise
+        # that link stays a 24h backdoor to the account.
+        delete_reset_tokens(updated.id)
+        {:ok, updated}
+      end
+    else
+      {:error, :invalid_current_password}
+    end
+  end
+
+  @doc """
+  Mints an admin-issued password-reset link for `target` (#232, ADR-0002 Decision
+  6): stores only the hash, expires in #{@reset_ttl_hours}h, single-use. Returns
+  `{:ok, raw_token}` (shown once, never stored) | `{:error, :forbidden}`.
+
+  Authorized here, not just in the UI: the actor must be an admin, and a **plain
+  admin may not reset a `super_admin`** — minting that link would let them redeem
+  it and seize the account (privilege escalation). Only a super_admin resets a
+  super_admin.
+  """
+  def create_password_reset(%Scope{user: %User{} = actor}, %User{} = target) do
+    cond do
+      not User.admin?(actor) ->
+        {:error, :forbidden}
+
+      User.super_admin?(target) and not User.super_admin?(actor) ->
+        {:error, :forbidden}
+
+      true ->
+        raw = Eden.Tokens.generate()
+
+        expires_at =
+          DateTime.utc_now()
+          |> DateTime.add(@reset_ttl_hours, :hour)
+          |> DateTime.truncate(:second)
+
+        # One live link per person: minting a new one supersedes any outstanding
+        # link, so a superseded (or stale) link can't still redeem.
+        delete_reset_tokens(target.id)
+
+        Repo.insert!(%PasswordResetToken{
+          user_id: target.id,
+          hashed_token: Eden.Tokens.hash(raw),
+          expires_at: expires_at
+        })
+
+        {:ok, raw}
+    end
+  end
+
+  @doc "True if `actor` may mint a reset link for `target` (#232) — see `create_password_reset/2`."
+  def can_reset_password?(%User{} = actor, %User{} = target),
+    do: User.admin?(actor) and (not User.super_admin?(target) or User.super_admin?(actor))
+
+  @doc """
+  Redeems a reset link (#232): under a row lock, if the token is valid and
+  unexpired, sets the new password, deletes the token (single-use), and revokes
+  all the user's sessions. Returns `{:ok, user}` | `{:error, :invalid | :expired |
+  changeset}`.
+  """
+  def reset_password_with_token(raw_token, new_password) when is_binary(raw_token) do
+    hashed = Eden.Tokens.hash(raw_token)
+    Repo.transact(fn -> redeem_reset(hashed, new_password) end)
+  end
+
+  @doc """
+  True if a reset token is currently redeemable (exists + unexpired). A read-only
+  peek for the `/reset/:token` page to show the form vs an \"expired\" state; the
+  redeem path (`reset_password_with_token/2`) re-checks under a lock.
+  """
+  def reset_token_valid?(raw_token) when is_binary(raw_token) do
+    case Repo.get_by(PasswordResetToken, hashed_token: Eden.Tokens.hash(raw_token)) do
+      nil -> false
+      # The SAME predicate the redeem path uses, so the peek and the redeem never
+      # disagree at the exact expiry instant.
+      %PasswordResetToken{} = token -> not reset_expired?(token)
+    end
+  end
+
+  defp redeem_reset(hashed, new_password) do
+    with %PasswordResetToken{} = token <- Repo.one(locked_reset_query(hashed)),
+         false <- reset_expired?(token) do
+      apply_reset(token, new_password)
+    else
+      nil -> {:error, :invalid}
+      true -> {:error, :expired}
+    end
+  end
+
+  defp locked_reset_query(hashed) do
+    from(t in PasswordResetToken,
+      where: t.hashed_token == ^hashed,
+      lock: "FOR UPDATE",
+      preload: :user
+    )
+  end
+
+  defp reset_expired?(%PasswordResetToken{expires_at: at}),
+    do: DateTime.after?(DateTime.utc_now(), at)
+
+  defp apply_reset(%PasswordResetToken{} = token, new_password) do
+    with {:ok, updated} <-
+           token.user |> User.password_changeset(%{password: new_password}) |> Repo.update() do
+      # Delete every reset token for this user, not just the redeemed one — a
+      # redemption single-uses this link AND invalidates any sibling links.
+      delete_reset_tokens(token.user_id)
+      revoke_all_user_sessions(updated)
+      {:ok, updated}
+    end
+  end
+
+  defp delete_reset_tokens(user_id),
+    do: Repo.delete_all(from(t in PasswordResetToken, where: t.user_id == ^user_id))
+
   ## Invites
 
   @doc """
@@ -330,13 +467,11 @@ defmodule Eden.Accounts do
 
   ## Token helpers
 
-  @doc "A URL-safe random invite token (raw; never stored)."
-  def build_token,
-    do: @token_bytes |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
+  @doc "A URL-safe random invite token (raw; never stored). See `Eden.Tokens`."
+  def build_token, do: Eden.Tokens.generate()
 
-  @doc "The stored form of a token."
-  def hash_token(raw) when is_binary(raw),
-    do: :crypto.hash(:sha256, raw) |> Base.encode16(case: :lower)
+  @doc "The stored form of a token. See `Eden.Tokens`."
+  def hash_token(raw) when is_binary(raw), do: Eden.Tokens.hash(raw)
 
   ## Internals
 

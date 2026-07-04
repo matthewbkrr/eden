@@ -93,7 +93,9 @@ defmodule EdenWeb.SettingsLive do
           profile_user: user,
           profile_form: to_form(Accounts.change_profile(user)),
           username_form: to_form(Accounts.change_username(user)),
-          username_hint: nil
+          username_hint: nil,
+          password_form: to_form(%{}, as: :password),
+          password_error: nil
         )
         |> allow_upload(:avatar,
           accept: ~w(.png .jpg .jpeg .gif .webp),
@@ -314,6 +316,77 @@ defmodule EdenWeb.SettingsLive do
                 <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
               </div>
             </.form>
+          </section>
+
+          <section
+            :if={@profile_user}
+            class="rounded-[var(--ed-radius-lg)] border p-5"
+            style="border-color: var(--ed-border); background: var(--ed-surface);"
+          >
+            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Password")}</h2>
+            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+              {gettext("Changing your password signs you out of every device.")}
+            </p>
+
+            <.form
+              for={@password_form}
+              id="password-form"
+              phx-submit="change_password"
+              class="space-y-4"
+            >
+              <label class="block space-y-1.5">
+                <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                  {gettext("Current password")}
+                </span>
+                <input
+                  type="password"
+                  name="password[current]"
+                  value=""
+                  class="ed-input"
+                  autocomplete="current-password"
+                  required
+                />
+              </label>
+              <label class="block space-y-1.5">
+                <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                  {gettext("New password")}
+                </span>
+                <input
+                  type="password"
+                  name="password[new]"
+                  value=""
+                  class="ed-input"
+                  autocomplete="new-password"
+                  minlength="8"
+                  required
+                />
+              </label>
+              <p :if={@password_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                {@password_error}
+              </p>
+              <div class="flex justify-end">
+                <button type="submit" class="ed-btn ed-btn--primary">
+                  {gettext("Change password")}
+                </button>
+              </div>
+            </.form>
+
+            <div
+              class="mt-4 pt-4 border-t flex items-center justify-between gap-3"
+              style="border-color: var(--ed-border);"
+            >
+              <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                {gettext("Sign out of all devices")}
+              </span>
+              <button
+                type="button"
+                phx-click="logout_everywhere"
+                data-confirm={gettext("Sign out everywhere? You'll need to sign in again.")}
+                class="ed-btn ed-btn--ghost text-sm"
+              >
+                {gettext("Log out everywhere")}
+              </button>
+            </div>
           </section>
 
           <section
@@ -826,6 +899,38 @@ defmodule EdenWeb.SettingsLive do
   def handle_event("remove_avatar", _params, socket) do
     {:ok, user} = Accounts.remove_avatar(socket.assigns.profile_user)
     {:noreply, assign(socket, profile_user: user)}
+  end
+
+  # Password change (#232): verifies the current password, sets the new one, and
+  # kills every session — so we navigate to sign-in afterward (the current cookie
+  # is now dead too). A too-short new password comes back as a flash (the input's
+  # minlength catches the common case client-side).
+  def handle_event("change_password", %{"password" => %{"current" => cur, "new" => new}}, socket) do
+    case Accounts.change_password(socket.assigns.profile_user, cur, new) do
+      {:ok, _user} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, gettext("Password changed. Please sign in again."))
+         |> push_navigate(to: ~p"/login")}
+
+      # Errors render INLINE in the password section (a top-page flash is
+      # off-screen when the user is scrolled down to the form).
+      {:error, :invalid_current_password} ->
+        {:noreply, assign(socket, password_error: gettext("Current password is incorrect."))}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply,
+         assign(socket, password_error: gettext("New password must be at least 8 characters."))}
+    end
+  end
+
+  def handle_event("logout_everywhere", _params, socket) do
+    :ok = Accounts.revoke_all_user_sessions(socket.assigns.profile_user)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, gettext("Signed out of all devices. Please sign in again."))
+     |> push_navigate(to: ~p"/login")}
   end
 
   # Set the user's presence status (#102). The Accounts broadcast also reaches any

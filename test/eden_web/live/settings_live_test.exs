@@ -335,4 +335,37 @@ defmodule EdenWeb.SettingsLiveTest do
     on_exit(fn -> File.rm(path) end)
     path
   end
+
+  describe "password (#232)" do
+    setup %{conn: conn} do
+      user = user_fixture(%{password: "password123"})
+      %{conn: log_in_user(conn, user), user: user}
+    end
+
+    test "a wrong current password shows an error and stays put", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/settings")
+
+      html =
+        view
+        |> form("#password-form", password: %{current: "wrong-one", new: "newpass12345"})
+        |> render_submit()
+
+      assert html =~ "Current password is incorrect"
+    end
+
+    test "the right current password sets a new one and redirects to sign in", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, view, _} = live(conn, ~p"/settings")
+
+      assert {:error, {:live_redirect, %{to: "/login"}}} =
+               view
+               |> form("#password-form", password: %{current: "password123", new: "newpass12345"})
+               |> render_submit()
+
+      assert %Eden.Accounts.User{} =
+               Accounts.get_user_by_username_and_password(user.username, "newpass12345")
+    end
+  end
 end

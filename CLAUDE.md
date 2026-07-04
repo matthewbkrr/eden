@@ -51,6 +51,13 @@ design — built incrementally as features land.)
   AND every patch) is where admins edit people's managed fields
   (`apply_managed_fields/2`) and a super_admin assigns roles
   (`set_user_role/3`); a shielded link surfaces it in Settings for admins only.
+  **Passwords & recovery** (#232): a user changes their password in Settings
+  (`change_password/3` verifies the current one, then **revokes every session** —
+  the UI signs them back in) or hits "log out everywhere" (`revoke_all_user_sessions/1`);
+  an admin mints a one-time **reset link** from `/admin` (`create_password_reset/1`)
+  redeemed at `/reset/:token` (`reset_password_with_token/2` — `FOR UPDATE`,
+  single-use, revokes sessions). Every hash-at-rest token flow (invites + reset)
+  shares `Eden.Tokens` (generate/hash). Still no email/TOTP.
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.

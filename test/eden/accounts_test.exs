@@ -2,7 +2,7 @@ defmodule Eden.AccountsTest do
   use Eden.DataCase, async: true
 
   alias Eden.Accounts
-  alias Eden.Accounts.{Invite, Scope, User}
+  alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
 
   defp user_fixture(attrs \\ %{}) do
     base = %{
@@ -21,6 +21,17 @@ defmodule Eden.AccountsTest do
 
   # role isn't cast by registration_changeset (it's admin-managed, #174), so set it directly.
   defp promote(user, role), do: user |> Ecto.Changeset.change(role: role) |> Repo.update!()
+
+  # A reset link minted by a super_admin (create_password_reset/2 is authorized).
+  defp mint_reset(target) do
+    {:ok, raw} =
+      Accounts.create_password_reset(
+        Scope.for_user(promote(user_fixture(), "super_admin")),
+        target
+      )
+
+    raw
+  end
 
   defp valid_attrs(overrides \\ %{}) do
     Map.merge(
@@ -491,6 +502,112 @@ defmodule Eden.AccountsTest do
       File.write!(path, "definitely not an image")
       on_exit(fn -> File.rm(path) end)
       assert {:error, _} = Accounts.set_avatar(user_fixture(), path)
+    end
+  end
+
+  describe "change_password/3 (#232)" do
+    test "verifies the current password, sets a new one, and revokes every session" do
+      user = user_fixture(%{username: "pwuser", password: "password123"})
+      _ = Accounts.generate_user_session_token(user)
+      _ = Accounts.generate_user_session_token(user)
+
+      assert {:ok, updated} = Accounts.change_password(user, "password123", "newpassword456")
+      assert User.valid_password?(updated, "newpassword456")
+      refute User.valid_password?(updated, "password123")
+      assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 0
+    end
+
+    test "invalidates any pending admin reset link (no 24h backdoor)" do
+      user = user_fixture(%{username: "pwuser2", password: "password123"})
+      raw = mint_reset(user)
+
+      assert {:ok, _} = Accounts.change_password(user, "password123", "newpassword456")
+
+      refute Accounts.reset_token_valid?(raw)
+      assert {:error, :invalid} = Accounts.reset_password_with_token(raw, "yetanother123")
+    end
+
+    test "rejects a wrong current password" do
+      user = user_fixture(%{password: "password123"})
+
+      assert {:error, :invalid_current_password} =
+               Accounts.change_password(user, "wrong-one", "newpassword456")
+    end
+
+    test "rejects a too-short new password" do
+      user = user_fixture(%{password: "password123"})
+      assert {:error, %Ecto.Changeset{}} = Accounts.change_password(user, "password123", "short")
+    end
+  end
+
+  describe "password reset links (#232)" do
+    test "mint → redeem sets the new password, is single-use, and revokes sessions" do
+      user = user_fixture(%{username: "resetme", password: "password123"})
+      _ = Accounts.generate_user_session_token(user)
+
+      raw = mint_reset(user)
+      assert {:ok, updated} = Accounts.reset_password_with_token(raw, "brandnewpass789")
+      assert updated.id == user.id
+      assert User.valid_password?(updated, "brandnewpass789")
+      assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 0
+
+      # single-use: the row is gone, a replay fails
+      assert {:error, :invalid} = Accounts.reset_password_with_token(raw, "another123456")
+    end
+
+    test "minting a new link supersedes the previous one (one live link per person)" do
+      user = user_fixture(%{username: "resettwice", password: "password123"})
+      first = mint_reset(user)
+      second = mint_reset(user)
+
+      refute Accounts.reset_token_valid?(first)
+      assert Accounts.reset_token_valid?(second)
+      assert {:error, :invalid} = Accounts.reset_password_with_token(first, "whatever123456")
+      assert {:ok, _} = Accounts.reset_password_with_token(second, "brandnewpass789")
+    end
+
+    test "rejects an unknown token" do
+      assert {:error, :invalid} = Accounts.reset_password_with_token("nope", "whatever123456")
+    end
+
+    test "rejects an expired token" do
+      user = user_fixture()
+      raw = mint_reset(user)
+
+      Repo.update_all(from(t in PasswordResetToken, where: t.user_id == ^user.id),
+        set: [
+          expires_at: DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
+        ]
+      )
+
+      assert {:error, :expired} = Accounts.reset_password_with_token(raw, "whatever123456")
+    end
+
+    test "rejects a too-short new password without consuming the token" do
+      user = user_fixture()
+      raw = mint_reset(user)
+      assert {:error, %Ecto.Changeset{}} = Accounts.reset_password_with_token(raw, "short")
+      # token survives (the transaction rolled back), so a valid retry still works
+      assert {:ok, _} = Accounts.reset_password_with_token(raw, "validpass1234")
+    end
+
+    test "a plain admin can't mint a reset for a super_admin (no privilege escalation)" do
+      admin = promote(user_fixture(), "admin")
+      target = promote(user_fixture(), "super_admin")
+
+      assert {:error, :forbidden} =
+               Accounts.create_password_reset(Scope.for_user(admin), target)
+
+      # a super_admin can
+      sa = promote(user_fixture(), "super_admin")
+      assert {:ok, _} = Accounts.create_password_reset(Scope.for_user(sa), target)
+    end
+
+    test "a non-admin can't mint a reset at all" do
+      member = user_fixture()
+
+      assert {:error, :forbidden} =
+               Accounts.create_password_reset(Scope.for_user(member), user_fixture())
     end
   end
 end
