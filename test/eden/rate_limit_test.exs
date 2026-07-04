@@ -27,11 +27,19 @@ defmodule Eden.RateLimitTest do
 
   test "resets once the window elapses" do
     k = key()
-    # 50ms window: the two hits land in the same window (µs apart), the sleep
-    # crosses at least one boundary, so the next hit starts a fresh window.
-    assert RateLimit.hit(k, 50, 1) == :ok
-    assert RateLimit.hit(k, 50, 1) == {:error, :rate_limited}
-    Process.sleep(80)
-    assert RateLimit.hit(k, 50, 1) == :ok
+    scale = 100
+
+    # Land at the START of a fresh window, so the two hits below share it with an
+    # almost-full window of headroom — no wall-clock race where a boundary falls
+    # between the two consecutive calls (the flaky case).
+    now = System.system_time(:millisecond)
+    Process.sleep(scale - rem(now, scale))
+
+    assert RateLimit.hit(k, scale, 1) == :ok
+    assert RateLimit.hit(k, scale, 1) == {:error, :rate_limited}
+
+    # A full window later we're definitely in the next window; the count resets.
+    Process.sleep(scale)
+    assert RateLimit.hit(k, scale, 1) == :ok
   end
 end
