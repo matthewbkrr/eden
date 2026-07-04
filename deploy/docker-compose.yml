@@ -30,6 +30,9 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL}
       SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      # Encrypts TOTP 2FA secrets at rest (#250). Required — a dedicated secret,
+      # separate from SECRET_KEY_BASE, kept stable (see deploy/.env.example).
+      EDEN_VAULT_KEY: ${EDEN_VAULT_KEY:?EDEN_VAULT_KEY is required (set it in .env)}
       # Public address — drives URL generation + the LiveView socket check_origin.
       # IP phase:     PHX_HOST=<ip>  PHX_SCHEME=http   PHX_PORT=80
       # Domain phase: PHX_HOST=host  PHX_SCHEME=https  PHX_PORT=443

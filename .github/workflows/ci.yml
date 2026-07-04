@@ -180,8 +180,12 @@ jobs:
           set -euo pipefail
           PGPASSWORD=postgres createdb -h localhost -U postgres eden_prod
           SECRET="$(openssl rand -base64 48)"
+          # EDEN_VAULT_KEY is a required prod secret (#250) — a dedicated key,
+          # independent of SECRET_KEY_BASE, so generate a separate one here.
+          VAULT_KEY="$(openssl rand -base64 48)"
           ENVS="--network host \
             -e SECRET_KEY_BASE=$SECRET \
+            -e EDEN_VAULT_KEY=$VAULT_KEY \
             -e DATABASE_URL=ecto://postgres:postgres@localhost:5432/eden_prod \
             -e PHX_HOST=localhost -e PORT=4000"
 

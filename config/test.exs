@@ -45,6 +45,9 @@ config :eden, EdenWeb.Endpoint,
 # limiter and its plug are unit-tested directly (RateLimit specs pass `enabled: true`).
 config :eden, EdenWeb.RateLimit, enabled: false
 
+# Static encryption key for Eden.Vault (#250) in test — any fixed non-secret value.
+config :eden, Eden.Vault, key: "test-only-vault-key-not-a-secret"
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

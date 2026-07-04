@@ -401,6 +401,145 @@ defmodule Eden.Accounts do
   defp delete_reset_tokens(user_id),
     do: Repo.delete_all(from(t in PasswordResetToken, where: t.user_id == ^user_id))
 
+  ## TOTP two-factor auth (#250, ADR-0002 Decision 7)
+
+  @totp_issuer "ihichat"
+  @backup_code_count 10
+
+  @doc "True if the user has an active TOTP factor (#250)."
+  def totp_enrolled?(%User{} = user), do: User.totp_enrolled?(user)
+
+  @doc """
+  Begins TOTP setup: returns `{secret, otpauth_uri}` where `secret` is a fresh,
+  **not-yet-persisted** secret and the URI feeds the enrollment QR. The caller (the
+  Settings LiveView) holds the secret until `activate_totp/3` confirms a code from
+  it, so an abandoned setup never leaves a half-enrolled account.
+  """
+  def setup_totp(%User{} = user) do
+    secret = NimbleTOTP.secret()
+    uri = NimbleTOTP.otpauth_uri("#{@totp_issuer}:#{user.username}", secret, issuer: @totp_issuer)
+    {secret, uri}
+  end
+
+  @doc """
+  Activates TOTP once the user proves possession with a valid `code` for `secret`
+  (from `setup_totp/1`). Persists the **Vault-encrypted** secret + activation time
+  and returns fresh one-time backup codes (shown once, stored only as hashes).
+  Returns `{:ok, user, backup_codes}` | `{:error, :invalid_code}`.
+  """
+  def activate_totp(%User{} = user, secret, code) when is_binary(secret) and is_binary(code) do
+    if NimbleTOTP.valid?(secret, String.trim(code)) do
+      {plain_codes, hashed} = generate_backup_codes()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, updated} =
+        user
+        |> Ecto.Changeset.change(
+          totp_secret: Eden.Vault.encrypt(secret),
+          totp_activated_at: now,
+          totp_last_used_at: nil,
+          totp_backup_codes: hashed
+        )
+        |> Repo.update()
+
+      {:ok, updated, plain_codes}
+    else
+      {:error, :invalid_code}
+    end
+  end
+
+  @doc """
+  Verifies a TOTP `code` for an enrolled user and stamps `totp_last_used_at` so the
+  same code can't be replayed within its validity window. Returns `{:ok, user}` |
+  `:error`.
+
+  The check-and-stamp runs under a `FOR UPDATE` row lock: two concurrent logins with
+  the same code serialize, and the second re-reads the freshly stamped
+  `totp_last_used_at`, so `NimbleTOTP.valid?` rejects the replay (no last-write-wins
+  TOCTOU).
+  """
+  def verify_totp(%User{id: id}, code) when is_binary(code) do
+    Repo.transact(fn ->
+      with %User{} = user <- lock_user(id),
+           true <- User.totp_enrolled?(user),
+           {:ok, secret} <- Eden.Vault.decrypt(user.totp_secret),
+           true <- NimbleTOTP.valid?(secret, String.trim(code), since: user.totp_last_used_at) do
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+        user |> Ecto.Changeset.change(totp_last_used_at: now) |> Repo.update()
+      else
+        _ -> {:error, :invalid}
+      end
+    end)
+    |> totp_result()
+  end
+
+  @doc """
+  Verifies and **consumes** a one-time backup code (recovery when the authenticator
+  is unavailable). Returns `{:ok, user}` with the code removed | `:error`.
+
+  Runs under a `FOR UPDATE` row lock so a code can't be redeemed twice by concurrent
+  requests: the second sees the code already gone from the locked row.
+  """
+  def consume_backup_code(%User{id: id}, code) when is_binary(code) do
+    hash = Eden.Tokens.hash(normalize_backup(code))
+
+    Repo.transact(fn ->
+      with %User{} = user <- lock_user(id),
+           true <- hash in user.totp_backup_codes do
+        remaining = List.delete(user.totp_backup_codes, hash)
+        user |> Ecto.Changeset.change(totp_backup_codes: remaining) |> Repo.update()
+      else
+        _ -> {:error, :invalid}
+      end
+    end)
+    |> totp_result()
+  end
+
+  defp lock_user(id), do: Repo.one(from(u in User, where: u.id == ^id, lock: "FOR UPDATE"))
+
+  # Repo.transact unwraps {:ok, user}; collapse any error (rolled back) to :error.
+  defp totp_result({:ok, %User{} = user}), do: {:ok, user}
+  defp totp_result(_), do: :error
+
+  @doc """
+  Disables TOTP after the user proves possession with a valid current `code`.
+  **Refused while the user holds an admin role** — an admin's second factor is
+  mandatory (#250), so they can't drop it while privileged. Returns `{:ok, user}` |
+  `{:error, :required_for_admin | :invalid_code}`.
+  """
+  def disable_totp(%User{} = user, code) when is_binary(code) do
+    cond do
+      User.admin?(user) -> {:error, :required_for_admin}
+      match?({:ok, _}, verify_totp(user, code)) -> clear_totp(user)
+      true -> {:error, :invalid_code}
+    end
+  end
+
+  defp clear_totp(%User{} = user) do
+    user
+    |> Ecto.Changeset.change(
+      totp_secret: nil,
+      totp_activated_at: nil,
+      totp_last_used_at: nil,
+      totp_backup_codes: []
+    )
+    |> Repo.update()
+  end
+
+  # 10 codes; the plaintext is returned once for the user to save, only hashes persist.
+  defp generate_backup_codes do
+    plain = for _ <- 1..@backup_code_count, do: backup_code()
+    hashed = Enum.map(plain, fn c -> Eden.Tokens.hash(normalize_backup(c)) end)
+    {plain, hashed}
+  end
+
+  defp backup_code,
+    do: :crypto.strong_rand_bytes(5) |> Base.hex_encode32(case: :lower, padding: false)
+
+  # Normalize before hashing so display formatting / spacing / case never blocks a
+  # match (hash on generation and on redemption run through the same funnel).
+  defp normalize_backup(code), do: code |> String.downcase() |> String.replace(~r/[^a-z0-9]/, "")
+
   ## Invites
 
   @doc """

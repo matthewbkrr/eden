@@ -57,7 +57,19 @@ design — built incrementally as features land.)
   an admin mints a one-time **reset link** from `/admin` (`create_password_reset/1`)
   redeemed at `/reset/:token` (`reset_password_with_token/2` — `FOR UPDATE`,
   single-use, revokes sessions). Every hash-at-rest token flow (invites + reset)
-  shares `Eden.Tokens` (generate/hash). Still no email/TOTP.
+  shares `Eden.Tokens` (generate/hash). Still no email.
+  **TOTP two-factor** (#250, ADR-0002 Decision 7): a user enrolls in Settings
+  (`setup_totp/1` → scan QR / manual key → `activate_totp/3` confirms a code, reveals
+  one-time **backup codes**); at sign-in an enrolled user's password step stashes a
+  short-lived pending marker and hands off to a **second-factor challenge**
+  (`/login/totp`, `EdenWeb.TotpLive` → `UserSessionController.totp/2`) before any
+  session token is issued — a stolen password alone can't get in. `verify_totp/2`
+  (RFC-6238 via **`nimble_totp`**, replay-blocked by `totp_last_used_at`) or
+  `consume_backup_code/2` completes login; the challenge POST shares the #236 login
+  throttle. The secret is **encrypted at rest** through `Eden.Vault` (hand-rolled
+  AES-256-GCM, key from env — never the DB). `disable_totp/2` needs a valid code and
+  is **refused for admins** — their factor is mandatory (the gate-level enforcement
+  for admins-without-TOTP is the #250 follow-up).
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.
@@ -351,8 +363,10 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   (cheap, no DB). TLS terminates at Caddy (no app-level `force_ssl`, #85), so the
   probe hits plain HTTP without a redirect.
 - Required runtime env (see `config/runtime.exs`): `DATABASE_URL`,
-  `SECRET_KEY_BASE`, `PHX_HOST`; `EDEN_UPLOADS_ROOT` for the uploads volume;
-  `PORT` optional. **`PHX_SCHEME`/`PHX_PORT`** (#85) make the public URL
+  `SECRET_KEY_BASE`, `PHX_HOST`, **`EDEN_VAULT_KEY`** (encrypts TOTP secrets at rest,
+  #250 — a dedicated secret, independent of `SECRET_KEY_BASE` and kept stable, or
+  stored TOTP secrets become undecryptable); `EDEN_UPLOADS_ROOT` for the uploads
+  volume; `PORT` optional. **`PHX_SCHEME`/`PHX_PORT`** (#85) make the public URL
   http-by-IP or https-by-domain without a recompile — the same release flips
   phases by env (they drive URL generation + the LiveView socket `check_origin`).
 - CI's **release-smoke** job builds the prod release and runs migrations through
