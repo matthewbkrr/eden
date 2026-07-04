@@ -173,11 +173,18 @@ html {
   --ed-border: oklch(0.32 0.014 261);
   --ed-ink: oklch(0.96 0.005 261);
   --ed-muted: oklch(0.68 0.012 261);
-  --ed-primary: oklch(0.62 0.16 261);
-  --ed-primary-strong: oklch(0.68 0.16 261);
+  /* Darkened to clear WCAG AA (4.5:1) for white --ed-on-primary on the fill (#257):
+     own-bubble body, primary-button labels, unread badges. Now matches the light
+     theme's primary (0.55) + deepen-on-hover (-strong 0.50 < base), unifying the
+     hover direction across themes. Static 4.80:1, hover 5.96:1. */
+  --ed-primary: oklch(0.55 0.16 261);
+  --ed-primary-strong: oklch(0.50 0.16 261);
   --ed-on-primary: oklch(0.99 0.01 261);
   --ed-online: oklch(0.72 0.15 150);
-  --ed-danger: oklch(0.65 0.19 25);
+  /* Darkened so white labels clear WCAG AA at REST *and* on hover (#257): the
+     brightness(1.08) hover lightens the fill (text clamps to white), so the base
+     must leave headroom. Static 5.18:1, hover 4.89:1. */
+  --ed-danger: oklch(0.55 0.19 25);
   /* Danger as TEXT on a dark surface — lightened for contrast (the reverse of the light theme). */
   --ed-danger-strong: oklch(0.75 0.17 25);
   --ed-warning: oklch(0.78 0.14 75);
@@ -197,11 +204,14 @@ html {
     --ed-border: oklch(0.32 0.014 261);
     --ed-ink: oklch(0.96 0.005 261);
     --ed-muted: oklch(0.68 0.012 261);
-    --ed-primary: oklch(0.62 0.16 261);
-    --ed-primary-strong: oklch(0.68 0.16 261);
+    /* Darkened to clear WCAG AA (4.5:1) for white on the fill (#257) — matches the
+       light theme's primary + deepen-on-hover. Static 4.80:1, hover 5.96:1. */
+    --ed-primary: oklch(0.55 0.16 261);
+    --ed-primary-strong: oklch(0.50 0.16 261);
     --ed-on-primary: oklch(0.99 0.01 261);
     --ed-online: oklch(0.72 0.15 150);
-    --ed-danger: oklch(0.65 0.19 25);
+    /* WCAG AA on white labels at rest + hover (#257): static 5.18:1, hover 4.89:1. */
+    --ed-danger: oklch(0.55 0.19 25);
     --ed-danger-strong: oklch(0.75 0.17 25);
     --ed-warning: oklch(0.78 0.14 75);
     --ed-away: var(--ed-warning);
