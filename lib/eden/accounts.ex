@@ -523,7 +523,14 @@ defmodule Eden.Accounts do
   makes them re-enroll before using admin power. Returns `{:ok, user}` | `{:error, :forbidden}`.
   """
   def admin_reset_totp(%Scope{user: %User{} = actor}, %User{} = target) do
-    if can_reset_password?(actor, target), do: clear_totp(target), else: {:error, :forbidden}
+    cond do
+      # No self-service: an admin clearing their OWN factor here would sidestep
+      # disable_totp/2's admin-refusal and shed a mandatory factor. Recovery is for
+      # OTHER people; an admin who's locked out is reset by another admin.
+      actor.id == target.id -> {:error, :forbidden}
+      can_reset_password?(actor, target) -> clear_totp(target)
+      true -> {:error, :forbidden}
+    end
   end
 
   defp clear_totp(%User{} = user) do

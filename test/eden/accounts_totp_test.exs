@@ -114,5 +114,14 @@ defmodule Eden.AccountsTotpTest do
       assert {:error, :forbidden} = Accounts.admin_reset_totp(Scope.for_user(admin), sa)
       assert Accounts.totp_enrolled?(Accounts.get_user!(sa.id))
     end
+
+    test "an admin can't reset their OWN factor via the recovery path (no mandatory-2FA bypass)" do
+      admin = promote(user_fixture(%{username: "selfreset"}), "admin")
+      {secret, _} = Accounts.setup_totp(admin)
+      {:ok, admin, _} = Accounts.activate_totp(admin, secret, code(secret))
+
+      assert {:error, :forbidden} = Accounts.admin_reset_totp(Scope.for_user(admin), admin)
+      assert Accounts.totp_enrolled?(Accounts.get_user!(admin.id))
+    end
   end
 end
