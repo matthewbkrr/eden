@@ -3,7 +3,7 @@ defmodule EdenWeb.AdminLive do
   Platform admin panel (#174, RFC Phase 2). Gated to admins by the `:require_admin`
   on_mount hook (checked at mount and on every patch). Lists everyone and lets an
   admin edit a user's **admin-managed** identity fields (corp email / Должность /
-  structure via `Accounts.apply_managed_fields/2`); a **super_admin** can also
+  structure via `Accounts.apply_managed_fields/3`); a **super_admin** can also
   change a user's platform role (`Accounts.set_user_role/3`). An admin can also mint a
   password-reset link, reset a lost second factor, and **deactivate / reactivate** an
   account (#251 — `Accounts.deactivate_user/2`, ends every session and blocks sign-in),
@@ -13,7 +13,7 @@ defmodule EdenWeb.AdminLive do
   use EdenWeb, :live_view
 
   alias Eden.Accounts
-  alias Eden.Accounts.User
+  alias Eden.Accounts.{Scope, User}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -72,9 +72,16 @@ defmodule EdenWeb.AdminLive do
   end
 
   def handle_event("save", %{"user" => params}, socket) do
-    case Accounts.apply_managed_fields(socket.assigns.selected, params) do
+    case Accounts.apply_managed_fields(
+           socket.assigns.current_scope,
+           socket.assigns.selected,
+           params
+         ) do
       {:ok, updated} ->
         {:noreply, socket |> refresh_user(updated) |> put_flash(:info, gettext("Saved."))}
+
+      {:error, :forbidden} ->
+        {:noreply, put_flash(socket, :error, gettext("You can't edit that person."))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, managed_form: to_form(changeset))}
@@ -117,7 +124,32 @@ defmodule EdenWeb.AdminLive do
   end
 
   @impl true
-  def handle_info({:user_updated, user}, socket), do: {:noreply, refresh_user(socket, user)}
+  def handle_info({:user_updated, user}, socket) do
+    socket = refresh_user(socket, user)
+
+    if user.id == socket.assigns.current_scope.user.id,
+      do: sync_self(socket, user),
+      else: {:noreply, socket}
+  end
+
+  # Our OWN account changed (#262): keep the in-socket scope fresh so a context re-check sees
+  # the current role (not the mount-time one), and eject to /settings if admin was revoked —
+  # `:require_admin` only gates at mount, so a mid-session demotion wouldn't otherwise remove
+  # access until the next navigation.
+  defp sync_self(socket, user) do
+    # Rebuild the scope via for_user/1 (its documented constructor — never assemble ad hoc)
+    # so any derived authorization state is recomputed, not just `user` swapped in (#292 review).
+    socket = assign(socket, current_scope: Scope.for_user(user))
+
+    if Accounts.admin?(user) do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("Your admin access was removed."))
+       |> push_navigate(to: ~p"/settings")}
+    end
+  end
 
   defp select_user(socket, id) do
     case Enum.find(socket.assigns.users, &(to_string(&1.id) == to_string(id))) do
