@@ -2586,3 +2586,6 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "System matches your device's light or dark setting."
 msgstr ""
+
+msgid "Security"
+msgstr ""

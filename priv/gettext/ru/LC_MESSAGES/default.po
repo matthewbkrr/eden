@@ -2602,3 +2602,6 @@ msgstr "Разделы настроек"
 #, elixir-autogen, elixir-format
 msgid "System matches your device's light or dark setting."
 msgstr "«Системная» повторяет светлую или тёмную тему устройства."
+
+msgid "Security"
+msgstr "Безопасность"
