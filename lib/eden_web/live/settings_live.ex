@@ -337,7 +337,10 @@ defmodule EdenWeb.SettingsLive do
                         maxlength="500"
                         placeholder={gettext("A short bio")}
                       >{Phoenix.HTML.Form.normalize_value("textarea", @profile_form[:bio].value)}</textarea>
-                      <% bio_len = @profile_form[:bio].value |> to_string() |> String.length() %>
+                      <%!-- Count codepoints, matching the changeset's max (:codepoints),
+                            so the number tracks what the server actually enforces. --%>
+                      <% bio_len =
+                        @profile_form[:bio].value |> to_string() |> String.codepoints() |> length() %>
                       <div class="flex items-start justify-between gap-3">
                         <span
                           :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
