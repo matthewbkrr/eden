@@ -108,10 +108,21 @@ defmodule Eden.Accounts do
   """
   def deactivate_user(%Scope{user: %User{} = actor}, %User{} = target) do
     with :ok <- authorize_activation(actor, target),
-         {:ok, updated} <- set_active(target, false) do
-      revoke_all_user_sessions(updated)
-      delete_reset_tokens(updated.id)
+         {:ok, updated} <- Repo.transact(fn -> deactivate_writes(target) end) do
+      # Side effects only after the row + token deletions commit: booting live
+      # sessions and refreshing open views must never fire on a rolled-back write.
+      broadcast_sessions_revoked(updated.id)
       {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  # The atomic DB half of a deactivation: flip active, then drop every session token
+  # and any outstanding reset link in the same transaction.
+  defp deactivate_writes(%User{} = target) do
+    with {:ok, updated} <- set_active(target, false) do
+      delete_all_session_tokens(updated.id)
+      delete_reset_tokens(updated.id)
+      {:ok, updated}
     end
   end
 
@@ -339,10 +350,23 @@ defmodule Eden.Accounts do
   with the generic session-ended flash. Every OTHER live session still gets booted.
   """
   def revoke_all_user_sessions(%User{} = user) do
-    Repo.delete_all(from t in UserToken, where: t.user_id == ^user.id and t.context == "session")
-    Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user.id), :sessions_revoked)
+    delete_all_session_tokens(user.id)
+    broadcast_sessions_revoked(user.id)
     :ok
   end
+
+  # The DB half of a revoke, split out so a caller that needs atomicity (deactivation)
+  # can delete tokens INSIDE its transaction and fire the broadcast after commit.
+  defp delete_all_session_tokens(user_id),
+    do:
+      Repo.delete_all(
+        from t in UserToken, where: t.user_id == ^user_id and t.context == "session"
+      )
+
+  # The side-effect half — never call this inside a transaction (a rollback can't
+  # un-send a broadcast; it must run only after the deletion commits).
+  defp broadcast_sessions_revoked(user_id),
+    do: Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user_id), :sessions_revoked)
 
   @doc "Subscribes a connected LiveView to its user's session-revocation signal (#256)."
   def subscribe_user_sessions(%Scope{user: %User{id: id}}),
