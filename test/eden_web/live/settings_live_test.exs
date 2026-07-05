@@ -26,6 +26,22 @@ defmodule EdenWeb.SettingsLiveTest do
     assert html =~ "Язык интерфейса"
   end
 
+  test "account events are a no-op when signed out, not a crash (#259)", %{conn: conn} do
+    # /settings is reachable signed-out (device prefs), but an account event pushed by a
+    # crafted client must no-op — not dereference the nil scope and kill the process.
+    {:ok, view, _html} = live(conn, ~p"/settings")
+
+    for event <- ~w(logout_everywhere set_notify_sound remove_avatar totp_setup) do
+      assert render_click(view, event, %{})
+    end
+
+    assert render_click(view, "change_password", %{
+             "password" => %{"current" => "x", "new" => "y"}
+           })
+
+    assert Process.alive?(view.pid)
+  end
+
   describe "profile section" do
     test "is hidden for signed-out visitors", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/settings")

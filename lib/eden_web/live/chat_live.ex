@@ -814,8 +814,12 @@ defmodule EdenWeb.ChatLive do
   # @channel) — these act on the open GROUP conversation (@selected). The context
   # authorizes; we just surface a flash on failure. The member list + roles refresh live
   # via the {:group_members_changed} broadcast below.
-  def handle_event("group_remove_member", %{"id" => id}, socket) do
-    case Chat.remove_group_member(socket.assigns.current_scope, socket.assigns.selected.id, id) do
+  def handle_event(
+        "group_remove_member",
+        %{"id" => id},
+        %{assigns: %{selected: %{id: sel_id}}} = socket
+      ) do
+    case Chat.remove_group_member(socket.assigns.current_scope, sel_id, id) do
       :ok ->
         {:noreply, socket}
 
@@ -823,6 +827,9 @@ defmodule EdenWeb.ChatLive do
         {:noreply, put_flash(socket, :error, gettext("Couldn't remove that member."))}
     end
   end
+
+  # No-op with nothing selected (@selected nil): the event can be pushed from any page.
+  def handle_event("group_remove_member", _params, socket), do: {:noreply, socket}
 
   # No guard: the context validates the role and errors on crafted values.
   def handle_event("group_set_role", %{"id" => id, "role" => role}, socket) do
@@ -947,14 +954,18 @@ defmodule EdenWeb.ChatLive do
 
   ## Channel mode: channel edit/delete + room CRUD (context re-checks roles)
 
-  def handle_event("open_channel_edit", _params, socket) do
-    if socket.assigns.channel.role in ~w(owner admin) do
-      form = to_form(Channels.change_channel(socket.assigns.channel))
+  def handle_event("open_channel_edit", _params, %{assigns: %{channel: %{} = channel}} = socket) do
+    if channel.role in ~w(owner admin) do
+      form = to_form(Channels.change_channel(channel))
       {:noreply, assign(socket, show_channel_edit: true, channel_form: form)}
     else
       {:noreply, socket}
     end
   end
+
+  # No-op outside channel mode (@channel nil): a client can push this event from any
+  # page, but there's nothing to edit without a channel (#259).
+  def handle_event("open_channel_edit", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_channel_edit", _params, socket) do
     # Drop any staged (incl. errored) avatar entry so it can't linger or apply to
@@ -1056,14 +1067,16 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  def handle_event("open_new_room", _params, socket) do
-    if socket.assigns.channel.role in ~w(owner admin) do
+  def handle_event("open_new_room", _params, %{assigns: %{channel: %{} = channel}} = socket) do
+    if channel.role in ~w(owner admin) do
       {:noreply,
        assign(socket, room_modal: :new, room_form: to_form(Chat.change_room(), as: :room))}
     else
       {:noreply, socket}
     end
   end
+
+  def handle_event("open_new_room", _params, socket), do: {:noreply, socket}
 
   def handle_event("open_room_rename", %{"id" => id}, socket) do
     with true <- socket.assigns.channel.role in ~w(owner admin),
@@ -1306,21 +1319,23 @@ defmodule EdenWeb.ChatLive do
 
   ## Channel access: members, add-members, invite links, leave
 
-  def handle_event("open_channel_members", _params, socket) do
-    case Channels.list_members(socket.assigns.current_scope, socket.assigns.channel.id) do
+  def handle_event("open_channel_members", _params, %{assigns: %{channel: %{id: cid}}} = socket) do
+    case Channels.list_members(socket.assigns.current_scope, cid) do
       {:ok, members} -> {:noreply, assign(socket, members_open: true, members: members)}
       {:error, _} -> {:noreply, socket}
     end
   end
 
+  def handle_event("open_channel_members", _params, socket), do: {:noreply, socket}
+
   def handle_event("close_channel_members", _params, socket) do
     {:noreply, assign(socket, members_open: false)}
   end
 
-  def handle_event("open_add_members", _params, socket) do
-    with true <- socket.assigns.channel.role in ~w(owner admin),
+  def handle_event("open_add_members", _params, %{assigns: %{channel: %{} = channel}} = socket) do
+    with true <- channel.role in ~w(owner admin),
          {:ok, members} <-
-           Channels.list_members(socket.assigns.current_scope, socket.assigns.channel.id) do
+           Channels.list_members(socket.assigns.current_scope, channel.id) do
       member_ids = MapSet.new(members, & &1.user.id)
 
       addable =
@@ -1340,6 +1355,8 @@ defmodule EdenWeb.ChatLive do
       _ -> {:noreply, socket}
     end
   end
+
+  def handle_event("open_add_members", _params, socket), do: {:noreply, socket}
 
   # #165: add eden users to a group (owner/admin). Reuses the add-members modal via
   # add_target; addable = everyone the actor can see who isn't already an active member.
@@ -1686,7 +1703,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
-  def handle_event("open_threads", _params, socket) do
+  def handle_event("open_threads", _params, %{assigns: %{selected: %{id: sel_id}}} = socket) do
     scope = socket.assigns.current_scope
 
     {:noreply,
@@ -1695,9 +1712,12 @@ defmodule EdenWeb.ChatLive do
        thread_root: nil,
        thread_reply_to: nil,
        thread_editing: nil,
-       thread_list: Chat.list_followed_threads(scope, socket.assigns.selected.id)
+       thread_list: Chat.list_followed_threads(scope, sel_id)
      )}
   end
+
+  # Threads are a room feature; no-op with nothing open (@selected nil, #259).
+  def handle_event("open_threads", _params, socket), do: {:noreply, socket}
 
   def handle_event("close_threads", _params, socket),
     do: {:noreply, assign(socket, thread_list_open: false)}
@@ -1977,33 +1997,13 @@ defmodule EdenWeb.ChatLive do
 
   @impl true
   def handle_info({:new_message, message}, socket) do
-    # An incoming message in the open conversation counts as read ONLY if the tab is in the
-    # foreground (#206) — a chat open in a background tab must not send a false ✓✓. While
-    # hidden the read is deferred; the "tab_visible" event reads it on return. Skip our own.
-    if message.sender_id != socket.assigns.current_scope.user.id and socket.assigns.tab_visible do
-      Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
-    end
-
-    # Room flat layout: continue (or break) the compact run live.
-    {message, socket} =
-      case {socket.assigns.selected, socket.assigns.last_flat} do
-        {%{channel_id: cid}, last} when not is_nil(cid) ->
-          marked = %{message | compact: compact?(message, last)}
-          {marked, assign(socket, last_flat: {message.sender_id, message.inserted_at})}
-
-        _ ->
-          {message, socket}
-      end
-
-    {:noreply,
-     socket
-     # The sender just sent — they're no longer typing, so clear them now rather
-     # than waiting out the TTL (#11).
-     |> drop_typing(:typing_users, message.sender_id)
-     |> assign(compacts: Map.put(socket.assigns.compacts, message.id, message.compact))
-     |> stream_insert(:messages, message)
-     # #136: keep an open profile gallery live — surface the message's matching-kind media.
-     |> maybe_prepend_gallery(message)}
+    # A message delivered on a conversation's topic just before we unsubscribed (a fast chat
+    # switch A→B) can arrive after B is selected — it must NOT stream into B's window or mark
+    # A read (#260). Only handle it for the conversation that's actually open. Other handlers
+    # ({:message_edited}, {:thread_reply}, {:message_deleted}) already guard this way.
+    if open?(socket, message.conversation_id),
+      do: stream_new_message(socket, message),
+      else: {:noreply, socket}
   end
 
   # #164: a message's text/caption was edited — update the row in place (same dom id, no
@@ -11341,6 +11341,36 @@ defmodule EdenWeb.ChatLive do
   # — that was the #104 bug where a reply's ready thumbnail leaked into the room).
   # Shared by reaction + thumbnail re-renders.
   #
+  # Stream a genuinely-new message into the open conversation (gated by `open?/2` in the
+  # {:new_message} handler, #260). Marks read only in a foreground tab (#206) and keeps a
+  # room's compact run continuous.
+  defp stream_new_message(socket, message) do
+    if message.sender_id != socket.assigns.current_scope.user.id and socket.assigns.tab_visible do
+      Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
+    end
+
+    # Room flat layout: continue (or break) the compact run live.
+    {message, socket} =
+      case {socket.assigns.selected, socket.assigns.last_flat} do
+        {%{channel_id: cid}, last} when not is_nil(cid) ->
+          marked = %{message | compact: compact?(message, last)}
+          {marked, assign(socket, last_flat: {message.sender_id, message.inserted_at})}
+
+        _ ->
+          {message, socket}
+      end
+
+    {:noreply,
+     socket
+     # The sender just sent — they're no longer typing, so clear them now rather
+     # than waiting out the TTL (#11).
+     |> drop_typing(:typing_users, message.sender_id)
+     |> assign(compacts: Map.put(socket.assigns.compacts, message.id, message.compact))
+     |> stream_insert(:messages, message)
+     # #136: keep an open profile gallery live — surface the message's matching-kind media.
+     |> maybe_prepend_gallery(message)}
+  end
+
   # A tombstone reaching here (a re-render racing a delete-for-both) must not be
   # re-inserted — {:message_deleted} already removed the row.
   defp restream_message_in_place(socket, %{deleted_at: deleted} = _message, _root)
@@ -11348,7 +11378,18 @@ defmodule EdenWeb.ChatLive do
        do: socket
 
   defp restream_message_in_place(socket, %{root_id: nil} = message, root) do
-    socket = stream_insert(socket, :messages, restore_compact(socket, message))
+    # Only stream_insert a main-stream message that's actually in the loaded window (#260):
+    # a reaction / thumbnail on a message scrolled out of view would otherwise insert a NEW
+    # dom id at the bottom, duplicating it out of order. It renders right when scrolled back
+    # in. ({:message_edited} already gates this way.)
+    socket =
+      if Map.has_key?(socket.assigns.compacts, message.id) do
+        stream_insert(socket, :messages, restore_compact(socket, message))
+      else
+        socket
+      end
+
+    # The open thread panel's root card updates regardless of the main-stream window.
     if root && root.id == message.id, do: assign(socket, thread_root: message), else: socket
   end
 
