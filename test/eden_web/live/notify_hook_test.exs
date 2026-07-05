@@ -5,6 +5,7 @@ defmodule EdenWeb.NotifyHookTest do
   import Phoenix.LiveViewTest
 
   alias Eden.Accounts.Scope
+  alias Eden.Channels
   alias Eden.Chat
 
   defp scope(user), do: Scope.for_user(user)
@@ -41,6 +42,22 @@ defmodule EdenWeb.NotifyHookTest do
 
     assert_push_event(view, "notify", %{conversation_id: conv_id})
     assert conv_id == dm.id
+  end
+
+  test "a room message delivers on /settings — channel-mute is server-side (#271, closes #272 deferral)",
+       %{conn: conn, alice: alice, bob: bob} do
+    {:ok, channel} = Channels.create_channel(scope(bob), %{"name" => "Team"})
+    {:ok, room} = Channels.create_room(scope(bob), channel.id, %{"name" => "talk"})
+    {:ok, _} = Channels.ensure_member(scope(alice), channel.id)
+    :ok = Chat.join_room(room.id, alice.id)
+
+    # Only /settings open (no rail data). Before #271 the web layer suppressed room
+    # notifs here; now an unmuted channel's recipients are chosen server-side, so it lands.
+    {:ok, view, _} = live(conn, ~p"/settings")
+    {:ok, _} = Chat.create_message(scope(bob), room.id, %{"body" => "room ping"})
+
+    assert_push_event(view, "notify", %{conversation_id: conv_id, kind: "room"})
+    assert conv_id == room.id
   end
 
   test "sidebar-sync chatter on the chat topic never reaches a non-chat page (#272 review)", %{

@@ -11,6 +11,7 @@ defmodule Eden.Chat do
   require Logger
 
   alias Eden.Accounts.{Scope, User}
+  alias Eden.Channels
 
   alias Eden.Chat.{
     Attachment,
@@ -3534,26 +3535,37 @@ defmodule Eden.Chat do
   end
 
   # #213: fan a notification out to everyone who should hear about `message`. The
-  # recipient set is gated on Chat-only data — members (or, for a thread reply,
-  # thread FOLLOWERS) minus the sender, minus anyone with the conversation directly
-  # muted (membership or folder), minus anyone in Do-Not-Disturb. The remaining two
-  # gates — "is this the chat I'm currently looking at" and channel-level mute — are
-  # per-session / Channels data, so the web layer applies them. Mute and DND silence
-  # everything, including followed threads (decided in #213).
+  # recipient set is gated server-side — members (or, for a thread reply, thread
+  # FOLLOWERS) minus the sender, minus anyone with the conversation directly muted
+  # (membership or folder), minus Do-Not-Disturb, and (for a room, #271) minus anyone
+  # who muted the CHANNEL. Only the per-session "is this the chat I'm looking at right
+  # now" focus gate is left to the web layer. Mute and DND silence everything, including
+  # followed threads (decided in #213). `conv` is loaded once and shared by the
+  # recipient query and the payload.
   defp notify_new(message) do
-    case notify_recipient_ids(message) do
+    conv = Repo.get(Conversation, message.conversation_id)
+
+    case notify_recipient_ids(message, conv) do
       [] -> :ok
-      recipients -> Notifications.deliver(recipients, notify_payload(message))
+      recipients -> Notifications.deliver(recipients, notify_payload(message, conv))
     end
   end
 
   # Who should hear about `message`: thread FOLLOWERS for a reply (#57), else the
-  # conversation's active MEMBERS. Both base sets then run through `common_gates/2`, so
-  # the shared rule (not the sender / not left / not directly muted / not DND) lives in
-  # one place — a new gate is one edit, not two. Filtered entirely in SQL.
-  defp notify_recipient_ids(%{root_id: root_id} = message) when not is_nil(root_id) do
-    # Threads are rooms-only, so no folder mute — just the room membership's direct
-    # mute + DND (via common_gates). The Membership join also drops anyone who left.
+  # conversation's active MEMBERS. The base set runs through `common_gates/2` (shared
+  # per-user rules) and `exclude_channel_muted/2` (#271 — for a room, drop anyone who
+  # muted the channel). Filtered entirely in SQL.
+  defp notify_recipient_ids(message, conv) do
+    message
+    |> recipient_base_query()
+    |> common_gates(message)
+    |> exclude_channel_muted(channel_muted_ids(conv))
+    |> Repo.all()
+  end
+
+  # Threads are rooms-only, so no folder mute — just the room membership's direct mute +
+  # DND (via common_gates). The Membership join also drops anyone who left.
+  defp recipient_base_query(%{root_id: root_id} = message) when not is_nil(root_id) do
     from(tm in ThreadMembership,
       join: u in User,
       as: :user,
@@ -3564,11 +3576,9 @@ defmodule Eden.Chat do
       where: tm.root_id == ^message.root_id and tm.following == true,
       select: tm.user_id
     )
-    |> common_gates(message)
-    |> Repo.all()
   end
 
-  defp notify_recipient_ids(message) do
+  defp recipient_base_query(message) do
     from(m in Membership,
       as: :membership,
       join: u in User,
@@ -3579,8 +3589,6 @@ defmodule Eden.Chat do
           m.user_id not in subquery(muted_folder_users(message)),
       select: m.user_id
     )
-    |> common_gates(message)
-    |> Repo.all()
   end
 
   # The gates every recipient path shares — not the sender, hasn't left, hasn't directly
@@ -3595,6 +3603,20 @@ defmodule Eden.Chat do
     )
   end
 
+  # #271: for a room message, drop anyone who muted the CHANNEL — that's Channels data,
+  # so we ask `Eden.Channels.muted_user_ids/1` rather than reach into channel_memberships.
+  # Applied server-side (not in the web layer) so every future delivery adapter (push,
+  # desktop) inherits the mute for free. A no-op list for DMs/groups (no channel).
+  defp channel_muted_ids(%Conversation{channel_id: cid}) when not is_nil(cid),
+    do: Channels.muted_user_ids(cid)
+
+  defp channel_muted_ids(_), do: []
+
+  defp exclude_channel_muted(query, []), do: query
+
+  defp exclude_channel_muted(query, muted_ids),
+    do: from([membership: m] in query, where: m.user_id not in ^muted_ids)
+
   # Users who muted `message`'s conversation via ANY of their muted folders (direct
   # chats only — rooms/threads have no folders).
   defp muted_folder_users(message) do
@@ -3606,15 +3628,14 @@ defmodule Eden.Chat do
   end
 
   # Locale-neutral payload: the web layer (recipient's session) formats the title,
-  # localizes any media label, and applies the channel-mute + focus suppression.
+  # localizes any media label, and applies the per-session focus suppression.
   # The `%User{}` match makes the `:sender` preload a hard contract — a caller that
   # forgets it fails loudly here (a NotLoaded assoc is truthy, so a `sender && …`
   # would otherwise crash deep in field access). Both callers preload it (`deliver`,
-  # `deliver_reply`). `conv` can be nil if the conversation was GC'd between insert
-  # and here; the catch-all `notify_*` clauses degrade it to a title-less DM.
-  defp notify_payload(%{sender: %User{} = sender} = message) do
-    conv = Repo.get(Conversation, message.conversation_id)
-
+  # `deliver_reply`). `conv` (loaded once in `notify_new`) can be nil if the conversation
+  # was GC'd between insert and here; the catch-all `notify_*` clauses degrade it to a
+  # title-less DM.
+  defp notify_payload(%{sender: %User{} = sender} = message, conv) do
     %{
       conversation_id: message.conversation_id,
       message_id: message.id,

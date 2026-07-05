@@ -132,6 +132,21 @@ defmodule Eden.Channels do
   end
 
   @doc """
+  User ids who have muted `channel_id` (badge-only channel mute). Public so the
+  notification fan-out in `Eden.Chat` can drop them from a room message's recipients
+  **server-side** (#271) — channel mute is Channels data, so Chat asks through this
+  function rather than reaching into `channel_memberships`. Trusted caller (no `Scope`):
+  the fan-out has already scoped who's eligible; this only subtracts muters.
+  """
+  def muted_user_ids(channel_id) do
+    Repo.all(
+      from m in Membership,
+        where: m.channel_id == ^channel_id and not is_nil(m.muted_at),
+        select: m.user_id
+    )
+  end
+
+  @doc """
   Records the scoped user's last-opened `room_id` for `channel_id` (#81) so
   re-entering the channel reopens it (see `list_channels/1`'s `entry_room_id`).
   `update_all` — a no-op (not a `StaleEntryError`) if the membership vanished
