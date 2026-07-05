@@ -4,7 +4,7 @@ const { test, expect, shot, send } = require("../helpers/fixtures")
 
 test.describe("structure", () => {
   test("create a folder, see it as a sidebar tab, then delete it", async ({ alice }, testInfo) => {
-    await alice.goto(`/settings`)
+    await alice.goto(`/settings/folders`)
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     const name = `Audit ${Date.now()}`
     const form = alice.locator('form[phx-submit="create_folder"]')
@@ -26,7 +26,7 @@ test.describe("structure", () => {
     await shot(alice, testInfo, "folder-tab")
 
     // Clean up — delete it (data-confirm; the fixture auto-accepts).
-    await alice.goto(`/settings`)
+    await alice.goto(`/settings/folders`)
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     const row2 = alice.locator("#folder-list li").filter({ has: alice.locator(`input[value="${name}"]`) })
     await expect(row2).toBeVisible({ timeout: 12_000 })
@@ -59,7 +59,7 @@ test.describe("structure", () => {
     await shot(bob, testInfo, "presence-online")
 
     // alice sets a non-active status; bob's view of her updates without a reload.
-    await alice.goto(`/settings`)
+    await alice.goto(`/settings/account`)
     await alice.locator(".ed-seg__btn", { hasText: "Away" }).click()
     await expect(peerHeader).not.toContainText(/online/i, { timeout: 12_000 })
     await shot(bob, testInfo, "presence-changed")

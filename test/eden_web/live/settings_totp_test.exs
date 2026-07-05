@@ -23,7 +23,7 @@ defmodule EdenWeb.SettingsTotpTest do
     end
 
     test "enroll: set up, confirm a code, and see one-time backup codes", %{conn: conn} do
-      {:ok, lv, _html} = live(conn, ~p"/settings")
+      {:ok, lv, _html} = live(conn, ~p"/settings/account")
 
       html = lv |> element("button", "Set up two-factor") |> render_click()
       assert html =~ "authenticator app"
@@ -43,7 +43,7 @@ defmodule EdenWeb.SettingsTotpTest do
     end
 
     test "a wrong confirmation code shows an error and doesn't enroll", %{conn: conn} do
-      {:ok, lv, _} = live(conn, ~p"/settings")
+      {:ok, lv, _} = live(conn, ~p"/settings/account")
       lv |> element("button", "Set up two-factor") |> render_click()
 
       html =
@@ -58,7 +58,7 @@ defmodule EdenWeb.SettingsTotpTest do
       {user, secret} = enroll(user_fixture(%{username: "offme", password: "password123"}))
       conn = log_in_user(conn, user)
 
-      {:ok, lv, html} = live(conn, ~p"/settings")
+      {:ok, lv, html} = live(conn, ~p"/settings/account")
       assert html =~ "On"
 
       html =
@@ -77,7 +77,7 @@ defmodule EdenWeb.SettingsTotpTest do
     admin = promote(user_fixture(%{username: "mfaadmin", password: "password123"}), "admin")
     {admin, _secret} = enroll(admin)
 
-    {:ok, _lv, html} = live(log_in_user(conn, admin), ~p"/settings")
+    {:ok, _lv, html} = live(log_in_user(conn, admin), ~p"/settings/account")
 
     assert html =~ "Required for your admin role"
     refute html =~ "phx-submit=\"totp_disable\""

@@ -48,7 +48,7 @@ test.describe("double-click to react (#106)", () => {
   })
 
   test("Settings picks which emoji the double-click reacts with", async ({ alice }, testInfo) => {
-    await alice.goto("/settings")
+    await alice.goto("/settings/reactions")
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     const group = alice.locator('[role="radiogroup"]').first()
     await expect(group).toBeVisible()

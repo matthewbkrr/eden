@@ -3,7 +3,7 @@ const { test, expect, shot } = require("../helpers/fixtures")
 
 test.describe("settings-ext", () => {
   test("toggling a quick-react updates the set", async ({ alice }, testInfo) => {
-    await alice.goto("/settings")
+    await alice.goto("/settings/reactions")
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     const grid = alice.locator(".ed-qr-grid")
     await expect(grid).toBeVisible()
@@ -26,7 +26,7 @@ test.describe("settings-ext", () => {
   })
 
   test("theme switch applies", async ({ alice }, testInfo) => {
-    await alice.goto("/settings")
+    await alice.goto("/settings/appearance")
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     await alice.locator(".ed-seg__btn", { hasText: "Dark" }).click()
     await expect(alice.locator("html")).toHaveAttribute("data-theme", /dark/i, { timeout: 6_000 })

@@ -3646,6 +3646,40 @@ html {
     color: var(--ed-ink);
     box-shadow: var(--ed-shadow);
   }
+
+  /* Settings — two-pane shell (#282): left section menu + right content pane.
+     Telegram-style; on mobile the menu and content swap via the drill-in in
+     SettingsLive (bare /settings = menu, /settings/:section = one pane). */
+  .ed-settings-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+  .ed-settings-nav__item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.625rem 0.75rem;
+    border-radius: var(--ed-radius);
+    color: var(--ed-ink);
+    font: 550 0.9375rem/1.2 var(--ed-font);
+    text-decoration: none;
+    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+  }
+  .ed-settings-nav__item:hover { background: var(--ed-surface-2); }
+  .ed-settings-nav__item:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
+  .ed-settings-nav__item.is-active {
+    background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
+  }
+  .ed-settings-nav__icon { flex: 0 0 auto; color: var(--ed-muted); }
+  .ed-settings-nav__item.is-active .ed-settings-nav__icon { color: var(--ed-primary); }
+  .ed-settings-nav__item.is-active span { font-weight: 600; }
+  .ed-settings-nav__chevron { margin-left: auto; color: var(--ed-muted); }
+  @media (pointer: coarse) {
+    .ed-settings-nav__item { min-height: 2.75rem; }
+  }
+
+  .ed-settings-pane { display: flex; flex-direction: column; gap: 1.5rem; }
 }
 
 /* Admin people list (#174): selectable rows. Lift on hover / selection (surface-2,

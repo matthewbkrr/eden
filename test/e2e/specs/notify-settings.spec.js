@@ -10,7 +10,7 @@ test("notification toggles flip, persist, and the desktop one honors permission 
   // Grant Notifications so the desktop toggle's requestPermission() resolves "granted".
   await alice.context().grantPermissions(["notifications"], { origin: seed.base_url })
 
-  await alice.goto("/settings")
+  await alice.goto("/settings/notifications")
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
 
   const sound = alice.locator('button[phx-click="set_notify_sound"]')

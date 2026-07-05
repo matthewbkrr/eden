@@ -43,7 +43,7 @@ function stubs() {
 // Turn alice's sound AND desktop notifications on, then land her on /app (not the bob DM, so the
 // server still pushes the notify). Shared dev prefs, so set them explicitly each run.
 async function enableBoth(alice) {
-  await alice.goto("/settings")
+  await alice.goto("/settings/notifications")
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
   const sound = alice.locator('button[phx-click="set_notify_sound"]')
   if ((await sound.getAttribute("aria-checked")) === "false") await sound.click()
@@ -86,7 +86,7 @@ test("AWAY: a desktop notification fires and the chime is suppressed (#217)", as
   expect(await alice.evaluate(() => window.__osc)).toBe(0)
 
   // Restore: turn desktop back off so other specs see the default.
-  await alice.goto("/settings")
+  await alice.goto("/settings/notifications")
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
   await alice.locator("#notify-desktop-switch").click()
 })
@@ -115,7 +115,7 @@ test("ON THE SITE: the chime plays and NO desktop banner is shown (#217)", async
   expect(await alice.evaluate(() => window.__notifs.length)).toBe(0)
 
   // Restore: turn desktop back off so other specs see the default.
-  await alice.goto("/settings")
+  await alice.goto("/settings/notifications")
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
   await alice.locator("#notify-desktop-switch").click()
 })
