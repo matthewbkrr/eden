@@ -229,7 +229,7 @@ msgstr ""
 
 #: lib/eden_web/components/shell_components.ex:234
 #: lib/eden_web/components/shell_components.ex:253
-#: lib/eden_web/live/admin_live.ex:223
+#: lib/eden_web/live/admin_live.ex:224
 #: lib/eden_web/live/chat_live.ex:3093
 #: lib/eden_web/live/chat_live.ex:3536
 #: lib/eden_web/live/chat_live.ex:3860
@@ -349,13 +349,13 @@ msgstr ""
 msgid "Message is too long (up to 4000 characters)."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1335
+#: lib/eden_web/live/settings_live.ex:1340
 #, elixir-autogen, elixir-format
 msgid "Images only"
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:12865
-#: lib/eden_web/live/settings_live.ex:1337
+#: lib/eden_web/live/settings_live.ex:1342
 #, elixir-autogen, elixir-format
 msgid "Invalid file"
 msgstr ""
@@ -372,7 +372,7 @@ msgstr ""
 #: lib/eden_web/live/chat_live.ex:10013
 #: lib/eden_web/live/chat_live.ex:10795
 #: lib/eden_web/live/chat_live.ex:10840
-#: lib/eden_web/notify_hook.ex:117
+#: lib/eden_web/notify_hook.ex:105
 #, elixir-autogen, elixir-format
 msgid "Photo"
 msgstr ""
@@ -400,12 +400,12 @@ msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:994
 #: lib/eden_web/live/chat_live.ex:11737
-#: lib/eden_web/live/settings_live.ex:1325
+#: lib/eden_web/live/settings_live.ex:1330
 #, elixir-autogen, elixir-format
 msgid "Couldn't process that image."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1336
+#: lib/eden_web/live/settings_live.ex:1341
 #, elixir-autogen, elixir-format
 msgid "One photo"
 msgstr ""
@@ -418,12 +418,12 @@ msgstr ""
 msgid "Profile"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1322
+#: lib/eden_web/live/settings_live.ex:1327
 #, elixir-autogen, elixir-format
 msgid "Profile saved."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:243
+#: lib/eden_web/live/admin_live.ex:244
 #: lib/eden_web/live/chat_live.ex:3916
 #: lib/eden_web/live/chat_live.ex:3925
 #: lib/eden_web/live/chat_live.ex:8034
@@ -439,7 +439,7 @@ msgstr ""
 msgid "This is how other people see you."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1334
+#: lib/eden_web/live/settings_live.ex:1339
 #, elixir-autogen, elixir-format
 msgid "Up to 5 MB"
 msgstr ""
@@ -498,7 +498,7 @@ msgstr ""
 #: lib/eden_web/live/chat_live.ex:8708
 #: lib/eden_web/live/chat_live.ex:8712
 #: lib/eden_web/live/chat_live.ex:10099
-#: lib/eden_web/notify_hook.ex:120
+#: lib/eden_web/notify_hook.ex:108
 #, elixir-autogen, elixir-format
 msgid "File"
 msgstr ""
@@ -518,7 +518,7 @@ msgstr ""
 #: lib/eden_web/live/chat_live.ex:9738
 #: lib/eden_web/live/chat_live.ex:10822
 #: lib/eden_web/live/chat_live.ex:10841
-#: lib/eden_web/notify_hook.ex:118
+#: lib/eden_web/notify_hook.ex:106
 #, elixir-autogen, elixir-format
 msgid "Video"
 msgstr ""
@@ -666,7 +666,7 @@ msgid "Delete this folder? Your chats stay; only the grouping is removed."
 msgstr ""
 
 #: lib/eden_web/live/settings_live.ex:834
-#: lib/eden_web/live/settings_live.ex:1302
+#: lib/eden_web/live/settings_live.ex:1307
 #, elixir-autogen, elixir-format
 msgid "Folder name"
 msgstr ""
@@ -702,8 +702,8 @@ msgstr ""
 msgid "Group your chats. Drag to reorder — \"All Chats\" can be moved but not deleted."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1301
 #: lib/eden_web/live/settings_live.ex:1306
+#: lib/eden_web/live/settings_live.ex:1311
 #, elixir-autogen, elixir-format
 msgid "Couldn't save that folder."
 msgstr ""
@@ -718,12 +718,12 @@ msgstr ""
 msgid "Right-click a chat to move it here."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1297
+#: lib/eden_web/live/settings_live.ex:1302
 #, elixir-autogen, elixir-format
 msgid "You can have up to %{count} folders."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1183
+#: lib/eden_web/live/settings_live.ex:1188
 #, elixir-autogen, elixir-format
 msgid "Folder renamed."
 msgstr ""
@@ -1487,7 +1487,7 @@ msgstr[1] ""
 
 #: lib/eden_web/live/chat_live.ex:8707
 #: lib/eden_web/live/chat_live.ex:10843
-#: lib/eden_web/notify_hook.ex:119
+#: lib/eden_web/notify_hook.ex:107
 #, elixir-autogen, elixir-format
 msgid "Audio"
 msgstr ""
@@ -1916,7 +1916,7 @@ msgstr ""
 msgid "Alerts for new messages while a browser tab is open. Muted chats and Do Not Disturb stay silent."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1270
+#: lib/eden_web/live/settings_live.ex:1275
 #, elixir-autogen, elixir-format
 msgid "Allow notifications in your browser to turn this on."
 msgstr ""
@@ -1937,11 +1937,6 @@ msgstr ""
 msgid "Play a chime when a message arrives in a chat you're not looking at."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:758
-#, elixir-autogen, elixir-format
-msgid "Show a system notification (Windows / macOS). Your browser will ask permission."
-msgstr ""
-
 #: lib/eden_web/live/settings_live.ex:735
 #, elixir-autogen, elixir-format
 msgid "Sound"
@@ -1952,7 +1947,7 @@ msgstr ""
 msgid "Sound notifications"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1263
+#: lib/eden_web/live/settings_live.ex:1268
 #, elixir-autogen, elixir-format
 msgid "Your browser doesn't support desktop notifications."
 msgstr ""
@@ -1962,7 +1957,7 @@ msgstr ""
 msgid "Messages, %{count} unread"
 msgstr ""
 
-#: lib/eden_web/notify_hook.ex:103
+#: lib/eden_web/notify_hook.ex:91
 #, elixir-autogen, elixir-format
 msgid "New message"
 msgstr ""
@@ -2163,25 +2158,25 @@ msgstr ""
 msgid "Available"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:240
+#: lib/eden_web/live/admin_live.ex:241
 #: lib/eden_web/live/chat_live.ex:10367
 #, elixir-autogen, elixir-format
 msgid "Corporate email"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:239
+#: lib/eden_web/live/admin_live.ex:240
 #: lib/eden_web/live/chat_live.ex:10365
 #, elixir-autogen, elixir-format
 msgid "Position"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:241
+#: lib/eden_web/live/admin_live.ex:242
 #: lib/eden_web/live/chat_live.ex:10366
 #, elixir-autogen, elixir-format
 msgid "Structure"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1039
+#: lib/eden_web/live/settings_live.ex:1044
 #, elixir-autogen, elixir-format
 msgid "Username updated."
 msgstr ""
@@ -2200,7 +2195,7 @@ msgstr[1] ""
 
 #: lib/eden_web/live/admin_live.ex:26
 #: lib/eden_web/live/admin_live.ex:159
-#: lib/eden_web/live/admin_live.ex:422
+#: lib/eden_web/live/admin_live.ex:423
 #, elixir-autogen, elixir-format
 msgid "Admin"
 msgstr ""
@@ -2220,12 +2215,12 @@ msgstr ""
 msgid "Couldn't change the role."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:237
+#: lib/eden_web/live/admin_live.ex:238
 #, elixir-autogen, elixir-format
 msgid "Managed fields — the person can't edit these themselves."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:421
+#: lib/eden_web/live/admin_live.ex:422
 #, elixir-autogen, elixir-format
 msgid "Member"
 msgstr ""
@@ -2235,8 +2230,8 @@ msgstr ""
 msgid "People"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:253
 #: lib/eden_web/live/admin_live.ex:254
+#: lib/eden_web/live/admin_live.ex:255
 #, elixir-autogen, elixir-format
 msgid "Platform role"
 msgstr ""
@@ -2251,12 +2246,12 @@ msgstr ""
 msgid "Saved."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:371
+#: lib/eden_web/live/admin_live.ex:372
 #, elixir-autogen, elixir-format
 msgid "Select a person to manage their profile and role."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:423
+#: lib/eden_web/live/admin_live.ex:424
 #, elixir-autogen, elixir-format
 msgid "Super-admin"
 msgstr ""
@@ -2282,7 +2277,7 @@ msgstr ""
 msgid "Choose a new password (at least 8 characters)."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:339
+#: lib/eden_web/live/admin_live.ex:340
 #, elixir-autogen, elixir-format
 msgid "Copy it now — it won't be shown again."
 msgstr ""
@@ -2292,17 +2287,17 @@ msgstr ""
 msgid "Current password"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1070
+#: lib/eden_web/live/settings_live.ex:1075
 #, elixir-autogen, elixir-format
 msgid "Current password is incorrect."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:319
+#: lib/eden_web/live/admin_live.ex:320
 #, elixir-autogen, elixir-format
 msgid "Generate a one-time link (valid 24h) and hand it to the person to set a new password."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:325
+#: lib/eden_web/live/admin_live.ex:326
 #, elixir-autogen, elixir-format
 msgid "Generate reset link"
 msgstr ""
@@ -2318,12 +2313,12 @@ msgstr ""
 msgid "New password"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1074
+#: lib/eden_web/live/settings_live.ex:1079
 #, elixir-autogen, elixir-format
 msgid "New password must be at least 8 characters."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1064
+#: lib/eden_web/live/settings_live.ex:1069
 #, elixir-autogen, elixir-format
 msgid "Password changed. Please sign in again."
 msgstr ""
@@ -2333,12 +2328,12 @@ msgstr ""
 msgid "Password set. Please sign in."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:317
+#: lib/eden_web/live/admin_live.ex:318
 #, elixir-autogen, elixir-format
 msgid "Reset access"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:336
+#: lib/eden_web/live/admin_live.ex:337
 #, elixir-autogen, elixir-format
 msgid "Reset link"
 msgstr ""
@@ -2364,7 +2359,7 @@ msgstr ""
 msgid "Sign out of all devices"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1083
+#: lib/eden_web/live/settings_live.ex:1088
 #, elixir-autogen, elixir-format
 msgid "Signed out of all devices. Please sign in again."
 msgstr ""
@@ -2390,7 +2385,7 @@ msgstr ""
 msgid "6-digit code"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1138
+#: lib/eden_web/live/settings_live.ex:1143
 #, elixir-autogen, elixir-format
 msgid "Admins must keep two-factor on."
 msgstr ""
@@ -2451,8 +2446,8 @@ msgid "Set up two-factor"
 msgstr ""
 
 #: lib/eden_web/controllers/user_session_controller.ex:56
-#: lib/eden_web/live/settings_live.ex:1125
-#: lib/eden_web/live/settings_live.ex:1141
+#: lib/eden_web/live/settings_live.ex:1130
+#: lib/eden_web/live/settings_live.ex:1146
 #, elixir-autogen, elixir-format
 msgid "That code didn't match. Try again."
 msgstr ""
@@ -2474,12 +2469,12 @@ msgstr ""
 msgid "Two-factor authentication"
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1135
+#: lib/eden_web/live/settings_live.ex:1140
 #, elixir-autogen, elixir-format
 msgid "Two-factor authentication is off."
 msgstr ""
 
-#: lib/eden_web/live/settings_live.ex:1122
+#: lib/eden_web/live/settings_live.ex:1127
 #, elixir-autogen, elixir-format
 msgid "Two-factor authentication is on."
 msgstr ""
@@ -2489,17 +2484,17 @@ msgstr ""
 msgid "Verify"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:359
+#: lib/eden_web/live/admin_live.ex:360
 #, elixir-autogen, elixir-format
 msgid "Reset two-factor"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:351
+#: lib/eden_web/live/admin_live.ex:352
 #, elixir-autogen, elixir-format
 msgid "This person has two-factor on. Reset it only if they've lost access."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:356
+#: lib/eden_web/live/admin_live.ex:357
 #, elixir-autogen, elixir-format
 msgid "Turn off this person's two-factor authentication?"
 msgstr ""
@@ -2519,17 +2514,17 @@ msgstr ""
 msgid "Account reactivated."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:279
+#: lib/eden_web/live/admin_live.ex:280
 #, elixir-autogen, elixir-format
 msgid "Account status"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:296
+#: lib/eden_web/live/admin_live.ex:297
 #, elixir-autogen, elixir-format
 msgid "Deactivate account"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:291
+#: lib/eden_web/live/admin_live.ex:292
 #, elixir-autogen, elixir-format
 msgid "Deactivate this account? Their sessions end now and they can't sign in."
 msgstr ""
@@ -2539,17 +2534,17 @@ msgstr ""
 msgid "Deactivated"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:283
+#: lib/eden_web/live/admin_live.ex:284
 #, elixir-autogen, elixir-format
 msgid "Deactivating ends every session at once and blocks sign-in until you reactivate."
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:304
+#: lib/eden_web/live/admin_live.ex:305
 #, elixir-autogen, elixir-format
 msgid "Reactivate account"
 msgstr ""
 
-#: lib/eden_web/live/admin_live.ex:301
+#: lib/eden_web/live/admin_live.ex:302
 #, elixir-autogen, elixir-format
 msgid "This account is deactivated — the person can't sign in."
 msgstr ""
@@ -2562,4 +2557,9 @@ msgstr ""
 #: lib/eden_web/live/admin_live.ex:115
 #, elixir-autogen, elixir-format
 msgid "You can't reactivate that person."
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:758
+#, elixir-autogen, elixir-format
+msgid "Show a system notification. Your browser will ask permission."
 msgstr ""

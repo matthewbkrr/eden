@@ -1796,6 +1796,20 @@ defmodule Eden.ChatTest do
       assert_receive {:notify, %{conversation_id: ^rid}}
       refute_received {:notify, %{conversation_id: ^rid}}
     end
+
+    test "truncates a long body in the notification payload (#273)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      sub(bob)
+
+      {:ok, _} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => String.duplicate("a", 300)})
+
+      assert_receive {:notify, %{preview: preview}}
+      assert String.length(preview) == 140
+    end
   end
 
   describe "messenger_unread_total (#216 rail badge)" do
