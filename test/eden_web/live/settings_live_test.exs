@@ -200,6 +200,20 @@ defmodule EdenWeb.SettingsLiveTest do
     end
   end
 
+  describe "account section (#284)" do
+    test "the account pane groups identity then a Security subsection", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, view, html} = live(conn, ~p"/settings/account")
+
+      # Identity controls (username + status) and the Security group label are present.
+      assert has_element?(view, "#username-form")
+      assert has_element?(view, "#password-form")
+      assert html =~ "Security"
+      # Status sits with identity, ahead of the Password card.
+      assert :binary.match(html, "Your status") < :binary.match(html, "Current password")
+    end
+  end
+
   describe "chat folders section" do
     alias Eden.Accounts.Scope
     alias Eden.Chat

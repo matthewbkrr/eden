@@ -418,6 +418,40 @@ defmodule EdenWeb.SettingsLive do
                   class="rounded-[var(--ed-radius-lg)] border p-5"
                   style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Sets the presence dot others see. Invisible appears offline to everyone."
+                    )}
+                  </p>
+                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <span style="font-size:0.875rem; white-space: nowrap;">
+                      {gettext("Your status")}
+                    </span>
+                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
+                      <button
+                        :for={{value, _label, short, _color} <- status_options()}
+                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
+                        type="button"
+                        aria-pressed={to_string(@profile_user.presence_status == value)}
+                        phx-click="set_status"
+                        phx-value-status={value}
+                      >
+                        {short}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+
+                <p style="font-size:0.8125rem; font-weight:600; color: var(--ed-muted); padding-left:0.125rem;">
+                  {gettext("Security")}
+                </p>
+
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
+                >
                   <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Password")}</h2>
                   <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
                     {gettext("Changing your password signs you out of every device.")}
@@ -637,36 +671,6 @@ defmodule EdenWeb.SettingsLive do
                     <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
                       {@totp_error}
                     </p>
-                  </div>
-                </section>
-
-                <section
-                  :if={@profile_user}
-                  class="rounded-[var(--ed-radius-lg)] border p-5"
-                  style="border-color: var(--ed-border); background: var(--ed-surface);"
-                >
-                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
-                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-                    {gettext(
-                      "Sets the presence dot others see. Invisible appears offline to everyone."
-                    )}
-                  </p>
-                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                    <span style="font-size:0.875rem; white-space: nowrap;">
-                      {gettext("Your status")}
-                    </span>
-                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
-                      <button
-                        :for={{value, _label, short, _color} <- status_options()}
-                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
-                        type="button"
-                        aria-pressed={to_string(@profile_user.presence_status == value)}
-                        phx-click="set_status"
-                        phx-value-status={value}
-                      >
-                        {short}
-                      </button>
-                    </div>
                   </div>
                 </section>
               </div>
