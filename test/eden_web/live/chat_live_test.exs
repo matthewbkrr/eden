@@ -2423,5 +2423,20 @@ defmodule EdenWeb.ChatLiveTest do
       refute body =~ "`"
       assert body =~ "bold"
     end
+
+    test "strips before fitting, so a long token can't leave a dangling marker (#279 review)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # A bold span longer than the banner cut: stripping BEFORE the 140-char fit removes
+      # both markers, so no dangling "**" survives (the old truncate-then-strip would).
+      bold = "**" <> String.duplicate("x", 200) <> "**"
+      send(view.pid, {:notify, notify_payload(%{conversation_id: 42, preview: bold})})
+
+      assert_push_event(view, "notify", %{body: body})
+      refute body =~ "*"
+      assert String.length(body) <= 140
+    end
   end
 end

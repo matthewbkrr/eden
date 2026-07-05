@@ -1797,7 +1797,7 @@ defmodule Eden.ChatTest do
       refute_received {:notify, %{conversation_id: ^rid}}
     end
 
-    test "truncates a long body in the notification payload (#273)", %{
+    test "bounds a long body in the notification payload (#273)", %{
       alice: alice,
       bob: bob,
       conv: conv
@@ -1805,10 +1805,11 @@ defmodule Eden.ChatTest do
       sub(bob)
 
       {:ok, _} =
-        Chat.create_message(scope(alice), conv.id, %{"body" => String.duplicate("a", 300)})
+        Chat.create_message(scope(alice), conv.id, %{"body" => String.duplicate("a", 600)})
 
+      # A generous size guard (the banner display is fitted client-side after stripping).
       assert_receive {:notify, %{preview: preview}}
-      assert String.length(preview) == 140
+      assert String.length(preview) == 500
     end
   end
 
