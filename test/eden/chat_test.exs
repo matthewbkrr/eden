@@ -22,7 +22,7 @@ defmodule Eden.ChatTest do
   defp scope(user), do: Scope.for_user(user)
 
   # Subscribe the test process to a user's notification topic (#213).
-  defp sub(user), do: Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{user.id}:notify")
+  defp sub(user), do: Phoenix.PubSub.subscribe(Eden.PubSub, Eden.Notifications.Web.topic(user.id))
 
   defp system_metas(conversation_id) do
     Eden.Repo.all(

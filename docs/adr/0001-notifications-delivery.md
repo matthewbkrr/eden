@@ -1,6 +1,7 @@
 # ADR: Notification delivery beyond the browser (#218)
 
-Status: **accepted strategy, not yet built** · Part of the notifications epic (#212).
+Status: **accepted strategy; step 1 built** (#235 — the `Eden.Notifications` seam +
+Web adapter; push transports still pending) · Part of the notifications epic (#212).
 
 This is an Architecture Decision Record. It fixes *how* eden will deliver a
 notification when the open web page can't (the browser is closed) and on mobile —
@@ -134,9 +135,12 @@ Eden.Chat  --(already gated #213)-->  Eden.Notifications  --fan out-->  adapters
 
 ## Rollout (future tickets, not this ADR)
 
-1. `Eden.Notifications` context + `Notifications.Adapter` behaviour + the
-   `notification_targets` table; refactor today's in-tab delivery into the **Web
-   adapter** (no behavior change — validates the seam).
+1. ✅ **Done (#235).** `Eden.Notifications` context + `Notifications.Adapter`
+   behaviour; today's in-tab delivery refactored into the **Web adapter** (no
+   behavior change — validates the seam); the two recipient-selection queries unified
+   behind one `common_gates`; the payload contract documented in one place. The
+   `notification_targets` device table is **not** part of this step — it's push-only
+   (the Web adapter has no device row), so it lands with the first push transport below.
 2. **Desktop app** (Tauri/Electron) + a Desktop adapter (or it simply rides the Web
    adapter's channel and renders natively).
 3. **iOS:** native app / wrapper that registers an APNs token; APNs adapter.
