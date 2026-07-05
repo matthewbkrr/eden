@@ -2600,5 +2600,8 @@ msgstr "Разделы настроек"
 
 #: lib/eden_web/live/settings_live.ex
 #, elixir-autogen, elixir-format
+msgid "System matches your device's light or dark setting."
+msgstr "«Системная» повторяет светлую или тёмную тему устройства."
+
 msgid "Security"
 msgstr "Безопасность"
