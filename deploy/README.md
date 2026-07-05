@@ -76,6 +76,12 @@ GHCR, then on the server: pulls, runs `bin/migrate`, and `docker compose up -d`.
 Caddy starts on `:80`. Only **backward-compatible (expand/contract)** migrations
 are safe via this path — the old container serves until `up -d` recreates it.
 
+> **Rollback caveat (#268).** The flow is forward-only. A few early migrations are
+> **not data-reversible** — notably `room_access_general_only` (its `up/0` deletes
+> membership rows; `down/0` only drops the `is_general` column, it can't restore them).
+> `Release.rollback/2` past such a point would leave data missing. Roll forward with a
+> new migration instead of rolling back below these versions.
+
 Verify:
 ```sh
 curl -s http://95.169.166.216/healthz   # → ok

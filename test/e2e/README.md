@@ -38,6 +38,15 @@ npx playwright test --config test/e2e/playwright.config.js --project=mobile-safa
 `@playwright/test` + browsers resolve from `~/node_modules` (no repo install). The dev server
 must be on `:4001`.
 
+## CI
+
+This harness is **not** a per-PR gate — realtime browser flows are slow and occasionally
+flaky over a live socket, so a red run here doesn't block a merge (green-on-`main` therefore
+does **not** mean "e2e passing"). It's run **on demand**: the `E2E (manual)` workflow
+(`.github/workflows/e2e.yml`, `workflow_dispatch`) sets up Postgres, seeds, boots the dev app,
+and runs a chosen spec on Chromium (default `smoke.spec.js`) — trigger it from the Actions tab.
+`package-lock.json` is committed so the Playwright version is pinned across machines.
+
 ## Conventions that keep specs robust
 
 - **Wait for connect before acting**: `await page.waitForFunction(() => window.liveSocket?.isConnected())`.
