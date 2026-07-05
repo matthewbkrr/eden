@@ -43,7 +43,9 @@ defmodule EdenWeb.UserSessionController do
   """
   def totp(conn, %{"totp" => %{"code" => code}}) do
     with id when is_integer(id) <- pending_user_id(conn),
-         %User{} = user <- Accounts.get_user(id),
+         # `active: true` closes the race where the account is deactivated (#251) between
+         # the password step and this second factor — no session is ever issued.
+         %User{active: true} = user <- Accounts.get_user(id),
          {:ok, user} <- verify_second_factor(user, code) do
       conn
       |> put_flash(:info, gettext("Welcome back, %{name}!", name: user.display_name))

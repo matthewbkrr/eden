@@ -37,6 +37,21 @@ defmodule EdenWeb.UserAuthTest do
       assert redirected_to(conn) == ~p"/login"
       assert Phoenix.Flash.get(conn.assigns.flash, :error)
     end
+
+    test "rejects a deactivated account, not revealing its state (#251)", %{conn: conn} do
+      user = user_fixture(%{username: "gone", password: "password123"})
+      user |> Ecto.Changeset.change(active: false) |> Eden.Repo.update!()
+
+      conn =
+        post(conn, ~p"/users/log_in", %{
+          "user" => %{"username" => "gone", "password" => "password123"}
+        })
+
+      refute get_session(conn, "user_token")
+      assert redirected_to(conn) == ~p"/login"
+      # Same generic error as a wrong password — account state isn't leaked.
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Invalid username or password"
+    end
   end
 
   describe "already-authenticated users are bounced from signed-out POST routes" do

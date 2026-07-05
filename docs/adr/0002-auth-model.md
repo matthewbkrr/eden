@@ -143,6 +143,12 @@ user (`users.active` = false) and all session tokens are deleted. When
 corp-OIDC lands, add a reconcile ("employee left upstream → deactivate") —
 JIT login alone never deactivates anyone (RFC §2.4).
 
+**Manual half — done (#251).** `Accounts.deactivate_user/2` · `reactivate_user/2`
+(admin-scoped, same authority as reset links, no self-action) set `users.active`
+and revoke every session; login is refused at the password check, the session-token
+gate, and the TOTP step, without leaking account state. The **upstream reconcile**
+half stays trigger-gated on a real corp-OIDC IdP (not built).
+
 ## Consequences
 
 - **Positive.** Zero new dependencies and zero new compliance surface today;
