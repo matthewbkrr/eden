@@ -791,6 +791,12 @@ defmodule Eden.ChannelsTest do
       assert :ok = Channels.approve_room_join(scope(alice), msg.id)
       assert Eden.Chat.room_member?(priv.id, bob.id)
       assert Channels.member_role(scope(bob), channel.id) == "member"
+
+      # #261: the channel membership and its general room commit together (one transaction),
+      # so a re-join never leaves a channel membership without general.
+      {:ok, rooms} = Channels.list_rooms(scope(alice), channel.id)
+      general = Enum.find(rooms, & &1.is_general)
+      assert Eden.Chat.room_member?(general.id, bob.id)
     end
 
     test "general can never be flipped to private (#41 invariant)", %{alice: alice} do

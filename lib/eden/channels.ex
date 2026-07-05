@@ -403,25 +403,31 @@ defmodule Eden.Channels do
          {:ok, _channel} <- get_channel(scope, room.channel_id),
          false <- Chat.room_member?(room.id, user.id) do
       case Chat.pending_join_request(room.id, user.id) do
-        nil ->
-          {:ok, _} =
-            Chat.create_system_message(room.id, %{
-              "action" => "join_request",
-              "requester_id" => user.id,
-              "requester_name" => user.display_name,
-              "status" => "pending"
-            })
-
-          {:ok, :requested}
-
-        _existing ->
-          {:ok, :already}
+        nil -> post_join_request(room.id, user)
+        _existing -> {:ok, :already}
       end
     else
       nil -> {:error, :not_found}
       %{} -> {:error, :not_private}
       true -> {:error, :member}
       error -> error
+    end
+  end
+
+  # Post a fresh join-request system message. A system message has no validated user input
+  # (meta is server-built, body is ""), so create_system_message's ONLY error path is the
+  # conversation_id FK — i.e. the room was deleted concurrently (#258). Mapping that error to
+  # `:not_found` is exact, not lossy; there's no validation failure it could mask.
+  defp post_join_request(room_id, user) do
+    Chat.create_system_message(room_id, %{
+      "action" => "join_request",
+      "requester_id" => user.id,
+      "requester_name" => user.display_name,
+      "status" => "pending"
+    })
+    |> case do
+      {:ok, _} -> {:ok, :requested}
+      {:error, _} -> {:error, :not_found}
     end
   end
 
@@ -436,18 +442,9 @@ defmodule Eden.Channels do
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      if meta["status"] == "pending" do
-        # The requester may have left the channel since knocking — re-ensure
-        # channel membership (idempotent) so a room membership never exists
-        # without its channel membership.
-        join_channel_tx(channel.id, req_id)
-        :ok = Chat.join_room(room.id, req_id)
-        {:ok, _} = Chat.resolve_join_request(msg, "accepted")
-        broadcast_user(req_id, :channels_changed)
-        broadcast_channel(channel.id, {:members_changed, channel.id})
-      end
-
-      :ok
+      if meta["status"] == "pending",
+        do: approve_pending(channel, room, req_id, msg),
+        else: :ok
     else
       # {:error, reason} from get_channel/ensure_role passes through; anything
       # else (nil, a non-join_request system message) is :not_found — never a
@@ -455,6 +452,40 @@ defmodule Eden.Channels do
       {:error, _} = error -> error
       _ -> {:error, :not_found}
     end
+  end
+
+  # Materialize an accepted knock: (re-)ensure channel membership (the requester may have
+  # left since knocking, so a room membership never exists without its channel one), join
+  # the room, then flip the request to accepted. All three commit in ONE transaction (#261),
+  # like every other `join_channel_tx` caller — a crash mid-way must not leave a channel
+  # membership without its general room, which a repeat approve (seeing the membership
+  # already there) wouldn't heal. Broadcasts fire only after the commit; a room deleted
+  # between our reads and the resolve (#258) rolls back and returns `{:error, _}`.
+  defp approve_pending(channel, room, req_id, msg) do
+    Repo.transact(fn ->
+      _ = join_channel_tx(channel.id, req_id)
+      :ok = Chat.join_room(room.id, req_id)
+
+      case Chat.resolve_join_request(msg, "accepted") do
+        {:ok, _} -> {:ok, :approved}
+        {:error, _} = error -> error
+      end
+    end)
+    |> case do
+      {:ok, :approved} ->
+        broadcast_user(req_id, :channels_changed)
+        broadcast_channel(channel.id, {:members_changed, channel.id})
+        :ok
+
+      {:error, _} ->
+        {:error, :not_found}
+    end
+  rescue
+    # The room was GC'd between get_room and the join writes (#258 review): join_room's
+    # insert_all hits an FK violation (Postgrex.Error), which the transaction rolls back
+    # (no half-done, #261) and re-raises. Map it to :not_found so approve is non-crashing,
+    # like decline/request.
+    Postgrex.Error -> {:error, :not_found}
   end
 
   @doc """
@@ -469,14 +500,19 @@ defmodule Eden.Channels do
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      if meta["status"] == "pending" do
-        {:ok, _} = Chat.resolve_join_request(msg, "declined")
-      end
-
-      :ok
+      if meta["status"] == "pending", do: decline_pending(msg), else: :ok
     else
       {:error, _} = error -> error
       _ -> {:error, :not_found}
+    end
+  end
+
+  # Flip a pending request to declined; `:not_found` (not a crash) if the room was
+  # deleted concurrently and the message is already gone (#258).
+  defp decline_pending(msg) do
+    case Chat.resolve_join_request(msg, "declined") do
+      {:ok, _} -> :ok
+      {:error, _} = error -> error
     end
   end
 

@@ -974,7 +974,17 @@ defmodule Eden.Chat do
   Trusted caller (e.g. `Eden.Channels` after authorizing).
   """
   def create_system_message(conversation_id, meta) when is_map(meta) do
-    %Message{conversation_id: conversation_id, kind: "system", body: "", meta: meta}
+    # Insert through a changeset carrying the FK constraint so a conversation deleted
+    # concurrently (room GC / channel delete) surfaces as `{:error, changeset}`, not a
+    # raised `Ecto.ConstraintError` from a bare struct insert (#258).
+    %Message{}
+    |> Ecto.Changeset.change(
+      conversation_id: conversation_id,
+      kind: "system",
+      body: "",
+      meta: meta
+    )
+    |> Ecto.Changeset.foreign_key_constraint(:conversation_id)
     |> Repo.insert()
     |> case do
       {:ok, message} ->
@@ -1006,13 +1016,19 @@ defmodule Eden.Chat do
   def resolve_join_request(%Message{} = message, status) do
     meta = Map.put(message.meta, "status", status)
 
-    {:ok, updated} =
-      message
-      |> Ecto.Changeset.change(meta: meta)
-      |> Repo.update()
+    message
+    |> Ecto.Changeset.change(meta: meta)
+    |> Repo.update(stale_error_field: :id)
+    |> case do
+      {:ok, updated} ->
+        broadcast(updated.conversation_id, {:new_message, updated})
+        {:ok, updated}
 
-    broadcast(updated.conversation_id, {:new_message, updated})
-    {:ok, updated}
+      # The room (and this system message) was deleted concurrently — nothing to resolve,
+      # a tagged error instead of a StaleEntryError crash (#258).
+      {:error, _} ->
+        {:error, :not_found}
+    end
   end
 
   @doc "Fetches a system message by id (trusted caller; authorize via its conversation)."
@@ -3072,6 +3088,10 @@ defmodule Eden.Chat do
       {:ok, fresh}
     else
       %Message{} -> {:error, :deleted}
+      # A concurrent HARD delete (room GC / admin cascade) removes the message row, so the
+      # re-read returns nil — surface a tagged error, not a bare nil, which would
+      # CaseClauseError the caller's react handler (#258).
+      nil -> {:error, :not_found}
       other -> other
     end
   end
@@ -3098,7 +3118,10 @@ defmodule Eden.Chat do
   defp do_toggle_reaction(message_id, user_id, emoji) do
     case Repo.get_by(MessageReaction, message_id: message_id, user_id: user_id, emoji: emoji) do
       %MessageReaction{} = existing ->
-        Repo.delete(existing)
+        # delete_all (not Repo.delete on the struct) so two tabs un-reacting the same row
+        # is a 0-row no-op, not an Ecto.StaleEntryError (#258) — mirrors do_toggle_folder.
+        Repo.delete_all(from r in MessageReaction, where: r.id == ^existing.id)
+        {:ok, :removed}
 
       nil ->
         %MessageReaction{message_id: message_id, user_id: user_id}
