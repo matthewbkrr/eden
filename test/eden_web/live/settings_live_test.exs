@@ -115,6 +115,12 @@ defmodule EdenWeb.SettingsLiveTest do
     end
   end
 
+  test "the appearance pane clarifies what System resolves to", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/settings/appearance")
+    assert html =~ "Theme"
+    assert html =~ "System matches your device"
+  end
+
   describe "profile section" do
     test "is hidden for signed-out visitors", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/settings")
