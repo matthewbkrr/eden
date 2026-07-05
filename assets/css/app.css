@@ -131,10 +131,16 @@ html {
   --ed-primary-strong: oklch(0.50 0.17 261);
   --ed-on-primary: oklch(0.99 0.01 261);
   --ed-online: oklch(0.62 0.15 150);
+  /* Online-green as TEXT on a light surface — darkened to clear WCAG AA 4.5:1 (#265);
+     the presence DOT keeps the brighter --ed-online. */
+  --ed-online-strong: oklch(0.5 0.15 150);
   --ed-danger: oklch(0.55 0.20 25);
   /* Danger as TEXT on a light surface — darkened to clear WCAG AA 4.5:1 (the fill red is ~4:1). */
   --ed-danger-strong: oklch(0.48 0.20 25);
   --ed-warning: oklch(0.70 0.14 75);
+  /* Warning-amber as TEXT on a light surface — darkened to clear WCAG AA (#265), like
+     --ed-danger-strong; the fill amber stays --ed-warning. */
+  --ed-warning-strong: oklch(0.5 0.14 75);
   /* Presence statuses (#102): away reuses warning amber, dnd reuses danger red. */
   --ed-away: var(--ed-warning);
   --ed-dnd: var(--ed-danger);
@@ -181,6 +187,7 @@ html {
   --ed-primary-strong: oklch(0.50 0.16 261);
   --ed-on-primary: oklch(0.99 0.01 261);
   --ed-online: oklch(0.72 0.15 150);
+  --ed-online-strong: oklch(0.72 0.15 150);
   /* Darkened so white labels clear WCAG AA at REST *and* on hover (#257): the
      brightness(1.08) hover lightens the fill (text clamps to white), so the base
      must leave headroom. Static 5.18:1, hover 4.89:1. */
@@ -188,6 +195,7 @@ html {
   /* Danger as TEXT on a dark surface — lightened for contrast (the reverse of the light theme). */
   --ed-danger-strong: oklch(0.75 0.17 25);
   --ed-warning: oklch(0.78 0.14 75);
+  --ed-warning-strong: oklch(0.8 0.14 75);
   --ed-away: var(--ed-warning);
   --ed-dnd: var(--ed-danger);
   --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.36);
@@ -210,10 +218,12 @@ html {
     --ed-primary-strong: oklch(0.50 0.16 261);
     --ed-on-primary: oklch(0.99 0.01 261);
     --ed-online: oklch(0.72 0.15 150);
+    --ed-online-strong: oklch(0.72 0.15 150);
     /* WCAG AA on white labels at rest + hover (#257): static 5.18:1, hover 4.89:1. */
     --ed-danger: oklch(0.55 0.19 25);
     --ed-danger-strong: oklch(0.75 0.17 25);
     --ed-warning: oklch(0.78 0.14 75);
+    --ed-warning-strong: oklch(0.8 0.14 75);
     --ed-away: var(--ed-warning);
     --ed-dnd: var(--ed-danger);
     --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.36);
@@ -1092,10 +1102,16 @@ html {
   .ed-menu__item:hover,
   .ed-menu__item:focus-visible {
     background: var(--ed-surface-2);
-    outline: none;
   }
+  /* Keyboard focus needs a real ring, not just the hover background (#265) — the item is
+     Tab-reachable; matches .ed-menu__react:focus-visible. */
+  .ed-menu__item:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: -2px;
+  }
+  /* danger-strong (not --ed-danger): clears AA on the surface-2 hover too (#265). */
   .ed-menu__item--danger {
-    color: var(--ed-danger);
+    color: var(--ed-danger-strong);
   }
   /* Divider between menu groups (e.g. actions vs. the destructive Delete). */
   .ed-menu__sep {
@@ -1402,7 +1418,8 @@ html {
   .ed-reply-bar__name {
     font-size: 0.75rem;
     font-weight: 600;
-    color: var(--ed-primary);
+    /* primary-strong: the 12px/600 author name clears AA on surface-2 (#265). */
+    color: var(--ed-primary-strong);
   }
   .ed-reply-bar__text {
     font-size: 0.8125rem;
@@ -2088,7 +2105,17 @@ html {
   .ed-convo--active:hover { background: color-mix(in oklab, var(--ed-primary) 22%, transparent); }
   .ed-convo__body { min-width: 0; flex: 1; }
   .ed-convo__top { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
-  .ed-convo__name { color: var(--ed-ink); font: 600 0.9375rem/1.2 var(--ed-font); }
+  /* Truncate a long DM/group name so it can't push the timestamp off-row (#265) — the
+     time is flex:none; the name needs min-width:0 to shrink below its content in the flex.
+     Mirrors .ed-convo__preview and room_item's `flex-1 truncate`. */
+  .ed-convo__name {
+    color: var(--ed-ink);
+    font: 600 0.9375rem/1.2 var(--ed-font);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .ed-convo__time { color: var(--ed-muted); font: 500 0.6875rem/1 var(--ed-mono); flex: none; }
   .ed-convo__preview {
     color: var(--ed-muted);

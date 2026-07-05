@@ -2582,6 +2582,11 @@ msgstr ""
 msgid "Settings sections"
 msgstr ""
 
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Security"
+msgstr ""
+
 #: lib/eden_web/components/shell_components.ex
 #, elixir-autogen, elixir-format
 msgid "Profile and status"
