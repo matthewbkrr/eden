@@ -3,10 +3,11 @@ defmodule Eden.Vault do
   Symmetric encryption at rest for small secrets (#250 — the TOTP secret). AES-256-GCM
   via `:crypto`, hand-rolled in the spirit of `Eden.Storage.SigV4` (no dependency).
 
-  The key comes from application config (`config/runtime.exs` derives it from
-  `SECRET_KEY_BASE`, or a dedicated `EDEN_VAULT_KEY`) and **never touches the
-  database**, so a DB leak alone can't decrypt what's stored — which is the whole
-  point of encrypting a recoverable TOTP secret rather than storing it in the clear.
+  The key comes from a **dedicated `EDEN_VAULT_KEY`** env var (`config/runtime.exs`
+  requires it and raises if it's missing — it is deliberately NOT derived from
+  `SECRET_KEY_BASE`; the two must be independent and separately stable, #263). It
+  **never touches the database**, so a DB leak alone can't decrypt what's stored —
+  the whole point of encrypting a recoverable TOTP secret rather than storing it clear.
 
   Ciphertext layout: `<<version, iv::12, tag::16, ciphertext::binary>>`. The leading
   version byte + a versioned AAD leave room for key rotation later without a data

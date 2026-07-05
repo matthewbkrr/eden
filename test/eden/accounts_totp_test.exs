@@ -9,6 +9,11 @@ defmodule Eden.AccountsTotpTest do
   defp promote(user, role), do: user |> Ecto.Changeset.change(role: role) |> Repo.update!()
   defp code(secret), do: NimbleTOTP.verification_code(secret)
 
+  # #263: activation now burns the confirmation code (stamps totp_last_used_at). Clear it so a
+  # follow-up verify/disable in the same 30s test window can use the current code — in real
+  # use those actions land in a later window than enrollment.
+  defp unburn(user), do: user |> Ecto.Changeset.change(totp_last_used_at: nil) |> Repo.update!()
+
   describe "enrollment" do
     test "setup → activate stores an encrypted secret and returns backup codes" do
       user = user_fixture()
@@ -40,7 +45,7 @@ defmodule Eden.AccountsTotpTest do
       user = user_fixture()
       {secret, _} = Accounts.setup_totp(user)
       {:ok, user, codes} = Accounts.activate_totp(user, secret, code(secret))
-      %{user: user, secret: secret, codes: codes}
+      %{user: unburn(user), secret: secret, codes: codes}
     end
 
     test "accepts a valid code and blocks its replay", %{user: user, secret: secret} do
@@ -70,7 +75,7 @@ defmodule Eden.AccountsTotpTest do
       user = user_fixture()
       {secret, _} = Accounts.setup_totp(user)
       {:ok, user, _} = Accounts.activate_totp(user, secret, code(secret))
-      %{user: user, secret: secret}
+      %{user: unburn(user), secret: secret}
     end
 
     test "a member can disable with a valid code", %{user: user, secret: secret} do

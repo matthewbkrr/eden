@@ -413,37 +413,40 @@ defmodule Eden.Accounts do
   super_admin.
   """
   def create_password_reset(%Scope{user: %User{} = actor}, %User{} = target) do
-    cond do
-      not User.admin?(actor) ->
-        {:error, :forbidden}
+    if User.admin?(actor) do
+      Repo.transact(fn -> mint_reset_locked(actor, target.id) end)
+    else
+      {:error, :forbidden}
+    end
+  end
 
-      User.super_admin?(target) and not User.super_admin?(actor) ->
-        {:error, :forbidden}
+  # Re-read the target under `FOR UPDATE` (#263) so the authority guard (plain admin ↛
+  # super_admin) + the #251 active check run against the FRESH row, not the in-memory struct
+  # from AdminLive's list. Closes a TOCTOU where a target promoted to super_admin in the
+  # sub-second before `{:user_updated}` lands could be reset by a plain admin on a stale role.
+  # Mirrors `set_role_guarded/2`. The token delete + insert commit in the same transaction.
+  defp mint_reset_locked(actor, target_id) do
+    with %User{} = target <-
+           Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE")),
+         true <- can_reset_password?(actor, target),
+         true <- User.active?(target) do
+      raw = Eden.Tokens.generate()
 
-      # No reset link for a deactivated account (#251) — reactivate first. Login is
-      # blocked anyway, so the link would be a dead end.
-      not User.active?(target) ->
-        {:error, :forbidden}
+      expires_at =
+        DateTime.utc_now() |> DateTime.add(@reset_ttl_hours, :hour) |> DateTime.truncate(:second)
 
-      true ->
-        raw = Eden.Tokens.generate()
+      # One live link per person: minting supersedes any outstanding link.
+      delete_reset_tokens(target.id)
 
-        expires_at =
-          DateTime.utc_now()
-          |> DateTime.add(@reset_ttl_hours, :hour)
-          |> DateTime.truncate(:second)
+      Repo.insert!(%PasswordResetToken{
+        user_id: target.id,
+        hashed_token: Eden.Tokens.hash(raw),
+        expires_at: expires_at
+      })
 
-        # One live link per person: minting a new one supersedes any outstanding
-        # link, so a superseded (or stale) link can't still redeem.
-        delete_reset_tokens(target.id)
-
-        Repo.insert!(%PasswordResetToken{
-          user_id: target.id,
-          hashed_token: Eden.Tokens.hash(raw),
-          expires_at: expires_at
-        })
-
-        {:ok, raw}
+      {:ok, raw}
+    else
+      _ -> {:error, :forbidden}
     end
   end
 
@@ -542,17 +545,22 @@ defmodule Eden.Accounts do
       {plain_codes, hashed} = generate_backup_codes()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      {:ok, updated} =
-        user
-        |> Ecto.Changeset.change(
+      changeset =
+        Ecto.Changeset.change(user,
           totp_secret: Eden.Vault.encrypt(secret),
           totp_activated_at: now,
-          totp_last_used_at: nil,
+          # Burn the activation code (#263): stamp it used so the SAME code can't also pass
+          # the login second factor within its ~30s window (verify_totp checks `since`).
+          totp_last_used_at: now,
           totp_backup_codes: hashed
         )
-        |> Repo.update()
 
-      {:ok, updated, plain_codes}
+      # `case`, not a `{:ok, _} =` match (#263): an unexpected write error is an error tuple,
+      # not a MatchError → 500.
+      case Repo.update(changeset) do
+        {:ok, updated} -> {:ok, updated, plain_codes}
+        {:error, _} = error -> error
+      end
     else
       {:error, :invalid_code}
     end
@@ -633,13 +641,24 @@ defmodule Eden.Accounts do
   makes them re-enroll before using admin power. Returns `{:ok, user}` | `{:error, :forbidden}`.
   """
   def admin_reset_totp(%Scope{user: %User{} = actor}, %User{} = target) do
-    cond do
-      # No self-service: an admin clearing their OWN factor here would sidestep
-      # disable_totp/2's admin-refusal and shed a mandatory factor. Recovery is for
-      # OTHER people; an admin who's locked out is reset by another admin.
-      actor.id == target.id -> {:error, :forbidden}
-      can_reset_password?(actor, target) -> clear_totp(target)
-      true -> {:error, :forbidden}
+    # No self-service: an admin clearing their OWN factor here would sidestep disable_totp/2's
+    # admin-refusal and shed a mandatory factor. Recovery is for OTHER people.
+    if actor.id == target.id do
+      {:error, :forbidden}
+    else
+      Repo.transact(fn -> reset_totp_locked(actor, target.id) end)
+    end
+  end
+
+  # Re-read the target under `FOR UPDATE` (#263) so the authority guard checks the FRESH role,
+  # not the in-memory struct — same TOCTOU fix as `create_password_reset/2`.
+  defp reset_totp_locked(actor, target_id) do
+    with %User{} = target <-
+           Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE")),
+         true <- can_reset_password?(actor, target) do
+      clear_totp(target)
+    else
+      _ -> {:error, :forbidden}
     end
   end
 
@@ -661,8 +680,11 @@ defmodule Eden.Accounts do
     {plain, hashed}
   end
 
+  # 10 random bytes = 80 bits (#263): even unsalted SHA-256 at rest is then infeasible to
+  # offline-bruteforce on a DB leak (the old 5 bytes / 40 bits fell in minutes on a GPU,
+  # split across the 10 codes). 16 lowercase chars — saved once, not memorized.
   defp backup_code,
-    do: :crypto.strong_rand_bytes(5) |> Base.hex_encode32(case: :lower, padding: false)
+    do: :crypto.strong_rand_bytes(10) |> Base.hex_encode32(case: :lower, padding: false)
 
   # Normalize before hashing so display formatting / spacing / case never blocks a
   # match (hash on generation and on redemption run through the same funnel).

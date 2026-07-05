@@ -11,6 +11,9 @@ defmodule EdenWeb.UserSessionTotpTest do
     {:ok, user, _codes} =
       Accounts.activate_totp(user, secret, NimbleTOTP.verification_code(secret))
 
+    # #263: activation burns the confirmation code; clear the stamp so the login step in the
+    # same 30s test window can use the current code (a real login lands in a later window).
+    user = user |> Ecto.Changeset.change(totp_last_used_at: nil) |> Eden.Repo.update!()
     {user, secret}
   end
 
