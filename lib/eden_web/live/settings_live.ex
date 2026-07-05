@@ -15,6 +15,16 @@ defmodule EdenWeb.SettingsLive do
   alias Eden.Accounts.User
   alias Eden.Chat
 
+  # Every account-scoped event (#259): all of Settings' events except device prefs, which
+  # don't route through handle_event (JS localStorage + LocaleController). Listed explicitly
+  # so the signed-out no-op guard below can't also swallow a genuinely-unrouted event —
+  # mirroring AdminLive / ChatLive's per-event guards (#290 review).
+  @account_events ~w(validate_profile save_profile validate_username save_username remove_avatar
+                     change_password logout_everywhere totp_setup totp_cancel totp_dismiss_codes
+                     totp_activate totp_disable set_status cancel_avatar new_folder_changed
+                     create_folder rename_folder delete_folder reorder_folders toggle_quick_reaction
+                     reset_quick_reactions set_dbl_reaction set_notify_sound set_notify_desktop)
+
   @impl true
   def mount(_params, _session, socket) do
     socket =
@@ -986,14 +996,14 @@ defmodule EdenWeb.SettingsLive do
   end
 
   @impl true
-  # /settings is reachable signed-out for device prefs (theme/language), but every event
-  # below is account-scoped and would dereference a nil scope (FunctionClauseError / KeyError)
-  # if a signed-out client pushed it directly. The template `:if`-gates those sections; this
-  # clause gates the EVENTS to match — a no-op when there's no signed-in user (#259). Theme /
-  # language don't route through here (JS localStorage + LocaleController), so nothing
-  # signed-out legitimately needs an event.
-  def handle_event(_event, _params, %{assigns: %{profile_user: nil}} = socket),
-    do: {:noreply, socket}
+  # /settings is reachable signed-out for device prefs, but the account events below would
+  # dereference a nil scope (FunctionClauseError / KeyError) if a signed-out client pushed one.
+  # The template `:if`-gates those sections; this clause gates the KNOWN account events to
+  # match — a no-op when there's no signed-in user (#259). It matches only @account_events (not
+  # a blanket `_event`), so a genuinely-unrouted event still surfaces (#290 review).
+  def handle_event(event, _params, %{assigns: %{profile_user: nil}} = socket)
+      when event in @account_events,
+      do: {:noreply, socket}
 
   def handle_event("validate_profile", %{"user" => params}, socket) do
     form =
