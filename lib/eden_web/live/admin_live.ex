@@ -443,7 +443,7 @@ defmodule EdenWeb.AdminLive do
         "font-size:0.6875rem; font-weight:600; ",
         (@role == "super_admin" &&
            "color: var(--ed-on-primary); background: var(--ed-primary);") ||
-          "color: var(--ed-warning); background: color-mix(in oklch, var(--ed-warning) 16%, transparent);"
+          "color: var(--ed-warning-strong); background: color-mix(in oklch, var(--ed-warning) 16%, transparent);"
       ]}
     >
       {role_label(@role)}

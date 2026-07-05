@@ -71,14 +71,15 @@ defmodule EdenWeb.SettingsLive do
   # head is the default section when none (or an unknown one) is requested.
   defp section_ids(assigns) do
     if match?(%{user: %User{}}, assigns[:current_scope]),
-      do: ~w(profile account notifications appearance language reactions folders),
+      do: ~w(profile account security notifications appearance language reactions folders),
       else: ~w(appearance language)
   end
 
   # Localized menu label + icon for a section id. One clause per section so a
   # future pane is a one-line change here plus its content block in render/1.
   defp section_meta("profile"), do: {gettext("Profile"), "hero-user-circle"}
-  defp section_meta("account"), do: {gettext("Account"), "hero-shield-check"}
+  defp section_meta("account"), do: {gettext("Account"), "hero-user"}
+  defp section_meta("security"), do: {gettext("Security"), "hero-lock-closed"}
   defp section_meta("notifications"), do: {gettext("Notifications"), "hero-bell"}
   defp section_meta("appearance"), do: {gettext("Appearance"), "hero-paint-brush"}
   defp section_meta("language"), do: {gettext("Language"), "hero-language"}
@@ -271,24 +272,36 @@ defmodule EdenWeb.SettingsLive do
                   >
                     <div class="flex items-center gap-4">
                       <% entry = List.first(@uploads.avatar.entries) %>
-                      <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
-                        <.live_img_preview :if={entry} entry={entry} />
-                        <img
-                          :if={!entry && avatar_src(@profile_user)}
-                          src={avatar_src(@profile_user)}
-                          alt=""
-                        />
-                        <span :if={!entry && !@profile_user.avatar_key}>
-                          {initials(@profile_user.display_name)}
+                      <%!-- The avatar is the only upload control (camera scrim on
+                            hover/focus), mirroring the group-avatar edit (#178):
+                            click it, pick a file, and it previews here at once; Save
+                            persists it. The sr-only file input keeps it keyboard-usable. --%>
+                      <label
+                        class="ed-avatar-edit"
+                        title={gettext("Change photo")}
+                        aria-label={gettext("Change photo")}
+                      >
+                        <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
+                          <.live_img_preview :if={entry} entry={entry} />
+                          <img
+                            :if={!entry && avatar_src(@profile_user)}
+                            src={avatar_src(@profile_user)}
+                            alt=""
+                          />
+                          <span :if={!entry && !@profile_user.avatar_key}>
+                            {initials(@profile_user.display_name)}
+                          </span>
                         </span>
-                      </span>
+                        <%!-- Camera scrim is the "click to change" affordance; once a
+                              photo is picked, show the clean preview (no scrim over it). --%>
+                        <span :if={!entry} class="ed-avatar-edit__overlay" aria-hidden="true">
+                          <.icon name="hero-camera-micro" class="size-5" />
+                        </span>
+                        <.live_file_input upload={@uploads.avatar} id="avatar-upload" class="sr-only" />
+                      </label>
 
                       <div class="flex flex-col gap-1.5">
                         <div class="flex items-center gap-2">
-                          <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
-                            {gettext("Upload photo")}
-                            <.live_file_input upload={@uploads.avatar} class="sr-only" />
-                          </label>
                           <button
                             :if={@profile_user.avatar_key && Enum.empty?(@uploads.avatar.entries)}
                             type="button"
@@ -345,12 +358,27 @@ defmodule EdenWeb.SettingsLive do
                         maxlength="500"
                         placeholder={gettext("A short bio")}
                       >{Phoenix.HTML.Form.normalize_value("textarea", @profile_form[:bio].value)}</textarea>
-                      <span
-                        :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
-                        style="color: var(--ed-danger); font-size:0.75rem;"
-                      >
-                        {msg}
-                      </span>
+                      <%!-- Count codepoints, matching the changeset's max (:codepoints),
+                            so the number tracks what the server actually enforces. --%>
+                      <% bio_len =
+                        @profile_form[:bio].value |> to_string() |> String.codepoints() |> length() %>
+                      <div class="flex items-start justify-between gap-3">
+                        <span
+                          :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
+                          style="color: var(--ed-danger); font-size:0.75rem;"
+                        >
+                          {msg}
+                        </span>
+                        <%!-- Visual live counter; maxlength enforces the cap, so this
+                              is a comfort cue, hidden from screen readers. --%>
+                        <span
+                          aria-hidden="true"
+                          class="ml-auto shrink-0"
+                          style={"font-size:0.75rem; font-variant-numeric: tabular-nums; color: var(--#{if bio_len >= 480, do: "ed-warning", else: "ed-muted"});"}
+                        >
+                          {bio_len}/500
+                        </span>
+                      </div>
                     </label>
 
                     <div class="flex justify-end">
@@ -415,7 +443,7 @@ defmodule EdenWeb.SettingsLive do
                     <div id="username-feedback" aria-live="polite" style="min-height:1rem;">
                       <span
                         :if={@username_hint == :available}
-                        style="color: var(--ed-online); font-size:0.75rem;"
+                        style="color: var(--ed-online-strong); font-size:0.75rem;"
                       >
                         {gettext("Available")}
                       </span>
@@ -433,6 +461,38 @@ defmodule EdenWeb.SettingsLive do
                   </.form>
                 </section>
 
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
+                >
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Sets the presence dot others see. Invisible appears offline to everyone."
+                    )}
+                  </p>
+                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <span style="font-size:0.875rem; white-space: nowrap;">
+                      {gettext("Your status")}
+                    </span>
+                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
+                      <button
+                        :for={{value, _label, short, _color} <- status_options()}
+                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
+                        type="button"
+                        aria-pressed={to_string(@profile_user.presence_status == value)}
+                        phx-click="set_status"
+                        phx-value-status={value}
+                      >
+                        {short}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div :if={@section == "security"} class="space-y-6">
                 <section
                   :if={@profile_user}
                   class="rounded-[var(--ed-radius-lg)] border p-5"
@@ -517,7 +577,7 @@ defmodule EdenWeb.SettingsLive do
                     <span
                       :if={Accounts.totp_enrolled?(@profile_user)}
                       class="rounded-[var(--ed-radius-full)] px-2 py-0.5"
-                      style="font-size:0.6875rem; font-weight:600; color: var(--ed-online); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
+                      style="font-size:0.6875rem; font-weight:600; color: var(--ed-online-strong); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
                     >
                       {gettext("On")}
                     </span>
@@ -657,36 +717,6 @@ defmodule EdenWeb.SettingsLive do
                     <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
                       {@totp_error}
                     </p>
-                  </div>
-                </section>
-
-                <section
-                  :if={@profile_user}
-                  class="rounded-[var(--ed-radius-lg)] border p-5"
-                  style="border-color: var(--ed-border); background: var(--ed-surface);"
-                >
-                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
-                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-                    {gettext(
-                      "Sets the presence dot others see. Invisible appears offline to everyone."
-                    )}
-                  </p>
-                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                    <span style="font-size:0.875rem; white-space: nowrap;">
-                      {gettext("Your status")}
-                    </span>
-                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
-                      <button
-                        :for={{value, _label, short, _color} <- status_options()}
-                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
-                        type="button"
-                        aria-pressed={to_string(@profile_user.presence_status == value)}
-                        phx-click="set_status"
-                        phx-value-status={value}
-                      >
-                        {short}
-                      </button>
-                    </div>
                   </div>
                 </section>
               </div>

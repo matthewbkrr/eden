@@ -2600,6 +2600,11 @@ msgstr "Разделы настроек"
 
 #: lib/eden_web/live/settings_live.ex
 #, elixir-autogen, elixir-format
+msgid "Security"
+msgstr "Безопасность"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
 msgid "Chime"
 msgstr "Колокольчик"
 
