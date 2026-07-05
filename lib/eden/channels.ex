@@ -403,25 +403,29 @@ defmodule Eden.Channels do
          {:ok, _channel} <- get_channel(scope, room.channel_id),
          false <- Chat.room_member?(room.id, user.id) do
       case Chat.pending_join_request(room.id, user.id) do
-        nil ->
-          {:ok, _} =
-            Chat.create_system_message(room.id, %{
-              "action" => "join_request",
-              "requester_id" => user.id,
-              "requester_name" => user.display_name,
-              "status" => "pending"
-            })
-
-          {:ok, :requested}
-
-        _existing ->
-          {:ok, :already}
+        nil -> post_join_request(room.id, user)
+        _existing -> {:ok, :already}
       end
     else
       nil -> {:error, :not_found}
       %{} -> {:error, :not_private}
       true -> {:error, :member}
       error -> error
+    end
+  end
+
+  # Post a fresh join-request system message. A room deleted concurrently (#258) makes the
+  # FK insert fail with a changeset error — surface `:not_found`, don't crash.
+  defp post_join_request(room_id, user) do
+    Chat.create_system_message(room_id, %{
+      "action" => "join_request",
+      "requester_id" => user.id,
+      "requester_name" => user.display_name,
+      "status" => "pending"
+    })
+    |> case do
+      {:ok, _} -> {:ok, :requested}
+      {:error, _} -> {:error, :not_found}
     end
   end
 
@@ -436,24 +440,34 @@ defmodule Eden.Channels do
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      if meta["status"] == "pending" do
-        # The requester may have left the channel since knocking — re-ensure
-        # channel membership (idempotent) so a room membership never exists
-        # without its channel membership.
-        join_channel_tx(channel.id, req_id)
-        :ok = Chat.join_room(room.id, req_id)
-        {:ok, _} = Chat.resolve_join_request(msg, "accepted")
-        broadcast_user(req_id, :channels_changed)
-        broadcast_channel(channel.id, {:members_changed, channel.id})
-      end
-
-      :ok
+      if meta["status"] == "pending",
+        do: approve_pending(channel, room, req_id, msg),
+        else: :ok
     else
       # {:error, reason} from get_channel/ensure_role passes through; anything
       # else (nil, a non-join_request system message) is :not_found — never a
       # bare struct that the caller's {:ok | {:error, _}} contract can't handle.
       {:error, _} = error -> error
       _ -> {:error, :not_found}
+    end
+  end
+
+  # Materialize an accepted knock: (re-)ensure channel membership (the requester may have
+  # left since knocking, so a room membership never exists without its channel one), join
+  # the room, then flip the request to accepted. A room deleted between our reads and the
+  # resolve (#258) returns `{:error, _}` instead of crashing.
+  defp approve_pending(channel, room, req_id, msg) do
+    join_channel_tx(channel.id, req_id)
+    :ok = Chat.join_room(room.id, req_id)
+
+    case Chat.resolve_join_request(msg, "accepted") do
+      {:ok, _} ->
+        broadcast_user(req_id, :channels_changed)
+        broadcast_channel(channel.id, {:members_changed, channel.id})
+        :ok
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -469,14 +483,19 @@ defmodule Eden.Channels do
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      if meta["status"] == "pending" do
-        {:ok, _} = Chat.resolve_join_request(msg, "declined")
-      end
-
-      :ok
+      if meta["status"] == "pending", do: decline_pending(msg), else: :ok
     else
       {:error, _} = error -> error
       _ -> {:error, :not_found}
+    end
+  end
+
+  # Flip a pending request to declined; `:not_found` (not a crash) if the room was
+  # deleted concurrently and the message is already gone (#258).
+  defp decline_pending(msg) do
+    case Chat.resolve_join_request(msg, "declined") do
+      {:ok, _} -> :ok
+      {:error, _} = error -> error
     end
   end
 

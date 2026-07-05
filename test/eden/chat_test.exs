@@ -1671,6 +1671,32 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "concurrent-delete hardening (#258)" do
+    test "resolve_join_request on a hard-deleted message returns :not_found, not a crash" do
+      alice = user_fixture()
+      bob = user_fixture()
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      {:ok, sys} =
+        Chat.create_system_message(conv.id, %{
+          "action" => "join_request",
+          "status" => "pending",
+          "requester_id" => bob.id
+        })
+
+      # The room/conversation is GC'd out from under us — the system message row is gone.
+      Repo.delete!(sys)
+
+      assert {:error, :not_found} = Chat.resolve_join_request(sys, "accepted")
+    end
+
+    test "create_system_message for a missing conversation errors instead of raising" do
+      # A conversation deleted concurrently → the FK violation surfaces as a changeset
+      # error, not a raised Ecto.ConstraintError from a bare struct insert.
+      assert {:error, %Ecto.Changeset{}} = Chat.create_system_message(-1, %{"action" => "x"})
+    end
+  end
+
   describe "notification prefs (#214)" do
     test "default to sound-on / desktop-off until set, then persist", %{alice: alice} do
       assert Chat.notification_prefs(scope(alice)) == %{sound: true, desktop: false}
