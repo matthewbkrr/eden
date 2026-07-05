@@ -2597,3 +2597,8 @@ msgstr "Аккаунт"
 #, elixir-autogen, elixir-format
 msgid "Settings sections"
 msgstr "Разделы настроек"
+
+#: lib/eden_web/components/shell_components.ex
+#, elixir-autogen, elixir-format
+msgid "Profile and status"
+msgstr "Профиль и статус"

@@ -151,8 +151,8 @@ defmodule EdenWeb.ShellComponents do
             type="button"
             class="ed-rail__btn ed-rail__btn--me"
             data-menu-trigger
-            title={gettext("Set status")}
-            aria-label={gettext("Set status")}
+            title={gettext("Profile and status")}
+            aria-label={gettext("Profile and status")}
             aria-haspopup="menu"
             aria-expanded="false"
           >
@@ -160,20 +160,69 @@ defmodule EdenWeb.ShellComponents do
             <span :if={!me_avatar_src(@me)}>{me_initials(@me)}</span>
             <span class={["ed-avatar__dot", me_dot_class(@my_dot)]}></span>
           </button>
-          <div class="ed-menu" id="status-menu" data-menu role="menu" hidden>
-            <button
-              :for={{value, label, _short, color} <- status_options()}
-              type="button"
-              class="ed-menu__item"
-              role="menuitem"
-              phx-click="set_status"
-              phx-value-status={value}
-            >
-              <span class="ed-status-dot" style={"background: var(#{color});"} aria-hidden="true">
+          <%!-- Discord-style mini-profile (#287): identity + "Edit profile" + a
+                status row whose options expand on HOVER (or focus, for keyboard /
+                touch), so picking a status needs no extra click. --%>
+          <div class="ed-menu ed-miniprofile" id="status-menu" data-menu role="menu" hidden>
+            <div class="ed-miniprofile__head">
+              <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
+                <img :if={me_avatar_src(@me)} src={me_avatar_src(@me)} alt="" />
+                <span :if={!me_avatar_src(@me)}>{me_initials(@me)}</span>
+                <span class={["ed-avatar__dot", me_dot_class(@my_dot)]}></span>
               </span>
-              <span class="flex-1">{label}</span>
-              <.icon :if={@my_status == value} name="hero-check-micro" class="size-4" />
-            </button>
+              <div class="min-w-0">
+                <div class="ed-miniprofile__name">{@me.display_name}</div>
+                <div class="ed-miniprofile__tag">@{@me.username}</div>
+              </div>
+            </div>
+
+            <.link navigate={~p"/settings/profile"} class="ed-menu__item" role="menuitem">
+              <.icon name="hero-pencil-square-micro" class="size-4" />
+              <span class="flex-1">{gettext("Edit profile")}</span>
+            </.link>
+
+            <div class="ed-menu__sep"></div>
+
+            <% {_v, cur_label, _s, cur_color} =
+              Enum.find(status_options(), hd(status_options()), &(elem(&1, 0) == @my_status)) %>
+            <%!-- Hover (or focus, for keyboard/touch) the summary to reveal the
+                  options; the accordion keeps the flyout inside the popover so it's
+                  never clipped by the menu's scroll container. --%>
+            <div class="ed-miniprofile__status">
+              <button
+                type="button"
+                class="ed-menu__item ed-miniprofile__status-summary"
+                aria-haspopup="true"
+              >
+                <span
+                  class="ed-status-dot"
+                  style={"background: var(#{cur_color});"}
+                  aria-hidden="true"
+                >
+                </span>
+                <span class="flex-1">{cur_label}</span>
+                <.icon name="hero-chevron-right-micro" class="size-4" />
+              </button>
+              <div class="ed-miniprofile__substatus" role="group" aria-label={gettext("Set status")}>
+                <button
+                  :for={{value, label, _short, color} <- status_options()}
+                  type="button"
+                  class="ed-menu__item"
+                  role="menuitem"
+                  phx-click="set_status"
+                  phx-value-status={value}
+                >
+                  <span
+                    class="ed-status-dot"
+                    style={"background: var(#{color});"}
+                    aria-hidden="true"
+                  >
+                  </span>
+                  <span class="flex-1">{label}</span>
+                  <.icon :if={@my_status == value} name="hero-check-micro" class="size-4" />
+                </button>
+              </div>
+            </div>
           </div>
         </span>
         <.link
