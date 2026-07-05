@@ -454,20 +454,29 @@ defmodule Eden.Channels do
 
   # Materialize an accepted knock: (re-)ensure channel membership (the requester may have
   # left since knocking, so a room membership never exists without its channel one), join
-  # the room, then flip the request to accepted. A room deleted between our reads and the
-  # resolve (#258) returns `{:error, _}` instead of crashing.
+  # the room, then flip the request to accepted. All three commit in ONE transaction (#261),
+  # like every other `join_channel_tx` caller — a crash mid-way must not leave a channel
+  # membership without its general room, which a repeat approve (seeing the membership
+  # already there) wouldn't heal. Broadcasts fire only after the commit; a room deleted
+  # between our reads and the resolve (#258) rolls back and returns `{:error, _}`.
   defp approve_pending(channel, room, req_id, msg) do
-    join_channel_tx(channel.id, req_id)
-    :ok = Chat.join_room(room.id, req_id)
+    Repo.transact(fn ->
+      _ = join_channel_tx(channel.id, req_id)
+      :ok = Chat.join_room(room.id, req_id)
 
-    case Chat.resolve_join_request(msg, "accepted") do
-      {:ok, _} ->
+      case Chat.resolve_join_request(msg, "accepted") do
+        {:ok, _} -> {:ok, :approved}
+        {:error, _} = error -> error
+      end
+    end)
+    |> case do
+      {:ok, :approved} ->
         broadcast_user(req_id, :channels_changed)
         broadcast_channel(channel.id, {:members_changed, channel.id})
         :ok
 
-      {:error, _} = error ->
-        error
+      {:error, _} ->
+        {:error, :not_found}
     end
   end
 
