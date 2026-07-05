@@ -183,16 +183,19 @@ defmodule EdenWeb.ShellComponents do
 
             <div class="ed-menu__sep"></div>
 
+            <% opts = status_options() %>
             <% {_v, cur_label, _s, cur_color} =
-              Enum.find(status_options(), hd(status_options()), &(elem(&1, 0) == @my_status)) %>
+              Enum.find(opts, hd(opts), &(elem(&1, 0) == @my_status)) %>
             <%!-- Hover (or focus, for keyboard/touch) the summary to reveal the
-                  options; the accordion keeps the flyout inside the popover so it's
-                  never clipped by the menu's scroll container. --%>
+                  options; the flyout stays inside the popover so it's never clipped.
+                  The summary is a menuitem so the ContextMenu hook's Arrow-key nav
+                  reaches it — and focusing it opens the flyout (focus-within), so the
+                  status menuitems below become reachable in turn. --%>
             <div class="ed-miniprofile__status">
               <button
                 type="button"
+                role="menuitem"
                 class="ed-menu__item ed-miniprofile__status-summary"
-                aria-haspopup="true"
               >
                 <span
                   class="ed-status-dot"
@@ -205,7 +208,7 @@ defmodule EdenWeb.ShellComponents do
               </button>
               <div class="ed-miniprofile__substatus" role="group" aria-label={gettext("Set status")}>
                 <button
-                  :for={{value, label, _short, color} <- status_options()}
+                  :for={{value, label, _short, color} <- opts}
                   type="button"
                   class="ed-menu__item"
                   role="menuitem"
