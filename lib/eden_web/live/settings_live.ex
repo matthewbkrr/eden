@@ -773,6 +773,10 @@ defmodule EdenWeb.SettingsLive do
                       </button>
                     </div>
                   </div>
+                  <%!-- "System" is the ambiguous one — say what it resolves to. --%>
+                  <p class="mt-3" style="color: var(--ed-muted); font-size:0.75rem;">
+                    {gettext("System matches your device's light or dark setting.")}
+                  </p>
                 </section>
               </div>
 
@@ -848,6 +852,7 @@ defmodule EdenWeb.SettingsLive do
                     </button>
                   </div>
                   <div class="ed-qr-grid" role="group" aria-label={gettext("Quick reactions")}>
+                    <% at_cap = length(@quick_set) >= @quick_limit %>
                     <button
                       :for={e <- @reaction_set}
                       type="button"
@@ -855,7 +860,13 @@ defmodule EdenWeb.SettingsLive do
                       phx-click="toggle_quick_reaction"
                       phx-value-emoji={e}
                       aria-pressed={to_string(e in @quick_set)}
-                      disabled={e not in @quick_set and length(@quick_set) >= @quick_limit}
+                      disabled={e not in @quick_set and at_cap}
+                      title={
+                        if(e not in @quick_set and at_cap,
+                          do: gettext("Remove one first; the row is full."),
+                          else: nil
+                        )
+                      }
                     >
                       {e}
                     </button>
@@ -1102,6 +1113,15 @@ defmodule EdenWeb.SettingsLive do
                       </li>
                     <% end %>
                   </ul>
+
+                  <%!-- Only the virtual "All Chats" row exists — nudge first-timers. --%>
+                  <p
+                    :if={@folders == []}
+                    class="mt-2"
+                    style="color: var(--ed-muted); font-size:0.8125rem;"
+                  >
+                    {gettext("No folders yet. Add one below to group chats into sidebar tabs.")}
+                  </p>
 
                   <form
                     phx-submit="create_folder"

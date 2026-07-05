@@ -415,6 +415,19 @@ defmodule EdenWeb.ChatLiveTest do
       assert Eden.Accounts.get_user!(ctx.alice.id).presence_status == "dnd"
     end
 
+    test "the rail mini-profile carries identity, edit-profile and the statuses (#287)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # Discord-style card: @tag, an Edit-profile deep-link, and the status list.
+      assert has_element?(view, "#status-menu", "@#{ctx.alice.username}")
+      assert has_element?(view, ~s(#status-menu a[href="/settings/profile"]), "Edit profile")
+
+      for status <- ~w(auto away dnd invisible) do
+        assert has_element?(view, ~s(#status-menu button[phx-value-status="#{status}"]))
+      end
+    end
+
     test "a status change from another session updates this one live (#102 multi-tab)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
