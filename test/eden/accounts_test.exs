@@ -413,6 +413,75 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "user deactivation / #251" do
+    test "deactivation flips active, revokes sessions, and blocks login; reactivation restores it" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture(%{username: "offboard", password: "password123"})
+      token = Accounts.generate_user_session_token(target)
+
+      assert %User{} = Accounts.get_user_by_username_and_password("offboard", "password123")
+      assert %User{} = Accounts.get_user_by_session_token(token)
+
+      assert {:ok, deactivated} = Accounts.deactivate_user(Scope.for_user(actor), target)
+      refute deactivated.active
+      # Every session token is gone (revoke_all_user_sessions), so the old cookie is dead.
+      assert Accounts.get_user_by_session_token(token) == nil
+      # And the password no longer logs in (indistinguishable from a wrong password).
+      assert Accounts.get_user_by_username_and_password("offboard", "password123") == nil
+
+      assert {:ok, reactivated} = Accounts.reactivate_user(Scope.for_user(actor), deactivated)
+      assert reactivated.active
+      assert %User{} = Accounts.get_user_by_username_and_password("offboard", "password123")
+    end
+
+    test "get_user_by_session_token rejects a deactivated user even if a token survives" do
+      user = user_fixture()
+      token = Accounts.generate_user_session_token(user)
+      # Flip active WITHOUT revoking, simulating a token that outlives the revoke.
+      user |> Ecto.Changeset.change(active: false) |> Repo.update!()
+      assert Accounts.get_user_by_session_token(token) == nil
+    end
+
+    test "same authority as reset links: a plain admin can't touch a super_admin, but can a member" do
+      admin = promote(user_fixture(), "admin")
+      super_admin = promote(user_fixture(), "super_admin")
+      member = user_fixture()
+
+      assert {:error, :forbidden} = Accounts.deactivate_user(Scope.for_user(admin), super_admin)
+      assert Repo.get!(User, super_admin.id).active
+
+      assert {:ok, deactivated} = Accounts.deactivate_user(Scope.for_user(admin), member)
+      refute deactivated.active
+    end
+
+    test "an actor can't deactivate themselves (no self-lockout)" do
+      actor = promote(user_fixture(), "super_admin")
+      assert {:error, :forbidden} = Accounts.deactivate_user(Scope.for_user(actor), actor)
+      assert Repo.get!(User, actor.id).active
+    end
+
+    test "a non-admin can't deactivate anyone" do
+      member = user_fixture()
+
+      assert {:error, :forbidden} =
+               Accounts.deactivate_user(Scope.for_user(member), user_fixture())
+    end
+
+    test "deactivation drops outstanding reset links, and none can be minted while inactive" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+
+      {:ok, _raw} = Accounts.create_password_reset(Scope.for_user(actor), target)
+      assert Repo.get_by(PasswordResetToken, user_id: target.id)
+
+      assert {:ok, _} = Accounts.deactivate_user(Scope.for_user(actor), target)
+      refute Repo.get_by(PasswordResetToken, user_id: target.id)
+
+      assert {:error, :forbidden} =
+               Accounts.create_password_reset(Scope.for_user(actor), Repo.get!(User, target.id))
+    end
+  end
+
   describe "set_presence_status/2 (#102)" do
     test "defaults to auto and persists each allowed status" do
       user = user_fixture()

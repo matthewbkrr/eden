@@ -54,6 +54,9 @@ defmodule Eden.Accounts do
   @doc "True if the user is a platform `super_admin` (#174) — may assign roles."
   def super_admin?(%User{} = user), do: User.super_admin?(user)
 
+  @doc "True unless an admin has deactivated the account (#251)."
+  def active?(%User{} = user), do: User.active?(user)
+
   @doc """
   Sets a user's platform role (#174). **Super-admin only** — enforced here, not
   just in the UI. An actor can't change their own role (no self-lockout / no
@@ -94,13 +97,68 @@ defmodule Eden.Accounts do
   end
 
   @doc """
-  Returns the user if the username/password pair is valid, otherwise nil.
-  Always runs a hash comparison so timing does not reveal whether a username exists.
+  Deactivates a user (#251, ADR-0002 Decision 8 — the manual half): sets `active =
+  false` and **revokes every session**, so their live sessions are booted immediately
+  (via the #256 `:sessions_revoked` signal) and they can't log back in.
+
+  Admin-scoped, same authority as reset links (`can_reset_password?/2` — a plain admin
+  can't touch a super_admin); an actor **can't deactivate themselves** (no self-lockout).
+  Any outstanding reset link is dropped too, so a disabled account has no live way back
+  in. Broadcasts `{:user_updated}`. Returns `{:ok, user}` | `{:error, :forbidden}`.
+  """
+  def deactivate_user(%Scope{user: %User{} = actor}, %User{} = target) do
+    with :ok <- authorize_activation(actor, target),
+         {:ok, updated} <- Repo.transact(fn -> deactivate_writes(target) end) do
+      # Side effects only after the row + token deletions commit: booting live
+      # sessions and refreshing open views must never fire on a rolled-back write.
+      broadcast_sessions_revoked(updated.id)
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  # The atomic DB half of a deactivation: flip active, then drop every session token
+  # and any outstanding reset link in the same transaction.
+  defp deactivate_writes(%User{} = target) do
+    with {:ok, updated} <- set_active(target, false) do
+      delete_all_session_tokens(updated.id)
+      delete_reset_tokens(updated.id)
+      {:ok, updated}
+    end
+  end
+
+  @doc """
+  Reactivates a deactivated user (#251): flips `active` back to true so login works
+  again. Same authority as `deactivate_user/2`. Returns `{:ok, user}` |
+  `{:error, :forbidden}`.
+  """
+  def reactivate_user(%Scope{user: %User{} = actor}, %User{} = target) do
+    with :ok <- authorize_activation(actor, target),
+         {:ok, updated} <- set_active(target, true) do
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  # A plain admin can't touch a super_admin (mirrors reset links), and nobody
+  # deactivates themselves out of their own admin session.
+  defp authorize_activation(%User{} = actor, %User{} = target) do
+    if actor.id != target.id and can_reset_password?(actor, target),
+      do: :ok,
+      else: {:error, :forbidden}
+  end
+
+  defp set_active(%User{} = user, active) when is_boolean(active),
+    do: user |> Ecto.Changeset.change(active: active) |> Repo.update()
+
+  @doc """
+  Returns the user if the username/password pair is valid **and the account is active**
+  (#251), otherwise nil. Always runs a hash comparison so timing does not reveal whether
+  a username exists; a deactivated account is indistinguishable from a wrong password (we
+  don't reveal account state).
   """
   def get_user_by_username_and_password(username, password)
       when is_binary(username) and is_binary(password) do
     user = get_user_by_username(username)
-    if User.valid_password?(user, password), do: user
+    if User.valid_password?(user, password) and User.active?(user), do: user
   end
 
   @doc """
@@ -254,10 +312,19 @@ defmodule Eden.Accounts do
     token
   end
 
-  @doc "Returns the user for a valid, non-expired session token, or nil."
+  @doc """
+  Returns the user for a valid, non-expired session token, or nil. A **deactivated**
+  account (#251) is rejected here too — defense-in-depth beyond the token revoke, so any
+  session token that outlives the revoke (or a race) still can't authenticate a request
+  or LiveView mount.
+  """
   def get_user_by_session_token(token) do
     {:ok, query} = UserToken.verify_session_token_query(token)
-    Repo.one(query)
+
+    case Repo.one(query) do
+      %User{active: true} = user -> user
+      _ -> nil
+    end
   end
 
   @doc "Deletes a session token (logout)."
@@ -283,10 +350,23 @@ defmodule Eden.Accounts do
   with the generic session-ended flash. Every OTHER live session still gets booted.
   """
   def revoke_all_user_sessions(%User{} = user) do
-    Repo.delete_all(from t in UserToken, where: t.user_id == ^user.id and t.context == "session")
-    Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user.id), :sessions_revoked)
+    delete_all_session_tokens(user.id)
+    broadcast_sessions_revoked(user.id)
     :ok
   end
+
+  # The DB half of a revoke, split out so a caller that needs atomicity (deactivation)
+  # can delete tokens INSIDE its transaction and fire the broadcast after commit.
+  defp delete_all_session_tokens(user_id),
+    do:
+      Repo.delete_all(
+        from t in UserToken, where: t.user_id == ^user_id and t.context == "session"
+      )
+
+  # The side-effect half — never call this inside a transaction (a rollback can't
+  # un-send a broadcast; it must run only after the deletion commits).
+  defp broadcast_sessions_revoked(user_id),
+    do: Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user_id), :sessions_revoked)
 
   @doc "Subscribes a connected LiveView to its user's session-revocation signal (#256)."
   def subscribe_user_sessions(%Scope{user: %User{id: id}}),
@@ -332,6 +412,11 @@ defmodule Eden.Accounts do
         {:error, :forbidden}
 
       User.super_admin?(target) and not User.super_admin?(actor) ->
+        {:error, :forbidden}
+
+      # No reset link for a deactivated account (#251) — reactivate first. Login is
+      # blocked anyway, so the link would be a dead end.
+      not User.active?(target) ->
         {:error, :forbidden}
 
       true ->

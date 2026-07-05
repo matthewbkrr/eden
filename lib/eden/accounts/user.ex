@@ -32,6 +32,11 @@ defmodule Eden.Accounts.User do
     # role_changeset/2 (through Accounts.set_user_role/3, super-admin-restricted).
     field :role, :string, default: "member"
 
+    # Account activation (#251, ADR-0002 Decision 8). false = an admin deactivated the
+    # account: login is refused and every session is revoked, until an admin reactivates.
+    # Written ONLY via Accounts.deactivate_user/2 · reactivate_user/2 (admin-scoped).
+    field :active, :boolean, default: true
+
     # Managed identity fields (#173, RFC Phase 1): admin-/sync-owned, written ONLY
     # via managed_changeset/2 (the admin panel #174 or a future directory sync),
     # never through the user's profile form. Read-only to the person on their card.
@@ -71,6 +76,9 @@ defmodule Eden.Accounts.User do
 
   @doc "True if the user is a `super_admin` (#174)."
   def super_admin?(%__MODULE__{role: role}), do: role == "super_admin"
+
+  @doc "True unless an admin has deactivated the account (#251)."
+  def active?(%__MODULE__{active: active}), do: active == true
 
   @doc """
   Admin-only changeset for a user's platform role (#174). The write path

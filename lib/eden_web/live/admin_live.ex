@@ -4,8 +4,11 @@ defmodule EdenWeb.AdminLive do
   on_mount hook (checked at mount and on every patch). Lists everyone and lets an
   admin edit a user's **admin-managed** identity fields (corp email / Должность /
   structure via `Accounts.apply_managed_fields/2`); a **super_admin** can also
-  change a user's platform role (`Accounts.set_user_role/3`). All authorization is
-  enforced in the context — this LiveView is the presentation + the gate.
+  change a user's platform role (`Accounts.set_user_role/3`). An admin can also mint a
+  password-reset link, reset a lost second factor, and **deactivate / reactivate** an
+  account (#251 — `Accounts.deactivate_user/2`, ends every session and blocks sign-in),
+  all under the same authority (a plain admin ↛ a super_admin, no acting on yourself).
+  All authorization is enforced in the context — this LiveView is the presentation + gate.
   """
   use EdenWeb, :live_view
 
@@ -34,7 +37,7 @@ defmodule EdenWeb.AdminLive do
   # selected would pass nil into a context function that expects a %User{} and crash
   # the LiveView — no-op it once here instead.
   def handle_event(event, _params, %{assigns: %{selected: nil}} = socket)
-      when event in ~w(reset_link reset_totp validate save set_role),
+      when event in ~w(reset_link reset_totp validate save set_role deactivate reactivate),
       do: {:noreply, socket}
 
   def handle_event("reset_link", _params, socket) do
@@ -88,6 +91,28 @@ defmodule EdenWeb.AdminLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't change the role."))}
+    end
+  end
+
+  def handle_event("deactivate", _params, socket) do
+    case Accounts.deactivate_user(socket.assigns.current_scope, socket.assigns.selected) do
+      {:ok, updated} ->
+        {:noreply,
+         socket |> refresh_user(updated) |> put_flash(:info, gettext("Account deactivated."))}
+
+      {:error, :forbidden} ->
+        {:noreply, put_flash(socket, :error, gettext("You can't deactivate that person."))}
+    end
+  end
+
+  def handle_event("reactivate", _params, socket) do
+    case Accounts.reactivate_user(socket.assigns.current_scope, socket.assigns.selected) do
+      {:ok, updated} ->
+        {:noreply,
+         socket |> refresh_user(updated) |> put_flash(:info, gettext("Account reactivated."))}
+
+      {:error, :forbidden} ->
+        {:noreply, put_flash(socket, :error, gettext("You can't reactivate that person."))}
     end
   end
 
@@ -155,7 +180,8 @@ defmodule EdenWeb.AdminLive do
                   aria-pressed={to_string(@selected && @selected.id == u.id)}
                   class={[
                     "w-full flex items-center gap-3 px-4 py-2.5 text-left ed-admin-row",
-                    @selected && @selected.id == u.id && "is-selected"
+                    @selected && @selected.id == u.id && "is-selected",
+                    !u.active && "opacity-60"
                   ]}
                 >
                   <.user_avatar user={u} size="ed-avatar--sm" />
@@ -164,7 +190,11 @@ defmodule EdenWeb.AdminLive do
                       {u.display_name}
                     </span>
                     <span class="block truncate" style="color: var(--ed-muted); font-size:0.8125rem;">
-                      @{u.username}<span :if={u.position}> · {u.position}</span>
+                      @{u.username}
+                      <span :if={u.position}>· {u.position}</span>
+                      <span :if={!u.active} style="color: var(--ed-danger);">
+                        · {gettext("Deactivated")}
+                      </span>
                     </span>
                   </span>
                   <.role_badge role={u.role} />
@@ -236,10 +266,52 @@ defmodule EdenWeb.AdminLive do
               </div>
             </div>
 
-            <%!-- Reset access (#232): mint a one-time link. Hidden when the acting
-                  admin may not reset this person (a plain admin ↛ a super_admin). --%>
+            <%!-- Account status (#251): deactivate / reactivate. Same authority as
+                  reset (a plain admin ↛ a super_admin); you can't deactivate yourself. --%>
             <div
-              :if={Accounts.can_reset_password?(@current_scope.user, @selected)}
+              :if={
+                Accounts.can_reset_password?(@current_scope.user, @selected) &&
+                  @selected.id != @current_scope.user.id
+              }
+              class="mt-5 pt-5 border-t"
+              style="border-color: var(--ed-border);"
+            >
+              <h3 style="font-size:0.8125rem; color: var(--ed-muted);">
+                {gettext("Account status")}
+              </h3>
+              <div :if={@selected.active} class="mt-2">
+                <p style="font-size:0.75rem; color: var(--ed-muted);">
+                  {gettext(
+                    "Deactivating ends every session at once and blocks sign-in until you reactivate."
+                  )}
+                </p>
+                <button
+                  type="button"
+                  phx-click="deactivate"
+                  data-confirm={
+                    gettext("Deactivate this account? Their sessions end now and they can't sign in.")
+                  }
+                  class="ed-btn ed-btn--ghost text-sm mt-2"
+                  style="color: var(--ed-danger);"
+                >
+                  {gettext("Deactivate account")}
+                </button>
+              </div>
+              <div :if={!@selected.active} class="mt-2">
+                <p style="font-size:0.75rem; color: var(--ed-danger);">
+                  {gettext("This account is deactivated — the person can't sign in.")}
+                </p>
+                <button type="button" phx-click="reactivate" class="ed-btn ed-btn--ghost text-sm mt-2">
+                  {gettext("Reactivate account")}
+                </button>
+              </div>
+            </div>
+
+            <%!-- Reset access (#232): mint a one-time link. Hidden when the acting
+                  admin may not reset this person (a plain admin ↛ a super_admin), or
+                  when the account is deactivated (#251 — reactivate first; it's moot). --%>
+            <div
+              :if={Accounts.can_reset_password?(@current_scope.user, @selected) && @selected.active}
               class="mt-5 pt-5 border-t"
               style="border-color: var(--ed-border);"
             >

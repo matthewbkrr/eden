@@ -51,7 +51,8 @@ defmodule EdenWeb.AdminLiveTest do
 
   describe "as an admin" do
     setup %{conn: conn} do
-      %{conn: log_in_user(conn, admin(%{username: "boss", display_name: "Boss"}))}
+      boss = admin(%{username: "boss", display_name: "Boss"})
+      %{conn: log_in_user(conn, boss), boss: boss}
     end
 
     test "lists everyone and edits a person's managed fields", %{conn: conn} do
@@ -125,11 +126,40 @@ defmodule EdenWeb.AdminLiveTest do
       refute html =~ "Reset two-factor"
     end
 
-    test "a person-action event with nobody selected is a safe no-op (#250)", %{conn: conn} do
+    test "deactivates then reactivates a person (#251)", %{conn: conn} do
+      worker = user_fixture(%{username: "leaver"})
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, worker)
+
+      html = view |> element(~s(button[phx-click="deactivate"])) |> render_click()
+      refute Accounts.active?(Accounts.get_user!(worker.id))
+      assert html =~ "Reactivate account"
+
+      html = view |> element(~s(button[phx-click="reactivate"])) |> render_click()
+      assert Accounts.active?(Accounts.get_user!(worker.id))
+      assert html =~ "Deactivate account"
+    end
+
+    test "hides the deactivate control for your own account (#251)", %{conn: conn, boss: boss} do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, boss)
+      refute html =~ "Deactivate account"
+    end
+
+    test "a plain admin gets no deactivate control for a super_admin (#251)", %{conn: conn} do
+      sa = promote(user_fixture(%{username: "topdog2"}), "super_admin")
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, sa)
+      refute html =~ "Deactivate account"
+    end
+
+    test "a person-action event with nobody selected is a safe no-op (#250, #251)", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/admin")
       # Forged/stale events with no selection must not crash the LiveView.
       render_click(view, "reset_totp", %{})
       render_click(view, "reset_link", %{})
+      render_click(view, "deactivate", %{})
+      render_click(view, "reactivate", %{})
       assert render(view) =~ "Select a person"
     end
 

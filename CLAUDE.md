@@ -58,6 +58,16 @@ design — built incrementally as features land.)
   redeemed at `/reset/:token` (`reset_password_with_token/2` — `FOR UPDATE`,
   single-use, revokes sessions). Every hash-at-rest token flow (invites + reset)
   shares `Eden.Tokens` (generate/hash). Still no email.
+  **Deactivation** (#251, ADR-0002 Decision 8 manual half): an admin flips
+  `users.active` from `/admin` (`deactivate_user/2` — sets `active=false` **and**
+  `revoke_all_user_sessions/1`, so live sessions are booted via the #256
+  `:sessions_revoked` signal and the person can't log back in; `reactivate_user/2`
+  restores it). Login is refused in three places — `get_user_by_username_and_password/2`
+  (indistinguishable from a wrong password, state not leaked), `get_user_by_session_token/1`
+  (defense-in-depth for a surviving token), and the TOTP second-factor step — and a
+  deactivated user can't be issued a reset link. Same authority as reset links
+  (`can_reset_password?/2`: a plain admin ↛ a super_admin; never yourself). The
+  **upstream-IdP auto-deactivation** half of Decision 8 stays trigger-gated (no IdP yet).
   **TOTP two-factor** (#250, ADR-0002 Decision 7): a user enrolls in Settings
   (`setup_totp/1` → scan QR / manual key → `activate_totp/3` confirms a code, reveals
   one-time **backup codes**); at sign-in an enrolled user's password step stashes a

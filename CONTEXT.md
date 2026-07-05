@@ -38,6 +38,13 @@ them, not speculatively. Use these words exactly; don't drift to synonyms.
 - **Reset link** — an admin-issued, one-time, short-expiry token bound to a
   specific user for password recovery; same machinery as invites, handed over
   any existing channel.
+- **Deactivation** — an admin sets `users.active = false` (ADR-0002 Decision 8,
+  manual half): every session is revoked and login is refused (indistinguishable
+  from a wrong password — account state isn't leaked) until an admin
+  **reactivates**. Same authority as reset links (a plain admin ↛ a super_admin;
+  never yourself). Distinct from **hard delete / erasure** (a separate concern)
+  and from the trigger-gated **upstream-IdP auto-deactivation** (Decision 8's
+  second half, awaiting a real IdP).
 
 ## Messaging (established; see CLAUDE.md for detail)
 
