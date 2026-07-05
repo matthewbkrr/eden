@@ -251,23 +251,38 @@ defmodule EdenWeb.SettingsLive do
                   >
                     <div class="flex items-center gap-4">
                       <% entry = List.first(@uploads.avatar.entries) %>
-                      <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
-                        <.live_img_preview :if={entry} entry={entry} />
-                        <img
-                          :if={!entry && avatar_src(@profile_user)}
-                          src={avatar_src(@profile_user)}
-                          alt=""
-                        />
-                        <span :if={!entry && !@profile_user.avatar_key}>
-                          {initials(@profile_user.display_name)}
+                      <%!-- The avatar is itself a click target for the picker (camera
+                            scrim on hover/focus), mirroring the group-avatar edit
+                            (#178). The "Upload photo" button drives the same input. --%>
+                      <label
+                        class="ed-avatar-edit"
+                        title={gettext("Change photo")}
+                        aria-label={gettext("Upload photo")}
+                      >
+                        <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
+                          <.live_img_preview :if={entry} entry={entry} />
+                          <img
+                            :if={!entry && avatar_src(@profile_user)}
+                            src={avatar_src(@profile_user)}
+                            alt=""
+                          />
+                          <span :if={!entry && !@profile_user.avatar_key}>
+                            {initials(@profile_user.display_name)}
+                          </span>
                         </span>
-                      </span>
+                        <span class="ed-avatar-edit__overlay" aria-hidden="true">
+                          <.icon name="hero-camera-micro" class="size-5" />
+                        </span>
+                        <.live_file_input upload={@uploads.avatar} id="avatar-upload" class="sr-only" />
+                      </label>
 
                       <div class="flex flex-col gap-1.5">
                         <div class="flex items-center gap-2">
-                          <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
+                          <label
+                            for="avatar-upload"
+                            class="ed-btn ed-btn--ghost cursor-pointer text-sm"
+                          >
                             {gettext("Upload photo")}
-                            <.live_file_input upload={@uploads.avatar} class="sr-only" />
                           </label>
                           <button
                             :if={@profile_user.avatar_key && Enum.empty?(@uploads.avatar.entries)}
@@ -325,12 +340,24 @@ defmodule EdenWeb.SettingsLive do
                         maxlength="500"
                         placeholder={gettext("A short bio")}
                       >{Phoenix.HTML.Form.normalize_value("textarea", @profile_form[:bio].value)}</textarea>
-                      <span
-                        :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
-                        style="color: var(--ed-danger); font-size:0.75rem;"
-                      >
-                        {msg}
-                      </span>
+                      <% bio_len = @profile_form[:bio].value |> to_string() |> String.length() %>
+                      <div class="flex items-start justify-between gap-3">
+                        <span
+                          :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
+                          style="color: var(--ed-danger); font-size:0.75rem;"
+                        >
+                          {msg}
+                        </span>
+                        <%!-- Visual live counter; maxlength enforces the cap, so this
+                              is a comfort cue, hidden from screen readers. --%>
+                        <span
+                          aria-hidden="true"
+                          class="ml-auto shrink-0"
+                          style={"font-size:0.75rem; font-variant-numeric: tabular-nums; color: var(--#{if bio_len >= 480, do: "ed-warning", else: "ed-muted"});"}
+                        >
+                          {bio_len}/500
+                        </span>
+                      </div>
                     </label>
 
                     <div class="flex justify-end">
