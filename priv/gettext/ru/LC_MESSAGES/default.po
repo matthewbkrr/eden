@@ -2605,3 +2605,13 @@ msgstr "«Системная» повторяет светлую или тёмн
 
 msgid "Security"
 msgstr "Безопасность"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "No folders yet. Add one below to group chats into sidebar tabs."
+msgstr "Папок пока нет. Добавьте ниже, чтобы сгруппировать чаты во вкладки сайдбара."
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Remove one first; the row is full."
+msgstr "Сначала уберите одну — ряд заполнен."
