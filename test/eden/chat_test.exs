@@ -1698,14 +1698,21 @@ defmodule Eden.ChatTest do
   end
 
   describe "notification prefs (#214)" do
-    test "default to sound-on / desktop-off until set, then persist", %{alice: alice} do
-      assert Chat.notification_prefs(scope(alice)) == %{sound: true, desktop: false}
+    test "default to sound-on / desktop-off / default chime until set, then persist", %{
+      alice: alice
+    } do
+      assert Chat.notification_prefs(scope(alice)) ==
+               %{sound: true, desktop: false, sound_name: "chime"}
 
       {:ok, false} = Chat.set_notify_sound(scope(alice), false)
-      assert Chat.notification_prefs(scope(alice)) == %{sound: false, desktop: false}
+
+      assert Chat.notification_prefs(scope(alice)) ==
+               %{sound: false, desktop: false, sound_name: "chime"}
 
       {:ok, true} = Chat.set_notify_desktop(scope(alice), true)
-      assert Chat.notification_prefs(scope(alice)) == %{sound: false, desktop: true}
+
+      assert Chat.notification_prefs(scope(alice)) ==
+               %{sound: false, desktop: true, sound_name: "chime"}
     end
 
     test "setting one toggle doesn't clobber the other or the reaction prefs", %{alice: alice} do
@@ -1713,8 +1720,28 @@ defmodule Eden.ChatTest do
       {:ok, _} = Chat.set_notify_desktop(scope(alice), true)
 
       # notify_sound keeps its default; the shared FolderPrefs row's quick_reactions survive.
-      assert Chat.notification_prefs(scope(alice)) == %{sound: true, desktop: true}
+      assert Chat.notification_prefs(scope(alice)) ==
+               %{sound: true, desktop: true, sound_name: "chime"}
+
       assert Chat.quick_reactions(scope(alice)) == ["🔥"]
+    end
+
+    test "the chime preset picks a valid name, rejects unknown, and resolves nil (#289)", %{
+      alice: alice
+    } do
+      assert "chime" in Chat.notify_sound_names()
+      assert Chat.default_notify_sound_name() == "chime"
+
+      {:ok, "glass"} = Chat.set_notify_sound_name(scope(alice), "glass")
+      assert Chat.notification_prefs(scope(alice)).sound_name == "glass"
+
+      # An unknown name is a no-op, not a stored dead preset.
+      assert {:error, :invalid} = Chat.set_notify_sound_name(scope(alice), "airhorn")
+      assert Chat.notification_prefs(scope(alice)).sound_name == "glass"
+
+      # Toggling a sibling pref never clobbers the chosen sound.
+      {:ok, _} = Chat.set_notify_sound(scope(alice), false)
+      assert Chat.notification_prefs(scope(alice)).sound_name == "glass"
     end
   end
 

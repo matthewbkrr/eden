@@ -27,6 +27,42 @@ import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
+// #289: notification-chime presets, synthesized via Web Audio (no audio assets).
+// Shared by the Notifier hook (plays the user's chosen preset on a new message)
+// and the Settings preview button. `key` is validated server-side against the
+// same closed set (Chat.notify_sound_names); unknown falls back to the default.
+window.edSound = {
+  // One enveloped note: soft attack + exponential decay so it's a chime, not a beep.
+  _note(ctx, {freq, at = 0, dur = 0.3, type = "sine", peak = 0.11}) {
+    const t = ctx.currentTime + at
+    const g = ctx.createGain()
+    g.connect(ctx.destination)
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.012)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    const o = ctx.createOscillator()
+    o.type = type
+    o.frequency.setValueAtTime(freq, t)
+    o.connect(g)
+    o.start(t)
+    o.stop(t + dur + 0.02)
+  },
+  _presets: {
+    chime: [{freq: 660, dur: 0.34}, {freq: 880, at: 0.09, dur: 0.28}],
+    ping: [{freq: 1046, dur: 0.25, peak: 0.1}],
+    pop: [{freq: 420, dur: 0.14, type: "triangle", peak: 0.13}],
+    glass: [{freq: 880, dur: 0.18}, {freq: 1318, at: 0.06, dur: 0.18}, {freq: 1760, at: 0.12, dur: 0.22}],
+    block: [
+      {freq: 300, dur: 0.1, type: "triangle", peak: 0.16},
+      {freq: 200, at: 0.05, dur: 0.12, type: "triangle", peak: 0.12},
+    ],
+  },
+  play(ctx, key) {
+    if (!ctx) return
+    for (const n of this._presets[key] || this._presets.chime) this._note(ctx, n)
+  },
+}
+
 // Capped backoff: retry fast at first, then settle at 5s. Keeps recovery quick
 // on a flaky RU↔overseas link without hammering the server during a long outage.
 const backoff = (tries) => [250, 500, 1000, 2000, 5000][tries - 1] || 5000

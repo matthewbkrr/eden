@@ -2604,3 +2604,43 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Profile and status"
 msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Chime"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Ping"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pop"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Glass"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Block"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Notification sound"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pick the chime that plays. Press play to hear it."
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Play"
+msgstr ""

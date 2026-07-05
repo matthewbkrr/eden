@@ -3776,6 +3776,31 @@ html {
   }
 
   .ed-settings-pane { display: flex; flex-direction: column; gap: 1.5rem; }
+
+  /* Notification-sound preset picker (#289): a radio row + a Play button. */
+  .ed-soundlist {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+  }
+  .ed-soundlist__row {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .ed-soundlist__pick {
+    flex: 1;
+    cursor: pointer;
+  }
+  .ed-soundlist__pick:hover {
+    background: var(--ed-surface-2);
+  }
+  .ed-soundlist__pick.is-active {
+    background: color-mix(in oklab, var(--ed-primary) 12%, transparent);
+  }
+  .ed-soundlist__pick.is-active .hero-check-micro {
+    color: var(--ed-primary);
+  }
 }
 
 /* Admin people list (#174): selectable rows. Lift on hover / selection (surface-2,

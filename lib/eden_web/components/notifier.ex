@@ -17,6 +17,7 @@ defmodule EdenWeb.Notifier do
       id="notifier"
       phx-hook=".Notifier"
       data-sound={to_string(@prefs.sound)}
+      data-sound-name={@prefs.sound_name}
       data-desktop={to_string(@prefs.desktop)}
       hidden
     >
@@ -120,20 +121,10 @@ defmodule EdenWeb.Notifier do
           else ctx.resume().then(() => ctx.state === "running" && this.play(ctx)).catch(() => {})
         },
         play(ctx) {
-          const t = ctx.currentTime
-          const gain = ctx.createGain()
-          gain.connect(ctx.destination)
-          // Soft attack/decay so it's a gentle chime, not a beep.
-          gain.gain.setValueAtTime(0.0001, t)
-          gain.gain.exponentialRampToValueAtTime(0.11, t + 0.012)
-          gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34)
-          const osc = ctx.createOscillator()
-          osc.type = "sine"
-          osc.frequency.setValueAtTime(660, t)
-          osc.frequency.setValueAtTime(880, t + 0.09) // a small two-note rise
-          osc.connect(gain)
-          osc.start(t)
-          osc.stop(t + 0.35)
+          // #289: the chime is the user's chosen preset (window.edSound owns the
+          // synth + preset table, shared with the Settings preview). data-sound-name
+          // is kept fresh by the server render; unknown/absent falls back to default.
+          window.edSound && window.edSound.play(ctx, this.el.dataset.soundName)
         },
       }
     </script>

@@ -2620,3 +2620,43 @@ msgstr "Сначала уберите одну — ряд заполнен."
 #, elixir-autogen, elixir-format
 msgid "Profile and status"
 msgstr "Профиль и статус"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Chime"
+msgstr "Колокольчик"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Ping"
+msgstr "Пинг"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pop"
+msgstr "Поп"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Glass"
+msgstr "Стекло"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Block"
+msgstr "Блок"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Notification sound"
+msgstr "Звук уведомления"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pick the chime that plays. Press play to hear it."
+msgstr "Выберите звук уведомления. Нажмите play, чтобы прослушать."
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Play"
+msgstr "Прослушать"
