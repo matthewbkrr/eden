@@ -251,13 +251,14 @@ defmodule EdenWeb.SettingsLive do
                   >
                     <div class="flex items-center gap-4">
                       <% entry = List.first(@uploads.avatar.entries) %>
-                      <%!-- The avatar is itself a click target for the picker (camera
-                            scrim on hover/focus), mirroring the group-avatar edit
-                            (#178). The "Upload photo" button drives the same input. --%>
+                      <%!-- The avatar is the only upload control (camera scrim on
+                            hover/focus), mirroring the group-avatar edit (#178):
+                            click it, pick a file, and it previews here at once; Save
+                            persists it. The sr-only file input keeps it keyboard-usable. --%>
                       <label
                         class="ed-avatar-edit"
                         title={gettext("Change photo")}
-                        aria-label={gettext("Upload photo")}
+                        aria-label={gettext("Change photo")}
                       >
                         <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
                           <.live_img_preview :if={entry} entry={entry} />
@@ -278,12 +279,6 @@ defmodule EdenWeb.SettingsLive do
 
                       <div class="flex flex-col gap-1.5">
                         <div class="flex items-center gap-2">
-                          <label
-                            for="avatar-upload"
-                            class="ed-btn ed-btn--ghost cursor-pointer text-sm"
-                          >
-                            {gettext("Upload photo")}
-                          </label>
                           <button
                             :if={@profile_user.avatar_key && Enum.empty?(@uploads.avatar.entries)}
                             type="button"
