@@ -678,5 +678,49 @@ defmodule Eden.AccountsTest do
       assert {:error, :forbidden} =
                Accounts.create_password_reset(Scope.for_user(member), user_fixture())
     end
+
+    test "re-reads the target's role — a stale in-memory role can't authorize a reset (#263)" do
+      admin = promote(user_fixture(), "admin")
+      target = user_fixture()
+
+      # The plain admin holds a struct where target.role is still "member", but the DB row is
+      # promoted to super_admin before the reset. The FOR UPDATE re-read checks the fresh role.
+      promote(target, "super_admin")
+
+      assert {:error, :forbidden} =
+               Accounts.create_password_reset(Scope.for_user(admin), target)
+    end
+  end
+
+  describe "TOTP activation hardening (#263)" do
+    test "admin_reset_totp re-reads the target's role (no stale-role TOCTOU)" do
+      admin = promote(user_fixture(), "admin")
+      target = user_fixture()
+      promote(target, "super_admin")
+
+      assert {:error, :forbidden} = Accounts.admin_reset_totp(Scope.for_user(admin), target)
+    end
+
+    test "backup codes carry 80 bits of entropy (16 chars)" do
+      user = user_fixture()
+      {secret, _} = Accounts.setup_totp(user)
+
+      {:ok, _user, codes} =
+        Accounts.activate_totp(user, secret, NimbleTOTP.verification_code(secret))
+
+      assert length(codes) == 10
+      assert Enum.all?(codes, &(String.length(&1) == 16))
+    end
+
+    test "activation burns the confirmation code — it can't also pass the login factor" do
+      user = user_fixture()
+      {secret, _} = Accounts.setup_totp(user)
+      code = NimbleTOTP.verification_code(secret)
+
+      {:ok, activated, _codes} = Accounts.activate_totp(user, secret, code)
+
+      # The same code was consumed at activation → verify_totp rejects it as a replay.
+      assert :error = Accounts.verify_totp(activated, code)
+    end
   end
 end
