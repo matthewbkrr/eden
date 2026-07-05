@@ -45,12 +45,24 @@ defmodule EdenWeb.SettingsLive do
   @impl true
   def handle_params(params, _uri, socket) do
     ids = section_ids(socket.assigns)
-    section = if params["section"] in ids, do: params["section"], else: hd(ids)
+    requested = params["section"]
+    section = if requested in ids, do: requested, else: hd(ids)
 
-    {:noreply,
-     socket
-     |> assign(section: section, drilled_in?: Map.has_key?(params, "section"))
-     |> assign(page_title: gettext("Settings") <> " \u00b7 " <> section_label(section))}
+    socket =
+      socket
+      |> assign(section: section, drilled_in?: Map.has_key?(params, "section"))
+      |> assign(page_title: gettext("Settings") <> " \u00b7 " <> section_label(section))
+
+    # A named-but-unknown/unauthorized section (e.g. /settings/nope, or
+    # /settings/profile while signed out) falls back to `section`; canonicalize
+    # the URL to it so the path never diverges from the highlighted pane/title.
+    # push_patch only lands on the connected render; the dead render already
+    # shows the consistent fallback pane, just under the stale URL for a beat.
+    if requested && requested != section && connected?(socket) do
+      {:noreply, push_patch(socket, to: ~p"/settings/#{section}", replace: true)}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Which sections this visitor can reach, in menu order. Device prefs
@@ -210,7 +222,10 @@ defmodule EdenWeb.SettingsLive do
               <.link patch={~p"/settings"} class="ed-btn--icon md:hidden" aria-label={gettext("Back")}>
                 <.icon name="hero-arrow-left-mini" class="size-5" />
               </.link>
-              <h2 style="font-size:1.125rem; font-weight:640;">{section_label(@section)}</h2>
+              <%!-- The section name is the page's h1: on mobile the aside (with the
+                    "Settings" wordmark) is hidden while drilled in, so this must
+                    carry the heading. --%>
+              <h1 style="font-size:1.125rem; font-weight:640;">{section_label(@section)}</h1>
             </header>
 
             <.ed_flash flash={@flash} />

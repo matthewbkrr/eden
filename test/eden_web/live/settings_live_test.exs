@@ -100,11 +100,18 @@ defmodule EdenWeb.SettingsLiveTest do
       refute has_element?(view, "#profile-form")
     end
 
-    test "an unknown section falls back to the default pane", %{conn: conn} do
+    test "an unknown section falls back to the default pane, highlight and title agreeing", %{
+      conn: conn
+    } do
       conn = log_in_user(conn, user_fixture())
       {:ok, view, _html} = live(conn, ~p"/settings/nope")
 
+      # The fallback pane, its menu highlight and the page title all resolve to
+      # the same section (profile), so nothing diverges. (The connected view also
+      # push_patches the URL to /settings/profile — a runtime-only nicety.)
       assert has_element?(view, "#profile-form")
+      assert has_element?(view, ~s(a[aria-current="page"]), "Profile")
+      assert page_title(view) =~ "Profile"
     end
   end
 
