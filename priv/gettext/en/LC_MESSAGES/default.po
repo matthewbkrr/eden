@@ -2584,6 +2584,11 @@ msgstr ""
 
 #: lib/eden_web/live/settings_live.ex
 #, elixir-autogen, elixir-format
+msgid "Security"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
 msgid "No folders yet. Add one below to group chats into sidebar tabs."
 msgstr ""
 
