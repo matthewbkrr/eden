@@ -395,7 +395,7 @@ defmodule EdenWeb.SettingsLive do
                     <div id="username-feedback" aria-live="polite" style="min-height:1rem;">
                       <span
                         :if={@username_hint == :available}
-                        style="color: var(--ed-online); font-size:0.75rem;"
+                        style="color: var(--ed-online-strong); font-size:0.75rem;"
                       >
                         {gettext("Available")}
                       </span>
@@ -497,7 +497,7 @@ defmodule EdenWeb.SettingsLive do
                     <span
                       :if={Accounts.totp_enrolled?(@profile_user)}
                       class="rounded-[var(--ed-radius-full)] px-2 py-0.5"
-                      style="font-size:0.6875rem; font-weight:600; color: var(--ed-online); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
+                      style="font-size:0.6875rem; font-weight:600; color: var(--ed-online-strong); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
                     >
                       {gettext("On")}
                     </span>
