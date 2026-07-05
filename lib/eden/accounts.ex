@@ -225,13 +225,19 @@ defmodule Eden.Accounts do
   @doc """
   Writes the admin-/sync-managed identity fields (#173): corp email, Должность,
   org structure, and the directory-sync seams. This is the **only** write path for
-  those fields — called by the admin panel (#174) or a future sync, never by a
-  user-facing form. Broadcasts `{:user_updated, user}` so open profile cards refresh.
-  Returns `{:ok, user}` or `{:error, changeset}`.
+  those fields — the admin panel (#174) or a future sync, never a user-facing form.
+  **Admin-only, enforced here** (#262): a write to the eden system-of-record must not
+  rely on a web-layer gate alone, so a future second caller is safe by default (like
+  `set_user_role/3`, `create_password_reset/2`). Broadcasts `{:user_updated, user}` so
+  open profile cards refresh. Returns `{:ok, user}` | `{:error, :forbidden | changeset}`.
   """
-  def apply_managed_fields(%User{} = user, attrs) do
-    with {:ok, updated} <- user |> User.managed_changeset(attrs) |> Repo.update() do
-      {:ok, broadcast_user_update(updated)}
+  def apply_managed_fields(%Scope{user: %User{} = actor}, %User{} = target, attrs) do
+    if User.admin?(actor) do
+      with {:ok, updated} <- target |> User.managed_changeset(attrs) |> Repo.update() do
+        {:ok, broadcast_user_update(updated)}
+      end
+    else
+      {:error, :forbidden}
     end
   end
 

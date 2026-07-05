@@ -177,6 +177,20 @@ defmodule EdenWeb.AdminLiveTest do
       # write the stale value back.
       assert render(view) =~ "Externally Set"
     end
+
+    test "a demoted admin's open session is ejected to /settings (#262)", %{
+      conn: conn,
+      boss: boss
+    } do
+      {:ok, view, _} = live(conn, ~p"/admin")
+
+      # The acting admin is demoted from another super_admin's session: the {:user_updated}
+      # for OUR OWN account, now a plain member, must eject us — :require_admin only gates at
+      # mount, so a mid-session demotion wouldn't otherwise remove access until navigation.
+      send(view.pid, {:user_updated, %{boss | role: "member"}})
+
+      assert_redirect(view, ~p"/settings")
+    end
   end
 
   describe "as a super_admin" do

@@ -39,8 +39,9 @@ design — built incrementally as features land.)
   reference the user id). **Managed identity fields** (`corp_email`, `position`
   (Должность), `structure`, + the `external_id`/`identity_source`/`managed_by`/
   `directory_synced_at` sync seams, #173) are **admin-/sync-owned**: written ONLY
-  through `managed_changeset` / `apply_managed_fields/2` (the admin panel #174 or a
-  future directory sync), never the user's profile form — the split is the eden-as-
+  through `managed_changeset` / `apply_managed_fields/3` (admin-scoped, `admin?`-checked
+  in the context #262 — the admin panel #174 or a future directory sync), never the
+  user's profile form — the split is the eden-as-
   system-of-record model of ADR-0002/#172. Users also carry a global **platform
   role** (`member | admin | super_admin`, #174) — distinct from the per-channel
   `owner|admin|member` roles; it gates the admin panel and is set only via
@@ -48,8 +49,9 @@ design — built incrementally as features land.)
   locked `FOR UPDATE` — so admin can never be locked out; a `role` CHECK constraint
   backs the changeset). `admin?/1` is the gate predicate. The **admin panel**
   (`/admin`, `EdenWeb.AdminLive`, `:require_admin` on_mount — enforced at mount
-  AND every patch) is where admins edit people's managed fields
-  (`apply_managed_fields/2`) and a super_admin assigns roles
+  AND every patch — and a mid-session demotion ejects the actor to `/settings` via
+  their own `{:user_updated}`, since on_mount doesn't re-run, #262) is where admins edit
+  people's managed fields (`apply_managed_fields/3`) and a super_admin assigns roles
   (`set_user_role/3`); a shielded link surfaces it in Settings for admins only.
   **Passwords & recovery** (#232): a user changes their password in Settings
   (`change_password/3` verifies the current one, then **revokes every session** —

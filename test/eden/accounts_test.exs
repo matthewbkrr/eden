@@ -289,13 +289,17 @@ defmodule Eden.AccountsTest do
     end
   end
 
-  describe "apply_managed_fields/2 (#173)" do
-    test "sets managed fields (trimmed, NUL-stripped) and broadcasts" do
+  describe "apply_managed_fields/3 (#173, #262)" do
+    setup do
+      %{admin: Scope.for_user(promote(user_fixture(), "admin"))}
+    end
+
+    test "sets managed fields (trimmed, NUL-stripped) and broadcasts", %{admin: admin} do
       user = user_fixture()
       :ok = Accounts.subscribe_user_updates()
 
       assert {:ok, u} =
-               Accounts.apply_managed_fields(user, %{
+               Accounts.apply_managed_fields(admin, user, %{
                  "corp_email" => "  ivan@rwb.ru ",
                  "position" => " Руководитель" <> <<0>> <> " блока ",
                  "structure" => "ЦФО • Склад Обухово",
@@ -311,33 +315,50 @@ defmodule Eden.AccountsTest do
       assert_receive {:user_updated, %User{corp_email: "ivan@rwb.ru"}}
     end
 
-    test "rejects a malformed corp email and an unknown identity_source" do
+    test "rejects a malformed corp email and an unknown identity_source", %{admin: admin} do
       user = user_fixture()
 
       assert {:error, %Ecto.Changeset{}} =
-               Accounts.apply_managed_fields(user, %{"corp_email" => "not-an-email"})
+               Accounts.apply_managed_fields(admin, user, %{"corp_email" => "not-an-email"})
 
       assert {:error, %Ecto.Changeset{}} =
-               Accounts.apply_managed_fields(user, %{"identity_source" => "martian"})
+               Accounts.apply_managed_fields(admin, user, %{"identity_source" => "martian"})
     end
 
-    test "bounds external_id and constrains managed_by (the remaining seams)" do
+    test "bounds external_id and constrains managed_by (the remaining seams)", %{admin: admin} do
       user = user_fixture()
 
       assert {:error, %Ecto.Changeset{}} =
-               Accounts.apply_managed_fields(user, %{"external_id" => String.duplicate("x", 256)})
+               Accounts.apply_managed_fields(admin, user, %{
+                 "external_id" => String.duplicate("x", 256)
+               })
 
       assert {:error, %Ecto.Changeset{}} =
-               Accounts.apply_managed_fields(user, %{"managed_by" => "the_wind"})
+               Accounts.apply_managed_fields(admin, user, %{"managed_by" => "the_wind"})
 
-      assert {:ok, u} = Accounts.apply_managed_fields(user, %{"managed_by" => "directory"})
+      assert {:ok, u} = Accounts.apply_managed_fields(admin, user, %{"managed_by" => "directory"})
       assert u.managed_by == "directory"
     end
 
-    test "a blank managed field clears to nil" do
-      {:ok, user} = Accounts.apply_managed_fields(user_fixture(), %{"position" => "Analyst"})
-      assert {:ok, cleared} = Accounts.apply_managed_fields(user, %{"position" => "  "})
+    test "a blank managed field clears to nil", %{admin: admin} do
+      {:ok, user} =
+        Accounts.apply_managed_fields(admin, user_fixture(), %{"position" => "Analyst"})
+
+      assert {:ok, cleared} = Accounts.apply_managed_fields(admin, user, %{"position" => "  "})
       assert cleared.position == nil
+    end
+
+    test "a non-admin actor is refused (authz is in the context, not web-only) — #262" do
+      member = Scope.for_user(user_fixture())
+
+      assert {:error, :forbidden} =
+               Accounts.apply_managed_fields(member, user_fixture(), %{"position" => "Nope"})
+
+      # A super_admin is also an admin, so it's allowed.
+      super_admin = Scope.for_user(promote(user_fixture(), "super_admin"))
+
+      assert {:ok, _} =
+               Accounts.apply_managed_fields(super_admin, user_fixture(), %{"position" => "Ok"})
     end
   end
 
