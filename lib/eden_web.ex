@@ -86,6 +86,8 @@ defmodule EdenWeb do
       import Phoenix.HTML
       # Core UI components
       import EdenWeb.CoreComponents
+      # Notification renderer host (#272), shared across authed pages
+      import EdenWeb.Notifier
 
       # Common modules used in templates
       alias EdenWeb.Layouts

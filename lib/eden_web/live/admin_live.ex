@@ -124,6 +124,8 @@ defmodule EdenWeb.AdminLive do
   def render(assigns) do
     ~H"""
     <div class="ed-root min-h-screen">
+      <%!-- New-message chime/banner also fires here (#272), not just in the chat. --%>
+      <.notifier :if={@notify_prefs} prefs={@notify_prefs} />
       <div class="mx-auto max-w-5xl px-5 sm:px-6 py-10">
         <header class="flex items-center gap-3 mb-8">
           <.link navigate={~p"/app"} class="ed-btn--icon" aria-label={gettext("Back")}>
