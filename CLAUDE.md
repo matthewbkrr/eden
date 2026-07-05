@@ -282,6 +282,19 @@ design — built incrementally as features land.)
   prod, swappable without touching callers. Callers store only the file **key +
   metadata**, never a concrete storage implementation — chat attachments
   (`Message`) and account avatars (`avatar_key`) both go through it.
+- **Notifications** — notification delivery behind an **adapter behaviour**
+  (`Eden.Notifications.Adapter`), mirroring Storage (ADR-0001, #235). `Eden.Chat`
+  decides **who** hears (the #213 gating — sender/left/mute/DND, thread-followers
+  for a reply; one `notify_recipient_ids` with a shared `common_gates`) and builds
+  a locale-neutral **payload**; `Eden.Notifications.deliver/2` fans that
+  already-gated set out over the configured adapters. Today the only transport is
+  the in-tab **`Eden.Notifications.Web`** adapter — broadcasts `{:notify, payload}`
+  on `user:<id>:notify` (separate from the `:chat` sidebar-sync topic, #272), which
+  open LiveViews subscribe to via `EdenWeb.NotifyHook` on **every** authed page. The
+  payload shape (the delivery **contract**) is documented once in the
+  `Eden.Notifications` moduledoc. Planned push transports (native desktop app / APNs
+  / FCM / RuStore-VK) and the `notification_targets` device table are deferred to
+  later ADR-0001 tickets — new adapter modules on this same seam, no caller change.
 
 ## Commands
 

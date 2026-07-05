@@ -23,6 +23,11 @@ config :eden, Oban,
 config :eden, Eden.Storage, adapter: Eden.Storage.Local
 config :eden, Eden.Storage.Local, root: "priv/uploads"
 
+# Notification delivery (ADR-0001). Fan-out adapters — today only the in-tab Web
+# transport; push transports (desktop/APNs/FCM/RuStore) join this list, no caller
+# changes. See Eden.Notifications.
+config :eden, Eden.Notifications, adapters: [Eden.Notifications.Web]
+
 # Configure the endpoint
 config :eden, EdenWeb.Endpoint,
   url: [host: "localhost"],

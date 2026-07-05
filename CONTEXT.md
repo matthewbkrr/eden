@@ -50,3 +50,24 @@ them, not speculatively. Use these words exactly; don't drift to synonyms.
   soft-delete tombstone with forward-safe blob cleanup.
 - **Forward (carry-and-drop)** — pick a message up onto the composer, drop it
   by sending; multi-select carries an ordered list.
+
+## Notifications (ADR-0001)
+
+- **Notification** — an alert about a new message/reply. A locale-neutral
+  **payload** map, produced solely by `Eden.Chat` (`notify_payload/1`) and
+  rendered by adapters; its shape is the delivery **contract**, documented in
+  one place (`Eden.Notifications` moduledoc).
+- **Recipient set** — *who* hears about a message: decided in `Eden.Chat` (the
+  #213 gating — sender/left/mute/DND, and thread-followers for a reply), never
+  in an adapter. Adapters deliver to an already-correct set.
+- **Notification adapter** (`Eden.Notifications.Adapter`) — a delivery transport
+  with one `deliver(user_id, payload)` callback, mirroring `Storage.Adapter`.
+  Configured as a fan-out list; new transports are new modules, no caller change.
+- **Web adapter** (`Eden.Notifications.Web`) — the in-tab transport: broadcasts
+  `{:notify, payload}` on the **notify topic** (`user:<id>:notify`) that open
+  LiveViews subscribe to. No stored device row — it rides the live connection.
+- **Notify topic** — `user:<id>:notify`, separate from the `user:<id>:chat`
+  sidebar-sync topic so pages that only want alerts aren't flooded with chatter.
+- **Push target** *(planned, ADR-0001)* — a per-user push **device** row
+  (`desktop | apns | fcm | rustore | vk`, token NOT NULL). Not yet built; the
+  Web adapter has no target row.

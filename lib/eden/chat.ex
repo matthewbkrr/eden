@@ -28,6 +28,7 @@ defmodule Eden.Chat do
 
   alias Eden.Ids
   alias Eden.Images
+  alias Eden.Notifications
   alias Eden.Repo
   alias Eden.Storage
 
@@ -3491,16 +3492,6 @@ defmodule Eden.Chat do
     do: Phoenix.PubSub.subscribe(@pubsub, user_topic(user.id))
 
   @doc """
-  Subscribe to the scoped user's new-message notifications only (#272). This is a
-  SEPARATE topic from `subscribe_user/1`: `EdenWeb.NotifyHook` mounts on every authed
-  LiveView (Settings, Admin, …) to deliver alerts, and must not also be flooded with the
-  sidebar-sync chatter (folders / activity / read / hidden / …) that only ChatLive
-  handles — an unhandled message on those pages is just log noise.
-  """
-  def subscribe_notifications(%Scope{user: user}),
-    do: Phoenix.PubSub.subscribe(@pubsub, notify_topic(user.id))
-
-  @doc """
   Broadcast that the scoped user is typing in `conversation_id`, on the
   conversation topic — so only sessions with that conversation open see it.
   Ephemeral: no DB write, receivers track it with a short TTL. Throttle at the
@@ -3551,63 +3542,67 @@ defmodule Eden.Chat do
   # everything, including followed threads (decided in #213).
   defp notify_new(message) do
     case notify_recipient_ids(message) do
-      [] ->
-        :ok
-
-      recipients ->
-        payload = notify_payload(message)
-
-        for uid <- recipients,
-            do: Phoenix.PubSub.broadcast(@pubsub, notify_topic(uid), {:notify, payload})
+      [] -> :ok
+      recipients -> Notifications.deliver(recipients, notify_payload(message))
     end
   end
 
-  defp notify_recipient_ids(%{root_id: root_id} = message) when not is_nil(root_id),
-    do: thread_recipient_ids(message)
+  # Who should hear about `message`: thread FOLLOWERS for a reply (#57), else the
+  # conversation's active MEMBERS. Both base sets then run through `common_gates/2`, so
+  # the shared rule (not the sender / not left / not directly muted / not DND) lives in
+  # one place — a new gate is one edit, not two. Filtered entirely in SQL.
+  defp notify_recipient_ids(%{root_id: root_id} = message) when not is_nil(root_id) do
+    # Threads are rooms-only, so no folder mute — just the room membership's direct
+    # mute + DND (via common_gates). The Membership join also drops anyone who left.
+    from(tm in ThreadMembership,
+      join: u in User,
+      as: :user,
+      on: u.id == tm.user_id,
+      join: m in Membership,
+      as: :membership,
+      on: m.user_id == tm.user_id and m.conversation_id == ^message.conversation_id,
+      where: tm.root_id == ^message.root_id and tm.following == true,
+      select: tm.user_id
+    )
+    |> common_gates(message)
+    |> Repo.all()
+  end
 
-  defp notify_recipient_ids(message), do: direct_recipient_ids(message)
+  defp notify_recipient_ids(message) do
+    from(m in Membership,
+      as: :membership,
+      join: u in User,
+      as: :user,
+      on: u.id == m.user_id,
+      where:
+        m.conversation_id == ^message.conversation_id and
+          m.user_id not in subquery(muted_folder_users(message)),
+      select: m.user_id
+    )
+    |> common_gates(message)
+    |> Repo.all()
+  end
 
-  # Active members (minus sender), filtered entirely in SQL: drop anyone with the
-  # conversation directly muted (`muted_at`), in Do-Not-Disturb, or muted via ANY of
-  # their muted folders. `presence_status` is NOT NULL (default "auto"), so the bare
-  # `!= "dnd"` keeps everyone else (no NULL-comparison surprise).
-  defp direct_recipient_ids(message) do
-    muted_folder_users =
-      from fm in FolderMembership,
-        join: f in Folder,
-        on: f.id == fm.folder_id,
-        where: fm.conversation_id == ^message.conversation_id and not is_nil(f.muted_at),
-        select: f.user_id
-
-    Repo.all(
-      from m in Membership,
-        join: u in User,
-        on: u.id == m.user_id,
-        where:
-          m.conversation_id == ^message.conversation_id and is_nil(m.left_at) and
-            m.user_id != ^message.sender_id and is_nil(m.muted_at) and
-            u.presence_status != "dnd" and
-            m.user_id not in subquery(muted_folder_users),
-        select: m.user_id
+  # The gates every recipient path shares — not the sender, hasn't left, hasn't directly
+  # muted the conversation, isn't in Do-Not-Disturb. Runs on the `:membership`/`:user`
+  # named bindings both base queries declare. `presence_status` is NOT NULL (default
+  # "auto"), so the bare `!= "dnd"` keeps everyone else (no NULL-comparison surprise).
+  defp common_gates(query, message) do
+    from([membership: m, user: u] in query,
+      where:
+        m.user_id != ^message.sender_id and is_nil(m.left_at) and
+          is_nil(m.muted_at) and u.presence_status != "dnd"
     )
   end
 
-  # Thread reply: only FOLLOWERS (#57). Threads are rooms-only, so no folder mute —
-  # just the room membership's direct mute + DND. The Membership join also drops
-  # anyone who has left the room.
-  defp thread_recipient_ids(message) do
-    Repo.all(
-      from tm in ThreadMembership,
-        join: u in User,
-        on: u.id == tm.user_id,
-        join: m in Membership,
-        on: m.user_id == tm.user_id and m.conversation_id == ^message.conversation_id,
-        where:
-          tm.root_id == ^message.root_id and tm.following == true and
-            tm.user_id != ^message.sender_id and is_nil(m.left_at) and is_nil(m.muted_at) and
-            u.presence_status != "dnd",
-        select: tm.user_id
-    )
+  # Users who muted `message`'s conversation via ANY of their muted folders (direct
+  # chats only — rooms/threads have no folders).
+  defp muted_folder_users(message) do
+    from fm in FolderMembership,
+      join: f in Folder,
+      on: f.id == fm.folder_id,
+      where: fm.conversation_id == ^message.conversation_id and not is_nil(f.muted_at),
+      select: f.user_id
   end
 
   # Locale-neutral payload: the web layer (recipient's session) formats the title,
@@ -3648,7 +3643,6 @@ defmodule Eden.Chat do
 
   defp topic(conversation_id), do: "conversation:#{conversation_id}"
   defp user_topic(user_id), do: "user:#{user_id}:chat"
-  defp notify_topic(user_id), do: "user:#{user_id}:notify"
 
   ## Internals
 

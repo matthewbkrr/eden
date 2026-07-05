@@ -2,7 +2,7 @@ defmodule EdenWeb.NotifyHook do
   @moduledoc """
   Delivers new-message notifications to **every** authenticated LiveView, not just
   ChatLive (#272). Modeled on `EdenWeb.RailHook`: on the connected mount it subscribes
-  to the user's **notifications** topic (`Chat.subscribe_notifications/1` — a dedicated
+  to the user's **notifications** stream (`Eden.Notifications.subscribe/1` — a dedicated
   topic carrying only `{:notify}`, NOT the full chat topic, so Settings/Admin aren't
   flooded with sidebar-sync chatter they have no handler for) and attaches a single
   `{:notify}` handler that pushes the client-side `notify` event (chime / OS banner,
@@ -31,6 +31,7 @@ defmodule EdenWeb.NotifyHook do
   use Gettext, backend: EdenWeb.Gettext
 
   alias Eden.Chat
+  alias Eden.Notifications
 
   def on_mount(:default, _params, _session, socket) do
     case socket.assigns[:current_scope] do
@@ -50,7 +51,7 @@ defmodule EdenWeb.NotifyHook do
     socket = assign_new(socket, :notify_prefs, fn -> Chat.notification_prefs(scope) end)
 
     if connected?(socket) and !socket.assigns[:notify_watched?] do
-      Chat.subscribe_notifications(scope)
+      Notifications.subscribe(scope)
 
       socket
       |> assign_new(:notify_watched?, fn -> true end)
