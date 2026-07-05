@@ -2391,21 +2391,22 @@ defmodule EdenWeb.ChatLiveTest do
       refute_push_event(view, "notify", %{})
     end
 
-    test "suppresses a muted channel's room even in DM mode (the rail is loaded)", ctx do
-      {:ok, ch} = Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Muted"})
+    test "delivers a room notification — channel-mute is filtered server-side now (#271)", ctx do
+      {:ok, ch} = Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Team"})
       {:ok, [room]} = Channels.list_rooms(Scope.for_user(ctx.alice), ch.id)
-      {:ok, _} = Channels.toggle_channel_mute(Scope.for_user(ctx.alice), ch.id)
 
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
 
+      # The web layer no longer gates on channel-mute — a muted channel's recipients are
+      # already dropped in Chat.notify_recipient_ids, so whatever reaches here delivers.
       send(
         view.pid,
         {:notify, notify_payload(%{conversation_id: room.id, channel_id: ch.id, preview: "x"})}
       )
 
-      render(view)
-      refute_push_event(view, "notify", %{})
+      assert_push_event(view, "notify", %{conversation_id: conv_id})
+      assert conv_id == room.id
     end
   end
 end

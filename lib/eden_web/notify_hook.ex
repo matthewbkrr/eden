@@ -14,15 +14,14 @@ defmodule EdenWeb.NotifyHook do
   (it needs `current_scope`). The handler being here — and removed from ChatLive —
   means there's exactly one, so no double delivery.
 
-  Gates (the rest ran server-side in `Chat.notify_recipient_ids`: self / direct-mute /
-  folder-mute / DND / non-followers):
-    * **focus** — suppress if you're actively viewing THIS chat (needs `selected` +
-      `tab_visible`, ChatLive-only assigns; absent elsewhere ⇒ never focused ⇒ deliver).
-    * **channel** — a room message is delivered only where channel-mute can be checked
-      (ChatLive's `channels` rail data). Outside ChatLive there's no rail data, so room
-      notifications are suppressed rather than risk leaking a muted channel — deferred
-      to #235 (server-side channel-mute). DM/group messages (no `channel_id`) always
-      deliver.
+  Only **one** gate is left here, because it's the only per-session one: **focus** —
+  suppress if you're actively viewing THIS chat right now (needs `selected` +
+  `tab_visible`, ChatLive-only assigns; absent elsewhere ⇒ never focused ⇒ deliver).
+  Every other gate — self / direct-mute / folder-mute / DND / non-followers, and (since
+  #271) **channel-mute** — is applied server-side in `Chat.notify_recipient_ids`, so the
+  payload only reaches sessions that should hear it. That's why room notifications now
+  deliver on `/settings` and `/admin` too: a muted channel is already filtered out
+  upstream, with no rail data needed here.
   """
   import Phoenix.Component, only: [assign_new: 3]
   import Phoenix.LiveView
@@ -71,26 +70,13 @@ defmodule EdenWeb.NotifyHook do
 
   defp on_notify(_message, socket), do: {:cont, socket}
 
-  defp deliver?(payload, assigns),
-    do: not focused?(payload, assigns) and not channel_suppressed?(payload, assigns)
+  defp deliver?(payload, assigns), do: not focused?(payload, assigns)
 
   # "Am I reading THIS chat right now" → full suppression. selected/tab_visible are
   # ChatLive-only, so this is always false on /settings, /admin.
   defp focused?(payload, assigns) do
     !!(assigns[:tab_visible] && assigns[:selected] &&
          assigns[:selected].id == payload.conversation_id)
-  end
-
-  defp channel_suppressed?(%{channel_id: nil}, _assigns), do: false
-
-  defp channel_suppressed?(%{channel_id: cid}, assigns) do
-    case assigns[:channels] do
-      # No rail data (not on a chat page): can't verify channel-mute, so suppress the
-      # room notification rather than leak a muted channel (#272 — full room delivery
-      # everywhere lands with #235's server-side channel-mute).
-      nil -> true
-      channels -> Enum.any?(channels, &(&1.id == cid && &1.muted))
-    end
   end
 
   # Localize (recipient's session) the once-built broadcast payload into a client event:

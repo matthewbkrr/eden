@@ -1,7 +1,9 @@
 # ADR: Notification delivery beyond the browser (#218)
 
 Status: **accepted strategy; step 1 built** (#235 — the `Eden.Notifications` seam +
-Web adapter; push transports still pending) · Part of the notifications epic (#212).
+Web adapter; push transports still pending). Revised #271 — channel-mute moved to the
+server-side recipient set; only `focus` remains a web-layer gate; push-vs-active-session
+policy recorded below. · Part of the notifications epic (#212).
 
 This is an Architecture Decision Record. It fixes *how* eden will deliver a
 notification when the open web page can't (the browser is closed) and on mobile —
@@ -111,13 +113,33 @@ Eden.Chat  --(already gated #213)-->  Eden.Notifications  --fan out-->  adapters
 
 ### What is reused, unchanged
 
-- **Gating (#213).** Recipient selection — mute / DND / focus / thread-following —
-  stays in `Eden.Chat`. Adapters deliver to an *already-correct* recipient set; they
-  never re-decide who.
+- **Gating (#213, #271).** Recipient selection is server-side in `Eden.Chat`
+  (`notify_recipient_ids`): self / direct-mute (membership + folder) / DND /
+  thread-following, and **channel-mute** — `Eden.Chat` asks
+  `Eden.Channels.muted_user_ids/1` (a public function, no cross-context reach-in) and
+  subtracts them (#271). Adapters deliver to an *already-correct* recipient set; they
+  never re-decide who. **The one gate that is NOT here is `focus`** — "is this the chat
+  I'm looking at right now" is inherently per-session, so it stays in the web layer
+  (`EdenWeb.NotifyHook`) and does **not** protect a future push transport. See the
+  push-vs-active-session policy below.
 - **Per-user prefs (#214).** `notify_sound` / `notify_desktop` extend to per-kind
   toggles on the same `chat_folder_prefs` row (e.g. `notify_push`) when push lands.
-- **The "no badge past mute" / focus-suppression invariants** apply before the payload
-  ever reaches Notifications, so every transport inherits them for free.
+- **The "no badge past mute" invariant** — including channel-mute (#271) — applies
+  server-side before the payload reaches Notifications, so every transport inherits it
+  for free. (This was NOT true while channel-mute lived in the web layer, #272; #271
+  moved it to the recipient query precisely so push can't leak a muted channel.)
+
+### Push vs. an active session (decision for the push tickets)
+
+`focus` suppression is a **per-session** gate (the open, focused tab), so it cannot
+travel with the locale-neutral payload the way the server gates do. A push transport
+therefore needs its own policy for "should I push to the phone when the user also has a
+live, focused web session?" **Recommendation:** suppress the push while any of the
+user's sessions is present-and-focused (a presence check at delivery, like Slack /
+Telegram), falling back to push when every session is idle / away / closed. The final
+mechanism (how presence is signalled to the Notifications context) is settled in the
+push transport's own ticket; this ADR only records that the decision is required and
+the default lean.
 
 ## Consequences
 
