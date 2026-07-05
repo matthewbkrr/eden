@@ -13,7 +13,7 @@ defmodule EdenWeb.AdminLive do
   use EdenWeb, :live_view
 
   alias Eden.Accounts
-  alias Eden.Accounts.User
+  alias Eden.Accounts.{Scope, User}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -137,7 +137,9 @@ defmodule EdenWeb.AdminLive do
   # `:require_admin` only gates at mount, so a mid-session demotion wouldn't otherwise remove
   # access until the next navigation.
   defp sync_self(socket, user) do
-    socket = assign(socket, current_scope: %{socket.assigns.current_scope | user: user})
+    # Rebuild the scope via for_user/1 (its documented constructor — never assemble ad hoc)
+    # so any derived authorization state is recomputed, not just `user` swapped in (#292 review).
+    socket = assign(socket, current_scope: Scope.for_user(user))
 
     if Accounts.admin?(user) do
       {:noreply, socket}
