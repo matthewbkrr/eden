@@ -70,14 +70,15 @@ defmodule EdenWeb.SettingsLive do
   # head is the default section when none (or an unknown one) is requested.
   defp section_ids(assigns) do
     if match?(%{user: %User{}}, assigns[:current_scope]),
-      do: ~w(profile account notifications appearance language reactions folders),
+      do: ~w(profile account security notifications appearance language reactions folders),
       else: ~w(appearance language)
   end
 
   # Localized menu label + icon for a section id. One clause per section so a
   # future pane is a one-line change here plus its content block in render/1.
   defp section_meta("profile"), do: {gettext("Profile"), "hero-user-circle"}
-  defp section_meta("account"), do: {gettext("Account"), "hero-shield-check"}
+  defp section_meta("account"), do: {gettext("Account"), "hero-user"}
+  defp section_meta("security"), do: {gettext("Security"), "hero-lock-closed"}
   defp section_meta("notifications"), do: {gettext("Notifications"), "hero-bell"}
   defp section_meta("appearance"), do: {gettext("Appearance"), "hero-paint-brush"}
   defp section_meta("language"), do: {gettext("Language"), "hero-language"}
@@ -442,11 +443,9 @@ defmodule EdenWeb.SettingsLive do
                     </div>
                   </div>
                 </section>
+              </div>
 
-                <p style="font-size:0.8125rem; font-weight:600; color: var(--ed-muted); padding-left:0.125rem;">
-                  {gettext("Security")}
-                </p>
-
+              <div :if={@section == "security"} class="space-y-6">
                 <section
                   :if={@profile_user}
                   class="rounded-[var(--ed-radius-lg)] border p-5"
