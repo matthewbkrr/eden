@@ -271,7 +271,9 @@ defmodule EdenWeb.SettingsLive do
                             {initials(@profile_user.display_name)}
                           </span>
                         </span>
-                        <span class="ed-avatar-edit__overlay" aria-hidden="true">
+                        <%!-- Camera scrim is the "click to change" affordance; once a
+                              photo is picked, show the clean preview (no scrim over it). --%>
+                        <span :if={!entry} class="ed-avatar-edit__overlay" aria-hidden="true">
                           <.icon name="hero-camera-micro" class="size-5" />
                         </span>
                         <.live_file_input upload={@uploads.avatar} id="avatar-upload" class="sr-only" />
