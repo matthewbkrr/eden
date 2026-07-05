@@ -23,7 +23,8 @@ defmodule EdenWeb.SettingsLive do
                      change_password logout_everywhere totp_setup totp_cancel totp_dismiss_codes
                      totp_activate totp_disable set_status cancel_avatar new_folder_changed
                      create_folder rename_folder delete_folder reorder_folders toggle_quick_reaction
-                     reset_quick_reactions set_dbl_reaction set_notify_sound set_notify_desktop)
+                     reset_quick_reactions set_dbl_reaction set_notify_sound set_notify_desktop
+                     set_notify_sound_name)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -86,17 +87,36 @@ defmodule EdenWeb.SettingsLive do
 
   defp section_label(id), do: elem(section_meta(id), 0)
 
-  # Per-user notification toggles (#214), account-scoped like the reactions block.
+  # Per-user notification toggles (#214) + chime preset (#289), account-scoped.
   defp assign_notifications(socket) do
     case socket.assigns[:current_scope] do
       %{user: %User{}} = scope ->
-        %{sound: sound, desktop: desktop} = Chat.notification_prefs(scope)
-        assign(socket, notify_sound: sound, notify_desktop: desktop)
+        %{sound: sound, desktop: desktop, sound_name: name} = Chat.notification_prefs(scope)
+
+        assign(socket,
+          notify_sound: sound,
+          notify_desktop: desktop,
+          notify_sound_name: name,
+          sound_presets: Chat.notify_sound_names()
+        )
 
       _ ->
-        assign(socket, notify_sound: true, notify_desktop: false)
+        assign(socket,
+          notify_sound: true,
+          notify_desktop: false,
+          notify_sound_name: Chat.default_notify_sound_name(),
+          sound_presets: Chat.notify_sound_names()
+        )
     end
   end
+
+  # Localized label for a chime preset (#289); keys come from Chat.notify_sound_names/0.
+  defp sound_label("chime"), do: gettext("Chime")
+  defp sound_label("ping"), do: gettext("Ping")
+  defp sound_label("pop"), do: gettext("Pop")
+  defp sound_label("glass"), do: gettext("Glass")
+  defp sound_label("block"), do: gettext("Block")
+  defp sound_label(other), do: other
 
   # The personal quick-react row (#67) is account-scoped — only when signed in.
   # `quick_set` is the user's current row (or the default); `reaction_set` is the
@@ -874,6 +894,72 @@ defmodule EdenWeb.SettingsLive do
                     </button>
                   </div>
 
+                  <%!-- #289: chime preset picker. Presets are synthesized client-side
+                        (window.edSound); Play previews without a server round-trip. --%>
+                  <div class="mt-2 pt-3 border-t" style="border-color: var(--ed-border);">
+                    <p style="font-size:0.8125rem; font-weight:600;">
+                      {gettext("Notification sound")}
+                    </p>
+                    <p class="mt-0.5 mb-2" style="color: var(--ed-muted); font-size:0.75rem;">
+                      {gettext("Pick the chime that plays. Press play to hear it.")}
+                    </p>
+                    <ul
+                      class="ed-soundlist"
+                      role="radiogroup"
+                      aria-label={gettext("Notification sound")}
+                    >
+                      <li :for={key <- @sound_presets} class="ed-soundlist__row">
+                        <button
+                          type="button"
+                          role="radio"
+                          aria-checked={to_string(@notify_sound_name == key)}
+                          class={[
+                            "ed-menu__item ed-soundlist__pick",
+                            @notify_sound_name == key && "is-active"
+                          ]}
+                          phx-click="set_notify_sound_name"
+                          phx-value-name={key}
+                        >
+                          <span class="flex-1">{sound_label(key)}</span>
+                          <.icon
+                            :if={@notify_sound_name == key}
+                            name="hero-check-micro"
+                            class="size-4"
+                          />
+                        </button>
+                        <button
+                          type="button"
+                          id={"sound-preview-#{key}"}
+                          phx-hook=".SoundPreview"
+                          data-sound-key={key}
+                          class="ed-btn--icon"
+                          aria-label={gettext("Play %{name}", name: sound_label(key))}
+                          title={gettext("Play")}
+                        >
+                          <.icon name="hero-play-micro" class="size-4" />
+                        </button>
+                      </li>
+                    </ul>
+                    <script :type={Phoenix.LiveView.ColocatedHook} name=".SoundPreview">
+                      // Preview a chime preset (#289) client-side. The click is a user
+                      // gesture, so it can create / resume the shared AudioContext; the
+                      // synth + preset table live on window.edSound (shared with Notifier).
+                      export default {
+                        mounted() {
+                          this.el.addEventListener("click", () => {
+                            const AC = window.AudioContext || window.webkitAudioContext
+                            if (!AC) return
+                            if (!window.__edAudio) window.__edAudio = new AC()
+                            const ctx = window.__edAudio
+                            const go = () => window.edSound && window.edSound.play(ctx, this.el.dataset.soundKey)
+                            if (ctx.state === "suspended") ctx.resume().then(go).catch(() => {})
+                            else go()
+                          })
+                        }
+                      }
+                    </script>
+                  </div>
+
                   <div
                     class="flex items-center justify-between py-1.5 mt-2 pt-3 border-t"
                     style="border-color: var(--ed-border);"
@@ -1395,6 +1481,17 @@ defmodule EdenWeb.SettingsLive do
     {:ok, on} = Chat.set_notify_sound(socket.assigns.current_scope, not cur)
     {:noreply, assign(socket, notify_sound: on)}
   end
+
+  # #289: pick the chime preset. The name is client-supplied, so the context
+  # validates it against the closed set; an unknown value is a no-op.
+  def handle_event("set_notify_sound_name", %{"name" => name}, socket) do
+    case Chat.set_notify_sound_name(socket.assigns.current_scope, name) do
+      {:ok, saved} -> {:noreply, assign(socket, notify_sound_name: saved)}
+      {:error, :invalid} -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_notify_sound_name", _params, socket), do: {:noreply, socket}
 
   # #214: desktop toggle carries the browser-permission result from the .NotifyPerm hook;
   # if it couldn't enable, explain why instead of silently snapping back off.

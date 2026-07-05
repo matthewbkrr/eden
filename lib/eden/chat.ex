@@ -80,6 +80,12 @@ defmodule Eden.Chat do
   # can't pin a media worker (and starve the :media queue) indefinitely.
   @media_cmd_timeout_ms 20_000
 
+  # #289: notification-chime presets. Each is a synthesized tone pattern played
+  # client-side (window.edSound.play), so there are no audio assets to ship; the
+  # closed set guards the client-supplied name. The head is the default.
+  @notify_sound_names ~w(chime ping pop glass block)
+  @default_sound "chime"
+
   @doc "Largest accepted upload size in bytes — the client-side ceiling (the server enforces the per-kind cap)."
   def max_attachment_bytes, do: @max_video_bytes
 
@@ -3027,11 +3033,40 @@ defmodule Eden.Chat do
   applies to the whole map, never a per-field default.
   """
   def notification_prefs(%Scope{user: user}) do
-    Repo.one(
-      from p in FolderPrefs,
-        where: p.user_id == ^user.id,
-        select: %{sound: p.notify_sound, desktop: p.notify_desktop}
-    ) || %{sound: true, desktop: false}
+    row =
+      Repo.one(
+        from p in FolderPrefs,
+          where: p.user_id == ^user.id,
+          select: %{
+            sound: p.notify_sound,
+            desktop: p.notify_desktop,
+            sound_name: p.notify_sound_name
+          }
+      )
+
+    # A missing row (or a NULL / since-retired preset name) resolves to the
+    # default chime, so callers always get a valid, playable preset.
+    name =
+      if row && row.sound_name in @notify_sound_names, do: row.sound_name, else: @default_sound
+
+    Map.put(row || %{sound: true, desktop: false}, :sound_name, name)
+  end
+
+  @doc "The selectable notification-chime presets (#289), in display order."
+  def notify_sound_names, do: @notify_sound_names
+
+  @doc "The default chime preset (#289) — used when the user hasn't picked one."
+  def default_notify_sound_name, do: @default_sound
+
+  @doc """
+  Sets the scoped user's notification-chime preset (#289). The name is validated
+  against the closed set (it's client-supplied), so an unknown value is a no-op
+  `{:error, :invalid}` rather than a stored dead preset. Returns `{:ok, name}`.
+  """
+  def set_notify_sound_name(%Scope{user: user}, name) when is_binary(name) do
+    if name in @notify_sound_names,
+      do: upsert_notify(user.id, :notify_sound_name, name),
+      else: {:error, :invalid}
   end
 
   @doc "Sets the scoped user's sound-notification toggle (#214). Returns `{:ok, on}`."

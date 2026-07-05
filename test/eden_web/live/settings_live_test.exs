@@ -394,6 +394,25 @@ defmodule EdenWeb.SettingsLiveTest do
       assert has_element?(view, ~s(button[phx-click="set_notify_sound"][aria-checked="false"]))
     end
 
+    test "the chime preset picker lists presets and persists a pick (#289)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, html} = live(conn, ~p"/settings/notifications")
+
+      # The default preset is marked, and every preset has a Play preview button.
+      assert html =~ "Notification sound"
+      assert has_element?(view, ~s(button[phx-value-name="chime"][aria-checked="true"]))
+      assert has_element?(view, ~s(button[data-sound-key="glass"]))
+
+      view
+      |> element(~s(button[phx-click="set_notify_sound_name"][phx-value-name="glass"]))
+      |> render_click()
+
+      assert Chat.notification_prefs(scope).sound_name == "glass"
+      assert has_element?(view, ~s(button[phx-value-name="glass"][aria-checked="true"]))
+    end
+
     test "desktop toggle persists the hook's permission result; denied flashes guidance", %{
       conn: conn
     } do

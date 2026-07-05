@@ -14,6 +14,8 @@ defmodule Eden.Chat.FolderPrefs do
     * `notify_sound` / `notify_desktop` — per-user notification toggles (#214):
       play a sound / show an OS desktop notification on a new message. Written by
       `Chat.set_notify_sound/2` and `Chat.set_notify_desktop/2`.
+    * `notify_sound_name` — which chime preset plays (#289); `nil` means "use the
+      default preset". Written by `Chat.set_notify_sound_name/2`.
   """
   use Ecto.Schema
 
@@ -23,6 +25,7 @@ defmodule Eden.Chat.FolderPrefs do
     field :dbl_click_reaction, :string
     field :notify_sound, :boolean, default: true
     field :notify_desktop, :boolean, default: false
+    field :notify_sound_name, :string
 
     belongs_to :user, Eden.Accounts.User
 
