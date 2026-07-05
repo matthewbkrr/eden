@@ -2584,7 +2584,20 @@ msgstr ""
 
 #: lib/eden_web/live/settings_live.ex
 #, elixir-autogen, elixir-format
+msgid "System matches your device's light or dark setting."
+msgstr ""
+
 msgid "Security"
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "No folders yet. Add one below to group chats into sidebar tabs."
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Remove one first; the row is full."
 msgstr ""
 
 #: lib/eden_web/components/shell_components.ex

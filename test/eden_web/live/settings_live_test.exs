@@ -115,6 +115,12 @@ defmodule EdenWeb.SettingsLiveTest do
     end
   end
 
+  test "the appearance pane clarifies what System resolves to", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/settings/appearance")
+    assert html =~ "Theme"
+    assert html =~ "System matches your device"
+  end
+
   describe "profile section" do
     test "is hidden for signed-out visitors", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/settings")
@@ -244,6 +250,19 @@ defmodule EdenWeb.SettingsLiveTest do
     test "is hidden for signed-out visitors", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/settings")
       refute html =~ "Chat folders"
+    end
+
+    test "shows an empty-state nudge until the first folder exists", %{conn: conn} do
+      user = user_fixture()
+      conn = log_in_user(conn, user)
+      {:ok, view, html} = live(conn, ~p"/settings/folders")
+
+      assert html =~ "No folders yet"
+
+      html =
+        view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+
+      refute html =~ "No folders yet"
     end
 
     test "create, rename, delete, and reorder", %{conn: conn} do
