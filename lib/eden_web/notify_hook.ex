@@ -82,9 +82,11 @@ defmodule EdenWeb.NotifyHook do
   # Localize (recipient's session) the once-built broadcast payload into a client event:
   # a body line + a ready avatar URL for the OS-notification icon.
   defp notify_event(payload) do
+    # Strip markdown markers here (Markup is a web module) so the OS banner shows clean
+    # text, not `**bold**` / `# heading` — the payload was truncated server-side (#273).
     body =
       cond do
-        payload.preview not in [nil, ""] -> payload.preview
+        payload.preview not in [nil, ""] -> EdenWeb.Markup.strip(payload.preview)
         payload.media_kind -> media_label(payload.media_kind)
         true -> gettext("New message")
       end

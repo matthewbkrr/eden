@@ -755,9 +755,7 @@ defmodule EdenWeb.SettingsLive do
               <div class="min-w-0 pr-4">
                 <p style="font-size:0.875rem;">{gettext("Desktop notifications")}</p>
                 <p style="color: var(--ed-muted); font-size:0.75rem;">
-                  {gettext(
-                    "Show a system notification (Windows / macOS). Your browser will ask permission."
-                  )}
+                  {gettext("Show a system notification. Your browser will ask permission.")}
                 </p>
               </div>
               <%!-- The hook owns the click: Notification.requestPermission() MUST run inside the
@@ -900,6 +898,11 @@ defmodule EdenWeb.SettingsLive do
                       this.pushEvent("set_notify_desktop", { on: false })
                       return
                     }
+                    // Safari ≤15 has only the callback form of requestPermission(); the
+                    // promise resolves to undefined there, so `perm === "granted"` fails and
+                    // the toggle flips on with a SECOND click after the grant (the catch
+                    // fallback reads Notification.permission). Negligible audience in 2026 —
+                    // recorded, not worked around (#273).
                     let perm
                     try { perm = await Notification.requestPermission() }
                     catch (_e) { perm = Notification.permission }
