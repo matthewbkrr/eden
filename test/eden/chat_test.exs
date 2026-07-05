@@ -1796,6 +1796,29 @@ defmodule Eden.ChatTest do
       assert_receive {:notify, %{conversation_id: ^rid}}
       refute_received {:notify, %{conversation_id: ^rid}}
     end
+
+    test "a thread reply also skips a follower who muted the CHANNEL (#271)", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "talk"})
+      {:ok, _} = Channels.ensure_member(scope(bob), channel.id)
+      :ok = Chat.join_room(room.id, bob.id)
+
+      {:ok, root} = Chat.create_message(scope(alice), room.id, %{"body" => "root"})
+      # Bob replies → follows the thread; alice (root author) is pulled in.
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "first"})
+      {:ok, _} = Channels.toggle_channel_mute(scope(bob), channel.id)
+
+      sub(bob)
+      # Alice replies → followers minus sender = bob, but bob muted the channel. Exercises
+      # exclude_channel_muted on the THREAD base query (its :membership binding is real).
+      {:ok, _} = Chat.create_reply(scope(alice), root.id, %{"body" => "second"})
+
+      rid = room.id
+      refute_receive {:notify, %{conversation_id: ^rid}}
+    end
   end
 
   describe "messenger_unread_total (#216 rail badge)" do
