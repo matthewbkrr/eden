@@ -51,8 +51,10 @@ defmodule EdenWeb.ChatLive do
       eff = EdenWeb.Presence.manual_to_effective(scope.user.presence_status)
       if eff != :invisible, do: EdenWeb.Presence.track_user(self(), scope.user.id, eff)
       Phoenix.PubSub.subscribe(Eden.PubSub, EdenWeb.Presence.topic())
-      # The user chat topic (folders/removed/notify/…) is subscribed by EdenWeb.NotifyHook
-      # (on_mount, runs first) — subscribing again here would double-deliver every event.
+      # The user chat topic carries sidebar-sync events (folders/activity/removed/read/…).
+      # Notifications ride a SEPARATE topic owned by EdenWeb.NotifyHook (#272), so the two
+      # subscriptions don't overlap — no double delivery of anything.
+      Chat.subscribe_user(scope)
       Accounts.subscribe_user_updates()
       Accounts.subscribe_presence(scope)
       # Start the "last seen" heartbeat (#102); the first touch happens below via
@@ -2236,12 +2238,6 @@ defmodule EdenWeb.ChatLive do
      # cheap no-op recompute (DMs never contribute to channel aggregates).
      |> refresh_rail()}
   end
-
-  # #213: a gated notification for a new message/reply landed on our user topic.
-  # The server already dropped self / muted / DND / non-followers; here we apply the
-  # two gates only this session can see — is THIS chat focused right now, and is its
-  # channel muted in our rail — then hand the payload to the client renderers
-  # (#215 sound / #217 desktop) via a push_event.
 
   # Folder set / membership / order / mute changed in one of the user's
   # sessions: refresh the tab bar, re-apply the active filter, and refresh room

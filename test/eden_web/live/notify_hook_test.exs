@@ -1,6 +1,7 @@
 defmodule EdenWeb.NotifyHookTest do
   use EdenWeb.ConnCase, async: true
 
+  import ExUnit.CaptureLog
   import Phoenix.LiveViewTest
 
   alias Eden.Accounts.Scope
@@ -12,7 +13,7 @@ defmodule EdenWeb.NotifyHookTest do
     alice = user_fixture(%{username: "notify_alice"})
     bob = user_fixture(%{username: "notify_bob"})
     {:ok, dm} = Chat.create_conversation(scope(bob), [alice.id])
-    %{conn: log_in_user(conn, alice), bob: bob, dm: dm}
+    %{conn: log_in_user(conn, alice), alice: alice, bob: bob, dm: dm}
   end
 
   test "a DM delivers a notification while the only open tab is /settings (#272)", %{
@@ -40,5 +41,26 @@ defmodule EdenWeb.NotifyHookTest do
 
     assert_push_event(view, "notify", %{conversation_id: conv_id})
     assert conv_id == dm.id
+  end
+
+  test "sidebar-sync chatter on the chat topic never reaches a non-chat page (#272 review)", %{
+    conn: conn,
+    alice: alice
+  } do
+    {:ok, view, _} = live(conn, ~p"/settings")
+
+    # NotifyHook subscribes to the DEDICATED :notify topic, not the full chat topic — so a
+    # folder/activity event that fans out to every session must NOT reach Settings (which
+    # has no handle_info for it). Before #272's dedicated topic, it did, logging an
+    # "Unhandled message" warning on every folder change while any Settings tab was open.
+    log =
+      capture_log(fn ->
+        Phoenix.PubSub.broadcast(Eden.PubSub, "user:#{alice.id}:chat", :folders_changed)
+        # A sync round-trip so a mis-delivered message would be processed before we assert.
+        render(view)
+      end)
+
+    refute log =~ "Unhandled message"
+    refute_push_event(view, "notify", %{}, 0)
   end
 end

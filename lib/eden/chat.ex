@@ -3491,6 +3491,16 @@ defmodule Eden.Chat do
     do: Phoenix.PubSub.subscribe(@pubsub, user_topic(user.id))
 
   @doc """
+  Subscribe to the scoped user's new-message notifications only (#272). This is a
+  SEPARATE topic from `subscribe_user/1`: `EdenWeb.NotifyHook` mounts on every authed
+  LiveView (Settings, Admin, …) to deliver alerts, and must not also be flooded with the
+  sidebar-sync chatter (folders / activity / read / hidden / …) that only ChatLive
+  handles — an unhandled message on those pages is just log noise.
+  """
+  def subscribe_notifications(%Scope{user: user}),
+    do: Phoenix.PubSub.subscribe(@pubsub, notify_topic(user.id))
+
+  @doc """
   Broadcast that the scoped user is typing in `conversation_id`, on the
   conversation topic — so only sessions with that conversation open see it.
   Ephemeral: no DB write, receivers track it with a short TTL. Throttle at the
@@ -3548,7 +3558,7 @@ defmodule Eden.Chat do
         payload = notify_payload(message)
 
         for uid <- recipients,
-            do: Phoenix.PubSub.broadcast(@pubsub, user_topic(uid), {:notify, payload})
+            do: Phoenix.PubSub.broadcast(@pubsub, notify_topic(uid), {:notify, payload})
     end
   end
 
@@ -3638,6 +3648,7 @@ defmodule Eden.Chat do
 
   defp topic(conversation_id), do: "conversation:#{conversation_id}"
   defp user_topic(user_id), do: "user:#{user_id}:chat"
+  defp notify_topic(user_id), do: "user:#{user_id}:notify"
 
   ## Internals
 

@@ -2,11 +2,13 @@ defmodule EdenWeb.NotifyHook do
   @moduledoc """
   Delivers new-message notifications to **every** authenticated LiveView, not just
   ChatLive (#272). Modeled on `EdenWeb.RailHook`: on the connected mount it subscribes
-  to the user's chat topic and attaches a single `{:notify}` handler that pushes the
-  client-side `notify` event (chime / OS banner, rendered by the shared
-  `EdenWeb.Notifier` host). So a message that arrives while the only open tab is
-  `/settings` or `/admin` still alerts — honoring the Settings promise "alerts while a
-  browser tab is open".
+  to the user's **notifications** topic (`Chat.subscribe_notifications/1` — a dedicated
+  topic carrying only `{:notify}`, NOT the full chat topic, so Settings/Admin aren't
+  flooded with sidebar-sync chatter they have no handler for) and attaches a single
+  `{:notify}` handler that pushes the client-side `notify` event (chime / OS banner,
+  rendered by the shared `EdenWeb.Notifier` host). So a message that arrives while the
+  only open tab is `/settings` or `/admin` still alerts — honoring the Settings promise
+  "alerts while a browser tab is open".
 
   Mounted once per LiveView via the live_session `on_mount` list, AFTER `UserAuth`
   (it needs `current_scope`). The handler being here — and removed from ChatLive —
@@ -48,7 +50,7 @@ defmodule EdenWeb.NotifyHook do
     socket = assign_new(socket, :notify_prefs, fn -> Chat.notification_prefs(scope) end)
 
     if connected?(socket) and !socket.assigns[:notify_watched?] do
-      Chat.subscribe_user(scope)
+      Chat.subscribe_notifications(scope)
 
       socket
       |> assign_new(:notify_watched?, fn -> true end)
@@ -95,7 +97,7 @@ defmodule EdenWeb.NotifyHook do
   defp notify_event(payload) do
     body =
       cond do
-        payload.preview != "" -> payload.preview
+        payload.preview not in [nil, ""] -> payload.preview
         payload.media_kind -> media_label(payload.media_kind)
         true -> gettext("New message")
       end
