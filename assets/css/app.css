@@ -1120,6 +1120,75 @@ html {
     background: var(--ed-border);
   }
 
+  /* Rail mini-profile (#287): Discord-style identity + hover-reveal status.
+     overflow:visible so the status flyout can escape the popover (it's short,
+     so it needs neither the .ed-menu scroll cap nor clipping). */
+  .ed-miniprofile {
+    min-width: 15rem;
+    overflow: visible;
+  }
+  .ed-miniprofile__head {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.625rem 0.625rem;
+  }
+  .ed-miniprofile__name {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: var(--ed-ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ed-miniprofile__tag {
+    font-size: 0.8125rem;
+    color: var(--ed-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The status options fly out to the right of the summary on hover / focus
+     (keyboard + touch), bottom-aligned so they grow upward and stay on-screen
+     even though the popover sits at the bottom of the rail. visibility gates
+     focusability; the always-visible summary is the focus-within entry point. */
+  .ed-miniprofile__status {
+    position: relative;
+  }
+  .ed-miniprofile__substatus {
+    position: absolute;
+    left: calc(100% + 0.375rem);
+    bottom: 0;
+    min-width: 12rem;
+    padding: 0.25rem;
+    border-radius: var(--ed-radius);
+    background: var(--ed-surface);
+    border: 1px solid var(--ed-border);
+    box-shadow: var(--ed-shadow-pop);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-0.25rem);
+    transition:
+      opacity 0.12s var(--ed-ease),
+      transform 0.12s var(--ed-ease),
+      visibility 0s 0.12s;
+  }
+  .ed-miniprofile__status:hover .ed-miniprofile__substatus,
+  .ed-miniprofile__status:focus-within .ed-miniprofile__substatus {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition:
+      opacity 0.12s var(--ed-ease),
+      transform 0.12s var(--ed-ease),
+      visibility 0s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-miniprofile__substatus {
+      transition: none;
+    }
+  }
+
   /* Newly arriving / sent messages rise in (the .RiseIn observer adds the
      class only to nodes inserted AFTER mount — never the initial list, so no
      page-load choreography). A quick rise + slight grow (10px + scale 0.96→1 + fade, 200ms)

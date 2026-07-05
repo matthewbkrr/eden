@@ -2599,3 +2599,8 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Remove one first; the row is full."
 msgstr ""
+
+#: lib/eden_web/components/shell_components.ex
+#, elixir-autogen, elixir-format
+msgid "Profile and status"
+msgstr ""
