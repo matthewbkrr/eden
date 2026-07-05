@@ -3646,7 +3646,7 @@ defmodule Eden.Chat do
       sender_id: message.sender_id,
       sender_name: sender.display_name,
       avatar_key: sender.avatar_key,
-      preview: message.body || "",
+      preview: notify_preview(message.body),
       media_kind: notify_media_kind(message)
     }
   end
@@ -3661,6 +3661,15 @@ defmodule Eden.Chat do
 
   defp notify_media_kind(%{attachments: [%{kind: kind} | _]}), do: kind
   defp notify_media_kind(_), do: nil
+
+  # Bound the body for the notification payload (#273): it fans out to every recipient
+  # over PubSub, so a 10 KB message shouldn't ride whole. This is a generous SIZE guard,
+  # not the display length — markdown is stripped and the text fitted to the banner on the
+  # RECEIVING side (`EdenWeb.Markup` is a web module, unavailable here). Stripping happens
+  # BEFORE the final display cut, so a mid-token slice can't leave a dangling `**` in the
+  # banner (#279 review); the 500 here just keeps a marker pair intact for the strip.
+  defp notify_preview(nil), do: ""
+  defp notify_preview(body), do: String.slice(body, 0, 500)
 
   defp topic(conversation_id), do: "conversation:#{conversation_id}"
   defp user_topic(user_id), do: "user:#{user_id}:chat"

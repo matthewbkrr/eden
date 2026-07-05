@@ -84,7 +84,7 @@ defmodule EdenWeb.NotifyHook do
   defp notify_event(payload) do
     body =
       cond do
-        payload.preview not in [nil, ""] -> payload.preview
+        payload.preview not in [nil, ""] -> display_preview(payload.preview)
         payload.media_kind -> media_label(payload.media_kind)
         true -> gettext("New message")
       end
@@ -94,6 +94,12 @@ defmodule EdenWeb.NotifyHook do
       avatar_url: avatar_src(payload.avatar_key, payload.sender_id)
     })
   end
+
+  # Strip markdown markers (Markup is a web module) THEN fit to the banner (#273). Doing
+  # it in this order means the (server-size-bounded) body is cleaned before the final cut,
+  # so truncation can't leave a dangling `**` / broken token (#279 review). `String.slice`
+  # is grapheme-safe, so a family emoji at the boundary is never split.
+  defp display_preview(preview), do: preview |> EdenWeb.Markup.strip() |> String.slice(0, 140)
 
   defp avatar_src(key, id) when is_binary(key),
     do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"

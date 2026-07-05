@@ -79,8 +79,15 @@ defmodule EdenWeb.Notifier do
             payload.kind === "dm"
               ? payload.sender_name || ""
               : [head, payload.sender_name].filter(Boolean).join(" · ")
-          const opts = { body: payload.body || "", tag: "ed-conv-" + payload.conversation_id }
-          if (payload.avatar_url) opts.icon = payload.avatar_url
+          // tag collapses a conversation's banners to one; renotify re-alerts on each new
+          // message (#273) so the 2nd..Nth message of a chat isn't a silent swap. Chrome/Edge
+          // honor renotify; Firefox/Safari ignore it harmlessly.
+          const opts = {
+            body: payload.body || "",
+            tag: "ed-conv-" + payload.conversation_id,
+            renotify: true,
+          }
+          if (payload.avatar_url) opts.icon = payload.avatar_url // same-origin GET, sends the session cookie
           let n
           try { n = new Notification(title, opts) } catch (_e) { return false }
           // Click → focus the window and jump to the message (the permalink scrolls to it).
@@ -98,8 +105,14 @@ defmodule EdenWeb.Notifier do
           const ctx = window.__edAudio
           if (!ctx) return // never unlocked (no gesture this page session)
           const now = Date.now()
-          if (now - (window.__edLastChime || 0) < 1500) return // throttle bursts (across remounts)
-          window.__edLastChime = now
+          // Throttle bursts AND dedup across tabs (#273): two background tabs shouldn't both
+          // ring the same message. The last-chime timestamp lives in localStorage (shared per
+          // origin), so the second tab within the window stays silent. Private-mode throws →
+          // fall back to ringing (better a rare double than silence).
+          let last = 0
+          try { last = parseInt(localStorage.getItem("ed:lastChime") || "0", 10) || 0 } catch (_e) {}
+          if (now - last < 1500) return
+          try { localStorage.setItem("ed:lastChime", String(now)) } catch (_e) {}
           // The browser auto-suspends an AudioContext after a spell in the background; once a
           // gesture has unlocked it, resume() needs no fresh gesture, so a notification can still
           // ring while you're in another app. Play now if running, else after the resume settles.
