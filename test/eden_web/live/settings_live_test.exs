@@ -7,7 +7,7 @@ defmodule EdenWeb.SettingsLiveTest do
 
   test "renders in English when the locale is en", %{conn: conn} do
     conn = Plug.Test.init_test_session(conn, %{"locale" => "en"})
-    {:ok, _view, html} = live(conn, ~p"/settings")
+    {:ok, _view, html} = live(conn, ~p"/settings/language")
 
     assert html =~ "Settings"
     assert html =~ "Appearance"
@@ -19,7 +19,7 @@ defmodule EdenWeb.SettingsLiveTest do
 
   test "renders in Russian when the locale is ru", %{conn: conn} do
     conn = Plug.Test.init_test_session(conn, %{"locale" => "ru"})
-    {:ok, _view, html} = live(conn, ~p"/settings")
+    {:ok, _view, html} = live(conn, ~p"/settings/language")
 
     assert html =~ "Настройки"
     assert html =~ "Внешний вид"
@@ -40,6 +40,79 @@ defmodule EdenWeb.SettingsLiveTest do
            })
 
     assert Process.alive?(view.pid)
+  end
+
+  describe "section navigation (#282)" do
+    test "signed-out visitors see only the device-pref sections", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/settings")
+
+      assert html =~ "Appearance"
+      assert html =~ "Language"
+      refute html =~ "Chat folders"
+      refute html =~ "Notifications"
+    end
+
+    test "the menu lists every account section for a signed-in user", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, _view, html} = live(conn, ~p"/settings")
+
+      for label <- [
+            "Profile",
+            "Account",
+            "Notifications",
+            "Appearance",
+            "Language",
+            "Reactions",
+            "Chat folders"
+          ] do
+        assert html =~ label
+      end
+    end
+
+    test "the admin-panel link shows only for platform admins", %{conn: _conn} do
+      {:ok, _v, plain} = live(log_in_user(build_conn(), user_fixture()), ~p"/settings")
+      refute plain =~ "Admin panel"
+
+      # role is admin-managed (#174), set directly; the Settings link needs only
+      # the role, not the TOTP factor that entering /admin requires.
+      admin = user_fixture() |> Ecto.Changeset.change(role: "admin") |> Eden.Repo.update!()
+      {:ok, _v, html} = live(log_in_user(build_conn(), admin), ~p"/settings")
+      assert html =~ "Admin panel"
+    end
+
+    test "a section deep-link renders that pane and marks it current", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, view, _html} = live(conn, ~p"/settings/reactions")
+
+      assert has_element?(view, ~s(a[aria-current="page"]), "Reactions")
+      assert has_element?(view, ".ed-qr-grid")
+    end
+
+    test "patch-navigating between sections swaps the pane without a remount", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, view, _html} = live(conn, ~p"/settings/profile")
+
+      assert has_element?(view, "#profile-form")
+
+      html = view |> element(~s(a[href="/settings/folders"])) |> render_click()
+
+      assert html =~ "All Chats"
+      refute has_element?(view, "#profile-form")
+    end
+
+    test "an unknown section falls back to the default pane, highlight and title agreeing", %{
+      conn: conn
+    } do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, view, _html} = live(conn, ~p"/settings/nope")
+
+      # The fallback pane, its menu highlight and the page title all resolve to
+      # the same section (profile), so nothing diverges. (The connected view also
+      # push_patches the URL to /settings/profile — a runtime-only nicety.)
+      assert has_element?(view, "#profile-form")
+      assert has_element?(view, ~s(a[aria-current="page"]), "Profile")
+      assert page_title(view) =~ "Profile"
+    end
   end
 
   describe "profile section" do
@@ -140,7 +213,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
 
       # create
       view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
@@ -177,7 +250,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
 
       view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
       [folder] = Chat.list_folders(scope)
@@ -206,7 +279,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
 
       view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
       [folder] = Chat.list_folders(scope)
@@ -236,7 +309,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/reactions")
 
       refute "🔥" in Chat.quick_reactions(scope)
 
@@ -263,7 +336,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/reactions")
 
       # Defaults to the first quick reaction.
       assert Chat.dbl_click_reaction(scope) == hd(Chat.default_quick_reactions())
@@ -283,7 +356,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/reactions")
 
       # Default state: nothing to reset.
       refute has_element?(view, ~s(button[phx-click="reset_quick_reactions"]))
@@ -313,7 +386,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/notifications")
 
       assert Chat.notification_prefs(scope).sound == true
       view |> element(~s(button[phx-click="set_notify_sound"])) |> render_click()
@@ -327,7 +400,7 @@ defmodule EdenWeb.SettingsLiveTest do
       user = user_fixture()
       scope = Scope.for_user(user)
       conn = log_in_user(conn, user)
-      {:ok, view, _html} = live(conn, ~p"/settings")
+      {:ok, view, _html} = live(conn, ~p"/settings/notifications")
 
       # The .NotifyPerm hook pushes the browser-permission result.
       render_hook(view, "set_notify_desktop", %{"on" => true, "perm" => "granted"})
@@ -359,7 +432,7 @@ defmodule EdenWeb.SettingsLiveTest do
     end
 
     test "a wrong current password shows an error and stays put", %{conn: conn} do
-      {:ok, view, _} = live(conn, ~p"/settings")
+      {:ok, view, _} = live(conn, ~p"/settings/account")
 
       html =
         view
@@ -373,7 +446,7 @@ defmodule EdenWeb.SettingsLiveTest do
       conn: conn,
       user: user
     } do
-      {:ok, view, _} = live(conn, ~p"/settings")
+      {:ok, view, _} = live(conn, ~p"/settings/account")
 
       assert {:error, {:live_redirect, %{to: "/login"}}} =
                view

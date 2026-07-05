@@ -89,7 +89,10 @@ defmodule EdenWeb.Router do
     # (current_scope may be nil; a reset link stands on its own token, #232).
     live_session :default,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :mount_current_scope}, EdenWeb.NotifyHook] do
-      live "/settings", SettingsLive
+      # Two-pane settings (Telegram-style): the bare path is the section menu
+      # (mobile) / default section (desktop); `:section` deep-links a pane.
+      live "/settings", SettingsLive, :index
+      live "/settings/:section", SettingsLive, :section
       live "/reset/:token", ResetLive
     end
   end

@@ -49,8 +49,9 @@ test.describe("surface tour", () => {
   })
 
   test("settings page (profile, quick reactions, folders)", async ({ alice }, testInfo) => {
-    await alice.goto(`/settings`)
+    await alice.goto(`/settings/profile`)
     await expect(alice.locator("#profile-form")).toBeVisible()
+    await alice.goto(`/settings/reactions`)
     await expect(alice.locator(".ed-qr-grid")).toBeVisible()
     await shot(alice, testInfo, "settings")
     expect(alice.__diag.pageErrors, "settings uncaught errors").toEqual([])

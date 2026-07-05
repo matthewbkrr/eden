@@ -33,7 +33,7 @@ test("a notification chimes when sound is on and the chat isn't focused (#215)",
   })
 
   // Notification prefs are shared dev state — make sure alice's sound is ON first.
-  await alice.goto("/settings")
+  await alice.goto("/settings/notifications")
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
   const toggle = alice.locator('button[phx-click="set_notify_sound"]')
   if ((await toggle.getAttribute("aria-checked")) === "false") await toggle.click()
@@ -90,7 +90,7 @@ test("a suspended audio context is resumed so a backgrounded notification still 
   })
 
   // Sound on (independent of the first test).
-  await alice.goto("/settings")
+  await alice.goto("/settings/notifications")
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
   const toggle = alice.locator('button[phx-click="set_notify_sound"]')
   if ((await toggle.getAttribute("aria-checked")) === "false") await toggle.click()

@@ -47,7 +47,7 @@ test.describe("messaging-ext", () => {
 
   test("move a chat into a folder, then back out", async ({ alice, seed }, testInfo) => {
     // Make a folder.
-    await alice.goto("/settings")
+    await alice.goto("/settings/folders")
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     const name = `Move ${Date.now()}`
     const form = alice.locator('form[phx-submit="create_folder"]')
@@ -69,7 +69,7 @@ test.describe("messaging-ext", () => {
     await shot(alice, testInfo, "move-to-folder")
 
     // Clean up — delete the folder (the grouping; the chat stays).
-    await alice.goto("/settings")
+    await alice.goto("/settings/folders")
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
     const row2 = alice.locator("#folder-list li").filter({ has: alice.locator(`input[value="${name}"]`) })
     await row2.getByLabel("Delete folder").click()

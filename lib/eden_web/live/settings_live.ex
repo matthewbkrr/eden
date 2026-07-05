@@ -38,6 +38,54 @@ defmodule EdenWeb.SettingsLive do
     {:ok, socket}
   end
 
+  # The active section is live-navigable (patch links, no remount), so it lives
+  # in handle_params, not mount. An unknown/unauthorized section falls back to
+  # the first available one; `drilled_in?` (a section named in the URL) drives
+  # the mobile menu<->content drill-in.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    ids = section_ids(socket.assigns)
+    requested = params["section"]
+    section = if requested in ids, do: requested, else: hd(ids)
+
+    socket =
+      socket
+      |> assign(section: section, drilled_in?: Map.has_key?(params, "section"))
+      |> assign(page_title: gettext("Settings") <> " \u00b7 " <> section_label(section))
+
+    # A named-but-unknown/unauthorized section (e.g. /settings/nope, or
+    # /settings/profile while signed out) falls back to `section`; canonicalize
+    # the URL to it so the path never diverges from the highlighted pane/title.
+    # push_patch only lands on the connected render; the dead render already
+    # shows the consistent fallback pane, just under the stale URL for a beat.
+    if requested && requested != section && connected?(socket) do
+      {:noreply, push_patch(socket, to: ~p"/settings/#{section}", replace: true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Which sections this visitor can reach, in menu order. Device prefs
+  # (appearance/language) are always available; the rest need an account. The
+  # head is the default section when none (or an unknown one) is requested.
+  defp section_ids(assigns) do
+    if match?(%{user: %User{}}, assigns[:current_scope]),
+      do: ~w(profile account notifications appearance language reactions folders),
+      else: ~w(appearance language)
+  end
+
+  # Localized menu label + icon for a section id. One clause per section so a
+  # future pane is a one-line change here plus its content block in render/1.
+  defp section_meta("profile"), do: {gettext("Profile"), "hero-user-circle"}
+  defp section_meta("account"), do: {gettext("Account"), "hero-shield-check"}
+  defp section_meta("notifications"), do: {gettext("Notifications"), "hero-bell"}
+  defp section_meta("appearance"), do: {gettext("Appearance"), "hero-paint-brush"}
+  defp section_meta("language"), do: {gettext("Language"), "hero-language"}
+  defp section_meta("reactions"), do: {gettext("Reactions"), "hero-face-smile"}
+  defp section_meta("folders"), do: {gettext("Chat folders"), "hero-folder"}
+
+  defp section_label(id), do: elem(section_meta(id), 0)
+
   # Per-user notification toggles (#214), account-scoped like the reactions block.
   defp assign_notifications(socket) do
     case socket.assigns[:current_scope] do
@@ -123,872 +171,953 @@ defmodule EdenWeb.SettingsLive do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :sections, section_ids(assigns))
+
     ~H"""
     <div class="ed-root min-h-screen">
       <%!-- New-message chime/banner while you're in Settings (#272), honoring the
             "alerts while a tab is open" promise below. Only when signed in. --%>
       <.notifier :if={@notify_prefs} prefs={@notify_prefs} />
-      <div class="mx-auto max-w-xl px-5 sm:px-6 py-10">
-        <header class="flex items-center gap-3 mb-8">
-          <.link navigate={~p"/app"} class="ed-btn--icon" aria-label={gettext("Back")}>
-            <.icon name="hero-arrow-left-mini" class="size-5" />
-          </.link>
-          <h1 style="font-size:1.375rem; font-weight:650;">{gettext("Settings")}</h1>
-        </header>
+      <div class="mx-auto max-w-4xl px-4 sm:px-6 py-6 md:py-10">
+        <div class="md:grid md:grid-cols-[210px_minmax(0,1fr)] md:gap-8">
+          <%!-- Left menu: full width on mobile until a section is drilled into. --%>
+          <aside class={["flex-col gap-4", @drilled_in? && "hidden md:flex", !@drilled_in? && "flex"]}>
+            <header class="flex items-center gap-2.5">
+              <.link navigate={~p"/app"} class="ed-btn--icon" aria-label={gettext("Back")}>
+                <.icon name="hero-arrow-left-mini" class="size-5" />
+              </.link>
+              <h1 style="font-size:1.375rem; font-weight:650;">{gettext("Settings")}</h1>
+            </header>
 
-        <.ed_flash flash={@flash} />
+            <nav class="ed-settings-nav" aria-label={gettext("Settings sections")}>
+              <%!-- Admin panel entry-point (#174), only for platform admins; leaves Settings. --%>
+              <.link
+                :if={@profile_user && Accounts.admin?(@profile_user)}
+                navigate={~p"/admin"}
+                class="ed-settings-nav__item"
+              >
+                <.icon name="hero-shield-check" class="ed-settings-nav__icon size-5" />
+                <span>{gettext("Admin panel")}</span>
+                <.icon name="hero-chevron-right-mini" class="ed-settings-nav__chevron size-4" />
+              </.link>
+              <.link
+                :for={id <- @sections}
+                patch={~p"/settings/#{id}"}
+                class={["ed-settings-nav__item", @section == id && "is-active"]}
+                aria-current={@section == id && "page"}
+              >
+                <.icon name={elem(section_meta(id), 1)} class="ed-settings-nav__icon size-5" />
+                <span>{section_label(id)}</span>
+                <.icon
+                  name="hero-chevron-right-mini"
+                  class="ed-settings-nav__chevron size-4 md:hidden"
+                />
+              </.link>
+            </nav>
+          </aside>
 
-        <div class="space-y-6">
-          <%!-- Admin panel entry-point (#174), only for platform admins. --%>
-          <.link
-            :if={@profile_user && Accounts.admin?(@profile_user)}
-            navigate={~p"/admin"}
-            class="flex items-center gap-3 rounded-[var(--ed-radius-lg)] border p-4 ed-btn--ghost"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <span style="color: var(--ed-primary);" aria-hidden="true">
-              <.icon name="hero-shield-check-micro" class="size-5" />
-            </span>
-            <span class="flex-1 font-medium" style="font-size:0.9375rem;">
-              {gettext("Admin panel")}
-            </span>
-            <span style="color: var(--ed-muted);" aria-hidden="true">
-              <.icon name="hero-chevron-right-mini" class="size-5" />
-            </span>
-          </.link>
+          <%!-- Right content: hidden on mobile until drilled in; always on desktop. --%>
+          <div class={["min-w-0 md:block", !@drilled_in? && "hidden"]}>
+            <header class="flex items-center gap-2 mb-6 md:mb-5">
+              <.link patch={~p"/settings"} class="ed-btn--icon md:hidden" aria-label={gettext("Back")}>
+                <.icon name="hero-arrow-left-mini" class="size-5" />
+              </.link>
+              <%!-- The section name is the page's h1: on mobile the aside (with the
+                    "Settings" wordmark) is hidden while drilled in, so this must
+                    carry the heading. --%>
+              <h1 style="font-size:1.125rem; font-weight:640;">{section_label(@section)}</h1>
+            </header>
 
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Profile")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("This is how other people see you.")}
-            </p>
+            <.ed_flash flash={@flash} />
 
-            <.form
-              for={@profile_form}
-              id="profile-form"
-              phx-change="validate_profile"
-              phx-submit="save_profile"
-              class="space-y-5"
-            >
-              <div class="flex items-center gap-4">
-                <% entry = List.first(@uploads.avatar.entries) %>
-                <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
-                  <.live_img_preview :if={entry} entry={entry} />
-                  <img
-                    :if={!entry && avatar_src(@profile_user)}
-                    src={avatar_src(@profile_user)}
-                    alt=""
-                  />
-                  <span :if={!entry && !@profile_user.avatar_key}>
-                    {initials(@profile_user.display_name)}
-                  </span>
-                </span>
-
-                <div class="flex flex-col gap-1.5">
-                  <div class="flex items-center gap-2">
-                    <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
-                      {gettext("Upload photo")}
-                      <.live_file_input upload={@uploads.avatar} class="sr-only" />
-                    </label>
-                    <button
-                      :if={@profile_user.avatar_key && Enum.empty?(@uploads.avatar.entries)}
-                      type="button"
-                      phx-click="remove_avatar"
-                      class="ed-btn ed-btn--ghost text-sm"
-                      style="color: var(--ed-danger);"
-                    >
-                      {gettext("Remove")}
-                    </button>
-                    <button
-                      :for={e <- @uploads.avatar.entries}
-                      type="button"
-                      phx-click="cancel_avatar"
-                      phx-value-ref={e.ref}
-                      class="ed-btn ed-btn--ghost text-sm"
-                    >
-                      {gettext("Cancel")}
-                    </button>
-                  </div>
-                  <p
-                    :for={err <- upload_errors(@uploads.avatar)}
-                    style="color: var(--ed-danger); font-size:0.75rem;"
-                  >
-                    {avatar_error(err)}
-                  </p>
-                  <%= for e <- @uploads.avatar.entries do %>
-                    <p
-                      :for={err <- upload_errors(@uploads.avatar, e)}
-                      style="color: var(--ed-danger); font-size:0.75rem;"
-                    >
-                      {avatar_error(err)}
-                    </p>
-                  <% end %>
-                  <p
-                    :if={Enum.empty?(@uploads.avatar.entries)}
-                    style="color: var(--ed-muted); font-size:0.75rem;"
-                  >
-                    {gettext("JPEG, PNG, GIF or WebP, up to 5 MB.")}
-                  </p>
-                </div>
-              </div>
-
-              <.ed_field field={@profile_form[:display_name]} label={gettext("Display name")} />
-
-              <label class="block space-y-1.5">
-                <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                  {gettext("About you")}
-                </span>
-                <textarea
-                  name={@profile_form[:bio].name}
-                  id={@profile_form[:bio].id}
-                  rows="3"
-                  class="ed-input"
-                  maxlength="500"
-                  placeholder={gettext("A short bio")}
-                >{Phoenix.HTML.Form.normalize_value("textarea", @profile_form[:bio].value)}</textarea>
-                <span
-                  :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
-                  style="color: var(--ed-danger); font-size:0.75rem;"
+            <div class="ed-settings-pane">
+              <div :if={@section == "profile"} class="space-y-6">
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  {msg}
-                </span>
-              </label>
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Profile")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext("This is how other people see you.")}
+                  </p>
 
-              <div class="flex justify-end">
-                <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
-              </div>
-            </.form>
-          </section>
-
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Username")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext(
-                "Your public @tag, and the name you log in with. Letters, numbers and underscores."
-              )}
-            </p>
-
-            <.form
-              for={@username_form}
-              id="username-form"
-              phx-change="validate_username"
-              phx-submit="save_username"
-              class="space-y-3"
-            >
-              <label class="block">
-                <span class="sr-only">{gettext("Username")}</span>
-                <div class="relative">
-                  <span
-                    aria-hidden="true"
-                    class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                    style="color: var(--ed-muted);"
+                  <.form
+                    for={@profile_form}
+                    id="profile-form"
+                    phx-change="validate_profile"
+                    phx-submit="save_profile"
+                    class="space-y-5"
                   >
-                    @
-                  </span>
-                  <input
-                    type="text"
-                    name={@username_form[:username].name}
-                    id={@username_form[:username].id}
-                    value={Phoenix.HTML.Form.normalize_value("text", @username_form[:username].value)}
-                    class="ed-input"
-                    style="padding-left: 1.75rem;"
-                    phx-debounce="400"
-                    autocomplete="off"
-                    autocapitalize="none"
-                    spellcheck="false"
-                    maxlength="30"
-                    aria-describedby="username-feedback"
-                  />
-                </div>
-              </label>
+                    <div class="flex items-center gap-4">
+                      <% entry = List.first(@uploads.avatar.entries) %>
+                      <span class="ed-avatar ed-avatar--lg" aria-hidden="true">
+                        <.live_img_preview :if={entry} entry={entry} />
+                        <img
+                          :if={!entry && avatar_src(@profile_user)}
+                          src={avatar_src(@profile_user)}
+                          alt=""
+                        />
+                        <span :if={!entry && !@profile_user.avatar_key}>
+                          {initials(@profile_user.display_name)}
+                        </span>
+                      </span>
 
-              <%!-- One aria-live region carries both the positive hint and errors so a
+                      <div class="flex flex-col gap-1.5">
+                        <div class="flex items-center gap-2">
+                          <label class="ed-btn ed-btn--ghost cursor-pointer text-sm">
+                            {gettext("Upload photo")}
+                            <.live_file_input upload={@uploads.avatar} class="sr-only" />
+                          </label>
+                          <button
+                            :if={@profile_user.avatar_key && Enum.empty?(@uploads.avatar.entries)}
+                            type="button"
+                            phx-click="remove_avatar"
+                            class="ed-btn ed-btn--ghost text-sm"
+                            style="color: var(--ed-danger);"
+                          >
+                            {gettext("Remove")}
+                          </button>
+                          <button
+                            :for={e <- @uploads.avatar.entries}
+                            type="button"
+                            phx-click="cancel_avatar"
+                            phx-value-ref={e.ref}
+                            class="ed-btn ed-btn--ghost text-sm"
+                          >
+                            {gettext("Cancel")}
+                          </button>
+                        </div>
+                        <p
+                          :for={err <- upload_errors(@uploads.avatar)}
+                          style="color: var(--ed-danger); font-size:0.75rem;"
+                        >
+                          {avatar_error(err)}
+                        </p>
+                        <%= for e <- @uploads.avatar.entries do %>
+                          <p
+                            :for={err <- upload_errors(@uploads.avatar, e)}
+                            style="color: var(--ed-danger); font-size:0.75rem;"
+                          >
+                            {avatar_error(err)}
+                          </p>
+                        <% end %>
+                        <p
+                          :if={Enum.empty?(@uploads.avatar.entries)}
+                          style="color: var(--ed-muted); font-size:0.75rem;"
+                        >
+                          {gettext("JPEG, PNG, GIF or WebP, up to 5 MB.")}
+                        </p>
+                      </div>
+                    </div>
+
+                    <.ed_field field={@profile_form[:display_name]} label={gettext("Display name")} />
+
+                    <label class="block space-y-1.5">
+                      <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                        {gettext("About you")}
+                      </span>
+                      <textarea
+                        name={@profile_form[:bio].name}
+                        id={@profile_form[:bio].id}
+                        rows="3"
+                        class="ed-input"
+                        maxlength="500"
+                        placeholder={gettext("A short bio")}
+                      >{Phoenix.HTML.Form.normalize_value("textarea", @profile_form[:bio].value)}</textarea>
+                      <span
+                        :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
+                        style="color: var(--ed-danger); font-size:0.75rem;"
+                      >
+                        {msg}
+                      </span>
+                    </label>
+
+                    <div class="flex justify-end">
+                      <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
+                    </div>
+                  </.form>
+                </section>
+              </div>
+
+              <div :if={@section == "account"} class="space-y-6">
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
+                >
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Username")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Your public @tag, and the name you log in with. Letters, numbers and underscores."
+                    )}
+                  </p>
+
+                  <.form
+                    for={@username_form}
+                    id="username-form"
+                    phx-change="validate_username"
+                    phx-submit="save_username"
+                    class="space-y-3"
+                  >
+                    <label class="block">
+                      <span class="sr-only">{gettext("Username")}</span>
+                      <div class="relative">
+                        <span
+                          aria-hidden="true"
+                          class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                          style="color: var(--ed-muted);"
+                        >
+                          @
+                        </span>
+                        <input
+                          type="text"
+                          name={@username_form[:username].name}
+                          id={@username_form[:username].id}
+                          value={
+                            Phoenix.HTML.Form.normalize_value("text", @username_form[:username].value)
+                          }
+                          class="ed-input"
+                          style="padding-left: 1.75rem;"
+                          phx-debounce="400"
+                          autocomplete="off"
+                          autocapitalize="none"
+                          spellcheck="false"
+                          maxlength="30"
+                          aria-describedby="username-feedback"
+                        />
+                      </div>
+                    </label>
+
+                    <%!-- One aria-live region carries both the positive hint and errors so a
                     screen reader announces the debounced result; min-height avoids a
                     layout shift as it fills. --%>
-              <div id="username-feedback" aria-live="polite" style="min-height:1rem;">
-                <span
-                  :if={@username_hint == :available}
-                  style="color: var(--ed-online); font-size:0.75rem;"
+                    <div id="username-feedback" aria-live="polite" style="min-height:1rem;">
+                      <span
+                        :if={@username_hint == :available}
+                        style="color: var(--ed-online); font-size:0.75rem;"
+                      >
+                        {gettext("Available")}
+                      </span>
+                      <span
+                        :for={msg <- Enum.map(@username_form[:username].errors, &translate_error/1)}
+                        style="color: var(--ed-danger); font-size:0.75rem;"
+                      >
+                        {msg}
+                      </span>
+                    </div>
+
+                    <div class="flex justify-end">
+                      <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
+                    </div>
+                  </.form>
+                </section>
+
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  {gettext("Available")}
-                </span>
-                <span
-                  :for={msg <- Enum.map(@username_form[:username].errors, &translate_error/1)}
-                  style="color: var(--ed-danger); font-size:0.75rem;"
-                >
-                  {msg}
-                </span>
-              </div>
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Password")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext("Changing your password signs you out of every device.")}
+                  </p>
 
-              <div class="flex justify-end">
-                <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
-              </div>
-            </.form>
-          </section>
-
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Password")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Changing your password signs you out of every device.")}
-            </p>
-
-            <.form
-              for={@password_form}
-              id="password-form"
-              phx-submit="change_password"
-              class="space-y-4"
-            >
-              <label class="block space-y-1.5">
-                <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                  {gettext("Current password")}
-                </span>
-                <input
-                  type="password"
-                  name="password[current]"
-                  value=""
-                  class="ed-input"
-                  autocomplete="current-password"
-                  required
-                />
-              </label>
-              <label class="block space-y-1.5">
-                <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                  {gettext("New password")}
-                </span>
-                <input
-                  type="password"
-                  name="password[new]"
-                  value=""
-                  class="ed-input"
-                  autocomplete="new-password"
-                  minlength="8"
-                  required
-                />
-              </label>
-              <p :if={@password_error} style="color: var(--ed-danger); font-size:0.75rem;">
-                {@password_error}
-              </p>
-              <div class="flex justify-end">
-                <button type="submit" class="ed-btn ed-btn--primary">
-                  {gettext("Change password")}
-                </button>
-              </div>
-            </.form>
-
-            <div
-              class="mt-4 pt-4 border-t flex items-center justify-between gap-3"
-              style="border-color: var(--ed-border);"
-            >
-              <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                {gettext("Sign out of all devices")}
-              </span>
-              <button
-                type="button"
-                phx-click="logout_everywhere"
-                data-confirm={gettext("Sign out everywhere? You'll need to sign in again.")}
-                class="ed-btn ed-btn--ghost text-sm"
-              >
-                {gettext("Log out everywhere")}
-              </button>
-            </div>
-          </section>
-
-          <%!-- Two-factor authentication (#250) --%>
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <div class="flex items-center gap-2">
-              <h2 style="font-size:0.9375rem; font-weight:600;">
-                {gettext("Two-factor authentication")}
-              </h2>
-              <span
-                :if={Accounts.totp_enrolled?(@profile_user)}
-                class="rounded-[var(--ed-radius-full)] px-2 py-0.5"
-                style="font-size:0.6875rem; font-weight:600; color: var(--ed-online); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
-              >
-                {gettext("On")}
-              </span>
-            </div>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("An authenticator app adds a second step at sign-in — a 6-digit code.")}
-            </p>
-
-            <%!-- Fresh backup codes, shown exactly once right after enrolling. --%>
-            <div :if={@totp_backup_codes} class="space-y-3">
-              <p style="font-size:0.875rem;">
-                {gettext(
-                  "Save these backup codes somewhere safe. Each works once if you lose your device."
-                )}
-              </p>
-              <ul
-                class="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-[var(--ed-radius)] p-3 font-mono"
-                style="background: var(--ed-surface-2); font-size:0.875rem; letter-spacing:0.04em;"
-              >
-                <li :for={c <- @totp_backup_codes}>{c}</li>
-              </ul>
-              <button type="button" phx-click="totp_dismiss_codes" class="ed-btn ed-btn--primary">
-                {gettext("I've saved them")}
-              </button>
-            </div>
-
-            <%!-- Enrolled (and not mid-code-reveal): offer disable. --%>
-            <div :if={Accounts.totp_enrolled?(@profile_user) and is_nil(@totp_backup_codes)}>
-              <p
-                :if={Accounts.admin?(@profile_user)}
-                style="font-size:0.8125rem; color: var(--ed-muted);"
-              >
-                {gettext(
-                  "Required for your admin role — it can't be turned off while you're an admin."
-                )}
-              </p>
-              <.form
-                :if={not Accounts.admin?(@profile_user)}
-                for={%{}}
-                as={:totp}
-                phx-submit="totp_disable"
-                class="flex flex-col gap-2 sm:flex-row sm:items-end"
-              >
-                <label class="block space-y-1.5 flex-1">
-                  <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                    {gettext("Enter a current code to turn it off")}
-                  </span>
-                  <input
-                    type="text"
-                    name="totp[code]"
-                    value=""
-                    inputmode="numeric"
-                    autocomplete="one-time-code"
-                    class="ed-input"
-                    required
-                  />
-                </label>
-                <button type="submit" class="ed-btn ed-btn--ghost">
-                  {gettext("Turn off")}
-                </button>
-              </.form>
-              <p :if={@totp_error} class="mt-2" style="color: var(--ed-danger); font-size:0.75rem;">
-                {@totp_error}
-              </p>
-            </div>
-
-            <%!-- Not enrolled, setup not started: the entry point. --%>
-            <button
-              :if={not Accounts.totp_enrolled?(@profile_user) and is_nil(@totp_setup)}
-              type="button"
-              phx-click="totp_setup"
-              class="ed-btn ed-btn--primary"
-            >
-              {gettext("Set up two-factor")}
-            </button>
-
-            <%!-- Mid-setup: QR + manual key + confirm-code form. --%>
-            <div :if={@totp_setup} class="space-y-4">
-              <p style="font-size:0.875rem;">
-                {gettext("Scan this with your authenticator app, then enter the code it shows.")}
-              </p>
-              <div class="flex flex-wrap items-start gap-4">
-                <div class="rounded-[var(--ed-radius)] p-2" style="background:#fff; width:184px;">
-                  {Phoenix.HTML.raw(@totp_setup.qr)}
-                </div>
-                <div class="space-y-1.5">
-                  <span style="font-size:0.75rem; color: var(--ed-muted);">
-                    {gettext("Or enter this key manually")}
-                  </span>
-                  <code
-                    class="block rounded-[var(--ed-radius)] px-2 py-1.5 font-mono break-all"
-                    style="background: var(--ed-surface-2); font-size:0.8125rem; letter-spacing:0.06em; max-width:16rem;"
+                  <.form
+                    for={@password_form}
+                    id="password-form"
+                    phx-submit="change_password"
+                    class="space-y-4"
                   >
-                    {@totp_setup.key}
-                  </code>
-                </div>
-              </div>
-              <.form
-                for={%{}}
-                as={:totp}
-                phx-submit="totp_activate"
-                class="flex flex-col gap-2 sm:flex-row sm:items-end"
-              >
-                <label class="block space-y-1.5 flex-1">
-                  <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                    {gettext("6-digit code")}
-                  </span>
-                  <input
-                    type="text"
-                    name="totp[code]"
-                    value=""
-                    inputmode="numeric"
-                    autocomplete="one-time-code"
-                    class="ed-input"
-                    autofocus
-                    required
-                  />
-                </label>
-                <button type="submit" class="ed-btn ed-btn--primary">
-                  {gettext("Turn on")}
-                </button>
-                <button type="button" phx-click="totp_cancel" class="ed-btn ed-btn--ghost">
-                  {gettext("Cancel")}
-                </button>
-              </.form>
-              <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
-                {@totp_error}
-              </p>
-            </div>
-          </section>
+                    <label class="block space-y-1.5">
+                      <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                        {gettext("Current password")}
+                      </span>
+                      <input
+                        type="password"
+                        name="password[current]"
+                        value=""
+                        class="ed-input"
+                        autocomplete="current-password"
+                        required
+                      />
+                    </label>
+                    <label class="block space-y-1.5">
+                      <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                        {gettext("New password")}
+                      </span>
+                      <input
+                        type="password"
+                        name="password[new]"
+                        value=""
+                        class="ed-input"
+                        autocomplete="new-password"
+                        minlength="8"
+                        required
+                      />
+                    </label>
+                    <p :if={@password_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                      {@password_error}
+                    </p>
+                    <div class="flex justify-end">
+                      <button type="submit" class="ed-btn ed-btn--primary">
+                        {gettext("Change password")}
+                      </button>
+                    </div>
+                  </.form>
 
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Sets the presence dot others see. Invisible appears offline to everyone.")}
-            </p>
-            <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-              <span style="font-size:0.875rem; white-space: nowrap;">{gettext("Your status")}</span>
-              <div class="ed-seg" role="group" aria-label={gettext("Status")}>
-                <button
-                  :for={{value, _label, short, _color} <- status_options()}
-                  class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
-                  type="button"
-                  aria-pressed={to_string(@profile_user.presence_status == value)}
-                  phx-click="set_status"
-                  phx-value-status={value}
+                  <div
+                    class="mt-4 pt-4 border-t flex items-center justify-between gap-3"
+                    style="border-color: var(--ed-border);"
+                  >
+                    <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                      {gettext("Sign out of all devices")}
+                    </span>
+                    <button
+                      type="button"
+                      phx-click="logout_everywhere"
+                      data-confirm={gettext("Sign out everywhere? You'll need to sign in again.")}
+                      class="ed-btn ed-btn--ghost text-sm"
+                    >
+                      {gettext("Log out everywhere")}
+                    </button>
+                  </div>
+                </section>
+
+                <%!-- Two-factor authentication (#250) --%>
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  {short}
-                </button>
-              </div>
-            </div>
-          </section>
+                  <div class="flex items-center gap-2">
+                    <h2 style="font-size:0.9375rem; font-weight:600;">
+                      {gettext("Two-factor authentication")}
+                    </h2>
+                    <span
+                      :if={Accounts.totp_enrolled?(@profile_user)}
+                      class="rounded-[var(--ed-radius-full)] px-2 py-0.5"
+                      style="font-size:0.6875rem; font-weight:600; color: var(--ed-online); background: color-mix(in oklch, var(--ed-online) 16%, transparent);"
+                    >
+                      {gettext("On")}
+                    </span>
+                  </div>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext("An authenticator app adds a second step at sign-in — a 6-digit code.")}
+                  </p>
 
-          <section
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Appearance")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Choose how ihichat looks on this device.")}
-            </p>
-            <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-              <span style="font-size:0.875rem;">{gettext("Theme")}</span>
-              <div
-                class="ed-seg"
-                role="group"
-                aria-label={gettext("Theme")}
-                id="theme-seg"
-                phx-hook=".ThemeSegA11y"
-              >
-                <button
-                  class="ed-seg__btn"
-                  data-active="system"
-                  aria-pressed="false"
-                  phx-click={JS.dispatch("phx:set-theme")}
-                  data-phx-theme="system"
+                  <%!-- Fresh backup codes, shown exactly once right after enrolling. --%>
+                  <div :if={@totp_backup_codes} class="space-y-3">
+                    <p style="font-size:0.875rem;">
+                      {gettext(
+                        "Save these backup codes somewhere safe. Each works once if you lose your device."
+                      )}
+                    </p>
+                    <ul
+                      class="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-[var(--ed-radius)] p-3 font-mono"
+                      style="background: var(--ed-surface-2); font-size:0.875rem; letter-spacing:0.04em;"
+                    >
+                      <li :for={c <- @totp_backup_codes}>{c}</li>
+                    </ul>
+                    <button
+                      type="button"
+                      phx-click="totp_dismiss_codes"
+                      class="ed-btn ed-btn--primary"
+                    >
+                      {gettext("I've saved them")}
+                    </button>
+                  </div>
+
+                  <%!-- Enrolled (and not mid-code-reveal): offer disable. --%>
+                  <div :if={Accounts.totp_enrolled?(@profile_user) and is_nil(@totp_backup_codes)}>
+                    <p
+                      :if={Accounts.admin?(@profile_user)}
+                      style="font-size:0.8125rem; color: var(--ed-muted);"
+                    >
+                      {gettext(
+                        "Required for your admin role — it can't be turned off while you're an admin."
+                      )}
+                    </p>
+                    <.form
+                      :if={not Accounts.admin?(@profile_user)}
+                      for={%{}}
+                      as={:totp}
+                      phx-submit="totp_disable"
+                      class="flex flex-col gap-2 sm:flex-row sm:items-end"
+                    >
+                      <label class="block space-y-1.5 flex-1">
+                        <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                          {gettext("Enter a current code to turn it off")}
+                        </span>
+                        <input
+                          type="text"
+                          name="totp[code]"
+                          value=""
+                          inputmode="numeric"
+                          autocomplete="one-time-code"
+                          class="ed-input"
+                          required
+                        />
+                      </label>
+                      <button type="submit" class="ed-btn ed-btn--ghost">
+                        {gettext("Turn off")}
+                      </button>
+                    </.form>
+                    <p
+                      :if={@totp_error}
+                      class="mt-2"
+                      style="color: var(--ed-danger); font-size:0.75rem;"
+                    >
+                      {@totp_error}
+                    </p>
+                  </div>
+
+                  <%!-- Not enrolled, setup not started: the entry point. --%>
+                  <button
+                    :if={not Accounts.totp_enrolled?(@profile_user) and is_nil(@totp_setup)}
+                    type="button"
+                    phx-click="totp_setup"
+                    class="ed-btn ed-btn--primary"
+                  >
+                    {gettext("Set up two-factor")}
+                  </button>
+
+                  <%!-- Mid-setup: QR + manual key + confirm-code form. --%>
+                  <div :if={@totp_setup} class="space-y-4">
+                    <p style="font-size:0.875rem;">
+                      {gettext("Scan this with your authenticator app, then enter the code it shows.")}
+                    </p>
+                    <div class="flex flex-wrap items-start gap-4">
+                      <div
+                        class="rounded-[var(--ed-radius)] p-2"
+                        style="background:#fff; width:184px;"
+                      >
+                        {Phoenix.HTML.raw(@totp_setup.qr)}
+                      </div>
+                      <div class="space-y-1.5">
+                        <span style="font-size:0.75rem; color: var(--ed-muted);">
+                          {gettext("Or enter this key manually")}
+                        </span>
+                        <code
+                          class="block rounded-[var(--ed-radius)] px-2 py-1.5 font-mono break-all"
+                          style="background: var(--ed-surface-2); font-size:0.8125rem; letter-spacing:0.06em; max-width:16rem;"
+                        >
+                          {@totp_setup.key}
+                        </code>
+                      </div>
+                    </div>
+                    <.form
+                      for={%{}}
+                      as={:totp}
+                      phx-submit="totp_activate"
+                      class="flex flex-col gap-2 sm:flex-row sm:items-end"
+                    >
+                      <label class="block space-y-1.5 flex-1">
+                        <span style="font-size:0.8125rem; color: var(--ed-muted);">
+                          {gettext("6-digit code")}
+                        </span>
+                        <input
+                          type="text"
+                          name="totp[code]"
+                          value=""
+                          inputmode="numeric"
+                          autocomplete="one-time-code"
+                          class="ed-input"
+                          autofocus
+                          required
+                        />
+                      </label>
+                      <button type="submit" class="ed-btn ed-btn--primary">
+                        {gettext("Turn on")}
+                      </button>
+                      <button type="button" phx-click="totp_cancel" class="ed-btn ed-btn--ghost">
+                        {gettext("Cancel")}
+                      </button>
+                    </.form>
+                    <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                      {@totp_error}
+                    </p>
+                  </div>
+                </section>
+
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  <.icon name="hero-computer-desktop-micro" class="size-4 hidden sm:block" />
-                  {gettext("System")}
-                </button>
-                <button
-                  class="ed-seg__btn"
-                  data-active="light"
-                  aria-pressed="false"
-                  phx-click={JS.dispatch("phx:set-theme")}
-                  data-phx-theme="light"
-                >
-                  <.icon name="hero-sun-micro" class="size-4 hidden sm:block" /> {gettext("Light")}
-                </button>
-                <button
-                  class="ed-seg__btn"
-                  data-active="dark"
-                  aria-pressed="false"
-                  phx-click={JS.dispatch("phx:set-theme")}
-                  data-phx-theme="dark"
-                >
-                  <.icon name="hero-moon-micro" class="size-4 hidden sm:block" /> {gettext("Dark")}
-                </button>
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Sets the presence dot others see. Invisible appears offline to everyone."
+                    )}
+                  </p>
+                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <span style="font-size:0.875rem; white-space: nowrap;">
+                      {gettext("Your status")}
+                    </span>
+                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
+                      <button
+                        :for={{value, _label, short, _color} <- status_options()}
+                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
+                        type="button"
+                        aria-pressed={to_string(@profile_user.presence_status == value)}
+                        phx-click="set_status"
+                        phx-value-status={value}
+                      >
+                        {short}
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </div>
-            </div>
-          </section>
 
-          <section
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Language")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext("Changes the language across ihichat.")}
-            </p>
-            <form
-              action={~p"/locale"}
-              method="post"
-              class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
-            >
-              <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
-              <input type="hidden" name="return_to" value={~p"/settings"} />
-              <span style="font-size:0.875rem;">{gettext("Interface language")}</span>
-              <div class="ed-seg" role="group" aria-label={gettext("Language")}>
-                <button
-                  class={["ed-seg__btn", @locale == "en" && "is-active"]}
-                  aria-pressed={to_string(@locale == "en")}
-                  name="locale"
-                  value="en"
-                  type="submit"
+              <div :if={@section == "appearance"} class="space-y-6">
+                <section
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  English
-                </button>
-                <button
-                  class={["ed-seg__btn", @locale == "ru" && "is-active"]}
-                  aria-pressed={to_string(@locale == "ru")}
-                  name="locale"
-                  value="ru"
-                  type="submit"
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Appearance")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext("Choose how ihichat looks on this device.")}
+                  </p>
+                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <span style="font-size:0.875rem;">{gettext("Theme")}</span>
+                    <div
+                      class="ed-seg"
+                      role="group"
+                      aria-label={gettext("Theme")}
+                      id="theme-seg"
+                      phx-hook=".ThemeSegA11y"
+                    >
+                      <button
+                        class="ed-seg__btn"
+                        data-active="system"
+                        aria-pressed="false"
+                        phx-click={JS.dispatch("phx:set-theme")}
+                        data-phx-theme="system"
+                      >
+                        <.icon name="hero-computer-desktop-micro" class="size-4 hidden sm:block" />
+                        {gettext("System")}
+                      </button>
+                      <button
+                        class="ed-seg__btn"
+                        data-active="light"
+                        aria-pressed="false"
+                        phx-click={JS.dispatch("phx:set-theme")}
+                        data-phx-theme="light"
+                      >
+                        <.icon name="hero-sun-micro" class="size-4 hidden sm:block" /> {gettext(
+                          "Light"
+                        )}
+                      </button>
+                      <button
+                        class="ed-seg__btn"
+                        data-active="dark"
+                        aria-pressed="false"
+                        phx-click={JS.dispatch("phx:set-theme")}
+                        data-phx-theme="dark"
+                      >
+                        <.icon name="hero-moon-micro" class="size-4 hidden sm:block" /> {gettext(
+                          "Dark"
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div :if={@section == "language"} class="space-y-6">
+                <section
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  Русский
-                </button>
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Language")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext("Changes the language across ihichat.")}
+                  </p>
+                  <form
+                    action={~p"/locale"}
+                    method="post"
+                    class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4"
+                  >
+                    <input
+                      type="hidden"
+                      name="_csrf_token"
+                      value={Plug.CSRFProtection.get_csrf_token()}
+                    />
+                    <input type="hidden" name="return_to" value={~p"/settings/language"} />
+                    <span style="font-size:0.875rem;">{gettext("Interface language")}</span>
+                    <div class="ed-seg" role="group" aria-label={gettext("Language")}>
+                      <button
+                        class={["ed-seg__btn", @locale == "en" && "is-active"]}
+                        aria-pressed={to_string(@locale == "en")}
+                        name="locale"
+                        value="en"
+                        type="submit"
+                      >
+                        English
+                      </button>
+                      <button
+                        class={["ed-seg__btn", @locale == "ru" && "is-active"]}
+                        aria-pressed={to_string(@locale == "ru")}
+                        name="locale"
+                        value="ru"
+                        type="submit"
+                      >
+                        Русский
+                      </button>
+                    </div>
+                  </form>
+                </section>
               </div>
-            </form>
-          </section>
 
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Reactions")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext(
-                "Pick the emoji in your quick-react row — the shortcuts shown first when you react to a message. Tap to add or remove (up to %{count}).",
-                count: @quick_limit
-              )}
-            </p>
-            <div class="flex items-center justify-between mb-2">
-              <span style="color: var(--ed-muted); font-size:0.75rem; font-variant-numeric: tabular-nums;">
-                {gettext("%{n} of %{max}", n: length(@quick_set), max: @quick_limit)}
-              </span>
-              <button
-                :if={@quick_set != @default_quick}
-                type="button"
-                class="ed-btn ed-btn--ghost ed-btn--sm"
-                phx-click="reset_quick_reactions"
-              >
-                {gettext("Reset to default")}
-              </button>
-            </div>
-            <div class="ed-qr-grid" role="group" aria-label={gettext("Quick reactions")}>
-              <button
-                :for={e <- @reaction_set}
-                type="button"
-                class={["ed-qr", e in @quick_set && "ed-qr--on"]}
-                phx-click="toggle_quick_reaction"
-                phx-value-emoji={e}
-                aria-pressed={to_string(e in @quick_set)}
-                disabled={e not in @quick_set and length(@quick_set) >= @quick_limit}
-              >
-                {e}
-              </button>
-            </div>
-
-            <div class="mt-5 pt-4" style="border-top: 1px solid var(--ed-border);">
-              <p style="font-weight:600; font-size:0.8125rem;">
-                {gettext("Double-click to react")}
-              </p>
-              <p class="mt-0.5 mb-3" style="color: var(--ed-muted); font-size:0.8125rem;">
-                {gettext(
-                  "Double-clicking a message reacts with this emoji. Pick one from your quick-react row."
-                )}
-              </p>
-              <div class="ed-qr-grid" role="radiogroup" aria-label={gettext("Double-click reaction")}>
-                <button
-                  :for={e <- @quick_set}
-                  type="button"
-                  class={["ed-qr", e == @dbl_reaction && "ed-qr--on"]}
-                  phx-click="set_dbl_reaction"
-                  phx-value-emoji={e}
-                  role="radio"
-                  aria-checked={to_string(e == @dbl_reaction)}
+              <div :if={@section == "reactions"} class="space-y-6">
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
-                  {e}
-                </button>
-              </div>
-            </div>
-          </section>
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Reactions")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Pick the emoji in your quick-react row — the shortcuts shown first when you react to a message. Tap to add or remove (up to %{count}).",
+                      count: @quick_limit
+                    )}
+                  </p>
+                  <div class="flex items-center justify-between mb-2">
+                    <span style="color: var(--ed-muted); font-size:0.75rem; font-variant-numeric: tabular-nums;">
+                      {gettext("%{n} of %{max}", n: length(@quick_set), max: @quick_limit)}
+                    </span>
+                    <button
+                      :if={@quick_set != @default_quick}
+                      type="button"
+                      class="ed-btn ed-btn--ghost ed-btn--sm"
+                      phx-click="reset_quick_reactions"
+                    >
+                      {gettext("Reset to default")}
+                    </button>
+                  </div>
+                  <div class="ed-qr-grid" role="group" aria-label={gettext("Quick reactions")}>
+                    <button
+                      :for={e <- @reaction_set}
+                      type="button"
+                      class={["ed-qr", e in @quick_set && "ed-qr--on"]}
+                      phx-click="toggle_quick_reaction"
+                      phx-value-emoji={e}
+                      aria-pressed={to_string(e in @quick_set)}
+                      disabled={e not in @quick_set and length(@quick_set) >= @quick_limit}
+                    >
+                      {e}
+                    </button>
+                  </div>
 
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Notifications")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext(
-                "Alerts for new messages while a browser tab is open. Muted chats and Do Not Disturb stay silent."
-              )}
-            </p>
-
-            <div class="flex items-center justify-between py-1.5">
-              <div class="min-w-0 pr-4">
-                <p style="font-size:0.875rem;">{gettext("Sound")}</p>
-                <p style="color: var(--ed-muted); font-size:0.75rem;">
-                  {gettext("Play a chime when a message arrives in a chat you're not looking at.")}
-                </p>
+                  <div class="mt-5 pt-4" style="border-top: 1px solid var(--ed-border);">
+                    <p style="font-weight:600; font-size:0.8125rem;">
+                      {gettext("Double-click to react")}
+                    </p>
+                    <p class="mt-0.5 mb-3" style="color: var(--ed-muted); font-size:0.8125rem;">
+                      {gettext(
+                        "Double-clicking a message reacts with this emoji. Pick one from your quick-react row."
+                      )}
+                    </p>
+                    <div
+                      class="ed-qr-grid"
+                      role="radiogroup"
+                      aria-label={gettext("Double-click reaction")}
+                    >
+                      <button
+                        :for={e <- @quick_set}
+                        type="button"
+                        class={["ed-qr", e == @dbl_reaction && "ed-qr--on"]}
+                        phx-click="set_dbl_reaction"
+                        phx-value-emoji={e}
+                        role="radio"
+                        aria-checked={to_string(e == @dbl_reaction)}
+                      >
+                        {e}
+                      </button>
+                    </div>
+                  </div>
+                </section>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={to_string(@notify_sound)}
-                aria-label={gettext("Sound notifications")}
-                class={["ed-switch", @notify_sound && "is-on"]}
-                phx-click="set_notify_sound"
-              >
-              </button>
-            </div>
 
-            <div
-              class="flex items-center justify-between py-1.5 mt-2 pt-3 border-t"
-              style="border-color: var(--ed-border);"
-            >
-              <div class="min-w-0 pr-4">
-                <p style="font-size:0.875rem;">{gettext("Desktop notifications")}</p>
-                <p style="color: var(--ed-muted); font-size:0.75rem;">
-                  {gettext("Show a system notification. Your browser will ask permission.")}
-                </p>
-              </div>
-              <%!-- The hook owns the click: Notification.requestPermission() MUST run inside the
+              <div :if={@section == "notifications"} class="space-y-6">
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
+                >
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Notifications")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Alerts for new messages while a browser tab is open. Muted chats and Do Not Disturb stay silent."
+                    )}
+                  </p>
+
+                  <div class="flex items-center justify-between py-1.5">
+                    <div class="min-w-0 pr-4">
+                      <p style="font-size:0.875rem;">{gettext("Sound")}</p>
+                      <p style="color: var(--ed-muted); font-size:0.75rem;">
+                        {gettext(
+                          "Play a chime when a message arrives in a chat you're not looking at."
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={to_string(@notify_sound)}
+                      aria-label={gettext("Sound notifications")}
+                      class={["ed-switch", @notify_sound && "is-on"]}
+                      phx-click="set_notify_sound"
+                    >
+                    </button>
+                  </div>
+
+                  <div
+                    class="flex items-center justify-between py-1.5 mt-2 pt-3 border-t"
+                    style="border-color: var(--ed-border);"
+                  >
+                    <div class="min-w-0 pr-4">
+                      <p style="font-size:0.875rem;">{gettext("Desktop notifications")}</p>
+                      <p style="color: var(--ed-muted); font-size:0.75rem;">
+                        {gettext("Show a system notification. Your browser will ask permission.")}
+                      </p>
+                    </div>
+                    <%!-- The hook owns the click: Notification.requestPermission() MUST run inside the
                     user gesture (Safari rejects a later server round-trip), so there's no
                     phx-click — the hook requests permission, then pushes the result. --%>
-              <button
-                type="button"
-                id="notify-desktop-switch"
-                phx-hook=".NotifyPerm"
-                role="switch"
-                aria-checked={to_string(@notify_desktop)}
-                aria-label={gettext("Desktop notifications")}
-                data-on={to_string(@notify_desktop)}
-                class={["ed-switch", @notify_desktop && "is-on"]}
-              >
-              </button>
-            </div>
-          </section>
+                    <button
+                      type="button"
+                      id="notify-desktop-switch"
+                      phx-hook=".NotifyPerm"
+                      role="switch"
+                      aria-checked={to_string(@notify_desktop)}
+                      aria-label={gettext("Desktop notifications")}
+                      data-on={to_string(@notify_desktop)}
+                      class={["ed-switch", @notify_desktop && "is-on"]}
+                    >
+                    </button>
+                  </div>
+                </section>
+              </div>
 
-          <section
-            :if={@profile_user}
-            class="rounded-[var(--ed-radius-lg)] border p-5"
-            style="border-color: var(--ed-border); background: var(--ed-surface);"
-          >
-            <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
-            <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-              {gettext(
-                "Group your chats. Drag to reorder — \"All Chats\" can be moved but not deleted."
-              )}
-            </p>
+              <div :if={@section == "folders"} class="space-y-6">
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
+                >
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Group your chats. Drag to reorder — \"All Chats\" can be moved but not deleted."
+                    )}
+                  </p>
 
-            <ul id="folder-list" phx-hook=".Sortable" class="space-y-1.5">
-              <%= for row <- @folder_rows do %>
-                <li
-                  :if={row == :all}
-                  draggable="true"
-                  data-id="all"
-                  class="ed-folder-row ed-folder-row--virtual"
-                >
-                  <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
-                    <.icon name="hero-bars-3-micro" class="size-4" />
-                  </span>
-                  <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
-                    {gettext("All Chats")}
-                  </span>
-                  <span style="color: var(--ed-muted); font-size:0.75rem;">
-                    {gettext("Default")}
-                  </span>
-                </li>
-                <li
-                  :if={row != :all}
-                  draggable="true"
-                  data-id={row.id}
-                  class="ed-folder-row"
-                >
-                  <span class="ed-folder-row__handle ed-folder-row__handle--grab" aria-hidden="true">
-                    <.icon name="hero-bars-3-micro" class="size-4" />
-                  </span>
-                  <%!-- Renames save on Enter AND on blur (clicking away / leaving
+                  <ul id="folder-list" phx-hook=".Sortable" class="space-y-1.5">
+                    <%= for row <- @folder_rows do %>
+                      <li
+                        :if={row == :all}
+                        draggable="true"
+                        data-id="all"
+                        class="ed-folder-row ed-folder-row--virtual"
+                      >
+                        <span
+                          class="ed-folder-row__handle ed-folder-row__handle--grab"
+                          aria-hidden="true"
+                        >
+                          <.icon name="hero-bars-3-micro" class="size-4" />
+                        </span>
+                        <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
+                          {gettext("All Chats")}
+                        </span>
+                        <span style="color: var(--ed-muted); font-size:0.75rem;">
+                          {gettext("Default")}
+                        </span>
+                      </li>
+                      <li
+                        :if={row != :all}
+                        draggable="true"
+                        data-id={row.id}
+                        class="ed-folder-row"
+                      >
+                        <span
+                          class="ed-folder-row__handle ed-folder-row__handle--grab"
+                          aria-hidden="true"
+                        >
+                          <.icon name="hero-bars-3-micro" class="size-4" />
+                        </span>
+                        <%!-- Renames save on Enter AND on blur (clicking away / leaving
                         the page), with a flash confirming the change. Focusing
                         selects the whole name so it's clearly being edited. --%>
+                        <form
+                          id={"rename-folder-#{row.id}"}
+                          phx-submit="rename_folder"
+                          class="flex-1 min-w-0"
+                        >
+                          <input type="hidden" name="folder_id" value={row.id} />
+                          <input
+                            id={"folder-name-#{row.id}"}
+                            name="name"
+                            value={row.name}
+                            maxlength={Chat.Folder.max_name()}
+                            class="ed-folder-row__name"
+                            aria-label={gettext("Folder name")}
+                            draggable="false"
+                            phx-hook=".SelectOnFocus"
+                            phx-blur="rename_folder"
+                            phx-value-folder_id={row.id}
+                          />
+                        </form>
+                        <button
+                          type="button"
+                          class="ed-btn--icon"
+                          style="color: var(--ed-danger);"
+                          phx-click="delete_folder"
+                          phx-value-id={row.id}
+                          data-confirm={
+                            gettext(
+                              "Delete this folder? Your chats stay; only the grouping is removed."
+                            )
+                          }
+                          aria-label={gettext("Delete folder")}
+                        >
+                          <.icon name="hero-trash-micro" class="size-4" />
+                        </button>
+                      </li>
+                    <% end %>
+                  </ul>
+
                   <form
-                    id={"rename-folder-#{row.id}"}
-                    phx-submit="rename_folder"
-                    class="flex-1 min-w-0"
+                    phx-submit="create_folder"
+                    phx-change="new_folder_changed"
+                    class="mt-3 flex items-center gap-2"
                   >
-                    <input type="hidden" name="folder_id" value={row.id} />
                     <input
-                      id={"folder-name-#{row.id}"}
                       name="name"
-                      value={row.name}
+                      value={@new_folder}
                       maxlength={Chat.Folder.max_name()}
-                      class="ed-folder-row__name"
-                      aria-label={gettext("Folder name")}
-                      draggable="false"
-                      phx-hook=".SelectOnFocus"
-                      phx-blur="rename_folder"
-                      phx-value-folder_id={row.id}
+                      placeholder={gettext("New folder name")}
+                      class="ed-input flex-1"
                     />
+                    <button type="submit" class="ed-btn ed-btn--primary" disabled={@new_folder == ""}>
+                      {gettext("Add")}
+                    </button>
                   </form>
-                  <button
-                    type="button"
-                    class="ed-btn--icon"
-                    style="color: var(--ed-danger);"
-                    phx-click="delete_folder"
-                    phx-value-id={row.id}
-                    data-confirm={
-                      gettext("Delete this folder? Your chats stay; only the grouping is removed.")
-                    }
-                    aria-label={gettext("Delete folder")}
-                  >
-                    <.icon name="hero-trash-micro" class="size-4" />
-                  </button>
-                </li>
-              <% end %>
-            </ul>
 
-            <form
-              phx-submit="create_folder"
-              phx-change="new_folder_changed"
-              class="mt-3 flex items-center gap-2"
-            >
-              <input
-                name="name"
-                value={@new_folder}
-                maxlength={Chat.Folder.max_name()}
-                placeholder={gettext("New folder name")}
-                class="ed-input flex-1"
-              />
-              <button type="submit" class="ed-btn ed-btn--primary" disabled={@new_folder == ""}>
-                {gettext("Add")}
-              </button>
-            </form>
-
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectOnFocus">
-              // Select the whole value on focus, so clicking a folder name makes
-              // it obvious the entire name is being edited (Finder-style).
-              export default {
-                mounted() { this.el.addEventListener("focus", () => this.el.select()) }
-              }
-            </script>
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".NotifyPerm">
-              // Desktop-notifications toggle (#214). Notification.requestPermission() must be
-              // called INSIDE the user gesture (Safari is strict; a server round-trip wouldn't
-              // count), so the click is handled here — not via phx-click — and only the RESULT
-              // is pushed. data-on reflects the current pref so we know which way we're toggling.
-              export default {
-                mounted() {
-                  this.el.addEventListener("click", async () => {
-                    const on = this.el.dataset.on === "true"
-                    if (!("Notification" in window)) {
-                      this.pushEvent("set_notify_desktop", { on: false, perm: "unsupported" })
-                      return
+                  <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectOnFocus">
+                    // Select the whole value on focus, so clicking a folder name makes
+                    // it obvious the entire name is being edited (Finder-style).
+                    export default {
+                      mounted() { this.el.addEventListener("focus", () => this.el.select()) }
                     }
-                    // Only an ON pref that's ALSO granted on THIS origin toggles off. A pref that's
-                    // "on" but ungranted here — e.g. the same account on a new domain (prod vs the
-                    // dev origin), where browser permission is per-origin — (re)requests instead,
-                    // so re-enabling is one click, not off-then-on.
-                    if (on && Notification.permission === "granted") {
-                      this.pushEvent("set_notify_desktop", { on: false })
-                      return
+                  </script>
+                  <script :type={Phoenix.LiveView.ColocatedHook} name=".NotifyPerm">
+                    // Desktop-notifications toggle (#214). Notification.requestPermission() must be
+                    // called INSIDE the user gesture (Safari is strict; a server round-trip wouldn't
+                    // count), so the click is handled here — not via phx-click — and only the RESULT
+                    // is pushed. data-on reflects the current pref so we know which way we're toggling.
+                    export default {
+                      mounted() {
+                        this.el.addEventListener("click", async () => {
+                          const on = this.el.dataset.on === "true"
+                          if (!("Notification" in window)) {
+                            this.pushEvent("set_notify_desktop", { on: false, perm: "unsupported" })
+                            return
+                          }
+                          // Only an ON pref that's ALSO granted on THIS origin toggles off. A pref that's
+                          // "on" but ungranted here — e.g. the same account on a new domain (prod vs the
+                          // dev origin), where browser permission is per-origin — (re)requests instead,
+                          // so re-enabling is one click, not off-then-on.
+                          if (on && Notification.permission === "granted") {
+                            this.pushEvent("set_notify_desktop", { on: false })
+                            return
+                          }
+                          // Safari ≤15 has only the callback form of requestPermission(); the
+                          // promise resolves to undefined there, so `perm === "granted"` fails and
+                          // the toggle flips on with a SECOND click after the grant (the catch
+                          // fallback reads Notification.permission). Negligible audience in 2026 —
+                          // recorded, not worked around (#273).
+                          let perm
+                          try { perm = await Notification.requestPermission() }
+                          catch (_e) { perm = Notification.permission }
+                          this.pushEvent("set_notify_desktop", { on: perm === "granted", perm })
+                        })
+                      }
                     }
-                    // Safari ≤15 has only the callback form of requestPermission(); the
-                    // promise resolves to undefined there, so `perm === "granted"` fails and
-                    // the toggle flips on with a SECOND click after the grant (the catch
-                    // fallback reads Notification.permission). Negligible audience in 2026 —
-                    // recorded, not worked around (#273).
-                    let perm
-                    try { perm = await Notification.requestPermission() }
-                    catch (_e) { perm = Notification.permission }
-                    this.pushEvent("set_notify_desktop", { on: perm === "granted", perm })
-                  })
-                }
-              }
-            </script>
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSegA11y">
-              // Theme is client-driven (data-theme on <html>), so aria-pressed on the
-              // theme segments can't be server-rendered — sync it here and on change.
-              export default {
-                mounted() {
-                  this._sync = () => {
-                    const cur = document.documentElement.getAttribute("data-theme") || "system"
-                    this.el.querySelectorAll("[data-phx-theme]").forEach((b) =>
-                      b.setAttribute("aria-pressed", String(b.dataset.phxTheme === cur)))
-                  }
-                  this._sync()
-                  this._obs = new MutationObserver(this._sync)
-                  this._obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
-                },
-                destroyed() { this._obs && this._obs.disconnect() }
-              }
-            </script>
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".Sortable">
-              // HTML5 drag-and-drop reorder. Items rearrange live as you drag; on
-              // drop we push the new id order to the server. Handlers bind once per
-              // node (guarded), so they survive LiveView re-renders.
-              export default {
-                mounted() { this.bind() },
-                updated() { this.bind() },
-                bind() {
-                  this.el.querySelectorAll("li[draggable=true]").forEach((item) => {
-                    if (item._dnd) return
-                    item._dnd = true
-                    item.addEventListener("dragstart", (e) => {
-                      this.dragging = item
-                      this.startOrder = this.order().join()
-                      item.classList.add("ed-dragging")
-                      e.dataTransfer.effectAllowed = "move"
-                    })
-                    item.addEventListener("dragend", () => {
-                      item.classList.remove("ed-dragging")
-                      this.commit()
-                    })
-                  })
-                  if (this._listBound) return
-                  this._listBound = true
-                  this.el.addEventListener("dragover", (e) => {
-                    e.preventDefault()
-                    if (!this.dragging) return
-                    const after = this.afterElement(e.clientY)
-                    if (after == null) this.el.appendChild(this.dragging)
-                    else this.el.insertBefore(this.dragging, after)
-                  })
-                },
-                afterElement(y) {
-                  const items = [...this.el.querySelectorAll("li[draggable=true]:not(.ed-dragging)")]
-                  return items.find((item) => {
-                    const box = item.getBoundingClientRect()
-                    return y < box.top + box.height / 2
-                  }) || null
-                },
-                commit() {
-                  this.dragging = null
-                  const ids = this.order()
-                  // A click on the handle or a cancelled drag isn't a reorder.
-                  if (ids.join() !== this.startOrder) this.pushEvent("reorder_folders", { ids })
-                },
-                order() {
-                  return [...this.el.querySelectorAll("li[draggable=true]")].map((i) => i.dataset.id)
-                }
-              }
-            </script>
-          </section>
+                  </script>
+                  <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSegA11y">
+                    // Theme is client-driven (data-theme on <html>), so aria-pressed on the
+                    // theme segments can't be server-rendered — sync it here and on change.
+                    export default {
+                      mounted() {
+                        this._sync = () => {
+                          const cur = document.documentElement.getAttribute("data-theme") || "system"
+                          this.el.querySelectorAll("[data-phx-theme]").forEach((b) =>
+                            b.setAttribute("aria-pressed", String(b.dataset.phxTheme === cur)))
+                        }
+                        this._sync()
+                        this._obs = new MutationObserver(this._sync)
+                        this._obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
+                      },
+                      destroyed() { this._obs && this._obs.disconnect() }
+                    }
+                  </script>
+                  <script :type={Phoenix.LiveView.ColocatedHook} name=".Sortable">
+                    // HTML5 drag-and-drop reorder. Items rearrange live as you drag; on
+                    // drop we push the new id order to the server. Handlers bind once per
+                    // node (guarded), so they survive LiveView re-renders.
+                    export default {
+                      mounted() { this.bind() },
+                      updated() { this.bind() },
+                      bind() {
+                        this.el.querySelectorAll("li[draggable=true]").forEach((item) => {
+                          if (item._dnd) return
+                          item._dnd = true
+                          item.addEventListener("dragstart", (e) => {
+                            this.dragging = item
+                            this.startOrder = this.order().join()
+                            item.classList.add("ed-dragging")
+                            e.dataTransfer.effectAllowed = "move"
+                          })
+                          item.addEventListener("dragend", () => {
+                            item.classList.remove("ed-dragging")
+                            this.commit()
+                          })
+                        })
+                        if (this._listBound) return
+                        this._listBound = true
+                        this.el.addEventListener("dragover", (e) => {
+                          e.preventDefault()
+                          if (!this.dragging) return
+                          const after = this.afterElement(e.clientY)
+                          if (after == null) this.el.appendChild(this.dragging)
+                          else this.el.insertBefore(this.dragging, after)
+                        })
+                      },
+                      afterElement(y) {
+                        const items = [...this.el.querySelectorAll("li[draggable=true]:not(.ed-dragging)")]
+                        return items.find((item) => {
+                          const box = item.getBoundingClientRect()
+                          return y < box.top + box.height / 2
+                        }) || null
+                      },
+                      commit() {
+                        this.dragging = null
+                        const ids = this.order()
+                        // A click on the handle or a cancelled drag isn't a reorder.
+                        if (ids.join() !== this.startOrder) this.pushEvent("reorder_folders", { ids })
+                      },
+                      order() {
+                        return [...this.el.querySelectorAll("li[draggable=true]")].map((i) => i.dataset.id)
+                      }
+                    }
+                  </script>
+                </section>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
