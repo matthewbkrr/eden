@@ -121,6 +121,21 @@ defmodule EdenWeb.SettingsLiveTest do
       refute html =~ "id=\"profile-form\""
     end
 
+    test "the bio character counter reflects the current length and updates live", %{conn: conn} do
+      {:ok, user} = Accounts.update_profile(user_fixture(), %{display_name: "Ada", bio: "Hi"})
+      conn = log_in_user(conn, user)
+      {:ok, view, html} = live(conn, ~p"/settings/profile")
+
+      assert html =~ "2/500"
+
+      html =
+        view
+        |> element("#profile-form")
+        |> render_change(user: %{display_name: "Ada", bio: "Hello there"})
+
+      assert html =~ "11/500"
+    end
+
     test "shows the signed-in user's current name and bio", %{conn: conn} do
       user = user_fixture(%{display_name: "Ada"})
 
