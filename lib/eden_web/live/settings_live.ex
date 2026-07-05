@@ -753,6 +753,10 @@ defmodule EdenWeb.SettingsLive do
                       </button>
                     </div>
                   </div>
+                  <%!-- "System" is the ambiguous one — say what it resolves to. --%>
+                  <p class="mt-3" style="color: var(--ed-muted); font-size:0.75rem;">
+                    {gettext("System matches your device's light or dark setting.")}
+                  </p>
                 </section>
               </div>
 
