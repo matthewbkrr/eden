@@ -903,16 +903,14 @@ defmodule EdenWeb.SettingsLive do
                     <p class="mt-0.5 mb-2" style="color: var(--ed-muted); font-size:0.75rem;">
                       {gettext("Pick the chime that plays. Press play to hear it.")}
                     </p>
-                    <ul
-                      class="ed-soundlist"
-                      role="radiogroup"
-                      aria-label={gettext("Notification sound")}
-                    >
+                    <%!-- A group of toggle buttons (aria-pressed), not a radiogroup:
+                          each row also holds a non-radio Play button, which an ARIA
+                          radiogroup forbids. Mirrors the quick-reactions grid. --%>
+                    <ul class="ed-soundlist" role="group" aria-label={gettext("Notification sound")}>
                       <li :for={key <- @sound_presets} class="ed-soundlist__row">
                         <button
                           type="button"
-                          role="radio"
-                          aria-checked={to_string(@notify_sound_name == key)}
+                          aria-pressed={to_string(@notify_sound_name == key)}
                           class={[
                             "ed-menu__item ed-soundlist__pick",
                             @notify_sound_name == key && "is-active"

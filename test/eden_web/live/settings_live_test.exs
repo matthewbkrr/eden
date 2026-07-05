@@ -402,7 +402,7 @@ defmodule EdenWeb.SettingsLiveTest do
 
       # The default preset is marked, and every preset has a Play preview button.
       assert html =~ "Notification sound"
-      assert has_element?(view, ~s(button[phx-value-name="chime"][aria-checked="true"]))
+      assert has_element?(view, ~s(button[phx-value-name="chime"][aria-pressed="true"]))
       assert has_element?(view, ~s(button[data-sound-key="glass"]))
 
       view
@@ -410,7 +410,7 @@ defmodule EdenWeb.SettingsLiveTest do
       |> render_click()
 
       assert Chat.notification_prefs(scope).sound_name == "glass"
-      assert has_element?(view, ~s(button[phx-value-name="glass"][aria-checked="true"]))
+      assert has_element?(view, ~s(button[phx-value-name="glass"][aria-pressed="true"]))
     end
 
     test "desktop toggle persists the hook's permission result; denied flashes guidance", %{
