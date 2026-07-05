@@ -215,6 +215,28 @@ defmodule EdenWeb.SettingsLiveTest do
     end
   end
 
+  describe "account & security sections (#284)" do
+    test "account holds identity; security is its own menu section with password + 2FA", %{
+      conn: conn
+    } do
+      conn = log_in_user(conn, user_fixture())
+
+      # Account: identity controls (username + status), no security cards.
+      {:ok, account, ahtml} = live(conn, ~p"/settings/account")
+      assert has_element?(account, "#username-form")
+      assert ahtml =~ "Your status"
+      refute has_element?(account, "#password-form")
+      # "Security" appears as a left-menu item (link), not a card here.
+      assert has_element?(account, ~s(a[href="/settings/security"]), "Security")
+
+      # Security: its own pane with password + two-factor.
+      {:ok, security, shtml} = live(conn, ~p"/settings/security")
+      assert has_element?(security, "#password-form")
+      assert shtml =~ "Two-factor authentication"
+      assert has_element?(security, ~s(a[aria-current="page"]), "Security")
+    end
+  end
+
   describe "chat folders section" do
     alias Eden.Accounts.Scope
     alias Eden.Chat
@@ -447,7 +469,7 @@ defmodule EdenWeb.SettingsLiveTest do
     end
 
     test "a wrong current password shows an error and stays put", %{conn: conn} do
-      {:ok, view, _} = live(conn, ~p"/settings/account")
+      {:ok, view, _} = live(conn, ~p"/settings/security")
 
       html =
         view
@@ -461,7 +483,7 @@ defmodule EdenWeb.SettingsLiveTest do
       conn: conn,
       user: user
     } do
-      {:ok, view, _} = live(conn, ~p"/settings/account")
+      {:ok, view, _} = live(conn, ~p"/settings/security")
 
       assert {:error, {:live_redirect, %{to: "/login"}}} =
                view

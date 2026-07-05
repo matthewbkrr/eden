@@ -2597,3 +2597,8 @@ msgstr "Аккаунт"
 #, elixir-autogen, elixir-format
 msgid "Settings sections"
 msgstr "Разделы настроек"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Security"
+msgstr "Безопасность"

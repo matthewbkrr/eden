@@ -70,14 +70,15 @@ defmodule EdenWeb.SettingsLive do
   # head is the default section when none (or an unknown one) is requested.
   defp section_ids(assigns) do
     if match?(%{user: %User{}}, assigns[:current_scope]),
-      do: ~w(profile account notifications appearance language reactions folders),
+      do: ~w(profile account security notifications appearance language reactions folders),
       else: ~w(appearance language)
   end
 
   # Localized menu label + icon for a section id. One clause per section so a
   # future pane is a one-line change here plus its content block in render/1.
   defp section_meta("profile"), do: {gettext("Profile"), "hero-user-circle"}
-  defp section_meta("account"), do: {gettext("Account"), "hero-shield-check"}
+  defp section_meta("account"), do: {gettext("Account"), "hero-user"}
+  defp section_meta("security"), do: {gettext("Security"), "hero-lock-closed"}
   defp section_meta("notifications"), do: {gettext("Notifications"), "hero-bell"}
   defp section_meta("appearance"), do: {gettext("Appearance"), "hero-paint-brush"}
   defp section_meta("language"), do: {gettext("Language"), "hero-language"}
@@ -445,6 +446,38 @@ defmodule EdenWeb.SettingsLive do
                   class="rounded-[var(--ed-radius-lg)] border p-5"
                   style="border-color: var(--ed-border); background: var(--ed-surface);"
                 >
+                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
+                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
+                    {gettext(
+                      "Sets the presence dot others see. Invisible appears offline to everyone."
+                    )}
+                  </p>
+                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+                    <span style="font-size:0.875rem; white-space: nowrap;">
+                      {gettext("Your status")}
+                    </span>
+                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
+                      <button
+                        :for={{value, _label, short, _color} <- status_options()}
+                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
+                        type="button"
+                        aria-pressed={to_string(@profile_user.presence_status == value)}
+                        phx-click="set_status"
+                        phx-value-status={value}
+                      >
+                        {short}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div :if={@section == "security"} class="space-y-6">
+                <section
+                  :if={@profile_user}
+                  class="rounded-[var(--ed-radius-lg)] border p-5"
+                  style="border-color: var(--ed-border); background: var(--ed-surface);"
+                >
                   <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Password")}</h2>
                   <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
                     {gettext("Changing your password signs you out of every device.")}
@@ -664,36 +697,6 @@ defmodule EdenWeb.SettingsLive do
                     <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
                       {@totp_error}
                     </p>
-                  </div>
-                </section>
-
-                <section
-                  :if={@profile_user}
-                  class="rounded-[var(--ed-radius-lg)] border p-5"
-                  style="border-color: var(--ed-border); background: var(--ed-surface);"
-                >
-                  <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Status")}</h2>
-                  <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
-                    {gettext(
-                      "Sets the presence dot others see. Invisible appears offline to everyone."
-                    )}
-                  </p>
-                  <div class="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                    <span style="font-size:0.875rem; white-space: nowrap;">
-                      {gettext("Your status")}
-                    </span>
-                    <div class="ed-seg" role="group" aria-label={gettext("Status")}>
-                      <button
-                        :for={{value, _label, short, _color} <- status_options()}
-                        class={["ed-seg__btn", @profile_user.presence_status == value && "is-active"]}
-                        type="button"
-                        aria-pressed={to_string(@profile_user.presence_status == value)}
-                        phx-click="set_status"
-                        phx-value-status={value}
-                      >
-                        {short}
-                      </button>
-                    </div>
                   </div>
                 </section>
               </div>
