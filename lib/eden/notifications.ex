@@ -50,7 +50,10 @@ defmodule Eden.Notifications do
   """
   @spec deliver([integer], payload) :: :ok
   def deliver(recipient_ids, payload) do
-    for uid <- recipient_ids, adapter <- adapters(), do: adapter.deliver(uid, payload)
+    # Read the adapter list once, not per recipient: a comprehension re-evaluates a
+    # generator expression on every iteration of the preceding one.
+    adapters = adapters()
+    for uid <- recipient_ids, adapter <- adapters, do: adapter.deliver(uid, payload)
     :ok
   end
 
