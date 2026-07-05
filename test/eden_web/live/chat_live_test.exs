@@ -2439,4 +2439,48 @@ defmodule EdenWeb.ChatLiveTest do
       assert String.length(body) <= 140
     end
   end
+
+  describe "crash-hardening: events/routing from the wrong context (#259, #260)" do
+    test "channel/group handlers no-op in DM mode instead of crashing the process (#259)", %{
+      conn: conn
+    } do
+      conn = log_in_user(conn, user_fixture())
+      # /app with nothing selected: @channel and @selected are nil.
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      for event <-
+            ~w(open_channel_members open_channel_edit open_new_room open_add_members open_threads) do
+        assert render_click(view, event, %{})
+      end
+
+      assert render_click(view, "group_remove_member", %{"id" => "1"})
+      assert Process.alive?(view.pid)
+    end
+
+    test "a {:new_message} for a conversation that isn't open is ignored (#260)", %{conn: conn} do
+      alice = user_fixture(%{username: "route_alice"})
+      bob = user_fixture(%{username: "route_bob"})
+      {:ok, conv_a} = Chat.create_conversation(Scope.for_user(alice), [bob.id])
+
+      conn = log_in_user(conn, alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{conv_a.id}")
+
+      # A bare {:new_message} for a DIFFERENT conversation (id 999_999, not the open one)
+      # lands in the mailbox — an in-flight broadcast during a fast A→B switch. A raw struct
+      # (not create_message) avoids the sidebar-activity broadcast, isolating the stream path.
+      # Without the open?/2 gate this would stream_insert into conv_a's window.
+      fake = %Eden.Chat.Message{
+        id: 999_999,
+        conversation_id: 999_999,
+        sender_id: bob.id,
+        body: "should-not-leak",
+        inserted_at: ~N[2020-01-01 00:00:00],
+        compact: false
+      }
+
+      send(view.pid, {:new_message, fake})
+
+      refute render(view) =~ "should-not-leak"
+    end
+  end
 end

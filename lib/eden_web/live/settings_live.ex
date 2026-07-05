@@ -986,6 +986,15 @@ defmodule EdenWeb.SettingsLive do
   end
 
   @impl true
+  # /settings is reachable signed-out for device prefs (theme/language), but every event
+  # below is account-scoped and would dereference a nil scope (FunctionClauseError / KeyError)
+  # if a signed-out client pushed it directly. The template `:if`-gates those sections; this
+  # clause gates the EVENTS to match — a no-op when there's no signed-in user (#259). Theme /
+  # language don't route through here (JS localStorage + LocaleController), so nothing
+  # signed-out legitimately needs an event.
+  def handle_event(_event, _params, %{assigns: %{profile_user: nil}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("validate_profile", %{"user" => params}, socket) do
     form =
       socket.assigns.profile_user
