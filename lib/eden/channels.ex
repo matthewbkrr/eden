@@ -414,8 +414,10 @@ defmodule Eden.Channels do
     end
   end
 
-  # Post a fresh join-request system message. A room deleted concurrently (#258) makes the
-  # FK insert fail with a changeset error — surface `:not_found`, don't crash.
+  # Post a fresh join-request system message. A system message has no validated user input
+  # (meta is server-built, body is ""), so create_system_message's ONLY error path is the
+  # conversation_id FK — i.e. the room was deleted concurrently (#258). Mapping that error to
+  # `:not_found` is exact, not lossy; there's no validation failure it could mask.
   defp post_join_request(room_id, user) do
     Chat.create_system_message(room_id, %{
       "action" => "join_request",
@@ -478,6 +480,12 @@ defmodule Eden.Channels do
       {:error, _} ->
         {:error, :not_found}
     end
+  rescue
+    # The room was GC'd between get_room and the join writes (#258 review): join_room's
+    # insert_all hits an FK violation (Postgrex.Error), which the transaction rolls back
+    # (no half-done, #261) and re-raises. Map it to :not_found so approve is non-crashing,
+    # like decline/request.
+    Postgrex.Error -> {:error, :not_found}
   end
 
   @doc """
