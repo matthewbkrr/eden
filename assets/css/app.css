@@ -307,6 +307,32 @@ html {
     .ed-btn--icon { width: 2.75rem; height: 2.75rem; }
   }
 
+  /* Compact icon button that sits INSIDE a 36px .ed-input (the password reveal,
+     #306) — the regular 36/44px .ed-btn--icon is flush with or overflows the
+     field, and its hover circle spills past the border. Visually 28px; the
+     ::after inset keeps the actual hit target at ~44px without visual overflow
+     (no mobile size bump, so it never outgrows the input). */
+  .ed-btn--affix {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    border: none;
+    border-radius: var(--ed-radius-full);
+    background: transparent;
+    color: var(--ed-muted);
+    cursor: pointer;
+    flex: none;
+    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+  }
+  .ed-btn--affix > * { pointer-events: none; }
+  .ed-btn--affix::after { content: ""; position: absolute; inset: -0.5rem; }
+  .ed-btn--affix:hover:not(:disabled) { background: var(--ed-surface-2); color: var(--ed-ink); }
+  .ed-btn--affix:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 1px; }
+
   /* Round send button — a true circle matching .ed-btn--icon (incl. the mobile 44px
      touch target) instead of a 40x36 pill. */
   .ed-btn--send { width: 2.25rem; padding: 0; border-radius: var(--ed-radius-full); flex: none; }

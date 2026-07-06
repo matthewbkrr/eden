@@ -76,6 +76,8 @@ defmodule EdenWeb.Router do
       live "/channels/:channel_id", ChatLive
       live "/channels/:channel_id/r/:id", ChatLive
       live "/channels/:channel_id/r/:id/m/:message_id", ChatLive
+      # Post-registration onboarding (#306): offer to enroll two-factor before the app.
+      live "/welcome/two-factor", WelcomeTotpLive
     end
 
     # Admin panel (#174) — gated to platform admins/super_admins by :require_admin

@@ -593,12 +593,112 @@ defmodule EdenWeb.CoreComponents do
         value={@type != "password" && Phoenix.HTML.Form.normalize_value(@type, @field.value)}
         {@rest}
       />
-      <span
-        :for={msg <- Enum.map(@field.errors, &translate_error/1)}
-        style="color: var(--ed-danger); font-size:0.75rem;"
-      >
-        {msg}
+      <.ed_field_errors field={@field} />
+    </label>
+    """
+  end
+
+  # Field errors, shown only once the person has actually typed in THAT input
+  # (used_input?, like the stock input/1) — otherwise "does not match the password"
+  # flashes under the confirmation while they're still on the first field (#306 review).
+  # `--ed-danger-strong` is the as-text danger tier: plain `--ed-danger` is a fill color
+  # and only hits ~3.5:1 on the dark background (#265).
+  attr :field, Phoenix.HTML.FormField, required: true
+
+  defp ed_field_errors(assigns) do
+    errors = if Phoenix.Component.used_input?(assigns.field), do: assigns.field.errors, else: []
+    assigns = assign(assigns, :errors, errors)
+
+    ~H"""
+    <span
+      :for={msg <- Enum.map(@errors, &translate_error/1)}
+      style="color: var(--ed-danger-strong); font-size:0.75rem;"
+    >
+      {msg}
+    </span>
+    """
+  end
+
+  @doc """
+  Password field with a show/hide (eye) toggle (#306). Same look + error rendering as
+  `ed_field`, but never echoes the value back and reveals what you typed on demand — used
+  by the registration form. The `.PasswordReveal` colocated hook flips the input `type`.
+  """
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :rest, :global, include: ~w(autocomplete autofocus required maxlength placeholder)
+
+  def ed_password_field(assigns) do
+    ~H"""
+    <label class="block space-y-1.5" phx-hook=".PasswordReveal" id={"#{@field.id}-wrap"}>
+      <span style="font-size:0.8125rem; color: var(--ed-muted);">
+        {@label}<span :if={@rest[:required]} style="color: var(--ed-danger);" aria-hidden="true"> *</span>
       </span>
+      <div class="relative">
+        <input
+          class="ed-input pr-10"
+          type="password"
+          name={@field.name}
+          id={@field.id}
+          data-reveal-input
+          {@rest}
+        />
+        <button
+          type="button"
+          data-reveal-toggle
+          aria-pressed="false"
+          aria-label={gettext("Show password")}
+          data-show-label={gettext("Show password")}
+          data-hide-label={gettext("Hide password")}
+          class="ed-btn--affix absolute right-1 top-1/2 -translate-y-1/2"
+        >
+          <span data-reveal-eye><.icon name="hero-eye" class="size-4" /></span>
+          <span data-reveal-eye-off class="hidden">
+            <.icon name="hero-eye-slash" class="size-4" />
+          </span>
+        </button>
+      </div>
+      <.ed_field_errors field={@field} />
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".PasswordReveal">
+        // Toggle a password input between hidden and visible, swapping the eye icon
+        // and keeping aria-pressed / aria-label in sync for screen readers.
+        //
+        // The toggle state is CLIENT-owned: the server always renders the masked
+        // default, and any LiveView patch (e.g. the form's phx-change validate on
+        // every keystroke) morphs type/aria/classes back — so the state lives on
+        // the hook and updated() re-applies it after each patch (#306 review; the
+        // focused-input carve-out only preserves `value`, not `type`).
+        export default {
+          mounted() {
+            this.showing = false
+            this._onClick = () => {
+              this.showing = !this.showing
+              this.sync()
+            }
+            const btn = this.el.querySelector("[data-reveal-toggle]")
+            btn && btn.addEventListener("click", this._onClick)
+          },
+          updated() { this.sync() },
+          sync() {
+            const input = this.el.querySelector("[data-reveal-input]")
+            const btn = this.el.querySelector("[data-reveal-toggle]")
+            if (!input || !btn) return
+            const show = this.showing
+            input.type = show ? "text" : "password"
+            btn.setAttribute("aria-pressed", String(show))
+            // Labels come from data-* so they honour the server-side gettext locale.
+            btn.setAttribute("aria-label", show ? btn.dataset.hideLabel : btn.dataset.showLabel)
+            const eye = this.el.querySelector("[data-reveal-eye]")
+            const eyeOff = this.el.querySelector("[data-reveal-eye-off]")
+            eye && eye.classList.toggle("hidden", show)
+            eyeOff && eyeOff.classList.toggle("hidden", !show)
+          },
+          destroyed() {
+            const btn = this.el.querySelector("[data-reveal-toggle]")
+            btn && this._onClick && btn.removeEventListener("click", this._onClick)
+          }
+        }
+      </script>
     </label>
     """
   end

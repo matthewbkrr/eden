@@ -55,5 +55,29 @@ defmodule EdenWeb.AuthLiveTest do
 
       assert html =~ "should be at least"
     end
+
+    test "renders the repeat-password field and a show/hide toggle (#306)", %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/invite/#{invite_token_fixture()}")
+      assert html =~ "Repeat password"
+      assert html =~ "data-reveal-toggle"
+    end
+
+    test "flags a mismatched password confirmation live (#306)", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/invite/#{invite_token_fixture()}")
+
+      html =
+        view
+        |> form("form",
+          user: %{
+            username: "newbie",
+            display_name: "New",
+            password: "password123",
+            password_confirmation: "different"
+          }
+        )
+        |> render_change()
+
+      assert html =~ "does not match"
+    end
   end
 end

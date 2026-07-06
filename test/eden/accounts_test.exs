@@ -11,9 +11,13 @@ defmodule Eden.AccountsTest do
       password: "password123"
     }
 
+    attrs = Map.merge(base, attrs)
+    # Registration now requires a matching confirmation (#306); default it to the password.
+    attrs = Map.put_new(attrs, :password_confirmation, attrs.password)
+
     {:ok, user} =
       %User{}
-      |> User.registration_changeset(Map.merge(base, attrs))
+      |> User.registration_changeset(attrs)
       |> Repo.insert()
 
     user
@@ -34,10 +38,14 @@ defmodule Eden.AccountsTest do
   end
 
   defp valid_attrs(overrides \\ %{}) do
-    Map.merge(
-      %{username: "newbie", display_name: "New Person", password: "password123"},
-      overrides
-    )
+    attrs =
+      Map.merge(
+        %{username: "newbie", display_name: "New Person", password: "password123"},
+        overrides
+      )
+
+    # Default a matching confirmation (#306) unless a test sets one (e.g. a mismatch case).
+    Map.put_new(attrs, :password_confirmation, attrs.password)
   end
 
   defp past, do: DateTime.utc_now() |> DateTime.add(-1, :day) |> DateTime.truncate(:second)
@@ -132,6 +140,23 @@ defmodule Eden.AccountsTest do
                })
 
       assert Repo.get!(Invite, ctx.invite.id).used_count == 0
+    end
+
+    test "rejects a mismatched password confirmation (#306)", ctx do
+      assert {:error, changeset} =
+               Accounts.register_user_with_invite(
+                 ctx.token,
+                 valid_attrs(%{password: "password123", password_confirmation: "different"})
+               )
+
+      assert "does not match the password" in errors_on(changeset).password_confirmation
+      assert Repo.get!(Invite, ctx.invite.id).used_count == 0
+    end
+
+    test "requires a password confirmation (#306)", ctx do
+      attrs = valid_attrs() |> Map.delete(:password_confirmation)
+      assert {:error, changeset} = Accounts.register_user_with_invite(ctx.token, attrs)
+      assert errors_on(changeset).password_confirmation != []
     end
 
     test "rejects a duplicate username", %{inviter: inviter, token: token} do
