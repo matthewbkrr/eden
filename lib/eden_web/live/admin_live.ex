@@ -18,6 +18,7 @@ defmodule EdenWeb.AdminLive do
 
   alias Eden.Accounts
   alias Eden.Accounts.{Scope, User}
+  alias Eden.Chat
 
   # Re-query the invites list each minute so the countdown labels advance and expired rows
   # drop, without a per-second timer.
@@ -186,6 +187,11 @@ defmodule EdenWeb.AdminLive do
   def handle_event("delete_account", _params, %{assigns: %{delete_armed: true}} = socket) do
     case Accounts.delete_user_permanently(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, updated} ->
+        # The web layer orchestrates the cross-context cleanup (contexts don't reach into
+        # each other): scrub the person's name from Chat's denormalized system-message meta
+        # and drop their private folders now that the account is anonymized (#305 review).
+        Chat.scrub_deleted_user_content(updated.id)
+
         # The person is now filtered out of the list; drop them + the open panel.
         {:noreply,
          socket
@@ -287,7 +293,15 @@ defmodule EdenWeb.AdminLive do
       users = Enum.map(socket.assigns.users, &if(&1.id == user.id, do: user, else: &1))
 
       if socket.assigns.selected && socket.assigns.selected.id == user.id do
-        assign(socket, users: users, selected: user, managed_form: managed_form(user))
+        # Reset the delete arm when the open person's struct is swapped underneath us (e.g.
+        # another admin edits them): the confirm must not silently carry onto a changed
+        # target (#305 review). The context re-checks authority anyway, so it's cosmetic.
+        assign(socket,
+          users: users,
+          selected: user,
+          managed_form: managed_form(user),
+          delete_armed: false
+        )
       else
         assign(socket, users: users)
       end

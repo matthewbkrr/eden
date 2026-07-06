@@ -10,6 +10,7 @@ defmodule Eden.Chat do
   import Ecto.Query, warn: false
   require Logger
 
+  alias Eden.Accounts
   alias Eden.Accounts.{Scope, User}
   alias Eden.Channels
 
@@ -330,7 +331,13 @@ defmodule Eden.Chat do
   names a group. Returns `{:ok, conversation}` (members preloaded).
   """
   def create_conversation(%Scope{user: creator}, other_ids, opts \\ []) do
-    other_ids = other_ids |> Enum.map(&normalize_id/1) |> Enum.uniq() |> List.delete(creator.id)
+    other_ids =
+      other_ids
+      |> Enum.map(&normalize_id/1)
+      |> Enum.uniq()
+      |> List.delete(creator.id)
+      |> reachable_user_ids()
+
     group? = Keyword.get(opts, :group, length(other_ids) > 1)
 
     cond do
@@ -447,8 +454,14 @@ defmodule Eden.Chat do
       {:ok, orphan_keys} = leave_and_maybe_gc(target_id, id)
       delete_unreferenced_blobs(orphan_keys)
       # The remover always stays a member, so the conversation isn't GC'd here — the
-      # "removed" notice always lands.
-      create_system_message(id, %{"action" => "member_removed", "name" => name})
+      # "removed" notice always lands. Store user_id so a later account deletion can scrub
+      # the denormalized name (#305 review).
+      create_system_message(id, %{
+        "action" => "member_removed",
+        "name" => name,
+        "user_id" => target_id
+      })
+
       Phoenix.PubSub.broadcast(@pubsub, user_topic(target_id), {:removed_from_conversation, id})
       notify_members(id)
       broadcast(id, {:group_members_changed, id})
@@ -527,14 +540,27 @@ defmodule Eden.Chat do
          actor_role when is_binary(actor_role) <- group_role_of(id, actor.id),
          :ok <- ensure_role(actor_role, ~w(owner admin)) do
       ids = user_ids |> Enum.map(&safe_id/1) |> Enum.filter(&is_integer/1)
-      # Real users who aren't already active members (a left/removed member is re-activated).
+      # Real, non-deleted users who aren't already active members (a left/removed member is
+      # re-activated). Excluding `deleted_at` keeps an anonymized account (#303) from being
+      # re-added via a forged id — deletion is terminal.
       already = active_member_ids(id)
-      candidates = Repo.all(from u in User, where: u.id in ^ids and u.id not in ^already)
+
+      candidates =
+        Repo.all(
+          from u in User, where: u.id in ^ids and u.id not in ^already and is_nil(u.deleted_at)
+        )
 
       added =
         Enum.map(candidates, fn u ->
           add_group_membership(id, u.id)
-          create_system_message(id, %{"action" => "member_added", "name" => u.display_name})
+          # Store user_id alongside the denormalized name so a future account deletion can
+          # scrub the name from this system message (#305 review).
+          create_system_message(id, %{
+            "action" => "member_added",
+            "name" => u.display_name,
+            "user_id" => u.id
+          })
+
           u
         end)
 
@@ -550,6 +576,43 @@ defmodule Eden.Chat do
       :error -> {:error, :not_found}
       {:error, _} = error -> error
     end
+  end
+
+  @doc """
+  Cross-context cleanup for a permanently-deleted account (#303, #305 review), called by
+  the web layer after `Accounts.delete_user_permanently/2` succeeds (contexts don't reach
+  into each other). Scrubs the person's display name from the **denormalized** copies in
+  system-message `meta` — the knock requester name and the member add/remove notices — so
+  anonymization reaches shared history, and deletes their private folders/prefs (no
+  shared-history value). Idempotent; safe on a user with nothing to scrub.
+
+  Member add/remove notices written before the `user_id` seam (#305) landed carry no id and
+  can't be targeted — those keep the original name (a bounded, documented gap).
+  """
+  def scrub_deleted_user_content(user_id) when is_integer(user_id) do
+    sentinel = Accounts.deleted_display_name()
+
+    scrub_meta_name(user_id, "requester_id", ["requester_name"], sentinel)
+    scrub_meta_name(user_id, "user_id", ["name"], sentinel)
+
+    Repo.delete_all(from(f in Folder, where: f.user_id == ^user_id))
+    Repo.delete_all(from(p in FolderPrefs, where: p.user_id == ^user_id))
+    :ok
+  end
+
+  # Overwrite `path` (a jsonb text[] path, e.g. ["name"]) with the sentinel in every system
+  # message whose `id_key` in meta points at this user. `update:` fragment references the
+  # row's own meta; the path is a fixed literal list (never user input).
+  defp scrub_meta_name(user_id, id_key, path, sentinel) do
+    from(m in Message,
+      where:
+        m.kind == "system" and
+          fragment("(?->>?)::bigint", m.meta, ^id_key) == ^user_id,
+      update: [
+        set: [meta: fragment("jsonb_set(?, ?, to_jsonb(?::text))", m.meta, ^path, ^sentinel)]
+      ]
+    )
+    |> Repo.update_all([])
   end
 
   @doc """
@@ -3733,6 +3796,19 @@ defmodule Eden.Chat do
   defp user_topic(user_id), do: "user:#{user_id}:chat"
 
   ## Internals
+
+  # Keep only ids that map to a real, non-deleted (#303) user, preserving order — a forged /
+  # stale / anonymized id can't be pulled into a new conversation (deletion is terminal).
+  defp reachable_user_ids([]), do: []
+
+  defp reachable_user_ids(ids) do
+    valid =
+      from(u in User, where: u.id in ^ids and is_nil(u.deleted_at), select: u.id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.filter(ids, &MapSet.member?(valid, &1))
+  end
 
   defp find_or_create_direct(creator, other_id) do
     case existing_direct(creator.id, other_id) do

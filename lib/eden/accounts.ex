@@ -185,6 +185,9 @@ defmodule Eden.Accounts do
   # lives in the DB; RU because the product is RU-facing.
   @deleted_display_name "Удалённый аккаунт"
 
+  @doc "The display-name sentinel shown for an anonymized account (#303) — one source of truth."
+  def deleted_display_name, do: @deleted_display_name
+
   @doc """
   Permanently deletes a user by **anonymization** (#303, ADR-0002 right-to-erasure):
   scrubs all PII + credentials + avatar and stamps `deleted_at`, but **keeps** the row
@@ -200,9 +203,15 @@ defmodule Eden.Accounts do
   session. Returns `{:ok, user}` | `{:error, :forbidden | :last_super_admin | :already_deleted}`.
   """
   def delete_user_permanently(%Scope{user: %User{} = actor}, %User{} = target) do
+    # Compute the throwaway password hash BEFORE opening the transaction: bcrypt is ~200ms
+    # of CPU and its input (random bytes) has zero dependence on the locked rows, so hashing
+    # inside would needlessly hold FOR UPDATE on every super_admin row for that window,
+    # stalling concurrent role changes / other deletions / super_admin 2FA logins (#303 review).
+    dead_hash = Bcrypt.hash_pwd_salt(Base.url_encode64(:crypto.strong_rand_bytes(32)))
+
     with :ok <- authorize_deletion(actor, target),
          {:ok, {updated, old_avatar_key}} <-
-           Repo.transact(fn -> anonymize_locked(actor, target.id) end) do
+           Repo.transact(fn -> anonymize_locked(actor, target.id, dead_hash) end) do
       # Side effects only after the scrub commits (a rollback can't un-delete a blob or
       # un-send a broadcast): reclaim the avatar blob, boot live sessions, refresh views.
       if old_avatar_key, do: Storage.delete(old_avatar_key)
@@ -226,7 +235,7 @@ defmodule Eden.Accounts do
   # set_role_guarded/2 → no deadlock) so a concurrent role change / second deletion can't
   # race us to zero super_admins or to a stale authority. Re-checks everything on the FRESH
   # row (#263 TOCTOU idiom). Returns {:ok, {updated, old_avatar_key}} for post-commit cleanup.
-  defp anonymize_locked(%User{} = actor, target_id) do
+  defp anonymize_locked(%User{} = actor, target_id, dead_hash) do
     super_ids =
       from(u in User, where: u.role == "super_admin", lock: "FOR UPDATE", select: u.id)
       |> Repo.all()
@@ -238,18 +247,22 @@ defmodule Eden.Accounts do
       not can_reset_password?(actor, target) -> {:error, :forbidden}
       User.deleted?(target) -> {:error, :already_deleted}
       target.id in super_ids and length(super_ids) <= 1 -> {:error, :last_super_admin}
-      true -> anonymize_write(target)
+      true -> anonymize_write(target, dead_hash)
     end
   end
 
-  defp anonymize_write(%User{} = target) do
+  defp anonymize_write(%User{} = target, dead_hash) do
     old_avatar_key = target.avatar_key
 
-    with {:ok, updated} <- target |> anonymize_changeset() |> Repo.update() do
+    with {:ok, updated} <- target |> anonymize_changeset(dead_hash) |> Repo.update() do
       # Drop every session token + any outstanding reset link in the same transaction, so a
-      # deleted account has no live way back in (mirrors deactivate_writes/1).
+      # deleted account has no live way back in (mirrors deactivate_writes/1); and revoke any
+      # registration invites they minted — an erased account leaves no live invite behind.
       delete_all_session_tokens(updated.id)
       delete_reset_tokens(updated.id)
+      # Revoke any invites the deleted user minted (shared helper, also used by
+      # deactivation) — an erased account leaves no live invite behind.
+      revoke_user_invites(updated.id)
       {:ok, {updated, old_avatar_key}}
     end
   end
@@ -257,7 +270,7 @@ defmodule Eden.Accounts do
   # `change/2` (not a validating changeset) so we can set the sentinel username/display —
   # the DB unique index on username still holds, and `deleted-<id>` is collision-proof
   # against the hyphen-free format real handles must match.
-  defp anonymize_changeset(%User{} = user) do
+  defp anonymize_changeset(%User{} = user, dead_hash) do
     Ecto.Changeset.change(user,
       username: "deleted-#{user.id}",
       display_name: @deleted_display_name,
@@ -278,9 +291,10 @@ defmodule Eden.Accounts do
       managed_by: nil,
       directory_synced_at: nil,
       # Credentials + second factor. `hashed_password` is NOT NULL, so replace it with a
-      # bcrypt hash of fresh random bytes rather than nil: the input is never revealed, so
-      # no password can ever verify against it (and `active=false` blocks login regardless).
-      hashed_password: Bcrypt.hash_pwd_salt(Base.url_encode64(:crypto.strong_rand_bytes(32))),
+      # bcrypt hash of fresh random bytes (computed outside the transaction) rather than nil:
+      # the input is never revealed, so no password can ever verify (and `active=false`
+      # blocks login regardless).
+      hashed_password: dead_hash,
       totp_secret: nil,
       totp_activated_at: nil,
       totp_last_used_at: nil,

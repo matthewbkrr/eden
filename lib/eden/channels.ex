@@ -442,9 +442,18 @@ defmodule Eden.Channels do
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
-      if meta["status"] == "pending",
-        do: approve_pending(channel, room, req_id, msg),
-        else: :ok
+      cond do
+        meta["status"] != "pending" ->
+          :ok
+
+        # The requester was permanently deleted (#303) after knocking — don't resurrect an
+        # anonymized account into the room; settle the stale knock as declined (#305 review).
+        requester_deleted?(req_id) ->
+          decline_pending(msg)
+
+        true ->
+          approve_pending(channel, room, req_id, msg)
+      end
     else
       # {:error, reason} from get_channel/ensure_role passes through; anything
       # else (nil, a non-join_request system message) is :not_found — never a
@@ -488,6 +497,10 @@ defmodule Eden.Channels do
     Postgrex.Error -> {:error, :not_found}
   end
 
+  defp requester_deleted?(req_id) do
+    Repo.exists?(from u in User, where: u.id == ^req_id and not is_nil(u.deleted_at))
+  end
+
   @doc """
   Declines a pending join request (admin+ of the room's channel): flips the
   request message to "declined" without joining anyone. The requester may
@@ -527,8 +540,10 @@ defmodule Eden.Channels do
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       ids = user_ids |> Enum.map(&Ids.normalize/1) |> Enum.filter(&is_integer/1)
-      # Intersect with real users — a phantom id would raise an FK violation.
-      ids = Repo.all(from u in User, where: u.id in ^ids, select: u.id)
+      # Intersect with real, non-deleted users — a phantom id would raise an FK violation,
+      # and an anonymized account (#303) must never be re-added to a room (deletion is
+      # terminal, #305 review).
+      ids = Repo.all(from u in User, where: u.id in ^ids and is_nil(u.deleted_at), select: u.id)
 
       {:ok, added} =
         Repo.transact(fn ->
@@ -605,9 +620,10 @@ defmodule Eden.Channels do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       ids = user_ids |> Enum.map(&Ids.normalize/1) |> Enum.filter(&is_integer/1)
-      # Intersect with real users: a phantom id would raise an FK violation
-      # inside insert_all (on_conflict only absorbs unique conflicts).
-      ids = Repo.all(from u in User, where: u.id in ^ids, select: u.id)
+      # Intersect with real, non-deleted users: a phantom id would raise an FK violation
+      # inside insert_all (on_conflict only absorbs unique conflicts), and an anonymized
+      # account (#303) must never be re-added (#305 review).
+      ids = Repo.all(from u in User, where: u.id in ^ids and is_nil(u.deleted_at), select: u.id)
 
       {:ok, added} =
         Repo.transact(fn ->
