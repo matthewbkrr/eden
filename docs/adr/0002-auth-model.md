@@ -149,6 +149,17 @@ and revoke every session; login is refused at the password check, the session-to
 gate, and the TOTP step, without leaking account state. The **upstream reconcile**
 half stays trigger-gated on a real corp-OIDC IdP (not built).
 
+**Permanent deletion — done (#303).** Deactivation is reversible; **erasure** is not.
+`Accounts.delete_user_permanently/2` (same admin authority; never yourself; the last
+super_admin is locked) implements the right-to-erasure by **anonymization**: it scrubs
+all PII, credentials, avatar and platform role, frees the `@tag` (`deleted-<id>`, which
+can't collide with a hyphen-free real handle), and stamps `users.deleted_at`, while
+**keeping the row** so the person's messages stay attributed as «Удалённый аккаунт» rather
+than holing shared corporate history (eden is the system of record). It reuses the
+deactivation gates by also setting `active = false`, revokes every session, and the row
+is filtered out of `list_users`/rosters/pickers; `reactivate_user/2` refuses it. Chosen
+over cascade-delete precisely to preserve conversation/room coherence for everyone else.
+
 ## Consequences
 
 - **Positive.** Zero new dependencies and zero new compliance surface today;

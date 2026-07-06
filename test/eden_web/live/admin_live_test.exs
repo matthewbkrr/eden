@@ -153,6 +153,52 @@ defmodule EdenWeb.AdminLiveTest do
       refute html =~ "Deactivate account"
     end
 
+    test "arms then permanently deletes a person, removing them from the list (#303)", %{
+      conn: conn
+    } do
+      worker = user_fixture(%{username: "eraseme", display_name: "Erase Me"})
+      {:ok, view, html} = live(conn, ~p"/admin")
+      assert html =~ "Erase Me"
+
+      select(view, worker)
+
+      # First click only arms — nothing is deleted yet.
+      html = view |> element(~s(button[phx-click="arm_delete"])) |> render_click()
+      assert html =~ "Delete permanently"
+      refute Accounts.deleted?(Repo.get!(User, worker.id))
+
+      # Confirm runs the irreversible anonymization.
+      html = view |> element(~s(button[phx-click="delete_account"])) |> render_click()
+      assert Accounts.deleted?(Repo.get!(User, worker.id))
+      # Gone from both the list and the detail panel.
+      refute html =~ "Erase Me"
+      assert html =~ "Select a person"
+    end
+
+    test "cancel disarms the delete without touching the account (#303)", %{conn: conn} do
+      worker = user_fixture(%{username: "keepme"})
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, worker)
+
+      view |> element(~s(button[phx-click="arm_delete"])) |> render_click()
+      html = view |> element(~s(button[phx-click="disarm_delete"])) |> render_click()
+      refute html =~ "Delete permanently"
+      refute Accounts.deleted?(Repo.get!(User, worker.id))
+    end
+
+    test "hides the delete control for your own account (#303)", %{conn: conn, boss: boss} do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, boss)
+      refute html =~ "Delete account"
+    end
+
+    test "a plain admin gets no delete control for a super_admin (#303)", %{conn: conn} do
+      sa = promote(user_fixture(%{username: "topdog3"}), "super_admin")
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, sa)
+      refute html =~ "Delete account"
+    end
+
     test "a person-action event with nobody selected is a safe no-op (#250, #251)", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/admin")
       # Forged/stale events with no selection must not crash the LiveView.
@@ -160,6 +206,8 @@ defmodule EdenWeb.AdminLiveTest do
       render_click(view, "reset_link", %{})
       render_click(view, "deactivate", %{})
       render_click(view, "reactivate", %{})
+      render_click(view, "arm_delete", %{})
+      render_click(view, "delete_account", %{})
       assert render(view) =~ "Select a person"
     end
 
