@@ -14,17 +14,33 @@ defmodule EdenWeb.InviteController do
         # destination so they can continue there after they enroll or skip.
         |> UserAuth.log_in_user(user, to: welcome_totp_path(conn))
 
-      {:error, %Ecto.Changeset{}} ->
-        # Most commonly a username already taken. Send them back to the form
-        # (which renders the flash) to choose another.
+      {:error, %Ecto.Changeset{} = changeset} ->
+        # Send them back to the form (which re-renders per-field errors) with a flash
+        # matching the actual failure — a password mismatch and a taken username are the
+        # two common ones and need different copy (#306 review).
         conn
-        |> put_flash(:error, gettext("That username may be taken. Please try another."))
+        |> put_flash(:error, registration_error_message(changeset))
         |> redirect(to: ~p"/invite/#{token}")
 
       {:error, _reason} ->
         # Invite became invalid (expired/revoked/exhausted/unknown) between load
         # and submit; the invite page re-renders the specific reason.
         redirect(conn, to: ~p"/invite/#{token}")
+    end
+  end
+
+  # Flash copy keyed to which field actually failed (the form shows the precise per-field
+  # error too; this is the top-level summary).
+  defp registration_error_message(%Ecto.Changeset{errors: errors}) do
+    cond do
+      Keyword.has_key?(errors, :password_confirmation) or Keyword.has_key?(errors, :password) ->
+        gettext("The passwords didn't match — please try again.")
+
+      Keyword.has_key?(errors, :username) ->
+        gettext("That username may be taken. Please try another.")
+
+      true ->
+        gettext("Please check the form and try again.")
     end
   end
 

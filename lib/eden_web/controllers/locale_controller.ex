@@ -10,17 +10,6 @@ defmodule EdenWeb.LocaleController do
 
     conn
     |> put_session(:locale, locale)
-    |> redirect(to: return_to(params))
+    |> redirect(to: EdenWeb.SafePath.local_path(params["return_to"], ~p"/settings"))
   end
-
-  # Only allow local paths to avoid an open-redirect via `return_to`. Normalise
-  # backslashes first: a browser reads "/\evil.example" as protocol-relative
-  # "//evil.example", which a bare "//" check would miss.
-  defp return_to(%{"return_to" => "/" <> _ = path}) do
-    if path |> String.replace("\\", "/") |> String.starts_with?("//"),
-      do: ~p"/settings",
-      else: path
-  end
-
-  defp return_to(_params), do: ~p"/settings"
 end

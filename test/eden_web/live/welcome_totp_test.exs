@@ -55,6 +55,13 @@ defmodule EdenWeb.WelcomeTotpLiveTest do
       assert_redirect(view, ~p"/app")
     end
 
+    test "ignores a control-character (tab) open-redirect bypass (#306 review)", %{conn: conn} do
+      # "/\t/evil.example" — browsers strip the tab, resolving to "//evil.example".
+      {:ok, view, _} = live(conn, ~p"/welcome/two-factor?return_to=%2F%09%2Fevil.example")
+      view |> element(~s(button[phx-click="skip"])) |> render_click()
+      assert_redirect(view, ~p"/app")
+    end
+
     test "activating with a valid code enrolls two-factor and reveals backup codes", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/welcome/two-factor")
       html = view |> element(~s(button[phx-click="start_setup"])) |> render_click()
@@ -81,6 +88,28 @@ defmodule EdenWeb.WelcomeTotpLiveTest do
         |> render_submit()
 
       assert html =~ "didn&#39;t match" or html =~ "didn't match"
+    end
+
+    test "an activate event with no live setup is a safe no-op (#306 review)", %{conn: conn} do
+      # Simulates a double-submit landing after the first cleared totp_setup, or a forged
+      # event — must not crash on nil.secret.
+      {:ok, view, _} = live(conn, ~p"/welcome/two-factor")
+      render_click(view, "activate", %{"totp" => %{"code" => "123456"}})
+      assert render(view) =~ "Secure your account"
+    end
+
+    test "finish (after enrolling) honors the local return_to", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/welcome/two-factor?return_to=%2Fchannels%2F9")
+      html = view |> element(~s(button[phx-click="start_setup"])) |> render_click()
+      key = Regex.run(~r/<code[^>]*>\s*([A-Z2-7]+)\s*<\/code>/, html) |> List.last()
+      secret = Base.decode32!(key, padding: false)
+
+      view
+      |> form("form[phx-submit=activate]", totp: %{code: NimbleTOTP.verification_code(secret)})
+      |> render_submit()
+
+      view |> element(~s(button[phx-click="finish"])) |> render_click()
+      assert_redirect(view, "/channels/9")
     end
   end
 

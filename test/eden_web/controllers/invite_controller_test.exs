@@ -49,6 +49,26 @@ defmodule EdenWeb.InviteControllerTest do
     assert redirected_to(conn) == ~p"/invite/#{token}"
     refute Accounts.get_user_by_username("mismatch")
     assert {:ok, _} = Accounts.fetch_valid_invite(token)
+    # The flash names the actual failure (passwords), not the misleading "username taken".
+    assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "passwords"
+  end
+
+  test "forwards a pre-registration return_to through the onboarding step (#306)", %{conn: conn} do
+    token = invite_token_fixture()
+
+    conn =
+      conn
+      |> Plug.Test.init_test_session(%{user_return_to: "/channels/3"})
+      |> post(~p"/invite/#{token}", %{
+        "user" => %{
+          "username" => "returner",
+          "display_name" => "R",
+          "password" => "password123",
+          "password_confirmation" => "password123"
+        }
+      })
+
+    assert redirected_to(conn) == ~p"/welcome/two-factor?#{[return_to: "/channels/3"]}"
   end
 
   test "a duplicate username redirects back to the invite with a flash and no session", %{

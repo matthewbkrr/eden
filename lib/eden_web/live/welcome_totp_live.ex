@@ -15,7 +15,7 @@ defmodule EdenWeb.WelcomeTotpLive do
   @impl true
   def mount(params, _session, socket) do
     user = socket.assigns.current_scope.user
-    return_to = safe_return_to(params["return_to"])
+    return_to = EdenWeb.SafePath.local_path(params["return_to"], ~p"/app")
 
     if Accounts.totp_enrolled?(user) do
       # Already has a factor (e.g. the link reopened later) — nothing to offer.
@@ -41,12 +41,15 @@ defmodule EdenWeb.WelcomeTotpLive do
      assign(socket, totp_setup: totp_setup(socket.assigns.current_scope.user), totp_error: nil)}
   end
 
-  def handle_event("activate", %{"totp" => %{"code" => code}}, socket) do
-    case Accounts.activate_totp(
-           socket.assigns.current_scope.user,
-           socket.assigns.totp_setup.secret,
-           code
-         ) do
+  # Guard on a live setup: a double-submit (the second lands after the first cleared
+  # totp_setup) or a forged event would otherwise blow up on `nil.secret` (#306 review;
+  # the per-event-guard lesson from the #258-261 crash cluster).
+  def handle_event(
+        "activate",
+        %{"totp" => %{"code" => code}},
+        %{assigns: %{totp_setup: %{secret: secret}}} = socket
+      ) do
+    case Accounts.activate_totp(socket.assigns.current_scope.user, secret, code) do
       {:ok, user, backup_codes} ->
         {:noreply,
          assign(socket,
@@ -60,6 +63,8 @@ defmodule EdenWeb.WelcomeTotpLive do
         {:noreply, assign(socket, totp_error: gettext("That code didn't match. Try again."))}
     end
   end
+
+  def handle_event("activate", _params, socket), do: {:noreply, socket}
 
   def handle_event("skip", _params, socket),
     do: {:noreply, push_navigate(socket, to: socket.assigns.return_to)}
@@ -77,19 +82,16 @@ defmodule EdenWeb.WelcomeTotpLive do
     }
   end
 
-  # Only follow a local path (the param is user-editable) — else land in the app.
-  # Normalise backslashes first: browsers treat "/\evil.example" as the protocol-relative
-  # "//evil.example", which would otherwise slip past a bare "//" check (#306 review).
-  defp safe_return_to("/" <> _ = path) do
-    if path |> String.replace("\\", "/") |> String.starts_with?("//"), do: ~p"/app", else: path
-  end
-
-  defp safe_return_to(_), do: ~p"/app"
-
   @impl true
   def render(assigns) do
     ~H"""
     <div class="ed-root min-h-screen grid place-items-center px-5 py-10">
+      <%!-- Float the transient welcome/error flash as a top toast so its auto-dismiss
+            doesn't shift the CTA out from under a tap (#306 review). --%>
+      <div class="fixed left-1/2 top-4 z-50 w-full max-w-md -translate-x-1/2 px-5">
+        <.ed_flash flash={@flash} />
+      </div>
+
       <div class="w-full max-w-md">
         <h1 class="mb-1" style="font-size:1.375rem; font-weight:650;">
           {gettext("Secure your account")}
@@ -99,8 +101,6 @@ defmodule EdenWeb.WelcomeTotpLive do
             "Add two-factor authentication — a 6-digit code from an authenticator app at sign-in. Recommended, but you can also do this later in Settings."
           )}
         </p>
-
-        <.ed_flash flash={@flash} />
 
         <%!-- Entry: offer to start, or skip. The secret is minted on the "Set up" click
               (start_setup), keeping the QR stable across a reconnect. --%>
@@ -131,10 +131,17 @@ defmodule EdenWeb.WelcomeTotpLive do
           </button>
         </div>
 
-        <%!-- Mid-setup: QR + manual key + confirm-code form + skip. --%>
+        <%!-- Mid-setup: QR + manual key + confirm-code form + skip. The QR never fits
+              beside the key inside max-w-md (184+256 > 448), so it always stacks — say so
+              rather than pretend to wrap. The QR is decorative: the manual key below is the
+              accessible path, so hide the SVG from assistive tech. --%>
         <div :if={@totp_setup} class="space-y-4">
-          <div class="flex flex-wrap items-start gap-4">
-            <div class="rounded-[var(--ed-radius)] p-2" style="background:#fff; width:184px;">
+          <div class="flex flex-col items-start gap-4">
+            <div
+              class="rounded-[var(--ed-radius)] p-2"
+              style="background:#fff; width:184px;"
+              aria-hidden="true"
+            >
               {Phoenix.HTML.raw(@totp_setup.qr)}
             </div>
             <div class="space-y-1.5">
@@ -166,7 +173,7 @@ defmodule EdenWeb.WelcomeTotpLive do
                 autofocus
               />
             </label>
-            <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
+            <p :if={@totp_error} style="color: var(--ed-danger-strong); font-size:0.75rem;">
               {@totp_error}
             </p>
             <button type="submit" class="ed-btn ed-btn--primary w-full">
