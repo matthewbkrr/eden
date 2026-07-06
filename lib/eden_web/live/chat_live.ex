@@ -134,6 +134,10 @@ defmodule EdenWeb.ChatLive do
         # the preview overlay immediately so the in-stream node takes over, instead
         # of the overlay lingering for the whole upload. Reset once consumed.
         sending_media: false,
+        # Metadata for an in-flight failed-card Resend (#…): stashed by retry_prepare (client_id,
+        # caption, as_file, media?, conversation), read by handle_retry_progress when the
+        # :attachment_retry auto-upload completes to build the message. nil when no retry is live.
+        pending_retry: nil,
         # FIFO of client_ids for in-flight media sends (#95): the hook pushes one on
         # media_sending just before each upload submit; send_attachment pops the
         # oldest to stamp the real message so its optimistic twin swaps out.
@@ -256,6 +260,18 @@ defmodule EdenWeb.ChatLive do
         # Telegram-style, instead of an indeterminate spinner that can't show how
         # far a slow cross-border upload has gotten.
         progress: &handle_attachment_progress/3
+      )
+      # Dedicated Resend channel (#…): re-sending a stalled attachment can't reuse :attachment —
+      # cancelling its in-flight entry leaves the config unable to accept new entries + racing the
+      # cancelled upload's late progress (a crash). This SEPARATE config is NEVER cancelled, so a
+      # retry stages into a pristine slot. auto_upload → the clones upload the instant they stage;
+      # handle_retry_progress consumes + sends when done. Same caps/accept as :attachment.
+      |> allow_upload(:attachment_retry,
+        accept: :any,
+        max_entries: Chat.max_staged_entries(),
+        max_file_size: Chat.max_attachment_bytes(),
+        auto_upload: true,
+        progress: &handle_retry_progress/3
       )
       # Edit-media album (#164 PR-2): the photos ADDED while editing a media message.
       # Same caps as :attachment; the total (kept + these) is re-checked server-side by
@@ -572,12 +588,47 @@ defmodule EdenWeb.ChatLive do
   # surface the failure so the loss is never silent. Already-completed files in a batch (#149,
   # each posts the moment it finishes) have left as real messages and are unaffected.
   def handle_event("media_send_reset", _params, socket) do
-    # cancel_staged_attachments/1 also resets sending_media (+ the client_id/progress gates),
-    # so the flag is cleared here as part of the abort — no separate assign needed.
-    {:noreply,
-     socket
-     |> cancel_staged_attachments()
-     |> put_flash(:error, gettext("Some files didn't upload — please try again."))}
+    # The client marked the stalled node(s) as a visible FAILED card (red !, with resend +
+    # delete); this just cancels the wedged staged entries and resets the send flags
+    # (cancel_staged_attachments does both), so nothing lingers to be nuked on a switch and
+    # new picks aren't blocked. No flash — the inline ! is the visible failure.
+    {:noreply, cancel_staged_attachments(socket)}
+  end
+
+  # Failed-card Resend, step 1 (#…): stash what the retry needs — the fresh optimistic client_id,
+  # the caption, the "send as file" flag, whether it's media or a plain file, and the conversation
+  # it belongs to (captured now, so navigating away can't misroute it). The client feeds the
+  # cloned File(s) into :attachment_retry only after this reply lands, so the metadata is always
+  # ready when handle_retry_progress fires. Replies so the client can sequence the feed.
+  def handle_event("retry_prepare", params, socket) do
+    pending =
+      case socket.assigns.selected do
+        %{id: conv_id} ->
+          %{
+            client_id: params["client_id"],
+            caption: params["caption"] || "",
+            as_file: params["as_file"] == true,
+            media: params["media"] == true,
+            conversation_id: conv_id
+          }
+
+        _ ->
+          nil
+      end
+
+    {:reply, %{}, assign(socket, pending_retry: pending)}
+  end
+
+  # Failed-card Resend, abort (#…): a stalled retry (its watchdog fired) cancels the pristine
+  # :attachment_retry entries and drops the pending metadata, so the card re-shows its failed
+  # state and a later retry starts clean. (:attachment_retry is auto_upload, so no send flags.)
+  def handle_event("retry_reset", _params, socket) do
+    socket =
+      Enum.reduce(socket.assigns.uploads.attachment_retry.entries, socket, fn entry, acc ->
+        cancel_upload(acc, :attachment_retry, entry.ref)
+      end)
+
+    {:noreply, assign(socket, pending_retry: nil)}
   end
 
   # The hook caps a pick at max_staged_entries (#193) — more than the upload config takes at
@@ -3251,6 +3302,7 @@ defmodule EdenWeb.ChatLive do
             data-resend={gettext("Resend")}
             data-delete={gettext("Delete")}
             data-resend-many={gettext("Resend {count} messages")}
+            data-not-sent={gettext("Not sent")}
             data-sending-label={gettext("Sending {name}")}
             data-cancel-label={gettext("Cancel upload")}
             data-queued-label={gettext("In queue")}
@@ -3335,6 +3387,10 @@ defmodule EdenWeb.ChatLive do
                 <.icon name="hero-x-mark-micro" class="size-4" />
               </button>
             </div>
+            <%!-- Dedicated Resend upload input (#…): always present + never inert, so a
+                  failed-card Resend can feed cloned Files into the pristine :attachment_retry
+                  config (auto_upload) at any time — even while the compose modal is open. --%>
+            <.live_file_input upload={@uploads.attachment_retry} class="sr-only" tabindex="-1" />
             <%!-- Composer bar: attach + message + emoji + send. ALWAYS rendered (#130)
                   so it never vanishes/jumps — the compose modal (below) floats on top
                   of it when files are staged, instead of replacing it. While that modal
@@ -5441,6 +5497,10 @@ defmodule EdenWeb.ChatLive do
             // this element. Revoked when a
             // clip is removed (VideoPreview destroyed) or the conversation switches.
             this.el.edenVideoUrls = new Map()
+            // The original picked File objects, keyed "name:size:lastModified", so a failed
+            // upload can be RE-SENT (#…): the LiveView entry's File is gone after a cancel, so
+            // we stash it at pick. Kept until the composer is torn down (destroyed).
+            this.el.edenFiles = new Map()
             this.input = this.el.querySelector('input[name="message[body]"]')
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
@@ -5462,6 +5522,10 @@ defmodule EdenWeb.ChatLive do
             this.onPick = (e) => {
               const input = e.target
               const isFile = input instanceof HTMLInputElement && input.type === "file"
+              // The dedicated Resend feed (#…) targets :attachment_retry directly — it must NOT be
+              // gated/queued like a normal :attachment pick (that would divert it into the main
+              // config). Let it propagate to LiveView untouched (its clones are already stashed).
+              if (isFile && input.name === "attachment_retry") return
               // Capture video object URLs for previews wherever the batch ends up.
               this.captureVideoUrls(e)
               // #119: a pick WHILE a media send is uploading can't enter the shared
@@ -5505,6 +5569,9 @@ defmodule EdenWeb.ChatLive do
             this.handleEvent("media_failed", ({ id }) => {
               this.dropPending(id)
             })
+            // Settle a failed-card Resend (#…): the server sends it, then names the card's
+            // client_id here — ok (the client_id swap already removed the card) vs failed.
+            this.handleEvent("retry_done", (payload) => this.onRetryDone(payload))
             // Determinate upload progress for an in-flight send. The server addresses
             // the album's averaged ring by its client_id (#95) and each file's ring by
             // its upload ref (#149); we drive whichever node it names and re-arm that
@@ -5517,7 +5584,18 @@ defmodule EdenWeb.ChatLive do
               this.armStall(node && node.closest(".ed-msg, .ed-flat"))
             })
           },
-          disconnected() { this.connected = false },
+          disconnected() {
+            this.connected = false
+            // Freeze every in-flight upload's stall watchdog: a dropped link is NOT a stall —
+            // LiveView pauses the upload and resumes it on reconnect — so the clock must not run
+            // while offline, else a flaky/slow connection loses files after the timeout (the
+            // "even on slow internet the file vanishes ~30s later" bug). Re-armed on reconnect.
+            if (this.pending) {
+              for (const row of this.pending.children) {
+                if (row._stall) { clearTimeout(row._stall); row._stall = null }
+              }
+            }
+          },
           destroyed() {
             // Composer torn down (e.g. live_redirect out of chat without a
             // conversation switch): per-tile VideoPreview.destroyed revokes live
@@ -5527,6 +5605,7 @@ defmodule EdenWeb.ChatLive do
               for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
               this.el.edenVideoUrls.clear()
             }
+            this.el.edenFiles?.clear()
             window.removeEventListener("offline", this.onOffline)
             this.sendTimers.forEach((t) => clearTimeout(t))
             this.sendTimers.clear()
@@ -5538,6 +5617,16 @@ defmodule EdenWeb.ChatLive do
             // server dedups by client_id, so re-sending can't duplicate.
             for (const item of this.queue) item.sent = false
             this.flush()
+            // Re-arm the stall watchdog for in-flight upload nodes (frozen on disconnect):
+            // LiveView resumes the paused upload now, so the clock restarts from a clean 0.
+            if (this.pending) {
+              for (const row of this.pending.children) {
+                if (!row.classList.contains("ed-msg-failed") &&
+                    row.querySelector(".ed-media-sending__ring-fill")) {
+                  this.armStall(row)
+                }
+              }
+            }
           },
           updated() {
             // Switched conversation: reset the text send queue/timers, and hide (not wipe)
@@ -5699,8 +5788,11 @@ defmodule EdenWeb.ChatLive do
               ;[...overlay.querySelectorAll(".ed-attach-file[data-ref]")].forEach((fe) => {
                 const cid = this.uuid()
                 files[fe.dataset.ref] = cid
+                // The stash key (name:size:lastModified) so a failed card can look its File
+                // back up in edenFiles and re-send it.
+                const key = fe.dataset.name + ":" + fe.dataset.sizeRaw + ":" + fe.dataset.modified
                 this.armStall(
-                  this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size),
+                  this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size, key),
                 )
               })
               // A files-only caption rides BELOW the whole pile as its own trailing message
@@ -6130,7 +6222,14 @@ defmodule EdenWeb.ChatLive do
               for (const { card } of stripCards) content.appendChild(card)
             }
 
-            return this.wrapAndAppendOptimistic(content, clientId, caption)
+            const row = this.wrapAndAppendOptimistic(content, clientId, caption)
+            // Stash this album's File keys + caption so a failed card can re-send the whole album.
+            const keys = composeTiles.map((t) => this.tileFileKey(t)).filter(Boolean)
+            if (row && keys.length) {
+              row.dataset.fileKeys = JSON.stringify(keys)
+              row.dataset.caption = caption || ""
+            }
+            return row
           },
           // Optimistic node for a photos-only "Send as file" album (#122): mirror the real
           // render — each photo as a document card (snapshot thumb + name + size), never an
@@ -6180,7 +6279,15 @@ defmodule EdenWeb.ChatLive do
               }),
             )
             // Document cards, not inline media → the normal padded bubble (isFile).
-            return this.wrapAndAppendOptimistic(wrap, clientId, caption, true)
+            const row = this.wrapAndAppendOptimistic(wrap, clientId, caption, true)
+            // Stash the album's File keys + the as-file flag so a failed card re-sends as docs.
+            const keys = tiles.map((t) => this.tileFileKey(t)).filter(Boolean)
+            if (row && keys.length) {
+              row.dataset.fileKeys = JSON.stringify(keys)
+              row.dataset.asFile = "true"
+              row.dataset.caption = caption || ""
+            }
+            return row
           },
           // Mirror album_row_sizes/1 (server): the count plan for N media (4→2+2, a trailing
           // remainder of 1 folded into 2+2). Only its LENGTH is used now — it sets how many
@@ -6267,20 +6374,69 @@ defmodule EdenWeb.ChatLive do
             })
             return btn
           },
+          // The edenFiles key (name:size:lastModified) for a staged compose tile — read off the
+          // inner <img>/<video>, which carry the raw client_size + client_last_modified. Lets a
+          // failed album/photo/video card look its original File(s) back up to re-send.
+          tileFileKey(tile) {
+            const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
+            if (!el) return null
+            return (el.dataset.name || "") + ":" + (el.dataset.size || "") + ":" + (el.dataset.modified || "")
+          },
+          // Re-send failed File(s) through the DEDICATED :attachment_retry channel (#…). Reusing
+          // :attachment is unreliable: cancelling its in-flight entry leaves the config unable to
+          // accept new entries + races the cancelled upload's late progress (a crash). The retry
+          // config is auto_upload and NEVER cancelled, so the clones stage + upload cleanly for
+          // every kind (lone photo/video, album, file). Clone each File with a nudged lastModified
+          // — a fresh identity so LiveView's identity-dedup doesn't drop it as "already seen" (the
+          // original entry carried the same identity). Sequence: stash metadata on the server
+          // (retry_prepare) FIRST — its reply guarantees pending_retry is set before the auto-
+          // upload finishes — THEN feed the clones. `opts`: {caption, asFile, media, cid}. On
+          // completion the server sends the message + pushes retry_done to settle the card.
+          retrySend(opts) {
+            const fresh = opts.files.map(
+              (f) => new File([f], f.name, { type: f.type, lastModified: (f.lastModified || 0) + 1 }),
+            )
+            this.pushEvent(
+              "retry_prepare",
+              {
+                client_id: opts.cid,
+                caption: opts.caption || "",
+                as_file: !!opts.asFile,
+                media: !!opts.media,
+              },
+              () => {
+                const input = this.el.querySelector('input[type="file"][name="attachment_retry"]')
+                if (input) this.feedInput(input, fresh)
+              },
+            )
+          },
           // Optimistic card for a file/doc send (#149): files post one message PER file, so
           // each gets its own card + client_id and a determinate ring IN the icon slot
           // (data-upload-ref → the server's per-file media_progress drives it). Mirrors the
           // real .ed-file card so the riser's data-client-id swap doesn't reflow.
-          addOptimisticFile(clientId, ref, name, size) {
+          addOptimisticFile(clientId, ref, name, size, key) {
             const card = document.createElement("div")
             card.className = "ed-file ed-file--sending"
             card.dataset.uploadRef = ref
+            // Stash the retry key + display bits so a failed card can re-send its File (#…).
+            if (key) card.dataset.fileKey = key
+            card.dataset.fileName = name || ""
+            card.dataset.fileSize = size || ""
             const label = this.el.dataset.sendingLabel
             // Function replacement so a filename with $-patterns ($&, $1) isn't interpreted.
             if (label) card.setAttribute("aria-label", label.replace("{name}", () => name || ""))
             const icon = document.createElement("span")
             icon.className = "ed-file__icon"
             icon.appendChild(this.buildRing("ed-file__ring"))
+            // In-flight cancel (#137) centered INSIDE the ring (Telegram-style): the progress
+            // arc tracks around the X. Aborts THIS file (by ref) + drops its row; a late tap
+            // after the swap is a harmless server no-op.
+            icon.appendChild(
+              this.buildCancel(() => {
+                this.pushEvent("cancel_upload", { ref })
+                card.closest(".ed-msg, .ed-flat")?.remove()
+              }),
+            )
             card.appendChild(icon)
             const meta = document.createElement("span")
             meta.className = "ed-file__meta"
@@ -6295,16 +6451,6 @@ defmodule EdenWeb.ChatLive do
             meta.appendChild(nm)
             meta.appendChild(sz)
             card.appendChild(meta)
-            // In-flight cancel (#137): the X aborts THIS file (by upload ref) and drops its
-            // row — the rest of the batch keeps going. If the upload already finished (a late
-            // tap), cancel_upload is a server no-op and the card has swapped to the real row
-            // (closest() → null), so the sent file simply stays — a safe race.
-            card.appendChild(
-              this.buildCancel(() => {
-                this.pushEvent("cancel_upload", { ref })
-                card.closest(".ed-msg, .ed-flat")?.remove()
-              }),
-            )
             // No caption on a file card — a files-only caption rides as its own trailing
             // message below the pile (#149). isFile → the normal padded bubble (not --media).
             return this.wrapAndAppendOptimistic(card, clientId, undefined, true)
@@ -6458,25 +6604,189 @@ defmodule EdenWeb.ChatLive do
             if (node._stall) clearTimeout(node._stall)
             node.remove()
           },
-          // Stall watchdog (#95/#149): if an upload makes NO progress for 30s — the link
-          // died after the optimistic node + media_sending, so "send" never fires — drop the
-          // stuck preview row and tell the server to ABORT the stalled send (cancel the staged
-          // entries + flash), so its files can't sit staged and be silently dropped by the next
-          // chat switch. Takes the optimistic ROW directly; every media_progress tick re-arms
-          // it, so a merely-slow upload is never killed; a row removed by the swap leaves a
-          // harmless dead timer (the callback no-ops once disconnected).
+          // Stall watchdog (#95/#149): if an upload makes NO progress for 90s WHILE CONNECTED
+          // — a dropped link is frozen in disconnected() and resumes on reconnect, so this only
+          // fires for a genuinely wedged upload — mark the node FAILED (red !, with resend +
+          // delete) instead of silently dropping it. Takes the optimistic ROW directly; every
+          // media_progress tick re-arms it, so a merely-slow upload is never killed; a row
+          // removed by the swap leaves a harmless dead timer (no-ops once disconnected).
           armStall(node) {
             if (!node) return
             if (node._stall) clearTimeout(node._stall)
             node._stall = setTimeout(() => {
               if (!node.isConnected) return
+              // Client: turn the node into the visible failed state (keeps it, with resend +
+              // delete). Server: cancel the wedged staged entries + reset sending_media, so
+              // nothing lingers to be nuked on a switch and new picks aren't blocked — WITHOUT
+              // the flash (the inline ! is the visible failure now). Resend re-stages from the
+              // File stash; delete just drops the node.
+              this.markUploadFailed(node)
+              // A retrying node lives on the dedicated :attachment_retry channel — reset THAT
+              // (drop its pristine entries + pending metadata), not the main :attachment send.
+              this.pushEvent(node.dataset.retry === "true" ? "retry_reset" : "media_send_reset", {})
+            }, 90000)
+          },
+          // A stalled upload → a visible failure the user controls, never a silent drop.
+          markUploadFailed(node) {
+            const card = node.querySelector(".ed-file--sending")
+            if (card) return this.markFileFailed(card)
+            // Media album / "send as file" pile: no per-file retry keys, so failed + delete
+            // only (re-pick to retry photos).
+            return this.markMediaFailed(node)
+          },
+          // Turn an in-flight FILE card into a failed one: red !, "Not sent", + Resend
+          // (re-uploads the File stashed at pick) + Delete. Re-send works even when the upload
+          // wedged with the link up, since the original File is stashed.
+          markFileFailed(card) {
+            if (card.classList.contains("ed-file--failed")) return
+            card.classList.remove("ed-file--sending")
+            card.classList.add("ed-file--failed")
+            // Drop the bubble's delivery tick (✓) — it never sent, so a "delivered" check next
+            // to "Not sent" is contradictory. The time stays; the ! + Resend/Delete carry the state.
+            card.closest(".ed-bubble")?.querySelector(".ed-bubble__meta .inline-flex")?.remove()
+            const ref = card.dataset.uploadRef
+            const icon = card.querySelector(".ed-file__icon")
+            if (icon) {
+              icon.innerHTML =
+                '<span class="hero-exclamation-circle-mini size-6" aria-hidden="true"></span>'
+            }
+            const sz = card.querySelector(".ed-file__size")
+            if (sz) sz.textContent = this.el.dataset.notSent || "Not sent"
+            const actions = document.createElement("div")
+            actions.className = "ed-file__actions"
+            const file = card.dataset.fileKey && this.el.edenFiles?.get(card.dataset.fileKey)
+            if (file) {
+              const retry = document.createElement("button")
+              retry.type = "button"
+              retry.className = "ed-file__act"
+              retry.textContent = this.el.dataset.resend || "Resend"
+              retry.addEventListener("click", (e) => {
+                e.preventDefault(); e.stopPropagation()
+                this.retryFile(card, ref, file)
+              })
+              actions.appendChild(retry)
+            }
+            const del = document.createElement("button")
+            del.type = "button"
+            del.className = "ed-file__act ed-file__act--danger"
+            del.textContent = this.el.dataset.delete || "Delete"
+            del.addEventListener("click", (e) => {
+              e.preventDefault(); e.stopPropagation()
+              // The entry was already cancelled when the stall fired (media_send_reset), so
+              // just drop the failed card — no cancel_upload (it would raise on the gone ref).
+              card.closest(".ed-msg, .ed-flat")?.remove()
+            })
+            actions.appendChild(del)
+            card.querySelector(".ed-file__meta")?.appendChild(actions)
+          },
+          // Re-send a failed file: keep the card in place as the in-flight indicator (restore its
+          // sending look via markRetrying), give it a FRESH client_id so the real retry message
+          // swaps it in, arm the stall watchdog, and fire the send down the dedicated channel.
+          retryFile(card, _ref, file) {
+            const node = card.closest(".ed-msg, .ed-flat")
+            if (!node) return
+            const cid = this.uuid()
+            node.dataset.clientId = cid
+            this.markRetrying(node)
+            this.armStall(node)
+            this.retrySend({ files: [file], asFile: false, media: false, caption: "", cid })
+          },
+          // Re-send a failed media album / lone photo / video / "send as file" pile from the
+          // stashed Files, keeping the node as the in-flight indicator (same channel as files).
+          retryMedia(node, keys, asFile) {
+            const files = keys.map((k) => this.el.edenFiles?.get(k)).filter(Boolean)
+            if (!files.length || files.length !== keys.length) return
+            const cid = this.uuid()
+            node.dataset.clientId = cid
+            this.markRetrying(node)
+            this.armStall(node)
+            this.retrySend({
+              files,
+              asFile,
+              media: true,
+              caption: node.dataset.caption || "",
+              cid,
+            })
+          },
+          // Turn a FAILED card back into an in-flight one for the duration of a Resend: drop the
+          // failed affordances (! / actions / bar) and restore the sending ring, so a re-failure
+          // (retry_done !ok or the stall watchdog) can cleanly re-mark it via markUploadFailed.
+          markRetrying(node) {
+            node.dataset.retry = "true"
+            node.classList.add("ed-msg--retrying")
+            const fcard = node.querySelector(".ed-file--failed")
+            if (fcard) {
+              fcard.classList.remove("ed-file--failed")
+              fcard.classList.add("ed-file--sending")
+              fcard.querySelector(".ed-file__actions")?.remove()
+              const icon = fcard.querySelector(".ed-file__icon")
+              if (icon) {
+                icon.innerHTML = ""
+                icon.appendChild(this.buildRing("ed-file__ring"))
+              }
+              const sz = fcard.querySelector(".ed-file__size")
+              if (sz) sz.textContent = fcard.dataset.fileSize || ""
+            }
+            // Media pile: dropping the failed bar reveals its ring again.
+            node.querySelector(".ed-upload-failed__bar")?.remove()
+          },
+          // Settle a Resend (#…): on success the real message's client_id swap already removed the
+          // node, so just kill its watchdog; on failure re-mark it failed (Resend/Delete return).
+          onRetryDone({ id, ok }) {
+            const node = this.pending?.querySelector(`[data-client-id="${id}"]`)
+            if (!node) return
+            if (node._stall) {
+              clearTimeout(node._stall)
+              node._stall = null
+            }
+            if (!ok) {
+              node.classList.remove("ed-msg--retrying")
+              this.markUploadFailed(node)
+            }
+          },
+          // A failed media album / lone photo / video / "send as file" pile: red ! + Resend
+          // (re-sends the whole album from the stashed Files) + Delete. Resend shows only when
+          // every File is still stashed (edenFiles) — otherwise the album can't be rebuilt.
+          markMediaFailed(node) {
+            if (node.querySelector(".ed-upload-failed__bar")) return
+            const host = node.querySelector(".ed-media-sending, .ed-asfile-sending") || node
+            host.querySelectorAll(".ed-sending-cancel").forEach((c) => c.remove())
+            const bar = document.createElement("div")
+            bar.className = "ed-upload-failed__bar"
+            bar.innerHTML =
+              '<span class="ed-upload-failed__bang">' +
+              '<span class="hero-exclamation-circle-mini size-5" aria-hidden="true"></span></span>'
+            let keys = []
+            try {
+              keys = JSON.parse(node.dataset.fileKeys || "[]")
+            } catch (_e) {
+              keys = []
+            }
+            const asFile = node.dataset.asFile === "true"
+            const haveAll = keys.length > 0 && keys.every((k) => this.el.edenFiles?.has(k))
+            if (haveAll) {
+              const retry = document.createElement("button")
+              retry.type = "button"
+              retry.className = "ed-file__act"
+              retry.textContent = this.el.dataset.resend || "Resend"
+              retry.addEventListener("click", (e) => {
+                e.preventDefault(); e.stopPropagation()
+                this.retryMedia(node, keys, asFile)
+              })
+              bar.appendChild(retry)
+            }
+            const del = document.createElement("button")
+            del.type = "button"
+            del.className = "ed-file__act ed-file__act--danger"
+            del.textContent = this.el.dataset.delete || "Delete"
+            del.addEventListener("click", (e) => {
+              e.preventDefault(); e.stopPropagation()
+              // Entries were already cancelled when the stall fired (media_send_reset), so just
+              // drop the failed node — no cancel_all_uploads (redundant; matches the file card).
               node.remove()
-              // Fire the abort whether the stalled send is foreground or backgrounded (#144):
-              // only one media send is ever in flight (#95/#119), so this can't flip the flag
-              // out from under an unrelated send — and a stalled BACKGROUND upload must be
-              // aborted too, else its entries linger for the next switch to silently cancel.
-              this.pushEvent("media_send_reset", {})
-            }, 30000)
+            })
+            bar.appendChild(del)
+            host.appendChild(bar)
           },
           // Snapshot a loaded preview <img> to a persistent JPEG data-URL. Returns
           // null on taint/empty so the node just shows the ring over a blank tile.
@@ -6515,15 +6825,17 @@ defmodule EdenWeb.ChatLive do
             const input = e.target
             if (!(input instanceof HTMLInputElement) || input.type !== "file") return
             for (const f of input.files || []) {
+              // name+size alone collide for two different files of equal weight; lastModified
+              // adds the distinguishing entropy (it matches entry.client_last_modified).
+              const key = f.name + ":" + f.size + ":" + f.lastModified
+              // Stash EVERY picked File so a failed upload can be re-sent (the entry's File is
+              // gone once cancelled). Keyed the same way as the previews below.
+              if (!this.el.edenFiles.has(key)) this.el.edenFiles.set(key, f)
               // video AND image: .VideoPreview + .ImgPreview both read these back. Images use
               // it so the compose preview is OUR crash-safe <img>, not LiveView's
               // <.live_img_preview> (whose mounted() threw createObjectURL(undefined) on a
               // consumed entry mid-send, aborting the patch → empty modal).
               if (!/^(video|image)\//.test(f.type || "")) continue
-              // name+size alone collide for two different clips of equal weight →
-              // the second tile would show the first file's frame. lastModified adds
-              // the distinguishing entropy (it matches entry.client_last_modified).
-              const key = f.name + ":" + f.size + ":" + f.lastModified
               if (!this.el.edenVideoUrls.has(key)) {
                 this.el.edenVideoUrls.set(key, URL.createObjectURL(f))
               }
@@ -9808,6 +10120,8 @@ defmodule EdenWeb.ChatLive do
               data-ref={entry.ref}
               data-name={entry.client_name}
               data-size={human_size(entry.client_size)}
+              data-size-raw={entry.client_size}
+              data-modified={entry.client_last_modified}
             >
               <span class="ed-file-chip shrink-0" aria-hidden="true">
                 <.icon name={entry_icon(entry)} class="size-5" />
@@ -11946,6 +12260,66 @@ defmodule EdenWeb.ChatLive do
   # `inert`, leaving the paperclip dead after a partial-batch cancel (#158).
   defp live_entries(%{entries: entries}), do: Enum.reject(entries, & &1.cancelled?)
 
+  # Auto-upload progress for the dedicated Resend channel (#…). auto_upload uploads each cloned
+  # File the instant it stages; once EVERY entry is done, consume them into one message via
+  # send_retry. (A stalled retry never reaches all-done — its client watchdog fires retry_reset.)
+  defp handle_retry_progress(:attachment_retry, _entry, socket) do
+    entries = live_entries(socket.assigns.uploads.attachment_retry)
+
+    if entries != [] and Enum.all?(entries, & &1.done?),
+      do: send_retry(socket),
+      else: {:noreply, socket}
+  end
+
+  # Consume the finished :attachment_retry entries into one message, mirroring send_attachment but
+  # for a retry: a single optimistic client_id (the retry re-sends ONE failed message — an album,
+  # a lone photo/video, or a file). The caption rides a media album; a file re-sends plain. On
+  # success the message streams in and its client_id swaps the retrying card; retry_done tells the
+  # client either way. pending_retry is captured at retry_prepare, so the conversation is stable.
+  defp send_retry(%{assigns: %{pending_retry: nil}} = socket), do: {:noreply, socket}
+
+  # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable` is
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp send_retry(%{assigns: %{pending_retry: pending}} = socket) do
+    %{client_id: cid, caption: caption, as_file: as_file, media: media?, conversation_id: conv_id} =
+      pending
+
+    sources =
+      socket.assigns.uploads.attachment_retry.entries
+      |> Enum.filter(& &1.done?)
+      |> Enum.map(fn entry ->
+        consume_uploaded_entry(socket, entry, fn %{path: path} ->
+          stable = Path.join(System.tmp_dir!(), "eden-retry-" <> entry.uuid)
+          File.cp!(path, stable)
+          # A media album stamps its client_id at the album level (opts); a file at the source.
+          {:ok,
+           %{path: stable, filename: entry.client_name, client_id: if(media?, do: nil, else: cid)}}
+        end)
+      end)
+
+    socket = assign(socket, pending_retry: nil)
+
+    case sources do
+      [] ->
+        {:noreply, push_event(socket, "retry_done", %{id: cid, ok: false})}
+
+      sources ->
+        opts = %{
+          body: if(media?, do: caption, else: ""),
+          as_file: as_file,
+          client_id: if(media?, do: [cid], else: nil)
+        }
+
+        result = Chat.create_attachments(socket.assigns.current_scope, conv_id, sources, opts)
+        Enum.each(sources, &File.rm(&1.path))
+
+        ok? = match?({:ok, _}, result)
+        socket = if ok?, do: socket, else: put_flash(socket, :error, gettext("Couldn't send."))
+        {:noreply, push_event(socket, "retry_done", %{id: cid, ok: ok?})}
+    end
+  end
+
   # Cancel every staged attachment upload (the composer tray) + reset the send flags.
   # Used by the explicit "clear tray"/Escape action and, via drop_staged_on_switch,
   # on a conversation switch when nothing is in flight.
@@ -11977,9 +12351,14 @@ defmodule EdenWeb.ChatLive do
         Map.has_key?(files, ref) && cid
       end)
 
+    # `cancel_upload/3` raises on an unknown ref, so only touch entries still live in the
+    # config — a stale ref (already cancelled by a stall's media_send_reset, or a late tap
+    # after the entry finished) is a safe no-op, not a crash.
+    known_ref? = Enum.any?(socket.assigns.uploads.attachment.entries, &(&1.ref == ref))
+
     socket =
       socket
-      |> cancel_upload(:attachment, ref)
+      |> then(&if(known_ref?, do: cancel_upload(&1, :attachment, ref), else: &1))
       |> assign(
         media_client_ids: drop_ref_from_stash(socket.assigns.media_client_ids, ref),
         last_file_pct: Map.delete(socket.assigns.last_file_pct, ref)
