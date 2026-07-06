@@ -100,6 +100,14 @@ design — built incrementally as features land.)
   power is reachable. Lost-device recovery is admin-mediated — `admin_reset_totp/2`
   (same authority as reset links: a plain admin can't touch a super_admin) clears a
   person's factor from `/admin`, after which an admin target must re-enroll at the gate.
+  **Registration hardening** (#306): the invite acceptance form (`EdenWeb.InviteLive`)
+  requires a **repeat-password** confirmation (`validate_confirmation` in
+  `registration_changeset`, run before the hash deletes the `:password` change) and both
+  password fields carry a **show/hide toggle** (`ed_password_field` + the `.PasswordReveal`
+  colocated hook). After a successful sign-up the new user is routed through a **post-signup
+  2FA onboarding step** (`/welcome/two-factor`, `EdenWeb.WelcomeTotpLive`) — an offer to
+  enroll now (reusing `setup_totp`/`activate_totp`) or **skip** to the app; it forwards any
+  `user_return_to` (re-validated local) so a pre-registration destination survives the detour.
 - **Chat** — the messaging domain. **Conversations are a first-class entity**, not
   an implicit pair of users:
   - `Conversation` — a thread; the same model backs both 1:1 and group chats.

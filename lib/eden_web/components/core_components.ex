@@ -602,4 +602,77 @@ defmodule EdenWeb.CoreComponents do
     </label>
     """
   end
+
+  @doc """
+  Password field with a show/hide (eye) toggle (#306). Same look + error rendering as
+  `ed_field`, but never echoes the value back and reveals what you typed on demand — used
+  by the registration form. The `.PasswordReveal` colocated hook flips the input `type`.
+  """
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, required: true
+  attr :rest, :global, include: ~w(autocomplete autofocus required maxlength placeholder)
+
+  def ed_password_field(assigns) do
+    ~H"""
+    <label class="block space-y-1.5" phx-hook=".PasswordReveal" id={"#{@field.id}-wrap"}>
+      <span style="font-size:0.8125rem; color: var(--ed-muted);">
+        {@label}<span :if={@rest[:required]} style="color: var(--ed-danger);" aria-hidden="true"> *</span>
+      </span>
+      <div class="relative">
+        <input
+          class="ed-input pr-11"
+          type="password"
+          name={@field.name}
+          id={@field.id}
+          data-reveal-input
+          {@rest}
+        />
+        <button
+          type="button"
+          data-reveal-toggle
+          aria-pressed="false"
+          aria-label={gettext("Show password")}
+          class="ed-btn--icon absolute right-1 top-1/2 -translate-y-1/2"
+        >
+          <span data-reveal-eye><.icon name="hero-eye" class="size-5" /></span>
+          <span data-reveal-eye-off class="hidden">
+            <.icon name="hero-eye-slash" class="size-5" />
+          </span>
+        </button>
+      </div>
+      <span
+        :for={msg <- Enum.map(@field.errors, &translate_error/1)}
+        style="color: var(--ed-danger); font-size:0.75rem;"
+      >
+        {msg}
+      </span>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".PasswordReveal">
+        // Toggle a password input between hidden and visible, swapping the eye icon
+        // and keeping aria-pressed / aria-label in sync for screen readers.
+        export default {
+          mounted() {
+            const input = this.el.querySelector("[data-reveal-input]")
+            const btn = this.el.querySelector("[data-reveal-toggle]")
+            const eye = this.el.querySelector("[data-reveal-eye]")
+            const eyeOff = this.el.querySelector("[data-reveal-eye-off]")
+            if (!input || !btn) return
+            this._onClick = () => {
+              const show = input.type === "password"
+              input.type = show ? "text" : "password"
+              btn.setAttribute("aria-pressed", String(show))
+              btn.setAttribute("aria-label", show ? "Hide password" : "Show password")
+              eye && eye.classList.toggle("hidden", show)
+              eyeOff && eyeOff.classList.toggle("hidden", !show)
+            }
+            btn.addEventListener("click", this._onClick)
+          },
+          destroyed() {
+            const btn = this.el.querySelector("[data-reveal-toggle]")
+            btn && this._onClick && btn.removeEventListener("click", this._onClick)
+          }
+        }
+      </script>
+    </label>
+    """
+  end
 end

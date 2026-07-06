@@ -113,6 +113,10 @@ defmodule Eden.Accounts.User do
     |> cast(attrs, [:username, :display_name, :password])
     |> validate_username(opts)
     |> validate_display_name()
+    # Confirmation must run BEFORE validate_password: it compares against the `:password`
+    # change, which `maybe_hash_password` deletes once it hashes (#306). `required: true`
+    # makes "repeat password" mandatory on the registration form.
+    |> validate_confirmation(:password, required: true, message: "does not match the password")
     |> validate_password(opts)
   end
 

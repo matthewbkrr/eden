@@ -25,8 +25,11 @@ defmodule EdenWeb.UserAuth do
   @doc """
   Logs the user in: issues a session token, renews the session to prevent
   fixation, and redirects to the stored return path or the signed-in home.
+
+  `opts[:to]` overrides the redirect target — used by registration (#306) to route a
+  brand-new user through the "set up two-factor" onboarding step first.
   """
-  def log_in_user(conn, user, _params \\ %{}) do
+  def log_in_user(conn, user, opts \\ []) do
     token = Accounts.generate_user_session_token(user)
     # Captured before renew_session/1 wipes the session.
     return_to = get_session(conn, :user_return_to)
@@ -34,7 +37,7 @@ defmodule EdenWeb.UserAuth do
     conn
     |> renew_session()
     |> put_token_in_session(token)
-    |> redirect(to: return_to || signed_in_path(conn))
+    |> redirect(to: opts[:to] || return_to || signed_in_path(conn))
   end
 
   @doc "Logs the user out, revoking the session token and live sessions."

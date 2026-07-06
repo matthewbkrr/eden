@@ -74,10 +74,15 @@ defmodule EdenWeb.InviteLive do
             autofocus
           />
           <.ed_field field={@form[:display_name]} label={gettext("Display name")} required />
-          <.ed_field
+          <.ed_password_field
             field={@form[:password]}
             label={gettext("Password")}
-            type="password"
+            autocomplete="new-password"
+            required
+          />
+          <.ed_password_field
+            field={@form[:password_confirmation]}
+            label={gettext("Repeat password")}
             autocomplete="new-password"
             required
           />

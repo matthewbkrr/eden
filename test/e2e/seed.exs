@@ -24,7 +24,12 @@ ensure_user = fn username, display ->
       {:ok, u} =
         %User{}
         |> User.registration_changeset(
-          %{username: username, display_name: display, password: password},
+          %{
+            username: username,
+            display_name: display,
+            password: password,
+            password_confirmation: password
+          },
           hash_password: true
         )
         |> Repo.insert()

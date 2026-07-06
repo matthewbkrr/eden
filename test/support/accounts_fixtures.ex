@@ -4,11 +4,16 @@ defmodule Eden.AccountsFixtures do
   alias Eden.Accounts
 
   def valid_user_attrs(attrs \\ %{}) do
-    Enum.into(attrs, %{
-      username: "user#{System.unique_integer([:positive])}",
-      display_name: "Test User",
-      password: "password123"
-    })
+    attrs =
+      Enum.into(attrs, %{
+        username: "user#{System.unique_integer([:positive])}",
+        display_name: "Test User",
+        password: "password123"
+      })
+
+    # Registration requires a matching confirmation (#306); default it to the password
+    # unless the caller set one explicitly (e.g. a mismatch test).
+    Map.put_new(attrs, :password_confirmation, attrs.password)
   end
 
   @doc "Creates a system invite and returns its raw token."
