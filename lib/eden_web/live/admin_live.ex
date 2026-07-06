@@ -58,7 +58,10 @@ defmodule EdenWeb.AdminLive do
         {:noreply, socket}
 
       invite ->
-        {:ok, _} = Accounts.revoke_invite(invite)
+        # Best-effort: revoking is idempotent and the list refresh reflects the truth
+        # either way — don't hard-match the result and risk a MatchError on a stale row
+        # (matches this module's no-op-stale-events stance, #302 review).
+        _ = Accounts.revoke_invite(invite)
         {:noreply, assign(socket, invites: Accounts.list_active_invites())}
     end
   end
@@ -269,6 +272,7 @@ defmodule EdenWeb.AdminLive do
             <button
               type="button"
               phx-click="create_invite"
+              phx-disable-with={gettext("Creating…")}
               class="ed-btn ed-btn--primary text-sm ml-auto shrink-0 whitespace-nowrap"
             >
               {gettext("New invite link")}
