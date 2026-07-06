@@ -24,7 +24,8 @@ defmodule EdenWeb.AdminLive do
     {:ok,
      socket
      |> assign(page_title: gettext("Admin"), users: Accounts.list_users())
-     |> assign(selected: nil, managed_form: nil, reset_link: nil)}
+     |> assign(selected: nil, managed_form: nil, reset_link: nil)
+     |> assign(invites: Accounts.list_active_invites(), new_invite_url: nil)}
   end
 
   @impl true
@@ -32,6 +33,35 @@ defmodule EdenWeb.AdminLive do
 
   def handle_event("deselect", _params, socket),
     do: {:noreply, assign(socket, selected: nil, managed_form: nil, reset_link: nil)}
+
+  # Onboarding (#302): mint a single-use, 7-day registration invite attributed to the acting
+  # admin, show its URL once, and refresh the outstanding list. Admin-gated by :require_admin.
+  def handle_event("create_invite", _params, socket) do
+    case Accounts.create_invite(socket.assigns.current_scope.user) do
+      {:ok, _invite, token} ->
+        {:noreply,
+         socket
+         |> assign(new_invite_url: url(~p"/invite/#{token}"))
+         |> assign(invites: Accounts.list_active_invites())}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, gettext("Couldn't create an invite link."))}
+    end
+  end
+
+  def handle_event("dismiss_invite_url", _params, socket),
+    do: {:noreply, assign(socket, new_invite_url: nil)}
+
+  def handle_event("revoke_invite", %{"id" => id}, socket) do
+    case Enum.find(socket.assigns.invites, &(to_string(&1.id) == id)) do
+      nil ->
+        {:noreply, socket}
+
+      invite ->
+        {:ok, _} = Accounts.revoke_invite(invite)
+        {:noreply, assign(socket, invites: Accounts.list_active_invites())}
+    end
+  end
 
   # Every action below assumes a selected person. A forged/stale event with nobody
   # selected would pass nil into a context function that expects a %User{} and crash
@@ -177,6 +207,19 @@ defmodule EdenWeb.AdminLive do
 
   defp managed_form(user), do: to_form(Accounts.change_managed_fields(user))
 
+  # One-line summary of an outstanding invite for the admin list: who minted it (if
+  # known — CLI-bootstrapped invites have no inviter), uses left, and its expiry date.
+  defp invite_summary(invite) do
+    left = invite.max_uses - invite.used_count
+    uses = ngettext("%{count} use left", "%{count} uses left", left)
+    until = gettext("until %{date}", date: Calendar.strftime(invite.expires_at, "%Y-%m-%d"))
+
+    case invite.inviter do
+      %{username: username} -> "@#{username} · #{uses} · #{until}"
+      _ -> "#{uses} · #{until}"
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -195,6 +238,79 @@ defmodule EdenWeb.AdminLive do
         </header>
 
         <.ed_flash flash={@flash} />
+
+        <%!-- Onboarding (#302): mint registration invite links. The only in-app path to
+              add a new teammate (invite-gated perimeter, ADR-0002); previously CLI-only. --%>
+        <section
+          class="rounded-[var(--ed-radius-lg)] border p-5 mb-6"
+          style="border-color: var(--ed-border); background: var(--ed-surface);"
+          aria-label={gettext("Invite people")}
+        >
+          <div class="flex items-start gap-4">
+            <div class="min-w-0">
+              <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Invite people")}</h2>
+              <p class="mt-0.5" style="color: var(--ed-muted); font-size:0.8125rem;">
+                {gettext(
+                  "Create a single-use link (valid 7 days) and send it to a new teammate so they can sign up."
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              phx-click="create_invite"
+              class="ed-btn ed-btn--primary text-sm ml-auto shrink-0 whitespace-nowrap"
+            >
+              {gettext("New invite link")}
+            </button>
+          </div>
+
+          <%!-- The just-minted URL, shown once — the raw token is never recoverable after. --%>
+          <div :if={@new_invite_url} class="mt-3">
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                value={@new_invite_url}
+                readonly
+                onclick="this.select()"
+                class="ed-input flex-1"
+                style="font-size:0.75rem;"
+                aria-label={gettext("Invite link")}
+              />
+              <button
+                type="button"
+                phx-click="dismiss_invite_url"
+                class="ed-btn ed-btn--ghost text-sm shrink-0"
+              >
+                {gettext("Done")}
+              </button>
+            </div>
+            <p class="mt-1" style="font-size:0.6875rem; color: var(--ed-muted);">
+              {gettext("Copy it now — it won't be shown again.")}
+            </p>
+          </div>
+
+          <%!-- Outstanding invites, each revocable until redeemed or expired. --%>
+          <ul :if={@invites != []} class="mt-4 space-y-0.5">
+            <li
+              :for={inv <- @invites}
+              class="flex items-center gap-3 py-1.5 text-sm"
+              style="border-top: 1px solid var(--ed-border);"
+            >
+              <span class="min-w-0 truncate" style="color: var(--ed-muted); font-size:0.8125rem;">
+                {invite_summary(inv)}
+              </span>
+              <button
+                type="button"
+                phx-click="revoke_invite"
+                phx-value-id={inv.id}
+                class="ed-btn ed-btn--ghost text-sm ml-auto shrink-0"
+                style="color: var(--ed-danger-strong);"
+              >
+                {gettext("Revoke")}
+              </button>
+            </li>
+          </ul>
+        </section>
 
         <div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
           <%!-- People --%>

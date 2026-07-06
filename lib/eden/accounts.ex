@@ -738,6 +738,22 @@ defmodule Eden.Accounts do
     |> Repo.update()
   end
 
+  @doc """
+  Outstanding registration invites — not revoked, not expired, not exhausted — newest
+  first, with the inviter preloaded. Drives the admin onboarding list (#302). Not scoped:
+  the caller (the `:require_admin` `/admin` panel) restricts who sees it.
+  """
+  def list_active_invites do
+    now = now()
+
+    from(i in Invite,
+      where: is_nil(i.revoked_at) and i.expires_at > ^now and i.used_count < i.max_uses,
+      order_by: [desc: i.inserted_at, desc: i.id],
+      preload: [:inviter]
+    )
+    |> Repo.all()
+  end
+
   ## Registration
 
   @doc """

@@ -164,6 +164,29 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "list_active_invites/0" do
+    test "returns only outstanding invites, newest first, with the inviter preloaded" do
+      inviter = user_fixture(%{username: "minter"})
+      {:ok, live1, _} = Accounts.create_invite(inviter)
+      {:ok, live2, _} = Accounts.create_invite(inviter)
+
+      # Excluded: expired, revoked, and exhausted invites.
+      {:ok, _expired, _} = Accounts.create_invite(inviter, expires_at: past())
+      {:ok, revoked, _} = Accounts.create_invite(inviter)
+      {:ok, _} = Accounts.revoke_invite(revoked)
+      {:ok, exhausted, token} = Accounts.create_invite(inviter, max_uses: 1)
+
+      {:ok, _user} =
+        Accounts.register_user_with_invite(token, valid_attrs(%{username: "redeemer"}))
+
+      ids = Accounts.list_active_invites() |> Enum.map(& &1.id)
+      assert ids == [live2.id, live1.id]
+      refute exhausted.id in ids
+
+      assert [%{inviter: %{username: "minter"}} | _] = Accounts.list_active_invites()
+    end
+  end
+
   describe "get_user_by_username_and_password/2" do
     setup do
       inviter = user_fixture()
