@@ -1079,7 +1079,7 @@ defmodule EdenWeb.ChatLiveTest do
       refute view |> element("#composer-body") |> render() =~ "a caption"
     end
 
-    test "the stall-watchdog reset re-shows the overlay so a stuck send can be cancelled (#95)",
+    test "the stall-watchdog reset aborts the stuck send: entries cancelled + error, no re-show",
          ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
@@ -1093,10 +1093,23 @@ defmodule EdenWeb.ChatLiveTest do
       render_hook(view, "media_sending", %{"id" => "cid-stall"})
       refute has_element?(view, "[data-upload-preview]")
 
-      # The upload stalled (no real row, no error); the hook's watchdog asks the
-      # server to clear the flag. The entry is still staged, so the overlay (with its
-      # cancel button) returns and the user can abandon the stuck send.
-      render_hook(view, "media_send_reset", %{})
+      # The upload stalled (no real row, no error); the watchdog asks the server to abort.
+      # It does NOT re-show the overlay (its live previews are gone after a switch, and the
+      # still-staged entry would be silently dropped by the next switch): the entry is
+      # cancelled and a failure flash is surfaced, so nothing lingers and the loss is visible.
+      html = render_hook(view, "media_send_reset", %{})
+      refute has_element?(view, "[data-upload-preview]")
+      assert html =~ "didn&#39;t upload" or html =~ "didn't upload"
+
+      # The abort must also clear sending_media (not just the entries), else the send state
+      # wedges: a fresh stage would stay hidden. Prove it by staging again — the overlay,
+      # gated on `not @sending_media`, returns.
+      file2 =
+        file_input(view, "#composer", :attachment, [
+          %{name: "b.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file2, "b.png", 20)
       assert has_element?(view, "[data-upload-preview]")
     end
 
