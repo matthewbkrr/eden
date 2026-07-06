@@ -1100,6 +1100,17 @@ defmodule EdenWeb.ChatLiveTest do
       html = render_hook(view, "media_send_reset", %{})
       refute has_element?(view, "[data-upload-preview]")
       assert html =~ "didn&#39;t upload" or html =~ "didn't upload"
+
+      # The abort must also clear sending_media (not just the entries), else the send state
+      # wedges: a fresh stage would stay hidden. Prove it by staging again — the overlay,
+      # gated on `not @sending_media`, returns.
+      file2 =
+        file_input(view, "#composer", :attachment, [
+          %{name: "b.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file2, "b.png", 20)
+      assert has_element?(view, "[data-upload-preview]")
     end
 
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do

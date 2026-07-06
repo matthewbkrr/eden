@@ -572,6 +572,8 @@ defmodule EdenWeb.ChatLive do
   # surface the failure so the loss is never silent. Already-completed files in a batch (#149,
   # each posts the moment it finishes) have left as real messages and are unaffected.
   def handle_event("media_send_reset", _params, socket) do
+    # cancel_staged_attachments/1 also resets sending_media (+ the client_id/progress gates),
+    # so the flag is cleared here as part of the abort — no separate assign needed.
     {:noreply,
      socket
      |> cancel_staged_attachments()
