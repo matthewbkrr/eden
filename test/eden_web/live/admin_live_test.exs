@@ -186,6 +186,17 @@ defmodule EdenWeb.AdminLiveTest do
       refute Accounts.deleted?(Repo.get!(User, worker.id))
     end
 
+    test "an unarmed delete_account event does not delete — the two-step is server-enforced (#303)",
+         %{conn: conn} do
+      worker = user_fixture(%{username: "notarmed"})
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, worker)
+
+      # Forge the confirm event WITHOUT first clicking arm_delete.
+      render_click(view, "delete_account", %{})
+      refute Accounts.deleted?(Repo.get!(User, worker.id))
+    end
+
     test "hides the delete control for your own account (#303)", %{conn: conn, boss: boss} do
       {:ok, view, _} = live(conn, ~p"/admin")
       html = select(view, boss)

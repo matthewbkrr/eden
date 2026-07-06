@@ -180,7 +180,10 @@ defmodule EdenWeb.AdminLive do
   def handle_event("disarm_delete", _params, socket),
     do: {:noreply, assign(socket, delete_armed: false)}
 
-  def handle_event("delete_account", _params, socket) do
+  # The two-step arm is enforced HERE, not just in the UI (#305 review): only an armed
+  # confirm runs the irreversible anonymization. The context still re-checks authority, so
+  # this guards against an accidental / stale / forged `delete_account` skipping the confirm.
+  def handle_event("delete_account", _params, %{assigns: %{delete_armed: true}} = socket) do
     case Accounts.delete_user_permanently(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, updated} ->
         # The person is now filtered out of the list; drop them + the open panel.
@@ -196,6 +199,9 @@ defmodule EdenWeb.AdminLive do
         {:noreply, put_flash(socket, :error, gettext("You can't delete that person."))}
     end
   end
+
+  # Not armed → a bare/forged event never deletes.
+  def handle_event("delete_account", _params, socket), do: {:noreply, socket}
 
   @impl true
   def handle_info({:user_updated, user}, socket) do
