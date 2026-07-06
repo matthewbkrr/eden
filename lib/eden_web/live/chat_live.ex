@@ -6163,7 +6163,8 @@ defmodule EdenWeb.ChatLive do
                 if (this.pending) this.pending.replaceChildren()
               }),
             )
-            return this.wrapAndAppendOptimistic(wrap, clientId, caption)
+            // Document cards, not inline media → the normal padded bubble (isFile).
+            return this.wrapAndAppendOptimistic(wrap, clientId, caption, true)
           },
           // Mirror album_row_sizes/1 (server): the count plan for N media (4→2+2, a trailing
           // remainder of 1 folded into 2+2). Only its LENGTH is used now — it sets how many
@@ -6289,14 +6290,14 @@ defmodule EdenWeb.ChatLive do
               }),
             )
             // No caption on a file card — a files-only caption rides as its own trailing
-            // message below the pile (#149).
-            return this.wrapAndAppendOptimistic(card, clientId)
+            // message below the pile (#149). isFile → the normal padded bubble (not --media).
+            return this.wrapAndAppendOptimistic(card, clientId, undefined, true)
           },
           // Wrap an optimistic content node (a media node OR a file card) into a bubble/flat
           // row tagged with its client_id, append it to #pending, animate it in, pin to the
           // bottom, and return the row. One shared seam for every kind (#149), so the riser
           // swap + the stall watchdog treat media and files identically.
-          wrapAndAppendOptimistic(content, clientId, caption) {
+          wrapAndAppendOptimistic(content, clientId, caption, isFile = false) {
             const row = document.createElement("div")
             row.dataset.clientId = clientId
             // Tag the conversation that owns this in-flight media/file node (#144): the
@@ -6347,40 +6348,61 @@ defmodule EdenWeb.ChatLive do
             } else {
               row.className = "ed-msg flex justify-end"
               const bubble = document.createElement("div")
-              // Mirror the REAL media bubble EXACTLY so the optimistic twin is the same height
-              // (no swap nudge) AND has no cobalt frame: --media zeroes the bubble padding (the
-              // photo fills edge-to-edge), the media sits in .ed-media, and the time either
-              // rides a padded .ed-bubble__cap--media (with caption) or overlays the photo
-              // bottom-right (.ed-media-time, no caption) — just like message_bubble.
-              bubble.className = "ed-bubble ed-bubble--me ed-bubble--media"
               const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
               const ticks =
                 this.el.dataset.isGroup !== "true"
                   ? '<span class="inline-flex items-center" style="margin-left:2px;">' +
                     '<span class="hero-check-micro size-3.5"></span></span>'
                   : ""
-              const mediaWrap = document.createElement("div")
-              mediaWrap.className = "ed-media"
-              mediaWrap.appendChild(content)
-              if (!caption) {
-                const t = document.createElement("span")
-                t.className = "ed-media-time"
-                t.innerHTML = "<time>" + time + "</time>" + ticks
-                mediaWrap.appendChild(t)
-              }
-              bubble.appendChild(mediaWrap)
-              if (caption) {
+              if (isFile) {
+                // A FILE (or "send as file" docs) keeps the NORMAL padded bubble — mirror
+                // message_bubble's media?==false branch: no --media (else the card's own
+                // translucent fill stacks on the cobalt bubble as "two bubbles" and the time
+                // overlay + cancel-X collide). The card sits in the padded bubble; a normal
+                // .ed-bubble__cap holds the optional caption + the meta row (time + ticks).
+                bubble.className = "ed-bubble ed-bubble--me"
+                bubble.appendChild(content)
                 const cap = document.createElement("div")
-                cap.className = "ed-bubble__cap ed-bubble__cap--media"
-                const capText = document.createElement("span")
-                capText.className = "break-words"
-                capText.textContent = caption
-                cap.appendChild(capText)
+                cap.className = "ed-bubble__cap"
+                if (caption) {
+                  const capText = document.createElement("span")
+                  capText.className = "break-words"
+                  capText.textContent = caption
+                  cap.appendChild(capText)
+                }
                 const meta = document.createElement("span")
                 meta.className = "ed-bubble__meta"
                 meta.innerHTML = "<time>" + time + "</time>" + ticks
                 cap.appendChild(meta)
                 bubble.appendChild(cap)
+              } else {
+                // Real inline media: mirror the media bubble EXACTLY so the optimistic twin is
+                // the same height (no swap nudge) and frameless — --media zeroes the padding,
+                // media fills .ed-media, the time overlays (no caption) or rides .ed-bubble__cap.
+                bubble.className = "ed-bubble ed-bubble--me ed-bubble--media"
+                const mediaWrap = document.createElement("div")
+                mediaWrap.className = "ed-media"
+                mediaWrap.appendChild(content)
+                if (!caption) {
+                  const t = document.createElement("span")
+                  t.className = "ed-media-time"
+                  t.innerHTML = "<time>" + time + "</time>" + ticks
+                  mediaWrap.appendChild(t)
+                }
+                bubble.appendChild(mediaWrap)
+                if (caption) {
+                  const cap = document.createElement("div")
+                  cap.className = "ed-bubble__cap ed-bubble__cap--media"
+                  const capText = document.createElement("span")
+                  capText.className = "break-words"
+                  capText.textContent = caption
+                  cap.appendChild(capText)
+                  const meta = document.createElement("span")
+                  meta.className = "ed-bubble__meta"
+                  meta.innerHTML = "<time>" + time + "</time>" + ticks
+                  cap.appendChild(meta)
+                  bubble.appendChild(cap)
+                }
               }
               row.appendChild(bubble)
             }
