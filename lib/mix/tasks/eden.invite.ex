@@ -4,13 +4,14 @@ defmodule Mix.Tasks.Eden.Invite do
   @moduledoc """
   Creates an invite and prints the URL to share.
 
-      mix eden.invite                       # single-use, expires in 7 days, no inviter
+      mix eden.invite                       # single-use, expires in 30 minutes, no inviter
       mix eden.invite --max-uses 5          # multi-use
-      mix eden.invite --days 1              # custom expiry
+      mix eden.invite --days 1              # longer-lived bootstrap link
       mix eden.invite --from alice          # attribute to an existing user
 
   Use this once to bootstrap the very first account (no inviter needed), and
-  afterwards to mint invites from the command line.
+  afterwards to mint invites from the command line. The default 30-minute window
+  matches the admin panel; pass `--days N` for a longer-lived bootstrap link.
   """
   use Mix.Task
 

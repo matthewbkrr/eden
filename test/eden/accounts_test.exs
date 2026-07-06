@@ -162,6 +162,70 @@ defmodule Eden.AccountsTest do
       {:ok, _invite, token} = Accounts.create_invite(inviter, expires_at: past())
       assert {:error, :expired} = Accounts.fetch_valid_invite(token)
     end
+
+    test "the default invite is single-use and expires in ~30 minutes (#302)" do
+      {:ok, invite, _token} = Accounts.create_invite(user_fixture())
+      assert invite.max_uses == 1
+      minutes = DateTime.diff(invite.expires_at, DateTime.utc_now(), :minute)
+      assert minutes in 28..30
+    end
+  end
+
+  describe "list_active_invites/0" do
+    test "returns only outstanding invites, newest first, with the inviter preloaded" do
+      inviter = user_fixture(%{username: "minter"})
+      {:ok, live1, _} = Accounts.create_invite(inviter)
+      {:ok, live2, _} = Accounts.create_invite(inviter)
+
+      # Excluded: expired, revoked, and exhausted invites.
+      {:ok, _expired, _} = Accounts.create_invite(inviter, expires_at: past())
+      {:ok, revoked, _} = Accounts.create_invite(inviter)
+      {:ok, _} = Accounts.revoke_invite(revoked)
+      {:ok, exhausted, token} = Accounts.create_invite(inviter, max_uses: 1)
+
+      {:ok, _user} =
+        Accounts.register_user_with_invite(token, valid_attrs(%{username: "redeemer"}))
+
+      ids = Accounts.list_active_invites() |> Enum.map(& &1.id)
+      assert ids == [live2.id, live1.id]
+      refute exhausted.id in ids
+
+      assert [%{inviter: %{username: "minter"}} | _] = Accounts.list_active_invites()
+    end
+  end
+
+  describe "admin-scoped invites (#302 review)" do
+    test "create_invite/2 mints for an admin scope, refuses a member" do
+      admin = promote(user_fixture(), "admin")
+
+      assert {:ok, %Invite{inviter_id: id}, _token} =
+               Accounts.create_invite(Scope.for_user(admin))
+
+      assert id == admin.id
+
+      assert {:error, :forbidden} = Accounts.create_invite(Scope.for_user(user_fixture()))
+    end
+
+    test "revoke_invite/2 is admin-only" do
+      admin = promote(user_fixture(), "admin")
+      {:ok, invite, _} = Accounts.create_invite(admin)
+
+      assert {:error, :forbidden} = Accounts.revoke_invite(Scope.for_user(user_fixture()), invite)
+      assert is_nil(Repo.get!(Invite, invite.id).revoked_at)
+
+      assert {:ok, revoked} = Accounts.revoke_invite(Scope.for_user(admin), invite)
+      assert revoked.revoked_at
+    end
+
+    test "deactivating a user revokes the invites they minted" do
+      actor = promote(user_fixture(), "super_admin")
+      inviter = promote(user_fixture(), "admin")
+      {:ok, invite, _} = Accounts.create_invite(inviter)
+
+      assert {:ok, _} = Accounts.deactivate_user(Scope.for_user(actor), inviter)
+      assert Repo.get!(Invite, invite.id).revoked_at
+      assert Accounts.list_active_invites() == []
+    end
   end
 
   describe "get_user_by_username_and_password/2" do

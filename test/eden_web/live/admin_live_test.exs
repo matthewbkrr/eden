@@ -163,6 +163,40 @@ defmodule EdenWeb.AdminLiveTest do
       assert render(view) =~ "Select a person"
     end
 
+    test "mints a registration invite link and lists it (#302)", %{conn: conn} do
+      {:ok, view, _} = live(conn, ~p"/admin")
+
+      html = view |> element(~s(button[phx-click="create_invite"])) |> render_click()
+
+      # The one-time URL is surfaced, and a matching active invite now exists.
+      assert html =~ "/invite/"
+      assert [invite] = Accounts.list_active_invites()
+      assert invite.max_uses == 1
+      assert html =~ "1 use left"
+    end
+
+    test "revokes an outstanding invite (#302)", %{conn: conn, boss: boss} do
+      {:ok, _invite, _token} = Accounts.create_invite(boss)
+      {:ok, view, _} = live(conn, ~p"/admin")
+      assert render(view) =~ "Revoke"
+
+      view |> element(~s(button[phx-click="revoke_invite"])) |> render_click()
+
+      assert Accounts.list_active_invites() == []
+    end
+
+    test "another admin's mint refreshes the panel over the invites topic (#302 review)", %{
+      conn: conn
+    } do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      refute render(view) =~ "use left"
+
+      # A different admin mints — the broadcast should refresh THIS open panel.
+      {:ok, _invite, _} = Accounts.create_invite(admin(%{username: "other_admin"}))
+
+      assert render(view) =~ "use left"
+    end
+
     test "an external update to the open person refreshes the list and the edit form", %{
       conn: conn
     } do
