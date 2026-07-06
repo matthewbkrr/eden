@@ -5,9 +5,11 @@ defmodule EdenWeb.AdminLive do
   admin edit a user's **admin-managed** identity fields (corp email / Должность /
   structure via `Accounts.apply_managed_fields/3`); a **super_admin** can also
   change a user's platform role (`Accounts.set_user_role/3`). An admin can also mint a
-  password-reset link, reset a lost second factor, and **deactivate / reactivate** an
+  password-reset link, reset a lost second factor, **deactivate / reactivate** an
   account (#251 — `Accounts.deactivate_user/2`, ends every session and blocks sign-in),
-  all under the same authority (a plain admin ↛ a super_admin, no acting on yourself).
+  and **mint / revoke registration invites** (#302 — `Accounts.create_invite/2` ·
+  `revoke_invite/2`, admin-checked in the context via `%Scope{}`), all under the same
+  authority (a plain admin ↛ a super_admin, no acting on yourself).
   All authorization is enforced in the context — this LiveView is the presentation + gate.
   """
   use EdenWeb, :live_view
@@ -16,10 +18,19 @@ defmodule EdenWeb.AdminLive do
   alias Eden.Accounts.{Scope, User}
 
   @impl true
+  # Re-query the invites list each minute so the countdown labels advance and expired rows
+  # drop, without a per-second timer.
+  @invite_tick_ms 60_000
+
   def mount(_params, _session, socket) do
-    # Identity shows everywhere, so refresh the list when anyone's profile /
-    # managed fields / role change (our own saves come back through here too).
-    if connected?(socket), do: Accounts.subscribe_user_updates()
+    if connected?(socket) do
+      # Identity shows everywhere, so refresh the list when anyone's profile /
+      # managed fields / role change (our own saves come back through here too).
+      Accounts.subscribe_user_updates()
+      # And when any admin mints / revokes / a link is redeemed (#302 review).
+      Accounts.subscribe_invites()
+      Process.send_after(self(), :tick_invites, @invite_tick_ms)
+    end
 
     {:ok,
      socket
@@ -37,14 +48,14 @@ defmodule EdenWeb.AdminLive do
   # Onboarding (#302): mint a single-use, 30-minute registration invite attributed to the
   # acting admin, show its URL once, and refresh the outstanding list. Admin-gated by :require_admin.
   def handle_event("create_invite", _params, socket) do
-    case Accounts.create_invite(socket.assigns.current_scope.user) do
+    case Accounts.create_invite(socket.assigns.current_scope) do
       {:ok, _invite, token} ->
         {:noreply,
          socket
          |> assign(new_invite_url: url(~p"/invite/#{token}"))
          |> assign(invites: Accounts.list_active_invites())}
 
-      {:error, _changeset} ->
+      {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't create an invite link."))}
     end
   end
@@ -61,7 +72,7 @@ defmodule EdenWeb.AdminLive do
         # Best-effort: revoking is idempotent and the list refresh reflects the truth
         # either way — don't hard-match the result and risk a MatchError on a stale row
         # (matches this module's no-op-stale-events stance, #302 review).
-        _ = Accounts.revoke_invite(invite)
+        _ = Accounts.revoke_invite(socket.assigns.current_scope, invite)
         {:noreply, assign(socket, invites: Accounts.list_active_invites())}
     end
   end
@@ -165,6 +176,16 @@ defmodule EdenWeb.AdminLive do
       else: {:noreply, socket}
   end
 
+  # Another admin minted/revoked, or a link was redeemed (#302 review): refresh the list.
+  def handle_info(:invites_changed, socket),
+    do: {:noreply, assign(socket, invites: Accounts.list_active_invites())}
+
+  # Periodic re-query so the countdown labels advance and expired rows drop.
+  def handle_info(:tick_invites, socket) do
+    Process.send_after(self(), :tick_invites, @invite_tick_ms)
+    {:noreply, assign(socket, invites: Accounts.list_active_invites())}
+  end
+
   # Our OWN account changed (#262): keep the in-socket scope fresh so a context re-check sees
   # the current role (not the mount-time one), and eject to /settings if admin was revoked —
   # `:require_admin` only gates at mount, so a mid-session demotion wouldn't otherwise remove
@@ -223,14 +244,15 @@ defmodule EdenWeb.AdminLive do
   end
 
   # Short-lived (30-minute #302) invites read best as a countdown; a longer CLI-minted
-  # `--days` link falls back to a date+time. Recomputed each render, so it's fresh on reload.
+  # `--days` link falls back to a date+time (UTC-labelled, since it's the raw stored value).
+  # Recomputed each render + on the per-minute tick, so it stays fresh (#302 review).
   defp expiry_label(expires_at) do
     minutes = DateTime.diff(expires_at, DateTime.utc_now(), :minute)
 
-    if minutes < 60 do
-      gettext("expires in ~%{n} min", n: max(minutes, 1))
-    else
-      gettext("until %{date}", date: Calendar.strftime(expires_at, "%Y-%m-%d %H:%M"))
+    cond do
+      minutes <= 0 -> gettext("expired")
+      minutes < 60 -> gettext("expires in ~%{n} min", n: minutes)
+      true -> gettext("until %{date} UTC", date: Calendar.strftime(expires_at, "%Y-%m-%d %H:%M"))
     end
   end
 

@@ -15,6 +15,10 @@ defmodule Eden.Accounts do
 
   @pubsub Eden.PubSub
   @user_updates_topic "user_updates"
+  # Admin-only: the outstanding-invites list changed (minted / revoked / redeemed). A
+  # dedicated topic (not user_updates) so only the admin panel subscribes — broadcasting a
+  # bare atom on the shared topic would reach every chat LiveView with no matching clause.
+  @invites_topic "admin:invites"
 
   # Registration invites are single-use and short-lived (#302 follow-up): handed over now,
   # accepted within the half hour. A `mix eden.invite --days N` bootstrap link can override
@@ -119,14 +123,23 @@ defmodule Eden.Accounts do
     end
   end
 
-  # The atomic DB half of a deactivation: flip active, then drop every session token
-  # and any outstanding reset link in the same transaction.
+  # The atomic DB half of a deactivation: flip active, then drop every session token,
+  # any outstanding reset link, and any registration invite the person minted (a disabled
+  # account leaves no live way in — for itself or the people it invited) in one transaction.
   defp deactivate_writes(%User{} = target) do
     with {:ok, updated} <- set_active(target, false) do
       delete_all_session_tokens(updated.id)
       delete_reset_tokens(updated.id)
+      revoke_user_invites(updated.id)
       {:ok, updated}
     end
+  end
+
+  # Revoke every still-open invite a user minted. update_all so it never raises on a stale
+  # row and stays inside the caller's transaction.
+  defp revoke_user_invites(user_id) do
+    from(i in Invite, where: i.inviter_id == ^user_id and is_nil(i.revoked_at))
+    |> Repo.update_all(set: [revoked_at: now()])
   end
 
   @doc """
@@ -701,8 +714,17 @@ defmodule Eden.Accounts do
 
   `inviter` is a `%User{}` or `nil` (a "system" invite that bootstraps the first
   account). Options: `:max_uses` (default 1), `:expires_at` (default 30 minutes out).
+
+  The **web path** passes a `%Scope{}` (the `/admin` panel) — minting is admin-only,
+  enforced here in the context, not just by the route gate (#302 review, mirrors the
+  #262/#263 precedent). The `%User{} | nil` arity stays for the CLI bootstrap, where no
+  scope exists yet.
   """
   def create_invite(inviter \\ nil, opts \\ [])
+
+  def create_invite(%Scope{user: %User{} = actor}, opts) do
+    if User.admin?(actor), do: create_invite(actor, opts), else: {:error, :forbidden}
+  end
 
   def create_invite(inviter, opts) when is_nil(inviter) or is_struct(inviter, User) do
     raw_token = build_token()
@@ -717,7 +739,7 @@ defmodule Eden.Accounts do
     |> Invite.create_changeset(attrs)
     |> Repo.insert()
     |> case do
-      {:ok, invite} -> {:ok, invite, raw_token}
+      {:ok, invite} -> {:ok, broadcast_invites_changed(invite), raw_token}
       {:error, changeset} -> {:error, changeset}
     end
   end
@@ -734,11 +756,26 @@ defmodule Eden.Accounts do
     end
   end
 
-  @doc "Revokes an invite so it can no longer be accepted."
+  @doc """
+  Revokes an invite so it can no longer be accepted. Admin-only via the `%Scope{}` arity
+  (the `/admin` panel, #302 review); the bare `%Invite{}` arity is the internal write.
+  """
+  def revoke_invite(%Scope{user: %User{} = actor}, %Invite{} = invite) do
+    if User.admin?(actor), do: revoke_invite(invite), else: {:error, :forbidden}
+  end
+
   def revoke_invite(%Invite{} = invite) do
+    with {:ok, updated} <- invite |> Ecto.Changeset.change(revoked_at: now()) |> Repo.update() do
+      {:ok, broadcast_invites_changed(updated)}
+    end
+  end
+
+  @doc "Subscribes the caller (the admin panel) to outstanding-invites changes (#302 review)."
+  def subscribe_invites, do: Phoenix.PubSub.subscribe(@pubsub, @invites_topic)
+
+  defp broadcast_invites_changed(invite) do
+    Phoenix.PubSub.broadcast(@pubsub, @invites_topic, :invites_changed)
     invite
-    |> Ecto.Changeset.change(revoked_at: now())
-    |> Repo.update()
   end
 
   @doc """
@@ -770,7 +807,16 @@ defmodule Eden.Accounts do
   """
   def register_user_with_invite(raw_token, attrs) when is_binary(raw_token) do
     hashed = hash_token(raw_token)
-    Repo.transact(fn -> accept_locked_invite(hashed, attrs) end)
+
+    case Repo.transact(fn -> accept_locked_invite(hashed, attrs) end) do
+      {:ok, user} ->
+        # A redemption bumps used_count and may exhaust the invite — refresh open admin panels.
+        broadcast_invites_changed(nil)
+        {:ok, user}
+
+      other ->
+        other
+    end
   end
 
   ## Token helpers

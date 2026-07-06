@@ -185,6 +185,18 @@ defmodule EdenWeb.AdminLiveTest do
       assert Accounts.list_active_invites() == []
     end
 
+    test "another admin's mint refreshes the panel over the invites topic (#302 review)", %{
+      conn: conn
+    } do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      refute render(view) =~ "use left"
+
+      # A different admin mints — the broadcast should refresh THIS open panel.
+      {:ok, _invite, _} = Accounts.create_invite(admin(%{username: "other_admin"}))
+
+      assert render(view) =~ "use left"
+    end
+
     test "an external update to the open person refreshes the list and the edit form", %{
       conn: conn
     } do

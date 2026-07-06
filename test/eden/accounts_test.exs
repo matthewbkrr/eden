@@ -194,6 +194,40 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "admin-scoped invites (#302 review)" do
+    test "create_invite/2 mints for an admin scope, refuses a member" do
+      admin = promote(user_fixture(), "admin")
+
+      assert {:ok, %Invite{inviter_id: id}, _token} =
+               Accounts.create_invite(Scope.for_user(admin))
+
+      assert id == admin.id
+
+      assert {:error, :forbidden} = Accounts.create_invite(Scope.for_user(user_fixture()))
+    end
+
+    test "revoke_invite/2 is admin-only" do
+      admin = promote(user_fixture(), "admin")
+      {:ok, invite, _} = Accounts.create_invite(admin)
+
+      assert {:error, :forbidden} = Accounts.revoke_invite(Scope.for_user(user_fixture()), invite)
+      assert is_nil(Repo.get!(Invite, invite.id).revoked_at)
+
+      assert {:ok, revoked} = Accounts.revoke_invite(Scope.for_user(admin), invite)
+      assert revoked.revoked_at
+    end
+
+    test "deactivating a user revokes the invites they minted" do
+      actor = promote(user_fixture(), "super_admin")
+      inviter = promote(user_fixture(), "admin")
+      {:ok, invite, _} = Accounts.create_invite(inviter)
+
+      assert {:ok, _} = Accounts.deactivate_user(Scope.for_user(actor), inviter)
+      assert Repo.get!(Invite, invite.id).revoked_at
+      assert Accounts.list_active_invites() == []
+    end
+  end
+
   describe "get_user_by_username_and_password/2" do
     setup do
       inviter = user_fixture()
