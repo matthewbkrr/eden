@@ -43,16 +43,21 @@ defmodule Eden.Accounts do
 
   @doc "All other users (everyone except the scoped user), for the new-conversation picker."
   def list_other_users(%Scope{user: user}) do
-    from(u in User, where: u.id != ^user.id, order_by: [asc: u.display_name])
+    # Deleted (anonymized, #303) accounts are never offered for a new conversation.
+    from(u in User,
+      where: u.id != ^user.id and is_nil(u.deleted_at),
+      order_by: [asc: u.display_name]
+    )
     |> Repo.all()
   end
 
   @doc """
   Lists all users for the admin panel (#174), by display name. The caller (the
   `/admin` on_mount gate) restricts this to admins; it is not scoped itself.
+  Permanently-deleted (anonymized, #303) accounts are excluded — deletion is terminal.
   """
   def list_users do
-    from(u in User, order_by: [asc: u.display_name]) |> Repo.all()
+    from(u in User, where: is_nil(u.deleted_at), order_by: [asc: u.display_name]) |> Repo.all()
   end
 
   @doc "True if the user holds a platform admin role (`admin` or `super_admin`, #174)."
@@ -63,6 +68,9 @@ defmodule Eden.Accounts do
 
   @doc "True unless an admin has deactivated the account (#251)."
   def active?(%User{} = user), do: User.active?(user)
+
+  @doc "True if the account was permanently deleted (anonymized, #303)."
+  def deleted?(%User{} = user), do: User.deleted?(user)
 
   @doc """
   Sets a user's platform role (#174). **Super-admin only** — enforced here, not
@@ -149,8 +157,14 @@ defmodule Eden.Accounts do
   """
   def reactivate_user(%Scope{user: %User{} = actor}, %User{} = target) do
     with :ok <- authorize_activation(actor, target),
+         # A permanently-deleted (anonymized, #303) account can never be brought back —
+         # `active=false` there is terminal, not the reversible deactivation of #251.
+         false <- User.deleted?(target),
          {:ok, updated} <- set_active(target, true) do
       {:ok, broadcast_user_update(updated)}
+    else
+      true -> {:error, :forbidden}
+      other -> other
     end
   end
 
@@ -164,6 +178,129 @@ defmodule Eden.Accounts do
 
   defp set_active(%User{} = user, active) when is_boolean(active),
     do: user |> Ecto.Changeset.change(active: active) |> Repo.update()
+
+  # Marker stored in `display_name` for an anonymized account (#303) — a fixed label
+  # rather than nil so every existing render site (chat header, member rows, message
+  # authorship) shows it without a per-site fallback. Stored (not gettext'd) since it
+  # lives in the DB; RU because the product is RU-facing.
+  @deleted_display_name "Удалённый аккаунт"
+
+  @doc "The display-name sentinel shown for an anonymized account (#303) — one source of truth."
+  def deleted_display_name, do: @deleted_display_name
+
+  @doc """
+  Permanently deletes a user by **anonymization** (#303, ADR-0002 right-to-erasure):
+  scrubs all PII + credentials + avatar and stamps `deleted_at`, but **keeps** the row
+  (and thus the person's messages) so shared conversations don't collapse into holes —
+  they render as "#{@deleted_display_name}" everywhere. The `@tag` (username) is freed
+  for reuse (`deleted-<id>` can't collide with a real, hyphen-free handle).
+
+  **Irreversible** (distinct from the reversible #251 deactivation). Same authority as
+  reset links (`can_reset_password?/2` — a plain admin can't delete a super_admin); an
+  actor can't delete themselves, and the **last** super_admin can't be deleted (locked
+  `FOR UPDATE`, so admin can never be locked out). Also sets `active=false`, so the
+  existing #251 login/session gates reject the account for free, and revokes every
+  session. Returns `{:ok, user}` | `{:error, :forbidden | :last_super_admin | :already_deleted}`.
+  """
+  def delete_user_permanently(%Scope{user: %User{} = actor}, %User{} = target) do
+    # Compute the throwaway password hash BEFORE opening the transaction: bcrypt is ~200ms
+    # of CPU and its input (random bytes) has zero dependence on the locked rows, so hashing
+    # inside would needlessly hold FOR UPDATE on every super_admin row for that window,
+    # stalling concurrent role changes / other deletions / super_admin 2FA logins (#303 review).
+    dead_hash = Bcrypt.hash_pwd_salt(Base.url_encode64(:crypto.strong_rand_bytes(32)))
+
+    with :ok <- authorize_deletion(actor, target),
+         {:ok, {updated, old_avatar_key}} <-
+           Repo.transact(fn -> anonymize_locked(actor, target.id, dead_hash) end) do
+      # Side effects only after the scrub commits (a rollback can't un-delete a blob or
+      # un-send a broadcast): reclaim the avatar blob, boot live sessions, refresh views.
+      if old_avatar_key, do: Storage.delete(old_avatar_key)
+      broadcast_sessions_revoked(updated.id)
+      {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  # Cheap pre-checks on the in-memory struct (nicer errors before opening a transaction);
+  # the authority + last-super-admin guards are RE-checked against the locked row below.
+  defp authorize_deletion(%User{} = actor, %User{} = target) do
+    cond do
+      actor.id == target.id -> {:error, :forbidden}
+      not can_reset_password?(actor, target) -> {:error, :forbidden}
+      User.deleted?(target) -> {:error, :already_deleted}
+      true -> :ok
+    end
+  end
+
+  # The atomic scrub. Locks the super_admin set THEN the target (same order as
+  # set_role_guarded/2 → no deadlock) so a concurrent role change / second deletion can't
+  # race us to zero super_admins or to a stale authority. Re-checks everything on the FRESH
+  # row (#263 TOCTOU idiom). Returns {:ok, {updated, old_avatar_key}} for post-commit cleanup.
+  defp anonymize_locked(%User{} = actor, target_id, dead_hash) do
+    super_ids =
+      from(u in User, where: u.role == "super_admin", lock: "FOR UPDATE", select: u.id)
+      |> Repo.all()
+
+    target = Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE"))
+
+    cond do
+      is_nil(target) -> {:error, :forbidden}
+      not can_reset_password?(actor, target) -> {:error, :forbidden}
+      User.deleted?(target) -> {:error, :already_deleted}
+      target.id in super_ids and length(super_ids) <= 1 -> {:error, :last_super_admin}
+      true -> anonymize_write(target, dead_hash)
+    end
+  end
+
+  defp anonymize_write(%User{} = target, dead_hash) do
+    old_avatar_key = target.avatar_key
+
+    with {:ok, updated} <- target |> anonymize_changeset(dead_hash) |> Repo.update() do
+      # Drop every session token + any outstanding reset link in the same transaction, so a
+      # deleted account has no live way back in (mirrors deactivate_writes/1); and revoke any
+      # registration invites they minted — an erased account leaves no live invite behind.
+      delete_all_session_tokens(updated.id)
+      delete_reset_tokens(updated.id)
+      # Revoke any invites the deleted user minted (shared helper, also used by
+      # deactivation) — an erased account leaves no live invite behind.
+      revoke_user_invites(updated.id)
+      {:ok, {updated, old_avatar_key}}
+    end
+  end
+
+  # `change/2` (not a validating changeset) so we can set the sentinel username/display —
+  # the DB unique index on username still holds, and `deleted-<id>` is collision-proof
+  # against the hyphen-free format real handles must match.
+  defp anonymize_changeset(%User{} = user, dead_hash) do
+    Ecto.Changeset.change(user,
+      username: "deleted-#{user.id}",
+      display_name: @deleted_display_name,
+      bio: nil,
+      avatar_key: nil,
+      last_active_at: nil,
+      presence_status: "invisible",
+      # Strip any platform role — a deleted account keeps no privilege.
+      role: "member",
+      active: false,
+      deleted_at: now(),
+      # Managed identity fields (#173).
+      corp_email: nil,
+      position: nil,
+      structure: nil,
+      external_id: nil,
+      identity_source: "local",
+      managed_by: nil,
+      directory_synced_at: nil,
+      # Credentials + second factor. `hashed_password` is NOT NULL, so replace it with a
+      # bcrypt hash of fresh random bytes (computed outside the transaction) rather than nil:
+      # the input is never revealed, so no password can ever verify (and `active=false`
+      # blocks login regardless).
+      hashed_password: dead_hash,
+      totp_secret: nil,
+      totp_activated_at: nil,
+      totp_last_used_at: nil,
+      totp_backup_codes: []
+    )
+  end
 
   @doc """
   Returns the user if the username/password pair is valid **and the account is active**

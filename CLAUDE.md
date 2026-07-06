@@ -70,6 +70,21 @@ design — built incrementally as features land.)
   deactivated user can't be issued a reset link. Same authority as reset links
   (`can_reset_password?/2`: a plain admin ↛ a super_admin; never yourself). The
   **upstream-IdP auto-deactivation** half of Decision 8 stays trigger-gated (no IdP yet).
+  **Permanent deletion / anonymization** (#303, right-to-erasure): deactivation is
+  reversible, deletion is not. `delete_user_permanently/2` (admin, from `/admin` behind a
+  two-step confirm; same authority; never yourself; the **last super_admin is locked**)
+  scrubs all PII, credentials, avatar and platform role, replaces `hashed_password` with a
+  random hash (the column is NOT NULL), frees the `@tag` (`deleted-<id>` — hyphen, so no
+  collision with a real handle), sets `active=false`, and stamps `users.deleted_at`, all in
+  one `FOR UPDATE` transaction; sessions are revoked and the avatar blob reclaimed after
+  commit. The **row survives** so the person's messages stay attributed as «Удалённый аккаунт»
+  (shared history isn't holed — the anonymize-not-cascade choice); deleted rows are filtered
+  from `list_users`/`list_other_users`/`create_conversation`/room+channel adds, `reactivate_user/2`
+  refuses them, and a pending knock from a since-deleted requester is auto-declined (never
+  re-added). After the Accounts scrub, the web layer calls `Chat.scrub_deleted_user_content/1`
+  (contexts don't reach into each other) to scrub the **denormalized** name from system-message
+  `meta` (knock requester, member add/remove — the latter carry `user_id` for this) and purge
+  the person's private folders. Reuses the #251 login/session gates via `active=false`.
   **TOTP two-factor** (#250, ADR-0002 Decision 7): a user enrolls in Settings
   (`setup_totp/1` → scan QR / manual key → `activate_totp/3` confirms a code, reveals
   one-time **backup codes**); at sign-in an enrolled user's password step stashes a

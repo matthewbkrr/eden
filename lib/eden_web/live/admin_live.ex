@@ -7,21 +7,24 @@ defmodule EdenWeb.AdminLive do
   change a user's platform role (`Accounts.set_user_role/3`). An admin can also mint a
   password-reset link, reset a lost second factor, **deactivate / reactivate** an
   account (#251 — `Accounts.deactivate_user/2`, ends every session and blocks sign-in),
-  and **mint / revoke registration invites** (#302 — `Accounts.create_invite/2` ·
-  `revoke_invite/2`, admin-checked in the context via `%Scope{}`), all under the same
-  authority (a plain admin ↛ a super_admin, no acting on yourself).
-  All authorization is enforced in the context — this LiveView is the presentation + gate.
+  **mint / revoke registration invites** (#302 — `Accounts.create_invite/2` ·
+  `revoke_invite/2`, admin-checked in the context via `%Scope{}`), and **permanently
+  delete** an account (#303 — `Accounts.delete_user_permanently/2`, irreversible
+  anonymization behind a two-step arm), all under the same authority (a plain admin ↛ a
+  super_admin, no acting on yourself; the last super_admin can't be deleted). All
+  authorization is enforced in the context — this LiveView is the presentation + gate.
   """
   use EdenWeb, :live_view
 
   alias Eden.Accounts
   alias Eden.Accounts.{Scope, User}
+  alias Eden.Chat
 
-  @impl true
   # Re-query the invites list each minute so the countdown labels advance and expired rows
   # drop, without a per-second timer.
   @invite_tick_ms 60_000
 
+  @impl true
   def mount(_params, _session, socket) do
     if connected?(socket) do
       # Identity shows everywhere, so refresh the list when anyone's profile /
@@ -35,7 +38,7 @@ defmodule EdenWeb.AdminLive do
     {:ok,
      socket
      |> assign(page_title: gettext("Admin"), users: Accounts.list_users())
-     |> assign(selected: nil, managed_form: nil, reset_link: nil)
+     |> assign(selected: nil, managed_form: nil, reset_link: nil, delete_armed: false)
      |> assign(invites: Accounts.list_active_invites(), new_invite_url: nil)}
   end
 
@@ -43,7 +46,9 @@ defmodule EdenWeb.AdminLive do
   def handle_event("select", %{"id" => id}, socket), do: {:noreply, select_user(socket, id)}
 
   def handle_event("deselect", _params, socket),
-    do: {:noreply, assign(socket, selected: nil, managed_form: nil, reset_link: nil)}
+    do:
+      {:noreply,
+       assign(socket, selected: nil, managed_form: nil, reset_link: nil, delete_armed: false)}
 
   # Onboarding (#302): mint a single-use, 30-minute registration invite attributed to the
   # acting admin, show its URL once, and refresh the outstanding list. Admin-gated by :require_admin.
@@ -81,7 +86,8 @@ defmodule EdenWeb.AdminLive do
   # selected would pass nil into a context function that expects a %User{} and crash
   # the LiveView — no-op it once here instead.
   def handle_event(event, _params, %{assigns: %{selected: nil}} = socket)
-      when event in ~w(reset_link reset_totp validate save set_role deactivate reactivate),
+      when event in ~w(reset_link reset_totp validate save set_role deactivate reactivate
+                       arm_delete disarm_delete delete_account),
       do: {:noreply, socket}
 
   def handle_event("reset_link", _params, socket) do
@@ -167,6 +173,42 @@ defmodule EdenWeb.AdminLive do
     end
   end
 
+  # Permanent deletion (#303) is a deliberate two-step: arm reveals the confirm, then
+  # `delete_account` runs the irreversible anonymization.
+  def handle_event("arm_delete", _params, socket),
+    do: {:noreply, assign(socket, delete_armed: true)}
+
+  def handle_event("disarm_delete", _params, socket),
+    do: {:noreply, assign(socket, delete_armed: false)}
+
+  # The two-step arm is enforced HERE, not just in the UI (#305 review): only an armed
+  # confirm runs the irreversible anonymization. The context still re-checks authority, so
+  # this guards against an accidental / stale / forged `delete_account` skipping the confirm.
+  def handle_event("delete_account", _params, %{assigns: %{delete_armed: true}} = socket) do
+    case Accounts.delete_user_permanently(socket.assigns.current_scope, socket.assigns.selected) do
+      {:ok, updated} ->
+        # The web layer orchestrates the cross-context cleanup (contexts don't reach into
+        # each other): scrub the person's name from Chat's denormalized system-message meta
+        # and drop their private folders now that the account is anonymized (#305 review).
+        Chat.scrub_deleted_user_content(updated.id)
+
+        # The person is now filtered out of the list; drop them + the open panel.
+        {:noreply,
+         socket
+         |> refresh_user(updated)
+         |> put_flash(:info, gettext("Account permanently deleted."))}
+
+      {:error, :last_super_admin} ->
+        {:noreply, put_flash(socket, :error, gettext("Can't remove the last super-admin."))}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, gettext("You can't delete that person."))}
+    end
+  end
+
+  # Not armed → a bare/forged event never deletes.
+  def handle_event("delete_account", _params, socket), do: {:noreply, socket}
+
   @impl true
   def handle_info({:user_updated, user}, socket) do
     socket = refresh_user(socket, user)
@@ -207,8 +249,16 @@ defmodule EdenWeb.AdminLive do
 
   defp select_user(socket, id) do
     case Enum.find(socket.assigns.users, &(to_string(&1.id) == to_string(id))) do
-      nil -> socket
-      user -> assign(socket, selected: user, managed_form: managed_form(user), reset_link: nil)
+      nil ->
+        socket
+
+      user ->
+        assign(socket,
+          selected: user,
+          managed_form: managed_form(user),
+          reset_link: nil,
+          delete_armed: false
+        )
     end
   end
 
@@ -219,13 +269,42 @@ defmodule EdenWeb.AdminLive do
   # writes back) stale values. Refreshing the form does drop the current admin's
   # unsaved edits when the person is changed underneath them — the safe trade
   # (show/save the truth, not clobber a concurrent change).
+  #
+  # A permanently-deleted (anonymized, #303) person is REMOVED from the list instead —
+  # deletion is terminal and `list_users/0` excludes them, so keep every admin panel
+  # consistent (the acting one and any other, over the broadcast). If the deleted person
+  # was open, close the detail panel.
   defp refresh_user(socket, %User{} = user) do
-    users = Enum.map(socket.assigns.users, &if(&1.id == user.id, do: user, else: &1))
+    if Accounts.deleted?(user) do
+      users = Enum.reject(socket.assigns.users, &(&1.id == user.id))
 
-    if socket.assigns.selected && socket.assigns.selected.id == user.id do
-      assign(socket, users: users, selected: user, managed_form: managed_form(user))
+      if socket.assigns.selected && socket.assigns.selected.id == user.id do
+        assign(socket,
+          users: users,
+          selected: nil,
+          managed_form: nil,
+          reset_link: nil,
+          delete_armed: false
+        )
+      else
+        assign(socket, users: users)
+      end
     else
-      assign(socket, users: users)
+      users = Enum.map(socket.assigns.users, &if(&1.id == user.id, do: user, else: &1))
+
+      if socket.assigns.selected && socket.assigns.selected.id == user.id do
+        # Reset the delete arm when the open person's struct is swapped underneath us (e.g.
+        # another admin edits them): the confirm must not silently carry onto a changed
+        # target (#305 review). The context re-checks authority anyway, so it's cosmetic.
+        assign(socket,
+          users: users,
+          selected: user,
+          managed_form: managed_form(user),
+          delete_armed: false
+        )
+      else
+        assign(socket, users: users)
+      end
     end
   end
 
@@ -543,6 +622,52 @@ defmodule EdenWeb.AdminLive do
                   class="ed-btn ed-btn--ghost text-sm mt-2"
                 >
                   {gettext("Reset two-factor")}
+                </button>
+              </div>
+            </div>
+
+            <%!-- Delete account (#303): permanent anonymization — scrubs PII, credentials
+                  and avatar, keeps the person's messages shown as "Deleted account".
+                  Irreversible, so a deliberate two-step arm guards it beyond the browser
+                  confirm. Same authority as reset (a plain admin ↛ a super_admin; not you). --%>
+            <div
+              :if={
+                Accounts.can_reset_password?(@current_scope.user, @selected) &&
+                  @selected.id != @current_scope.user.id
+              }
+              class="mt-5 pt-5 border-t"
+              style="border-color: var(--ed-border);"
+            >
+              <h3 style="font-size:0.8125rem; color: var(--ed-danger-strong);">
+                {gettext("Delete account")}
+              </h3>
+              <p class="mt-1" style="font-size:0.75rem; color: var(--ed-muted);">
+                {gettext(
+                  "Permanently erases this person's name, avatar and login. Their past messages stay, attributed to a deleted account. This can't be undone."
+                )}
+              </p>
+
+              <button
+                :if={!@delete_armed}
+                type="button"
+                phx-click="arm_delete"
+                class="ed-btn ed-btn--ghost text-sm mt-2"
+                style="color: var(--ed-danger-strong);"
+              >
+                {gettext("Delete account…")}
+              </button>
+
+              <div :if={@delete_armed} class="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  phx-click="delete_account"
+                  data-confirm={gettext("Permanently delete this account? This can't be undone.")}
+                  class="ed-btn ed-btn--danger text-sm"
+                >
+                  {gettext("Delete permanently")}
+                </button>
+                <button type="button" phx-click="disarm_delete" class="ed-btn ed-btn--ghost text-sm">
+                  {gettext("Cancel")}
                 </button>
               </div>
             </div>

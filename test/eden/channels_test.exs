@@ -738,6 +738,23 @@ defmodule Eden.ChannelsTest do
       assert is_nil(Eden.Chat.pending_join_request(priv.id, bob.id))
     end
 
+    test "approving a knock from a since-deleted requester declines it, doesn't add them (#305)",
+         ctx do
+      %{alice: alice, bob: bob, priv: priv} = ctx
+      assert {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+      msg = Eden.Chat.pending_join_request(priv.id, bob.id)
+
+      # Bob is permanently deleted after knocking.
+      bob
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now() |> DateTime.truncate(:second))
+      |> Eden.Repo.update!()
+
+      assert :ok = Channels.approve_room_join(scope(alice), msg.id)
+      # Not resurrected into the room; the stale knock is settled (declined, no longer pending).
+      refute Eden.Chat.room_member?(priv.id, bob.id)
+      assert is_nil(Eden.Chat.pending_join_request(priv.id, bob.id))
+    end
+
     test "an open room can't be knocked", %{alice: alice, bob: bob, channel: channel} do
       {:ok, open} = Channels.create_room(scope(alice), channel.id, %{"name" => "lounge"})
       assert {:error, :not_private} = Channels.request_room_join(scope(bob), open.id)

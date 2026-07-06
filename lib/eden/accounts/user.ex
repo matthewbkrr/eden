@@ -37,6 +37,13 @@ defmodule Eden.Accounts.User do
     # Written ONLY via Accounts.deactivate_user/2 · reactivate_user/2 (admin-scoped).
     field :active, :boolean, default: true
 
+    # Permanent deletion by anonymization (#303). Non-nil = an admin scrubbed this
+    # account's PII/credentials for good (also sets active=false). The row survives so its
+    # messages stay attributed as "Deleted account"; it's filtered from rosters/pickers.
+    # Irreversible — distinct from the reversible `active` flag. Written ONLY via
+    # Accounts.delete_user_permanently/2.
+    field :deleted_at, :utc_datetime
+
     # Managed identity fields (#173, RFC Phase 1): admin-/sync-owned, written ONLY
     # via managed_changeset/2 (the admin panel #174 or a future directory sync),
     # never through the user's profile form. Read-only to the person on their card.
@@ -79,6 +86,9 @@ defmodule Eden.Accounts.User do
 
   @doc "True unless an admin has deactivated the account (#251)."
   def active?(%__MODULE__{active: active}), do: active == true
+
+  @doc "True if the account has been permanently deleted (anonymized, #303)."
+  def deleted?(%__MODULE__{deleted_at: at}), do: not is_nil(at)
 
   @doc """
   Admin-only changeset for a user's platform role (#174). The write path

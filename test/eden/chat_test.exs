@@ -3680,4 +3680,55 @@ defmodule Eden.ChatTest do
       assert %{messages: _} = Chat.search(scope(alice), "anything")
     end
   end
+
+  describe "scrub_deleted_user_content/1 (#305)" do
+    test "scrubs the person's name from system-message meta and deletes their folders" do
+      alice = user_fixture()
+      bob = user_fixture(%{display_name: "Bob Real"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id], group: true, title: "G")
+
+      sentinel = Eden.Accounts.deleted_display_name()
+
+      added =
+        Repo.insert!(%Message{
+          conversation_id: conv.id,
+          kind: "system",
+          body: "",
+          meta: %{"action" => "member_added", "name" => "Bob Real", "user_id" => bob.id}
+        })
+
+      knock =
+        Repo.insert!(%Message{
+          conversation_id: conv.id,
+          kind: "system",
+          body: "",
+          meta: %{
+            "action" => "join_request",
+            "requester_id" => bob.id,
+            "requester_name" => "Bob Real",
+            "status" => "pending"
+          }
+        })
+
+      Repo.insert!(%Eden.Chat.Folder{user_id: bob.id, name: "Work", position: 0})
+
+      assert :ok = Chat.scrub_deleted_user_content(bob.id)
+
+      assert Repo.get!(Message, added.id).meta["name"] == sentinel
+      assert Repo.get!(Message, knock.id).meta["requester_name"] == sentinel
+      refute Repo.exists?(from(f in Eden.Chat.Folder, where: f.user_id == ^bob.id))
+    end
+
+    test "create_conversation refuses a deleted user (no ghost DM)" do
+      alice = user_fixture()
+      ghost = user_fixture()
+
+      {:ok, ghost} =
+        ghost
+        |> Ecto.Changeset.change(deleted_at: DateTime.utc_now() |> DateTime.truncate(:second))
+        |> Repo.update()
+
+      assert {:error, :no_members} = Chat.create_conversation(scope(alice), [ghost.id])
+    end
+  end
 end

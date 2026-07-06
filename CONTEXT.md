@@ -42,9 +42,17 @@ them, not speculatively. Use these words exactly; don't drift to synonyms.
   manual half): every session is revoked and login is refused (indistinguishable
   from a wrong password — account state isn't leaked) until an admin
   **reactivates**. Same authority as reset links (a plain admin ↛ a super_admin;
-  never yourself). Distinct from **hard delete / erasure** (a separate concern)
-  and from the trigger-gated **upstream-IdP auto-deactivation** (Decision 8's
-  second half, awaiting a real IdP).
+  never yourself). **Reversible.** Distinct from the trigger-gated **upstream-IdP
+  auto-deactivation** (Decision 8's second half, awaiting a real IdP).
+- **Permanent deletion (anonymization)** — an admin **erases** an account for
+  good (#303, `Accounts.delete_user_permanently/2`): scrubs all PII, credentials,
+  avatar and platform role, frees the `@tag`, and stamps `users.deleted_at`, but
+  **keeps the row** so the person's past messages stay attributed as «Удалённый
+  аккаунт» (right-to-erasure without holing shared history). Also sets
+  `active = false`, so the deactivation login/session gates reject it for free;
+  revokes every session. **Irreversible** (`reactivate_user/2` refuses a deleted
+  row), and the **last super_admin can't be deleted**. Same authority as reset
+  links; never yourself. Deleted rows drop out of `list_users`/rosters/pickers.
 
 ## Messaging (established; see CLAUDE.md for detail)
 

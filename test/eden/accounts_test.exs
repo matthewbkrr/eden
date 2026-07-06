@@ -567,6 +567,142 @@ defmodule Eden.AccountsTest do
     end
   end
 
+  describe "permanent deletion (anonymization) / #303" do
+    test "scrubs PII, credentials, avatar and role; stamps deleted_at; keeps the row" do
+      actor = promote(user_fixture(), "super_admin")
+
+      target =
+        user_fixture(%{username: "gone", display_name: "Gone Soon", password: "password123"})
+
+      # Give them a factor + a session + fields worth scrubbing.
+      {secret, _} = Accounts.setup_totp(target)
+
+      {:ok, target, _} =
+        Accounts.activate_totp(target, secret, NimbleTOTP.verification_code(secret))
+
+      {:ok, target} =
+        target
+        |> Ecto.Changeset.change(
+          bio: "hi",
+          avatar_key: "avatars/none.jpg",
+          corp_email: "g@rwb.ru",
+          position: "Analyst"
+        )
+        |> Repo.update()
+
+      token = Accounts.generate_user_session_token(target)
+
+      assert {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      assert Accounts.deleted?(deleted)
+      assert deleted.username == "deleted-#{target.id}"
+      assert deleted.display_name == "Удалённый аккаунт"
+      refute deleted.active
+      assert deleted.role == "member"
+
+      for field <- [:bio, :avatar_key, :corp_email, :position, :totp_secret] do
+        assert is_nil(Map.fetch!(deleted, field)), "expected #{field} to be scrubbed"
+      end
+
+      # The password hash is replaced (NOT NULL column), so the old credential is dead.
+      assert deleted.hashed_password != target.hashed_password
+      refute Accounts.totp_enrolled?(deleted)
+
+      # The row survives (messages still reference it), but every way in is dead.
+      assert Repo.get(User, target.id)
+      assert Accounts.get_user_by_username_and_password("gone", "password123") == nil
+      assert Accounts.get_user_by_session_token(token) == nil
+    end
+
+    test "frees the @tag with no format collision — the handle can be re-registered" do
+      # `deleted-<id>` carries a hyphen, which the username format forbids, so it can never
+      # collide with a real handle; and the original @tag is now free.
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture(%{username: "reclaim"})
+
+      assert {:ok, _} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      {:ok, _invite, token} = Accounts.create_invite(actor)
+
+      assert {:ok, reborn} =
+               Accounts.register_user_with_invite(token, valid_attrs(%{username: "reclaim"}))
+
+      assert reborn.username == "reclaim"
+      assert reborn.id != target.id
+    end
+
+    test "drops outstanding reset links so a deleted account has no live way back in" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+      {:ok, _raw} = Accounts.create_password_reset(Scope.for_user(actor), target)
+
+      assert {:ok, _} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+      refute Repo.get_by(PasswordResetToken, user_id: target.id)
+    end
+
+    test "same authority as reset links: a plain admin can't delete a super_admin" do
+      admin = promote(user_fixture(), "admin")
+      super_admin = promote(user_fixture(), "super_admin")
+
+      assert {:error, :forbidden} =
+               Accounts.delete_user_permanently(Scope.for_user(admin), super_admin)
+
+      refute Accounts.deleted?(Repo.get!(User, super_admin.id))
+    end
+
+    test "an actor can't delete themselves, and a non-admin can't delete anyone" do
+      actor = promote(user_fixture(), "super_admin")
+      assert {:error, :forbidden} = Accounts.delete_user_permanently(Scope.for_user(actor), actor)
+
+      member = user_fixture()
+
+      assert {:error, :forbidden} =
+               Accounts.delete_user_permanently(Scope.for_user(member), user_fixture())
+    end
+
+    test "a super_admin can be deleted while another remains (the not-last path)" do
+      a = promote(user_fixture(), "super_admin")
+      b = promote(user_fixture(), "super_admin")
+
+      assert {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(a), b)
+      assert Accounts.deleted?(deleted)
+      # a is untouched and still a super_admin — the guard only bites at the LAST one.
+      assert Repo.get!(User, a.id).role == "super_admin"
+    end
+
+    test "deleting is idempotent-safe: a second attempt on the same person is refused" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+
+      assert {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      assert {:error, :already_deleted} =
+               Accounts.delete_user_permanently(Scope.for_user(actor), deleted)
+    end
+
+    test "a deleted account can never be reactivated (terminal, not #251-reversible)" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+
+      assert {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+      assert {:error, :forbidden} = Accounts.reactivate_user(Scope.for_user(actor), deleted)
+      assert Accounts.deleted?(Repo.get!(User, target.id))
+    end
+
+    test "deleted accounts drop out of list_users/0 and the new-conversation picker" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture(%{username: "vanish"})
+
+      assert target.id in (Accounts.list_users() |> Enum.map(& &1.id))
+
+      assert {:ok, _} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      refute target.id in (Accounts.list_users() |> Enum.map(& &1.id))
+      other_ids = Accounts.list_other_users(Scope.for_user(actor)) |> Enum.map(& &1.id)
+      refute target.id in other_ids
+    end
+  end
+
   describe "set_presence_status/2 (#102)" do
     test "defaults to auto and persists each allowed status" do
       user = user_fixture()
