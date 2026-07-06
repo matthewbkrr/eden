@@ -563,11 +563,20 @@ defmodule EdenWeb.ChatLive do
   def handle_event("media_sending", _params, socket),
     do: {:noreply, assign(socket, sending_media: true)}
 
-  # The watchdog hook fires this when an upload stalled (no real row, no error): the
-  # entry is still staged, so clearing the flag re-shows the overlay (with its
-  # cancel affordance) and the user can retry or cancel (#95).
-  def handle_event("media_send_reset", _params, socket),
-    do: {:noreply, assign(socket, sending_media: false)}
+  # The watchdog hook fires this when an upload stalled (30s no progress): the link died
+  # after the optimistic node + media_sending, so "send" never fired and the entries are
+  # still staged. Do NOT just clear sending_media to re-show the overlay for retry — after a
+  # conversation switch the staged previews are gone (blank tiles), and worse, the still-
+  # staged entries sit in a limbo that the NEXT chat switch silently cancels (files vanish
+  # with no error). Instead ABORT cleanly: cancel the staged entries so nothing lingers, and
+  # surface the failure so the loss is never silent. Already-completed files in a batch (#149,
+  # each posts the moment it finishes) have left as real messages and are unaffected.
+  def handle_event("media_send_reset", _params, socket) do
+    {:noreply,
+     socket
+     |> cancel_staged_attachments()
+     |> put_flash(:error, gettext("Some files didn't upload — please try again."))}
+  end
 
   # The hook caps a pick at max_staged_entries (#193) — more than the upload config takes at
   # once would tag the excess :too_many_files and wedge the whole upload. Surface why nothing
@@ -5569,9 +5578,14 @@ defmodule EdenWeb.ChatLive do
                   }
                 }
               }
-              // Revoke any staged-clip object URLs from the old conversation (#117).
-              for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
-              this.el.edenVideoUrls.clear()
+              // Revoke staged-clip object URLs from the old conversation (#117) — but NOT
+              // while a media send is in flight: its entries (and their previews) survive the
+              // switch (#144), so revoking here would blank the tiles if its overlay ever
+              // reopens. Cleared normally on a switch with nothing in flight, and on destroy.
+              if (this.el.dataset.sendingMedia !== "true") {
+                for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
+                this.el.edenVideoUrls.clear()
+              }
             }
             // A media send is in flight (#130): re-hide the preview overlay on every
             // patch so a re-render beating media_sending — or morphdom restoring the
@@ -6443,24 +6457,23 @@ defmodule EdenWeb.ChatLive do
             node.remove()
           },
           // Stall watchdog (#95/#149): if an upload makes NO progress for 30s — the link
-          // died after the optimistic node + media_sending, so "send" never fires — drop
-          // the stuck preview row and ask the server to clear sending_media, which re-shows
-          // the overlay (the entry is still staged) so the user can retry or cancel. Takes
-          // the optimistic ROW (album or file card's row) directly; every media_progress
-          // tick re-arms it, so a merely-slow upload is never killed; a row removed by the
-          // swap leaves a harmless dead timer (the callback no-ops once disconnected).
+          // died after the optimistic node + media_sending, so "send" never fires — drop the
+          // stuck preview row and tell the server to ABORT the stalled send (cancel the staged
+          // entries + flash), so its files can't sit staged and be silently dropped by the next
+          // chat switch. Takes the optimistic ROW directly; every media_progress tick re-arms
+          // it, so a merely-slow upload is never killed; a row removed by the swap leaves a
+          // harmless dead timer (the callback no-ops once disconnected).
           armStall(node) {
             if (!node) return
             if (node._stall) clearTimeout(node._stall)
             node._stall = setTimeout(() => {
               if (!node.isConnected) return
               node.remove()
-              // The #95 recovery (re-show the overlay so a stuck send can be cancelled) only
-              // makes sense for the send the user is LOOKING at. Since #144 a node survives
-              // in the background (hidden, in another conversation), so guard the reset to
-              // the current conversation — else a backgrounded node's watchdog would flip
-              // sending_media false out from under an unrelated send in the open chat.
-              if (node.dataset.convId === this.convId) this.pushEvent("media_send_reset", {})
+              // Fire the abort whether the stalled send is foreground or backgrounded (#144):
+              // only one media send is ever in flight (#95/#119), so this can't flip the flag
+              // out from under an unrelated send — and a stalled BACKGROUND upload must be
+              // aborted too, else its entries linger for the next switch to silently cancel.
+              this.pushEvent("media_send_reset", {})
             }, 30000)
           },
           // Snapshot a loaded preview <img> to a persistent JPEG data-URL. Returns
