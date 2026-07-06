@@ -10,11 +10,21 @@ defmodule EdenWeb.WelcomeTotpLiveTest do
       %{conn: log_in_user(conn, user_fixture())}
     end
 
-    test "renders the two-factor setup with a skip option", %{conn: conn} do
+    test "renders the entry state with set-up and skip options", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/welcome/two-factor")
       assert html =~ "Secure your account"
+      assert html =~ "Set up two-factor"
       assert html =~ "Skip for now"
-      # The QR/manual-key setup is shown immediately (no extra click).
+    end
+
+    test "the QR/manual key is minted only on the explicit set-up click (#306 review)", %{
+      conn: conn
+    } do
+      {:ok, view, html} = live(conn, ~p"/welcome/two-factor")
+      # Not generated up front — so a reconnect can't swap the secret mid-scan.
+      refute html =~ "enter this key manually"
+
+      html = view |> element(~s(button[phx-click="start_setup"])) |> render_click()
       assert html =~ "enter this key manually"
     end
 
@@ -38,8 +48,16 @@ defmodule EdenWeb.WelcomeTotpLiveTest do
       assert_redirect(view, ~p"/app")
     end
 
+    test "ignores a backslash protocol-relative bypass (#306 review)", %{conn: conn} do
+      # "/\evil.example" — a browser normalises the backslash to "//evil.example".
+      {:ok, view, _} = live(conn, ~p"/welcome/two-factor?return_to=%2F%5Cevil.example")
+      view |> element(~s(button[phx-click="skip"])) |> render_click()
+      assert_redirect(view, ~p"/app")
+    end
+
     test "activating with a valid code enrolls two-factor and reveals backup codes", %{conn: conn} do
-      {:ok, view, html} = live(conn, ~p"/welcome/two-factor")
+      {:ok, view, _} = live(conn, ~p"/welcome/two-factor")
+      html = view |> element(~s(button[phx-click="start_setup"])) |> render_click()
 
       # Derive the live code from the manual key shown in the setup.
       key = Regex.run(~r/<code[^>]*>\s*([A-Z2-7]+)\s*<\/code>/, html) |> List.last()
@@ -55,6 +73,7 @@ defmodule EdenWeb.WelcomeTotpLiveTest do
 
     test "a wrong code shows an error and doesn't enroll", %{conn: conn} do
       {:ok, view, _} = live(conn, ~p"/welcome/two-factor")
+      view |> element(~s(button[phx-click="start_setup"])) |> render_click()
 
       html =
         view

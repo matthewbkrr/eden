@@ -21,12 +21,14 @@ defmodule EdenWeb.WelcomeTotpLive do
       # Already has a factor (e.g. the link reopened later) — nothing to offer.
       {:ok, push_navigate(socket, to: return_to)}
     else
+      # The secret is minted on the explicit "Set up" click (not on mount), so a
+      # reconnect can't silently swap the QR out from under a mid-scan user (#306 review).
       {:ok,
        socket
        |> assign(
          page_title: gettext("Secure your account"),
          return_to: return_to,
-         totp_setup: totp_setup(user),
+         totp_setup: nil,
          totp_error: nil,
          totp_backup_codes: nil
        )}
@@ -34,6 +36,11 @@ defmodule EdenWeb.WelcomeTotpLive do
   end
 
   @impl true
+  def handle_event("start_setup", _params, socket) do
+    {:noreply,
+     assign(socket, totp_setup: totp_setup(socket.assigns.current_scope.user), totp_error: nil)}
+  end
+
   def handle_event("activate", %{"totp" => %{"code" => code}}, socket) do
     case Accounts.activate_totp(
            socket.assigns.current_scope.user,
@@ -71,8 +78,10 @@ defmodule EdenWeb.WelcomeTotpLive do
   end
 
   # Only follow a local path (the param is user-editable) — else land in the app.
+  # Normalise backslashes first: browsers treat "/\evil.example" as the protocol-relative
+  # "//evil.example", which would otherwise slip past a bare "//" check (#306 review).
   defp safe_return_to("/" <> _ = path) do
-    if String.starts_with?(path, "//"), do: ~p"/app", else: path
+    if path |> String.replace("\\", "/") |> String.starts_with?("//"), do: ~p"/app", else: path
   end
 
   defp safe_return_to(_), do: ~p"/app"
@@ -92,6 +101,17 @@ defmodule EdenWeb.WelcomeTotpLive do
         </p>
 
         <.ed_flash flash={@flash} />
+
+        <%!-- Entry: offer to start, or skip. The secret is minted on the "Set up" click
+              (start_setup), keeping the QR stable across a reconnect. --%>
+        <div :if={is_nil(@totp_setup) and is_nil(@totp_backup_codes)} class="space-y-3">
+          <button type="button" phx-click="start_setup" class="ed-btn ed-btn--primary w-full">
+            {gettext("Set up two-factor")}
+          </button>
+          <button type="button" phx-click="skip" class="ed-btn ed-btn--ghost w-full">
+            {gettext("Skip for now")}
+          </button>
+        </div>
 
         <%!-- After activation: show the one-time backup codes, then continue. --%>
         <div :if={@totp_backup_codes} class="space-y-4">

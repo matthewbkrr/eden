@@ -632,6 +632,8 @@ defmodule EdenWeb.CoreComponents do
           data-reveal-toggle
           aria-pressed="false"
           aria-label={gettext("Show password")}
+          data-show-label={gettext("Show password")}
+          data-hide-label={gettext("Hide password")}
           class="ed-btn--icon absolute right-1 top-1/2 -translate-y-1/2"
         >
           <span data-reveal-eye><.icon name="hero-eye" class="size-5" /></span>
@@ -660,7 +662,8 @@ defmodule EdenWeb.CoreComponents do
               const show = input.type === "password"
               input.type = show ? "text" : "password"
               btn.setAttribute("aria-pressed", String(show))
-              btn.setAttribute("aria-label", show ? "Hide password" : "Show password")
+              // Labels come from data-* so they honour the server-side gettext locale.
+              btn.setAttribute("aria-label", show ? btn.dataset.hideLabel : btn.dataset.showLabel)
               eye && eye.classList.toggle("hidden", show)
               eyeOff && eyeOff.classList.toggle("hidden", !show)
             }
