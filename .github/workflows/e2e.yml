@@ -1,0 +1,101 @@
+name: E2E (manual)
+
+# The Playwright multi-user / multi-device audit harness (test/e2e/) drives the running
+# DEV app on :4001 as several simultaneous users. It is intentionally NOT a per-PR gate —
+# realtime browser flows are slow and occasionally flaky over a live socket, so a red run
+# here shouldn't block a merge. Run it on demand from the Actions tab (or wire a nightly
+# schedule later). See test/e2e/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      specs:
+        description: "Spec(s) under test/e2e/specs to run"
+        default: "smoke.spec.js"
+
+env:
+  ELIXIR_VERSION: "1.19"
+  OTP_VERSION: "28"
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        id: beam
+        with:
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+          otp-version: ${{ env.OTP_VERSION }}
+
+      - name: Cache deps and _build
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-e2e-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-e2e-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      # ffmpeg backs the media flows some specs exercise; harmless for the smoke default.
+      - name: Install media tools (ffmpeg)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # Build the dev app the harness drives: deps, the dev DB, and compiled assets.
+      - run: mix deps.get
+      - run: mix assets.setup
+      - run: mix assets.build
+      - run: mix ecto.create
+      - run: mix ecto.migrate
+
+      # Throwaway users + conversations → test/e2e/.seed.json (read by the fixtures).
+      - run: mix run test/e2e/seed.exs
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright (Chromium)
+        working-directory: test/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # The server must stay up FOR the Playwright run, so start it in the background in the
+      # SAME step (a background process from an earlier step doesn't survive to the next).
+      - name: Boot the app and run the specs
+        run: |
+          PORT=4001 mix phx.server > /tmp/server.log 2>&1 &
+          for _ in $(seq 1 90); do
+            curl -sf http://localhost:4001/healthz > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:4001/healthz > /dev/null || { echo "::error::app never came up on :4001"; cat /tmp/server.log; exit 1; }
+          cd test/e2e
+          npx playwright test --config playwright.config.js --project=desktop-chromium "specs/${{ inputs.specs }}"
+
+      - name: Upload the Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: |
+            test/e2e/playwright-report
+            test/e2e/test-results
+          retention-days: 7
