@@ -162,6 +162,13 @@ defmodule Eden.AccountsTest do
       {:ok, _invite, token} = Accounts.create_invite(inviter, expires_at: past())
       assert {:error, :expired} = Accounts.fetch_valid_invite(token)
     end
+
+    test "the default invite is single-use and expires in ~30 minutes (#302)" do
+      {:ok, invite, _token} = Accounts.create_invite(user_fixture())
+      assert invite.max_uses == 1
+      minutes = DateTime.diff(invite.expires_at, DateTime.utc_now(), :minute)
+      assert minutes in 28..30
+    end
   end
 
   describe "list_active_invites/0" do

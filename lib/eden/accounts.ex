@@ -16,9 +16,12 @@ defmodule Eden.Accounts do
   @pubsub Eden.PubSub
   @user_updates_topic "user_updates"
 
-  @default_ttl_days 7
+  # Registration invites are single-use and short-lived (#302 follow-up): handed over now,
+  # accepted within the half hour. A `mix eden.invite --days N` bootstrap link can override
+  # the window when a longer-lived first invite is needed.
+  @default_ttl_minutes 30
   # Admin-issued password-reset links are short-lived: handed to the user and
-  # redeemed promptly (#232), unlike a multi-day registration invite.
+  # redeemed promptly (#232).
   @reset_ttl_hours 24
 
   ## Users
@@ -697,7 +700,7 @@ defmodule Eden.Accounts do
   once (in the invite URL); only its hash is persisted.
 
   `inviter` is a `%User{}` or `nil` (a "system" invite that bootstraps the first
-  account). Options: `:max_uses` (default 1), `:expires_at` (default 7 days out).
+  account). Options: `:max_uses` (default 1), `:expires_at` (default 30 minutes out).
   """
   def create_invite(inviter \\ nil, opts \\ [])
 
@@ -817,7 +820,7 @@ defmodule Eden.Accounts do
     |> Repo.update()
   end
 
-  defp default_expiry, do: now() |> DateTime.add(@default_ttl_days, :day)
+  defp default_expiry, do: now() |> DateTime.add(@default_ttl_minutes, :minute)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end

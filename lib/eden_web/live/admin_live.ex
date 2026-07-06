@@ -34,8 +34,8 @@ defmodule EdenWeb.AdminLive do
   def handle_event("deselect", _params, socket),
     do: {:noreply, assign(socket, selected: nil, managed_form: nil, reset_link: nil)}
 
-  # Onboarding (#302): mint a single-use, 7-day registration invite attributed to the acting
-  # admin, show its URL once, and refresh the outstanding list. Admin-gated by :require_admin.
+  # Onboarding (#302): mint a single-use, 30-minute registration invite attributed to the
+  # acting admin, show its URL once, and refresh the outstanding list. Admin-gated by :require_admin.
   def handle_event("create_invite", _params, socket) do
     case Accounts.create_invite(socket.assigns.current_scope.user) do
       {:ok, _invite, token} ->
@@ -208,15 +208,26 @@ defmodule EdenWeb.AdminLive do
   defp managed_form(user), do: to_form(Accounts.change_managed_fields(user))
 
   # One-line summary of an outstanding invite for the admin list: who minted it (if
-  # known — CLI-bootstrapped invites have no inviter), uses left, and its expiry date.
+  # known — CLI-bootstrapped invites have no inviter), uses left, and how soon it expires.
   defp invite_summary(invite) do
     left = invite.max_uses - invite.used_count
     uses = ngettext("%{count} use left", "%{count} uses left", left)
-    until = gettext("until %{date}", date: Calendar.strftime(invite.expires_at, "%Y-%m-%d"))
 
     case invite.inviter do
-      %{username: username} -> "@#{username} · #{uses} · #{until}"
-      _ -> "#{uses} · #{until}"
+      %{username: username} -> "@#{username} · #{uses} · #{expiry_label(invite.expires_at)}"
+      _ -> "#{uses} · #{expiry_label(invite.expires_at)}"
+    end
+  end
+
+  # Short-lived (30-minute #302) invites read best as a countdown; a longer CLI-minted
+  # `--days` link falls back to a date+time. Recomputed each render, so it's fresh on reload.
+  defp expiry_label(expires_at) do
+    minutes = DateTime.diff(expires_at, DateTime.utc_now(), :minute)
+
+    if minutes < 60 do
+      gettext("expires in ~%{n} min", n: max(minutes, 1))
+    else
+      gettext("until %{date}", date: Calendar.strftime(expires_at, "%Y-%m-%d %H:%M"))
     end
   end
 
@@ -251,7 +262,7 @@ defmodule EdenWeb.AdminLive do
               <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Invite people")}</h2>
               <p class="mt-0.5" style="color: var(--ed-muted); font-size:0.8125rem;">
                 {gettext(
-                  "Create a single-use link (valid 7 days) and send it to a new teammate so they can sign up."
+                  "Create a single-use link (valid 30 minutes) and send it to a new teammate so they can sign up."
                 )}
               </p>
             </div>
