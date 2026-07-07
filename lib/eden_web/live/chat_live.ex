@@ -636,6 +636,7 @@ defmodule EdenWeb.ChatLive do
     caption = if is_binary(params["caption"]), do: params["caption"], else: ""
     caption_id = sanitize_cid(params["caption_id"])
     as_file = params["as_file"] == true
+    root_id = sanitize_root_id(params["root_id"])
 
     if queue_id == nil or (albums == %{} and file_cids == []) do
       {:reply, %{ok: false}, socket}
@@ -647,10 +648,9 @@ defmodule EdenWeb.ChatLive do
         queue_id: queue_id,
         group_id: group_id,
         conv_id: selected_id(socket),
-        # root_id threads a seq send into a room thread — reserved for the threads phase; the main
-        # composer (the only seq caller today) leaves it nil, so create_attachments posts to the
-        # conversation, not a thread.
-        root_id: nil,
+        # root_id (phase F): the thread composer sends the root — the file steps become REPLIES under
+        # it (Chat.create_album_reply re-validates access + threading). The main composer sends none.
+        root_id: root_id,
         caption: caption,
         caption_id: caption_id,
         as_file: as_file,
@@ -690,6 +690,7 @@ defmodule EdenWeb.ChatLive do
     caption = if is_binary(params["caption"]), do: params["caption"], else: ""
     caption_id = sanitize_cid(params["caption_id"])
     as_file = params["as_file"] == true
+    root_id = sanitize_root_id(params["root_id"])
     scope = socket.assigns.current_scope
 
     if queue_id == nil or is_nil(conv_id) or (albums == %{} and file_cids == []) do
@@ -713,7 +714,7 @@ defmodule EdenWeb.ChatLive do
             queue_id: queue_id,
             group_id: group_id,
             conv_id: conv_id,
-            root_id: nil,
+            root_id: root_id,
             caption: caption,
             caption_id: caption_id,
             as_file: as_file,
@@ -13310,7 +13311,9 @@ defmodule EdenWeb.ChatLive do
     result =
       Chat.create_attachments(scope, queue.conv_id, [source], %{
         client_id: pending.client_id,
-        group_id: queue.group_id
+        group_id: queue.group_id,
+        # A root_id (phase F) routes the file to a thread REPLY under it instead of the main stream.
+        root_id: queue.root_id
       })
 
     File.rm(source.path)
@@ -13378,7 +13381,7 @@ defmodule EdenWeb.ChatLive do
         do: {queue.caption, true},
         else: {"", queue.caption_used}
 
-    opts = %{body: caption, client_id: [acid], as_file: queue.as_file}
+    opts = %{body: caption, client_id: [acid], as_file: queue.as_file, root_id: queue.root_id}
 
     result =
       Chat.create_attachments(socket.assigns.current_scope, queue.conv_id, spec.sources, opts)
@@ -13557,6 +13560,12 @@ defmodule EdenWeb.ChatLive do
 
   defp sanitize_cid(cid) when is_binary(cid) and byte_size(cid) <= 64, do: cid
   defp sanitize_cid(_), do: nil
+
+  # A thread root id (phase F) is a positive integer message id; anything else → nil (main stream).
+  # The reply path (Chat.create_album_reply) re-validates access + threading, so a forged id fails
+  # the send rather than posting anywhere unauthorized.
+  defp sanitize_root_id(id) when is_integer(id) and id > 0, do: id
+  defp sanitize_root_id(_), do: nil
 
   # A client-supplied group_id is only accepted if it's a well-formed UUID (else nil) — it can't
   # forge cross-user grouping (rendering needs same-sender adjacency), but this keeps a malformed

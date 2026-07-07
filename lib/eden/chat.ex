@@ -2130,7 +2130,7 @@ defmodule Eden.Chat do
           opts[:group_id]
         )
 
-      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id])
+      send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id], opts[:root_id])
     else
       false -> {:error, :not_found}
       {:error, reason} -> {:error, reason}
@@ -2210,20 +2210,23 @@ defmodule Eden.Chat do
   # infrastructure error (storage/DB) reaches here, and the committed albums' real rows still
   # swap their optimistic twins. If partial-success ever needs surfacing, return the sent
   # messages alongside the error instead of a bare {:error, reason}.
-  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id) do
+  defp send_attachment_steps(scope, conversation_id, steps, reply_to_id, root_id) do
     steps
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, []}, fn {{srcs, body, cid, group_id}, i}, {:ok, acc} ->
       # reply_to belongs to the first message (the album with the caption, or the
       # first file), not the trailing per-file messages.
       reply = if i == 0, do: reply_to_id, else: nil
+      step_opts = %{body: body, reply_to_id: reply, client_id: cid, group_id: group_id}
 
-      case create_album_message(scope, conversation_id, srcs, %{
-             body: body,
-             reply_to_id: reply,
-             client_id: cid,
-             group_id: group_id
-           }) do
+      # A root_id (TG-attachments in room threads, phase F) makes each step a thread REPLY under the
+      # root — files still group by group_id, the album is one reply — instead of a main-stream message.
+      result =
+        if root_id,
+          do: create_album_reply(scope, root_id, srcs, step_opts),
+          else: create_album_message(scope, conversation_id, srcs, step_opts)
+
+      case result do
         {:ok, message} -> {:cont, {:ok, [message | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
       end
