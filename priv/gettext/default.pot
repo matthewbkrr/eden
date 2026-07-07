@@ -2711,7 +2711,17 @@ msgstr ""
 msgid "System matches your device's light or dark setting."
 msgstr ""
 
-#: lib/eden_web/controllers/invite_controller.ex:37
+#: lib/eden_web/controllers/invite_controller.ex:48
+#, elixir-autogen, elixir-format
+msgid "Please choose a password of 8 to 72 characters."
+msgstr ""
+
+#: lib/eden_web/controllers/invite_controller.ex:45
+#, elixir-autogen, elixir-format
+msgid "Please enter a password."
+msgstr ""
+
+#: lib/eden_web/controllers/invite_controller.ex:38
 #, elixir-autogen, elixir-format
 msgid "The passwords didn't match — please try again."
 msgstr ""

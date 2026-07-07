@@ -53,6 +53,52 @@ defmodule EdenWeb.InviteControllerTest do
     assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "passwords"
   end
 
+  test "a too-short (but matching) password gets the length flash, not 'didn't match' (#307 review)",
+       %{conn: conn} do
+    token = invite_token_fixture()
+
+    conn =
+      post(conn, ~p"/invite/#{token}", %{
+        "user" => %{
+          "username" => "shortpw",
+          "display_name" => "S",
+          "password" => "short",
+          "password_confirmation" => "short"
+        }
+      })
+
+    refute get_session(conn, "user_token")
+    refute Accounts.get_user_by_username("shortpw")
+    # The redirect remounts a fresh form, so the flash is the only feedback — it must describe
+    # the LENGTH failure, not falsely claim the (matching) passwords didn't match.
+    flash = Phoenix.Flash.get(conn.assigns.flash, :error)
+    assert flash =~ "8 to 72 characters"
+    refute flash =~ "didn't match"
+  end
+
+  test "a blank password gets the 'enter a password' flash, not a length/mismatch one (#312 review)",
+       %{conn: conn} do
+    token = invite_token_fixture()
+
+    conn =
+      post(conn, ~p"/invite/#{token}", %{
+        "user" => %{
+          "username" => "blankpw",
+          "display_name" => "B",
+          "password" => "",
+          "password_confirmation" => ""
+        }
+      })
+
+    refute get_session(conn, "user_token")
+
+    # A required (blank) password is a distinct failure — not "at least 8" and not "didn't match".
+    flash = Phoenix.Flash.get(conn.assigns.flash, :error)
+    assert flash =~ "enter a password"
+    refute flash =~ "didn't match"
+    refute flash =~ "72 characters"
+  end
+
   test "forwards a pre-registration return_to through the onboarding step (#306)", %{conn: conn} do
     token = invite_token_fixture()
 
