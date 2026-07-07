@@ -661,9 +661,12 @@ defmodule EdenWeb.ChatLive do
 
       socket =
         socket
-        |> cancel_seq_staged()
+        |> cancel_seq_staged(root_id)
         |> assign(
-          sending_media: true,
+          # `sending_media` gates the MAIN composer's UI (overlay/pick-queue). A thread send (root_id)
+          # runs its own panel and must not mark the main composer busy — but it must preserve a main
+          # send already in flight (don't clobber a concurrent true).
+          sending_media: root_id == nil or socket.assigns.sending_media,
           # Tail, not head: on overflow keep the NEWEST queues (the one we just appended + reply
           # {ok} for), so the client's items always find their stashed queue. Realistic depth is
           # 1-2 (the feeder drains sequentially); the cap is a runaway backstop.
@@ -4067,7 +4070,11 @@ defmodule EdenWeb.ChatLive do
           <%!-- Staged thread-reply album (#104): a compact thumbnail tray; the reply
                 input below doubles as the caption. Sends as one album on submit. --%>
           <div :if={@uploads.thread_attachment.entries != []} class="ed-thread-tray">
-            <div :for={entry <- @uploads.thread_attachment.entries} class="ed-thread-tray__item">
+            <div
+              :for={entry <- @uploads.thread_attachment.entries}
+              class="ed-thread-tray__item"
+              data-key={"#{entry.client_name}:#{entry.client_size}:#{entry.client_last_modified}"}
+            >
               <.live_img_preview
                 :if={image_entry?(entry)}
                 entry={entry}
@@ -5757,6 +5764,11 @@ defmodule EdenWeb.ChatLive do
             this.input = this.el.querySelector('input[name="message[body]"]')
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
+            // Expose this instance so the thread composer (.ThreadSendQueue, a separate colocated
+            // hook that can't share these methods) can route a thread album/file send through the
+            // SAME sequential feeder (phase F trim): one item at a time (no batch stall), each
+            // landing as a thread reply progressively. Only the DM/room pane owns the feeder.
+            window.__edSendQueue = this
             // Resume any send whose upload was cut off by a reload (phase E): rebuild its optimistic
             // rows from the durable store and re-feed the unfinished items. Fire-and-forget (async).
             this.resumeSends()
@@ -5881,6 +5893,7 @@ defmodule EdenWeb.ChatLive do
               this.el.edenVideoUrls.clear()
             }
             this.el.edenFiles?.clear()
+            if (window.__edSendQueue === this) delete window.__edSendQueue
             window.removeEventListener("offline", this.onOffline)
             if (this._onRegroup) window.removeEventListener("ed:regroup", this._onRegroup)
             this.sendTimers.forEach((t) => clearTimeout(t))
@@ -7252,6 +7265,61 @@ defmodule EdenWeb.ChatLive do
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
           },
+          // Route a thread album/file send through the sequential feeder (phase F trim). Called by
+          // .ThreadSendQueue with the raw File objects it captured (threads have no client-side
+          // compose overlay + no optimistic nodes — flat replies stream in from the server as each
+          // item lands, so this builds NO optimistic UI, just the queue). Media splits into albums
+          // of maxAlbum; files each become their own reply; ≥2 files share a group_id (server-minted
+          // in queue_start). The reply body is the caption — inline on the first album, or a trailing
+          // reply when it's files-only. Each item carries its File directly (item.file) so pumpSeq
+          // feeds it without needing the main composer's edenFiles stash.
+          enqueueThreadSeq({ files, caption, rootId }) {
+            // The root id must reach the server as a NUMBER (sanitize_root_id requires an integer;
+            // a string "123" would decode as a binary and be dropped → the send would leak to the
+            // main stream). dataset values are strings, so coerce + guard here.
+            const root_id = Number(rootId)
+            if (!Number.isInteger(root_id) || root_id <= 0) return
+            const isMedia = (f) => /^(image|video)\//.test(f.type || "")
+            const media = files.filter(isMedia)
+            const docs = files.filter((f) => !isMedia(f))
+            const albumSpecs = []
+            const seqItems = []
+            for (let i = 0; i < media.length; i += this.maxAlbum()) {
+              const batch = media.slice(i, i + this.maxAlbum())
+              const cid = this.uuid()
+              albumSpecs.push({ cid, count: batch.length })
+              batch.forEach((f) =>
+                seqItems.push({ kind: "media", albumCid: cid, clientId: this.uuid(), file: f }),
+              )
+            }
+            const fileCids = []
+            docs.forEach((f) => {
+              const cid = this.uuid()
+              fileCids.push(cid)
+              seqItems.push({ kind: "file", clientId: cid, file: f })
+            })
+            if (!seqItems.length) return
+            // A files-only caption rides its own trailing reply (like the main composer's #149
+            // trailing text); a caption WITH media rides the first album inline (server-side).
+            const captionId = !media.length && caption && fileCids.length ? this.uuid() : null
+            const queueId = this.uuid()
+            this.pushEvent(
+              "queue_start",
+              {
+                queue_id: queueId,
+                caption,
+                caption_id: captionId,
+                as_file: false,
+                albums: albumSpecs,
+                file_cids: fileCids,
+                root_id: root_id,
+              },
+              () => {
+                ;(this.seqQueues = this.seqQueues || []).push({ queueId, items: seqItems })
+                this.pumpSeq()
+              },
+            )
+          },
           // ── Sequential send feeder (TG-attachments) ──────────────────────────────────────────
           // Feed ONE queued item's clone into :attachment_seq, wait for the server's seq_done, then
           // pump the next. `seqFeeding` guards the single-in-flight invariant (one entry at a time).
@@ -7318,6 +7386,11 @@ defmodule EdenWeb.ChatLive do
           // optimistic node) — drop it from its queue and pump the next.
           onSeqDone(id) {
             this.seqFeeding = null
+            // Clear the nodeless (thread) watchdog so a just-finished item can't seq_reset the next.
+            if (this._seqStall) {
+              clearTimeout(this._seqStall)
+              this._seqStall = null
+            }
             // A finished album photo: retire its tile's ring + cancel-X (its source is now
             // accumulated server-side, so cancelling it here would only fade the tile while the
             // album still sends it — phase D review). A done photo simply shows clean.
@@ -7509,7 +7582,22 @@ defmodule EdenWeb.ChatLive do
           // photo (tile) / mark a stalled file failed, tell the server to abort + drop it, remove it
           // from the client queue, and pump the next — the batch keeps going. Re-armed by seq_progress.
           armSeqStall(node) {
-            if (!node) return
+            // A thread send (phase F trim) has no optimistic node — arm a hook-level watchdog so a
+            // stalled item still frees the slot + pumps the next (there's no tile/card to fade). The
+            // node path fades the tile / marks the card failed on the right element. onSeqDone clears
+            // the hook-level timer so a finished item's watchdog can't fire spuriously.
+            if (!node) {
+              const feeding = this.seqFeeding
+              if (this._seqStall) clearTimeout(this._seqStall)
+              this._seqStall = setTimeout(() => {
+                this._seqStall = null
+                this.pushEvent("seq_reset", {})
+                if (feeding) this.dropSeqFeedingFromQueue(feeding)
+                this.seqFeeding = null
+                this.pumpSeq()
+              }, 90000)
+              return
+            }
             if (node._stall) clearTimeout(node._stall)
             node._stall = setTimeout(() => {
               if (!node.isConnected) return
@@ -7774,6 +7862,24 @@ defmodule EdenWeb.ChatLive do
             this.onOffline = () => { for (const i of this.queue) this.armWatchdog(i.clientId, i.body) }
             window.addEventListener("offline", this.onOffline)
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
+            // Capture picked File objects (phase F trim): the thread album/file send is fed one at a
+            // time through the main composer's sequential feeder, which needs the real Files. Keyed
+            // "name:size:lastModified" to match the tray items' data-key, so a per-item removal (the
+            // ✕) and a multi-pick tray both resolve correctly at submit. Delegated + capture so it
+            // survives the input's re-renders.
+            this.pickedFiles = new Map()
+            this.onPick = (e) => {
+              const input = e.target
+              if (!(input instanceof HTMLInputElement) || input.type !== "file") return
+              for (const f of input.files || []) {
+                this.pickedFiles.set(`${f.name}:${f.size}:${f.lastModified}`, f)
+              }
+            }
+            // Both events, capture: file inputs fire `change`, but LiveView's own capture listener
+            // consumes + clears the input during staging, so grab the Files on the `input` tick too
+            // (mirrors the main composer's edenFiles capture).
+            this.el.addEventListener("input", this.onPick, true)
+            this.el.addEventListener("change", this.onPick, true)
           },
           disconnected() { this.connected = false },
           reconnected() {
@@ -7789,6 +7895,7 @@ defmodule EdenWeb.ChatLive do
             if (this.el.dataset.threadRoot !== this.threadRoot) {
               this.threadRoot = this.el.dataset.threadRoot
               this.queue = []
+              this.pickedFiles.clear()
               this.sendTimers.forEach((t) => clearTimeout(t))
               this.sendTimers.clear()
               this.closeMenu()
@@ -7797,15 +7904,38 @@ defmodule EdenWeb.ChatLive do
           },
           destroyed() {
             window.removeEventListener("offline", this.onOffline)
+            this.el.removeEventListener("input", this.onPick, true)
+            this.el.removeEventListener("change", this.onPick, true)
             this.sendTimers.forEach((t) => clearTimeout(t))
             this.sendTimers.clear()
             this.closeMenu()
           },
           onSubmit(e) {
-            // A staged album (.ed-thread-tray) or a quote-reply (.ed-reply-bar) rides the
-            // normal form submit (their own server paths); only plain text gets the
-            // client_id + failed-! treatment.
-            if (this.el.querySelector(".ed-thread-tray, .ed-reply-bar")) return
+            // A quote-reply / edit / forward bar (.ed-reply-bar) rides the server path (it needs the
+            // reply_to_id / edit target / forward drop) — leave it. A staged album/file tray WITHOUT
+            // a bar routes through the main composer's sequential feeder (phase F trim): one item at
+            // a time (no batch stall), each landing as a thread reply progressively.
+            if (this.el.querySelector(".ed-reply-bar")) return
+            const tray = this.el.querySelector(".ed-thread-tray")
+            if (tray) {
+              // Map the tray's staged entries (server truth, so a per-item ✕ is honoured) to the
+              // Files we captured, IN ORDER. Only take over when we can fully serve it (feeder up +
+              // every staged file captured); otherwise fall through to the server album path
+              // (send_thread_album) so a send is never dropped.
+              const keys = [...tray.querySelectorAll(".ed-thread-tray__item")].map((n) => n.dataset.key)
+              const files = keys.map((k) => this.pickedFiles.get(k)).filter(Boolean)
+              const owner = window.__edSendQueue
+              if (owner && keys.length && files.length === keys.length) {
+                e.preventDefault()
+                e.stopPropagation()
+                const caption = (this.input.value || "").trim()
+                this.input.value = ""
+                this.pickedFiles.clear()
+                owner.enqueueThreadSeq({ files, caption, rootId: this.threadRoot })
+              }
+              // Tray present → never the plain-text path (whether we took over or deferred).
+              return
+            }
             e.preventDefault()
             e.stopPropagation()
             const body = (this.input.value || "").trim()
@@ -13405,8 +13535,14 @@ defmodule EdenWeb.ChatLive do
   defp maybe_trailing_caption(socket, scope, queue) do
     if queue.files_left <= 0 and not is_nil(queue.caption_id) and queue.caption != "" and
          not queue.caption_used and queue.albums == %{} do
-      {send_trailing_caption(socket, scope, queue.conv_id, queue.caption, queue.caption_id),
-       %{queue | caption_used: true}}
+      {send_trailing_caption(
+         socket,
+         scope,
+         queue.conv_id,
+         queue.caption,
+         queue.caption_id,
+         queue.root_id
+       ), %{queue | caption_used: true}}
     else
       {socket, queue}
     end
@@ -13535,11 +13671,15 @@ defmodule EdenWeb.ChatLive do
     end)
   end
 
-  # A queue_start supersedes the staged :attachment tray (the client re-feeds clones into
-  # :attachment_seq), so cancel those staged entries. Staged-only cancel is the safe path.
-  defp cancel_seq_staged(socket) do
-    Enum.reduce(live_entries(socket.assigns.uploads.attachment), socket, fn entry, acc ->
-      cancel_upload(acc, :attachment, entry.ref)
+  # A queue_start supersedes the staged tray (the client re-feeds clones into :attachment_seq),
+  # so cancel those staged entries. Staged-only cancel is the safe path. A thread send (phase F,
+  # root_id) staged its tray on :thread_attachment; the main composer on :attachment — cancel the
+  # one this send superseded so the OTHER composer's tray (if any) is left untouched.
+  defp cancel_seq_staged(socket, root_id) do
+    upload = if root_id, do: :thread_attachment, else: :attachment
+
+    Enum.reduce(live_entries(socket.assigns.uploads[upload]), socket, fn entry, acc ->
+      cancel_upload(acc, upload, entry.ref)
     end)
   end
 
@@ -14265,7 +14405,7 @@ defmodule EdenWeb.ChatLive do
     # The last file of a files-only send pulls its caption down as a trailing message.
     {socket, caption, caption_id} =
       if done? and caption != "" and caption_id do
-        {send_trailing_caption(socket, scope, conversation_id, caption, caption_id), "", nil}
+        {send_trailing_caption(socket, scope, conversation_id, caption, caption_id, nil), "", nil}
       else
         {socket, caption, caption_id}
       end
@@ -14323,13 +14463,20 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  defp send_trailing_caption(socket, scope, conversation_id, caption, caption_id) do
-    case Chat.create_message(scope, conversation_id, %{
-           "body" => caption,
-           "client_id" => caption_id
-         }) do
+  # The files-only caption below the pile. In a thread (phase F, root_id) it lands as a trailing
+  # thread REPLY under the root; in the main stream it's a plain trailing message. Both dedup by
+  # client_id and mark the optimistic node failed on error.
+  defp send_trailing_caption(socket, scope, conversation_id, caption, caption_id, root_id) do
+    attrs = %{"body" => caption, "client_id" => caption_id}
+
+    result =
+      if root_id,
+        do: Chat.create_reply(scope, root_id, attrs),
+        else: Chat.create_message(scope, conversation_id, attrs)
+
+    case result do
       {:ok, _message} -> socket
-      {:error, _changeset} -> push_media_failed(socket, caption_id)
+      {:error, _reason} -> push_media_failed(socket, caption_id)
     end
   end
 
@@ -14488,7 +14635,7 @@ defmodule EdenWeb.ChatLive do
        ) do
     socket =
       if (not has_media? and caption_id) && String.trim(body) != "",
-        do: send_trailing_caption(socket, scope, conversation_id, body, caption_id),
+        do: send_trailing_caption(socket, scope, conversation_id, body, caption_id, nil),
         else: socket
 
     {:noreply, socket |> clear_media_caption() |> assign(reply_to: nil, last_typing_at: nil)}
