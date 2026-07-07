@@ -173,7 +173,10 @@ defmodule Eden.Accounts do
   defp reactivate_locked(actor, target_id) do
     with %User{} = target <-
            Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE")),
-         true <- can_reset_password?(actor, target),
+         # The SAME authority as deactivate_user/2 (#311 review), re-checked on the fresh, locked
+         # row so a role change racing the reactivate can't slip past. The self-check is already
+         # handled by the guard clause above; authorize_activation re-asserts it harmlessly.
+         :ok <- authorize_activation(actor, target),
          # A permanently-deleted (anonymized, #303) account can never be brought back —
          # `active=false` there is terminal, not the reversible deactivation of #251.
          false <- User.deleted?(target) do
