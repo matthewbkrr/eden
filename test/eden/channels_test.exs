@@ -571,6 +571,24 @@ defmodule Eden.ChannelsTest do
       assert {:ok, [_]} = Channels.list_invites(scope(alice), channel.id)
     end
 
+    test "revoke_invites_by kills every live invite the user minted (#305 review P2)", %{
+      alice: alice,
+      channel: channel
+    } do
+      {:ok, live1, raw1} = Channels.create_invite(scope(alice), channel.id)
+      {:ok, _live2, _raw2} = Channels.create_invite(scope(alice), channel.id)
+
+      # An already-revoked one keeps its timestamp (not re-stamped), and the count is the live ones.
+      Channels.revoke_invite(scope(alice), live1.id)
+      before = Repo.get(Eden.Channels.Invite, live1.id).revoked_at
+
+      assert Channels.revoke_invites_by(alice.id) == 1
+      assert Repo.get(Eden.Channels.Invite, live1.id).revoked_at == before
+      assert {:ok, []} = Channels.list_invites(scope(alice), channel.id)
+      # A revoked token no longer joins.
+      assert {:error, :revoked} = Channels.join_by_token(scope(alice), raw1)
+    end
+
     test "joining adds membership + rooms; idempotent; counts uses", %{
       alice: alice,
       bob: bob,

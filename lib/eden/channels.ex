@@ -900,6 +900,23 @@ defmodule Eden.Channels do
   end
 
   @doc """
+  Revoke every still-live channel/room invite a user minted (#305 review P2). Called by the web
+  layer when an account is deactivated or permanently erased — an unrevoked private-room invite
+  token keeps granting access indefinitely regardless of its creator's state, so offboarding must
+  kill them alongside the account's registration invites. Unscoped (a system action, not a
+  member operation); returns the count revoked.
+  """
+  def revoke_invites_by(user_id) when is_integer(user_id) do
+    {n, _} =
+      Repo.update_all(
+        from(i in Invite, where: i.created_by_id == ^user_id and is_nil(i.revoked_at)),
+        set: [revoked_at: now()]
+      )
+
+    n
+  end
+
+  @doc """
   Joins a channel by invite token (any authenticated user). The invite row is
   locked `FOR UPDATE` so two people racing on the last use cannot both
   succeed; membership + room materialization commit in the same transaction.

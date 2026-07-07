@@ -18,6 +18,7 @@ defmodule EdenWeb.AdminLive do
 
   alias Eden.Accounts
   alias Eden.Accounts.{Scope, User}
+  alias Eden.Channels
   alias Eden.Chat
 
   # Re-query the invites list each minute so the countdown labels advance and expired rows
@@ -154,6 +155,11 @@ defmodule EdenWeb.AdminLive do
   def handle_event("deactivate", _params, socket) do
     case Accounts.deactivate_user(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, updated} ->
+        # Also kill the person's live channel/room invite links (#305 review): a private-room
+        # token keeps granting access regardless of its creator's state. Cross-context, so the
+        # web layer orchestrates it — same seam as the deletion scrub below.
+        Channels.revoke_invites_by(updated.id)
+
         {:noreply,
          socket |> refresh_user(updated) |> put_flash(:info, gettext("Account deactivated."))}
 
@@ -189,8 +195,11 @@ defmodule EdenWeb.AdminLive do
       {:ok, updated} ->
         # The web layer orchestrates the cross-context cleanup (contexts don't reach into
         # each other): scrub the person's name from Chat's denormalized system-message meta
-        # and drop their private folders now that the account is anonymized (#305 review).
+        # and drop their private folders now that the account is anonymized (#305 review), and
+        # revoke every channel/room invite they minted (#305 review P2 — else a private-room
+        # token from the erased account keeps granting access).
         Chat.scrub_deleted_user_content(updated.id)
+        Channels.revoke_invites_by(updated.id)
 
         # The person is now filtered out of the list; drop them + the open panel.
         {:noreply,
