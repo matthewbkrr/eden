@@ -7528,10 +7528,12 @@ defmodule EdenWeb.ChatLive do
             const stream = document.getElementById("messages")
             const hasReal = !!(stream && stream.querySelector(`.ed-msg[data-group-id="${groupId}"]`))
             rows.forEach((row, i) => {
-              let pos
-              if (n === 0) pos = null
-              else if (hasReal) pos = i === n - 1 ? "last" : "mid"
-              else pos = n === 1 ? null : i === 0 ? "first" : i === n - 1 ? "last" : "mid"
+              // forEach only runs for n ≥ 1. With real rows present the tail just continues them
+              // (:mid, the very last :last); otherwise the optimistic set owns the bubble (first…last,
+              // or nil for a lone row).
+              const pos = hasReal
+                ? i === n - 1 ? "last" : "mid"
+                : n === 1 ? null : i === 0 ? "first" : i === n - 1 ? "last" : "mid"
               const bubble = row.querySelector(".ed-bubble")
               row.classList.toggle("ed-msg--grp-cont", pos === "mid" || pos === "last")
               if (!bubble) return
