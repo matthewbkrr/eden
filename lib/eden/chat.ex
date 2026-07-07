@@ -2070,7 +2070,8 @@ defmodule Eden.Chat do
           sources_of(media),
           sources_of(files),
           Map.get(opts, :body, ""),
-          opts[:client_id]
+          opts[:client_id],
+          opts[:group_id]
         )
 
       send_attachment_steps(scope, conversation_id, steps, opts[:reply_to_id])
@@ -2110,16 +2111,23 @@ defmodule Eden.Chat do
   # the album-level id (`album_cid`), each file message its OWN id — minted per
   # file and carried on the source map by upload ref (`:client_id`) — so the
   # in-stream optimistic card swaps per file, not just for the first message.
-  defp attachment_steps([], [], _body, _album_cid), do: []
+  #
+  # A step is `{sources, body, client_id, group_id}`. `group_id` (TG-attachments) is
+  # stamped on FILE steps only (photo albums stay one-message-N-attachments, so their
+  # steps carry `nil`), tying the send's file rows into one visual bubble downstream.
+  defp attachment_steps([], [], _body, _album_cid, _group_id), do: []
 
-  defp attachment_steps([], [first | rest], body, _album_cid),
-    do: [{[first], body, source_cid(first)} | Enum.map(rest, &{[&1], "", source_cid(&1)})]
+  defp attachment_steps([], [first | rest], body, _album_cid, group_id),
+    do: [
+      {[first], body, source_cid(first), group_id}
+      | Enum.map(rest, &{[&1], "", source_cid(&1), group_id})
+    ]
 
   # Media past @max_album_entries is split into a SEQUENCE of albums (#193, Telegram-style):
   # the caption + the optimistic client_id (and the reply, via send_attachment_steps) ride the
   # FIRST album; the rest are plain and stream in. `List.wrap` keeps the single-album case
   # (the common one) identical, so the client protocol is unchanged.
-  defp attachment_steps(media, files, body, album_cid) do
+  defp attachment_steps(media, files, body, album_cid, group_id) do
     cids = List.wrap(album_cid)
 
     album_steps =
@@ -2127,10 +2135,10 @@ defmodule Eden.Chat do
       |> Enum.chunk_every(@max_album_entries)
       |> Enum.with_index()
       |> Enum.map(fn {chunk, i} ->
-        {chunk, if(i == 0, do: body, else: ""), Enum.at(cids, i)}
+        {chunk, if(i == 0, do: body, else: ""), Enum.at(cids, i), nil}
       end)
 
-    album_steps ++ Enum.map(files, &{[&1], "", source_cid(&1)})
+    album_steps ++ Enum.map(files, &{[&1], "", source_cid(&1), group_id})
   end
 
   defp source_cid(%{client_id: cid}), do: cid
@@ -2149,7 +2157,7 @@ defmodule Eden.Chat do
   defp send_attachment_steps(scope, conversation_id, steps, reply_to_id) do
     steps
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, []}, fn {{srcs, body, cid}, i}, {:ok, acc} ->
+    |> Enum.reduce_while({:ok, []}, fn {{srcs, body, cid, group_id}, i}, {:ok, acc} ->
       # reply_to belongs to the first message (the album with the caption, or the
       # first file), not the trailing per-file messages.
       reply = if i == 0, do: reply_to_id, else: nil
@@ -2157,7 +2165,8 @@ defmodule Eden.Chat do
       case create_album_message(scope, conversation_id, srcs, %{
              body: body,
              reply_to_id: reply,
-             client_id: cid
+             client_id: cid,
+             group_id: group_id
            }) do
         {:ok, message} -> {:cont, {:ok, [message | acc]}}
         {:error, reason} -> {:halt, {:error, reason}}
@@ -2367,7 +2376,8 @@ defmodule Eden.Chat do
            message_attrs,
            prepared,
            reply_to_id,
-           root && root.id
+           root && root.id,
+           opts[:group_id]
          ) do
       {:ok, message} ->
         message =
@@ -3664,12 +3674,32 @@ defmodule Eden.Chat do
   # followed threads (decided in #213). `conv` is loaded once and shared by the
   # recipient query and the payload.
   defp notify_new(message) do
-    conv = Repo.get(Conversation, message.conversation_id)
+    if group_follow_up?(message) do
+      # A trailing member of a file group (TG-attachments): the group's FIRST message
+      # already notified; the rest are the same "N files" send and must not re-ring.
+      :ok
+    else
+      conv = Repo.get(Conversation, message.conversation_id)
 
-    case notify_recipient_ids(message, conv) do
-      [] -> :ok
-      recipients -> Notifications.deliver(recipients, notify_payload(message, conv))
+      case notify_recipient_ids(message, conv) do
+        [] -> :ok
+        recipients -> Notifications.deliver(recipients, notify_payload(message, conv))
+      end
     end
+  end
+
+  # Notify-once per file group: true when an EARLIER row of the same group already exists,
+  # so only the first message of a send delivers a notification. DB-side (not a client
+  # flag) so it holds even when a group's rows are created across a reconnect/resume rather
+  # than in one call. Ungrouped messages (nil) always notify.
+  defp group_follow_up?(%{group_id: nil}), do: false
+
+  defp group_follow_up?(%{group_id: group_id, conversation_id: conversation_id, id: id}) do
+    Repo.exists?(
+      from(m in Message,
+        where: m.conversation_id == ^conversation_id and m.group_id == ^group_id and m.id < ^id
+      )
+    )
   end
 
   # Who should hear about `message`: thread FOLLOWERS for a reply (#57), else the
@@ -3906,14 +3936,24 @@ defmodule Eden.Chat do
     )
   end
 
-  defp insert_album_message(user, conversation_id, message_attrs, prepared, reply_to_id, root_id) do
+  defp insert_album_message(
+         user,
+         conversation_id,
+         message_attrs,
+         prepared,
+         reply_to_id,
+         root_id,
+         group_id
+       ) do
     Repo.transact(fn ->
       with {:ok, message} <-
              %Message{
                conversation_id: conversation_id,
                sender_id: user.id,
                root_id: root_id,
-               reply_to_id: reply_to_id
+               reply_to_id: reply_to_id,
+               # Server-set (never cast): the file-group tie (TG-attachments); nil for albums.
+               group_id: group_id
              }
              |> Message.photo_changeset(message_attrs)
              |> Repo.insert(),

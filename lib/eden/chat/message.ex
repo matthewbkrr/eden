@@ -42,6 +42,13 @@ defmodule Eden.Chat.Message do
     # in the web layer so each viewer computes "mine" from their own id.
     has_many :reactions, Eden.Chat.MessageReaction
 
+    # Telegram-style file grouping: the file messages of one send share a
+    # server-minted `group_id` (TG-attachments epic). Set ONLY on the struct by the
+    # context (never cast from user params — a client can't forge cross-user grouping,
+    # and grouped *rendering* additionally requires same-sender adjacency). Photo
+    # albums stay one-message-N-attachments, so their rows carry `nil` here.
+    field :group_id, Ecto.UUID
+
     # Threads (flat, Mattermost-style): a reply points at its root; the root
     # carries denormalized counters maintained by the context.
     belongs_to :root, Eden.Chat.Message

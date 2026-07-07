@@ -2909,6 +2909,82 @@ defmodule Eden.ChatTest do
       assert Repo.aggregate(Message, :count) == 0
       assert Repo.aggregate(Attachment, :count) == 0
     end
+
+    test "a file group shares the server-stamped group_id; the album carries none (TG grouping)",
+         %{alice: alice, conv: conv} do
+      gid = "11111111-1111-1111-1111-111111111111"
+
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path("doc one"), filename: "a.txt"},
+        %{path: image_path("doc two"), filename: "b.txt"}
+      ]
+
+      assert {:ok, [album, f1, f2]} =
+               Chat.create_attachments(scope(alice), conv.id, sources, %{group_id: gid})
+
+      # Photo albums stay one-message-N-attachments → no group_id; each file row shares it.
+      assert is_nil(album.group_id)
+      assert f1.group_id == gid
+      assert f2.group_id == gid
+    end
+
+    test "without a group_id, file messages stay ungrouped (nil)", %{alice: alice, conv: conv} do
+      sources = [
+        %{path: image_path("doc one"), filename: "a.txt"},
+        %{path: image_path("doc two"), filename: "b.txt"}
+      ]
+
+      assert {:ok, msgs} = Chat.create_attachments(scope(alice), conv.id, sources, %{})
+      assert Enum.all?(msgs, &is_nil(&1.group_id))
+    end
+
+    test "notify-once: a file group rings the recipient a single time", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      sub(bob)
+      gid = "22222222-2222-2222-2222-222222222222"
+
+      sources = [
+        %{path: image_path("doc one"), filename: "a.txt"},
+        %{path: image_path("doc two"), filename: "b.txt"},
+        %{path: image_path("doc three"), filename: "c.txt"}
+      ]
+
+      assert {:ok, _} = Chat.create_attachments(scope(alice), conv.id, sources, %{group_id: gid})
+
+      cid = conv.id
+      # Only the FIRST file message of the group notifies.
+      assert_receive {:notify, %{conversation_id: ^cid}}
+      # The 2nd and 3rd rows are the same "3 files" send → no re-ring.
+      refute_receive {:notify, %{conversation_id: ^cid}}
+    end
+
+    test "a forwarded copy leaves its group (group_id not carried over)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      {:ok, target} = Chat.create_conversation(scope(alice), [bob.id])
+      gid = "33333333-3333-3333-3333-333333333333"
+
+      {:ok, [f1 | _]} =
+        Chat.create_attachments(
+          scope(alice),
+          conv.id,
+          [
+            %{path: image_path("doc one"), filename: "a.txt"},
+            %{path: image_path("doc two"), filename: "b.txt"}
+          ],
+          %{group_id: gid}
+        )
+
+      assert f1.group_id == gid
+      assert {:ok, fwd} = Chat.forward_message(scope(alice), f1.id, target.id)
+      assert is_nil(fwd.group_id)
+    end
   end
 
   describe "generate_thumbnail/1" do
