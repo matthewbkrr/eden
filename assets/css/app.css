@@ -3694,6 +3694,42 @@ html {
     width: 1.375rem !important;
     height: 1.375rem !important;
   }
+  /* Per-photo controls on an album tile (phase D): each tile shows its OWN ring + cancel-X centred
+     INSIDE it over a subtle scrim (so the white arc reads on any photo). A cancelled tile fades and
+     the flex mosaic reflows to fill the gap. (A lone photo / "send as file" card reuse the media /
+     file-card ring rules; only the mosaic tile needs its own sizing.) */
+  .ed-album__tile.ed-tile--sending::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: oklch(0 0 0 / 0.25);
+    z-index: 0;
+    pointer-events: none;
+  }
+  .ed-album__tile.ed-tile--sending .ed-media-sending__ring {
+    width: 2rem;
+    height: 2rem;
+  }
+  .ed-album__tile.ed-tile--sending .ed-sending-cancel {
+    inset: 0;
+    margin: auto;
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+  .ed-album__tile.ed-tile--sending .ed-sending-cancel > span {
+    width: 1rem !important;
+    height: 1rem !important;
+  }
+  .ed-tile--out {
+    transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+    opacity: 0;
+    transform: scale(0.86);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-tile--out {
+      transition: none;
+    }
+  }
 
   /* Touch targets (#137): enlarge the badges on coarse pointers — a ::before hit-area
      expansion would be clipped by the tile/photo's overflow:hidden. The in-flight cancel

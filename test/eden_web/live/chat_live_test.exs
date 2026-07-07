@@ -1367,6 +1367,49 @@ defmodule EdenWeb.ChatLiveTest do
       assert is_nil(album.group_id)
     end
 
+    test "cancelling one album photo (phase D) sends the album with the rest", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qp",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [%{"cid" => "alb", "count" => 2}],
+        "file_cids" => []
+      })
+
+      # Photo 1 uploads and accumulates (album expects 2, has 1 so far — not yet posted).
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qp",
+        "client_id" => "ph1",
+        "kind" => "media",
+        "album_cid" => "alb"
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "1.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(f1, "1.png", 100)
+
+      # The user cancels the OTHER (still-queued) photo → the album's expected drops to 1, which the
+      # one uploaded photo already satisfies, so the album is posted NOW with just that photo.
+      render_hook(view, "seq_drop", %{"queue_id" => "qp", "kind" => "media", "album_cid" => "alb"})
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      album = Enum.find(msgs, &(&1.client_id == "alb"))
+      assert album, "the album should send with the remaining photo after one was cancelled"
+      assert length(album.attachments) == 1
+
+      # The queue finalized (no wedged sending flag).
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.send_queues == []
+      refute assigns.sending_media
+    end
+
     test "a lone file gets no group_id (renders as a normal bubble)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
