@@ -12918,13 +12918,72 @@ defmodule EdenWeb.ChatLive do
   # no-op frames. `ceil` lets each arc actually reach 100%.
   defp handle_attachment_progress(:attachment, entry, socket) do
     cond do
-      media_entry?(entry) -> media_album_progress(socket)
+      media_entry?(entry) -> media_progress_or_flush(socket)
       # A file is sent the MOMENT its own upload finishes (#149), independent of the rest
       # of the batch — no waiting for the slowest doc before it becomes a real, clickable
       # card. consume_uploaded_entry only requires THIS entry to be done.
       entry.done? -> send_ready_file(socket, entry)
       true -> file_progress(socket, entry)
     end
+  end
+
+  # Drive the album ring — and, in a MIXED batch (album + files) where the album's own entries
+  # are ALL done but a file is still lagging, SEND the album now instead of waiting for the
+  # all-uploads-done form "send" (#…). Otherwise a file that stalls blocks the completed album,
+  # and the stall abort then cancels the album's finished entries — silently discarding photos
+  # that already uploaded (the reported bug). A pure-media send (no files) keeps the existing
+  # all-done path unchanged; this only kicks in when files are the thing lagging.
+  defp media_progress_or_flush(socket) do
+    entries = live_entries(socket.assigns.uploads.attachment)
+    media = Enum.filter(entries, &media_entry?/1)
+    files = Enum.reject(entries, &media_entry?/1)
+
+    if media != [] and Enum.all?(media, & &1.done?) and files != [] and
+         not Enum.all?(files, & &1.done?),
+       do: flush_ready_album(socket),
+       else: media_album_progress(socket)
+  end
+
+  # Consume the done MEDIA entries into their album(s) and send them, leaving the file entries in
+  # the config for their own send_ready_file / stall path. The stash entry keeps its files but
+  # drops album_ids + caption (both rode the album), so once every file lands the files-only path
+  # takes over. sending_media stays true (files still in flight) until the last file settles.
+  # sobelow_skip ["Traversal.FileModule"] — File.rm on the server-side stable temp, not user input.
+  defp flush_ready_album(socket) do
+    case socket.assigns.media_client_ids do
+      [{album_ids, caption, conv_id, files, caption_id, as_file} | rest] when album_ids != [] ->
+        conversation_id = conv_id || selected_id(socket)
+        sources = consume_done_media(socket)
+
+        opts = %{body: caption, reply_to_id: nil, client_id: album_ids, as_file: as_file}
+        _ = Chat.create_attachments(socket.assigns.current_scope, conversation_id, sources, opts)
+        Enum.each(sources, &File.rm(&1.path))
+
+        {:noreply,
+         assign(socket,
+           media_client_ids: [{[], "", conv_id, files, caption_id, as_file} | rest],
+           last_media_pct: nil
+         )}
+
+      _ ->
+        media_album_progress(socket)
+    end
+  end
+
+  # Consume every done MEDIA (image/video) entry to a stable temp, leaving file entries untouched.
+  # Same false positive as send_attachment: `path` is the LiveView upload temp, `stable` is
+  # tmp_dir + the entry's server-side uuid — neither is user input.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp consume_done_media(socket) do
+    socket.assigns.uploads.attachment.entries
+    |> Enum.filter(&(media_entry?(&1) and &1.done?))
+    |> Enum.map(fn entry ->
+      consume_uploaded_entry(socket, entry, fn %{path: path} ->
+        stable = Path.join(System.tmp_dir!(), "eden-upload-" <> entry.uuid)
+        File.cp!(path, stable)
+        {:ok, %{path: stable, filename: entry.client_name, client_id: nil}}
+      end)
+    end)
   end
 
   defp media_album_progress(socket) do
