@@ -24,6 +24,10 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/eden"
 import topbar from "../vendor/topbar"
+// Durable send queue (TG-attachments, phase E): the colocated SendQueue hook reaches it via this
+// global so an in-flight upload survives a page reload (persisted to IndexedDB, resumed on mount).
+import {SendStore} from "./send_store"
+window.__edenSendStore = SendStore
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
