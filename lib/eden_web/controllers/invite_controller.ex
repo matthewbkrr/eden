@@ -29,17 +29,27 @@ defmodule EdenWeb.InviteController do
     end
   end
 
-  # Flash copy keyed to which field actually failed — the redirect remounts a FRESH form, so
-  # the flash is the ONLY feedback (per-field errors don't survive), and it must be accurate
-  # (#307 review P2). A mismatch is :password_confirmation ONLY; a plain :password error (too
-  # short) is a DIFFERENT failure and must not read as "didn't match".
+  # Flash copy keyed to which field actually failed — the redirect remounts a FRESH form, so the
+  # flash is the ONLY feedback (per-field errors don't survive) and it must be accurate (#307
+  # review). The :password bucket carries required (blank) OR length (min 8 / max 72 bytes), so
+  # split those out and report them BEFORE :password_confirmation — a password that's blank/too
+  # short can't meaningfully "match" yet, and reporting the mismatch would hide the real fix.
   defp registration_error_message(%Ecto.Changeset{errors: errors}) do
+    password_issue =
+      case errors[:password] do
+        {_msg, opts} -> Keyword.get(opts, :validation)
+        _ -> nil
+      end
+
     cond do
+      password_issue == :required ->
+        gettext("Please enter a password.")
+
+      password_issue == :length ->
+        gettext("Please choose a password of 8 to 72 characters.")
+
       Keyword.has_key?(errors, :password_confirmation) ->
         gettext("The passwords didn't match — please try again.")
-
-      Keyword.has_key?(errors, :password) ->
-        gettext("Please choose a password of at least 8 characters.")
 
       Keyword.has_key?(errors, :username) ->
         gettext("That username may be taken. Please try another.")
