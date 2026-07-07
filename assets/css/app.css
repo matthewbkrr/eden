@@ -2080,10 +2080,6 @@ html {
     flex-direction: column;
     gap: 0.5rem;
   }
-  .ed-compose__files-note {
-    font-size: 0.75rem;
-    color: var(--ed-muted);
-  }
   .ed-compose__foot {
     display: flex;
     align-items: center;
