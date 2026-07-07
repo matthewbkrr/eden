@@ -6114,6 +6114,17 @@ defmodule EdenWeb.ChatLive do
               // and replies the group_id (stamped on the file group). Then pump the items one at a
               // time. #122 asFile rides so photos store uncompressed + render as documents.
               const queueId = this.uuid()
+              // Fuse the file rows into the merged bubble IMMEDIATELY (before the server's group_id
+              // round-trips) so they never flash as separate cards for a frame. A temporary marker
+              // (the queueId) groups them now; the queue_start reply then swaps in the real group_id
+              // at the same positions (no reflow). Only for a multi-file send (the server groups ≥2).
+              if (fileCids.length >= 2) {
+                fileCids.forEach((cid) => {
+                  const row = this.pending?.querySelector(`[data-client-id="${cid}"]`)
+                  if (row) row.dataset.groupId = queueId
+                })
+                this.reGroupOptimistic(queueId)
+              }
               // Persist each item (its File + metadata) to IndexedDB BEFORE the send (phase E) so a
               // reload mid-upload can resume it from the durable blob. Best-effort — no-ops if the
               // store is unavailable. `storeId` lets seq_done / cancel drop the record as items resolve.
@@ -7510,8 +7521,19 @@ defmodule EdenWeb.ChatLive do
             if (!groupId || !this.pending) return
             const rows = [...this.pending.querySelectorAll(`.ed-msg[data-group-id="${groupId}"]`)]
             const n = rows.length
+            // If real rows of this group already landed in #messages, they've OPENED the merged
+            // bubble (:first / :middle, kept off :last while in-flight) — so the optimistic tail just
+            // CONTINUES it (all :middle, the very last :last). Only when no real row exists yet does
+            // the optimistic set own the whole bubble (first…last).
+            const stream = document.getElementById("messages")
+            const hasReal = !!(stream && stream.querySelector(`.ed-msg[data-group-id="${groupId}"]`))
             rows.forEach((row, i) => {
-              const pos = n <= 1 ? null : i === 0 ? "first" : i === n - 1 ? "last" : "mid"
+              // forEach only runs for n ≥ 1. With real rows present the tail just continues them
+              // (:mid, the very last :last); otherwise the optimistic set owns the bubble (first…last,
+              // or nil for a lone row).
+              const pos = hasReal
+                ? i === n - 1 ? "last" : "mid"
+                : n === 1 ? null : i === 0 ? "first" : i === n - 1 ? "last" : "mid"
               const bubble = row.querySelector(".ed-bubble")
               row.classList.toggle("ed-msg--grp-cont", pos === "mid" || pos === "last")
               if (!bubble) return
@@ -12388,22 +12410,49 @@ defmodule EdenWeb.ChatLive do
     {m.sender_id, m.group_id, m, m.group_pos}
   end
 
-  # Live insert (DMs): continue or break the grouped-file run. A message that continues the tail
-  # group promotes the previous row (nil→:first, :last→:middle, re-streamed) and lands as :last;
-  # anything else is a solo row (nil) until its own next member arrives. Mirrors the flat compact
-  # seam. Returns {message_with_pos, socket} and records the new tail + group_pos map.
+  # Live insert (DMs): continue or break the grouped-file run. While the group is STILL uploading on
+  # THIS (sender's) session — its send queue has more items coming — a landed row renders as :first
+  # / :middle (never :last), so it fuses with the in-flight optimistic bubble below instead of
+  # detaching as its own tailed bubble. The FINAL file (queue drained) lands as :last, closing the
+  # bubble. A recipient (no send queue) sees the ordinary progressive merge. Mirrors the flat
+  # compact seam. Returns {message_with_pos, socket} and records the new tail + group_pos map.
   defp mark_group_new(socket, message) do
+    in_flight? = not is_nil(message.group_id) and group_in_flight?(socket, message.group_id)
+
     case socket.assigns.last_group do
       {sid, gid, prev, prev_pos}
       when sid == message.sender_id and not is_nil(message.group_id) and gid == message.group_id ->
-        new_prev_pos = if prev_pos == nil, do: :first, else: :middle
-        message = %{message | group_pos: :last}
-        {message, socket |> restream_prev_group(prev, new_prev_pos) |> track_group(message)}
+        # Continuation: this row is :middle while more are coming, else :last (the tail).
+        message = %{message | group_pos: if(in_flight?, do: :middle, else: :last)}
+        {message, socket |> demote_prev(prev, prev_pos) |> track_group(message)}
 
       _ ->
-        message = %{message | group_pos: nil}
+        # First row of a group. In-flight → :first (opens the bubble the #pending tail continues);
+        # else a solo/ungrouped row (nil).
+        message = %{message | group_pos: if(in_flight?, do: :first, else: nil)}
         {message, track_group(socket, message)}
     end
+  end
+
+  # Is this file group still uploading on this session — does a live send queue for it have more
+  # items to come? (Only the sender has a send queue; a recipient always sees false → normal merge.)
+  defp group_in_flight?(socket, group_id) do
+    Enum.any?(socket.assigns.send_queues, fn q ->
+      q.group_id == group_id and (q.files_left > 0 or q.albums != %{})
+    end)
+  end
+
+  # The previous tail is no longer the tail once a row continues the run: nil→:first (it becomes the
+  # head), :last→:middle (demoted); :first / :middle keep their place. Re-stream only if it changed.
+  defp demote_prev(socket, prev, prev_pos) do
+    new_pos =
+      case prev_pos do
+        nil -> :first
+        :last -> :middle
+        other -> other
+      end
+
+    if new_pos != prev_pos, do: restream_prev_group(socket, prev, new_pos), else: socket
   end
 
   defp track_group(socket, message) do
