@@ -2349,6 +2349,7 @@ defmodule EdenWeb.ChatLive do
        |> maybe_drop_gallery(message)
        # Re-fuse the merged file bubble if a group member was the one deleted.
        |> reshape_group(message.conversation_id, message.group_id)
+       |> forget_row(message.id)
        |> refresh_thread_list()}
     else
       {:noreply, socket}
@@ -2378,7 +2379,8 @@ defmodule EdenWeb.ChatLive do
           |> stream_delete_by_dom_id(:thread, "thread-#{message_id}")
           |> close_thread_if_root_gone(message_id)
           # Re-fuse the merged file bubble if a group member was hidden.
-          |> reshape_group(conversation_id, group_id),
+          |> reshape_group(conversation_id, group_id)
+          |> forget_row(message_id),
         else: socket
 
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
@@ -12184,12 +12186,20 @@ defmodule EdenWeb.ChatLive do
 
     socket =
       Enum.reduce(marked, socket, fn m, s ->
-        if Map.get(s.assigns.group_pos, m.id) == m.group_pos do
-          s
-        else
-          s
-          |> stream_insert(:messages, m)
-          |> assign(group_pos: Map.put(s.assigns.group_pos, m.id, m.group_pos))
+        cond do
+          # Not in the loaded window (a group straddling the top pagination boundary): a
+          # stream_insert would APPEND it out of order, so leave it — it renders right when
+          # scrolled into view. group_pos tracks exactly the loaded rows, like `compacts`.
+          not Map.has_key?(s.assigns.group_pos, m.id) ->
+            s
+
+          Map.get(s.assigns.group_pos, m.id) == m.group_pos ->
+            s
+
+          true ->
+            s
+            |> stream_insert(:messages, m)
+            |> assign(group_pos: Map.put(s.assigns.group_pos, m.id, m.group_pos))
         end
       end)
 
@@ -12199,6 +12209,15 @@ defmodule EdenWeb.ChatLive do
       {_sid, ^group_id, _prev, _pos} -> assign(socket, last_group: tail)
       _ -> socket
     end
+  end
+
+  # Drop a removed message's per-row render state so the maps don't accumulate stale ids over a
+  # long-lived session (a small unbounded growth). Both maps only ever track loaded rows.
+  defp forget_row(socket, message_id) do
+    assign(socket,
+      group_pos: Map.delete(socket.assigns.group_pos, message_id),
+      compacts: Map.delete(socket.assigns.compacts, message_id)
+    )
   end
 
   # Continue/break the thread panel's compact run for a live reply (#105), mirroring
