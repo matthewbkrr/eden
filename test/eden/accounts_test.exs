@@ -947,6 +947,22 @@ defmodule Eden.AccountsTest do
       assert {:error, :forbidden} = Accounts.admin_reset_totp(Scope.for_user(admin), target)
     end
 
+    test "admin_reset_totp clears the factor AND backup codes (#253 review)" do
+      admin = promote(user_fixture(), "admin")
+      target = user_fixture()
+      {secret, _} = Accounts.setup_totp(target)
+
+      {:ok, target, _codes} =
+        Accounts.activate_totp(target, secret, NimbleTOTP.verification_code(secret))
+
+      assert Accounts.totp_enrolled?(target)
+
+      assert {:ok, updated} = Accounts.admin_reset_totp(Scope.for_user(admin), target)
+      refute Accounts.totp_enrolled?(updated)
+      # Backup codes are emptied too (not just the secret) — else a saved code still logs in.
+      assert Accounts.get_user!(target.id).totp_backup_codes == []
+    end
+
     test "backup codes carry 80 bits of entropy (16 chars)" do
       user = user_fixture()
       {secret, _} = Accounts.setup_totp(user)

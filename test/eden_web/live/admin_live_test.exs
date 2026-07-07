@@ -126,6 +126,25 @@ defmodule EdenWeb.AdminLiveTest do
       refute html =~ "Reset two-factor"
     end
 
+    test "hides the reset-two-factor control on your OWN row (#253 review)", %{
+      conn: conn,
+      boss: boss
+    } do
+      # boss is an enrolled admin (mandatory factor), so totp_enrolled? is true — but resetting
+      # your own factor is refused by the context, so the control must not render on self.
+      {:ok, view, _} = live(conn, ~p"/admin")
+      html = select(view, boss)
+      refute html =~ "Reset two-factor"
+    end
+
+    test "a forged revoke_invite with no id no-ops instead of crashing (#304 review)", %{
+      conn: conn
+    } do
+      {:ok, view, _} = live(conn, ~p"/admin")
+      render_click(view, "revoke_invite", %{})
+      assert Process.alive?(view.pid)
+    end
+
     test "deactivates then reactivates a person (#251)", %{conn: conn} do
       worker = user_fixture(%{username: "leaver"})
       {:ok, view, _} = live(conn, ~p"/admin")

@@ -127,6 +127,7 @@ defmodule Eden.Accounts do
       # Side effects only after the row + token deletions commit: booting live
       # sessions and refreshing open views must never fire on a rolled-back write.
       broadcast_sessions_revoked(updated.id)
+      broadcast_invites_changed()
       {:ok, broadcast_user_update(updated)}
     end
   end
@@ -234,6 +235,7 @@ defmodule Eden.Accounts do
       # un-send a broadcast): reclaim the avatar blob, boot live sessions, refresh views.
       if old_avatar_key, do: Storage.delete(old_avatar_key)
       broadcast_sessions_revoked(updated.id)
+      broadcast_invites_changed()
       {:ok, broadcast_user_update(updated)}
     end
   end
@@ -278,8 +280,6 @@ defmodule Eden.Accounts do
       # registration invites they minted — an erased account leaves no live invite behind.
       delete_all_session_tokens(updated.id)
       delete_reset_tokens(updated.id)
-      # Revoke any invites the deleted user minted (shared helper, also used by
-      # deactivation) — an erased account leaves no live invite behind.
       revoke_user_invites(updated.id)
       {:ok, {updated, old_avatar_key}}
     end
@@ -815,13 +815,16 @@ defmodule Eden.Accounts do
   can't touch a super_admin. If the target is an admin, the `:require_admin` gate then
   makes them re-enroll before using admin power. Returns `{:ok, user}` | `{:error, :forbidden}`.
   """
+  # No self-service: an admin clearing their OWN factor here would sidestep disable_totp/2's
+  # admin-refusal and shed a mandatory factor. Recovery is for OTHER people.
+  def admin_reset_totp(%Scope{user: %User{id: id}}, %User{id: id}), do: {:error, :forbidden}
+
   def admin_reset_totp(%Scope{user: %User{} = actor}, %User{} = target) do
-    # No self-service: an admin clearing their OWN factor here would sidestep disable_totp/2's
-    # admin-refusal and shed a mandatory factor. Recovery is for OTHER people.
-    if actor.id == target.id do
-      {:error, :forbidden}
-    else
-      Repo.transact(fn -> reset_totp_locked(actor, target.id) end)
+    # Broadcast {:user_updated} like every other admin mutation (#253 review P3) so another
+    # admin's open panel refreshes (drops the now-stale "has two-factor on" + Reset control).
+    case Repo.transact(fn -> reset_totp_locked(actor, target.id) end) do
+      {:ok, updated} -> {:ok, broadcast_user_update(updated)}
+      err -> err
     end
   end
 
@@ -933,8 +936,15 @@ defmodule Eden.Accounts do
   def subscribe_invites, do: Phoenix.PubSub.subscribe(@pubsub, @invites_topic)
 
   defp broadcast_invites_changed(invite) do
-    Phoenix.PubSub.broadcast(@pubsub, @invites_topic, :invites_changed)
+    broadcast_invites_changed()
     invite
+  end
+
+  # No-arg form for the offboarding paths (#304 review P3): deactivation/deletion bulk-revoke the
+  # person's invites, so open admin panels must refresh their outstanding list too.
+  defp broadcast_invites_changed do
+    Phoenix.PubSub.broadcast(@pubsub, @invites_topic, :invites_changed)
+    :ok
   end
 
   @doc """
