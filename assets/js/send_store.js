@@ -57,10 +57,30 @@ function runTx(db, mode, fn) {
   });
 }
 
-function reqValue(request) {
+// Run a read/write transaction whose follow-up requests are issued from the FIRST request's
+// onsuccess — never across an `await` (WebKit auto-commits an IndexedDB transaction across await
+// points, which would throw on the follow-up put/delete and mark the store broken). Resolves with
+// whatever `collect` builds, on tx.oncomplete.
+function runReadWrite(db, build) {
   return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    let tx;
+    try {
+      tx = db.transaction(STORE, "readwrite");
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    const os = tx.objectStore(STORE);
+    let result;
+    try {
+      result = build(os);
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    tx.oncomplete = () => resolve(result && result.value);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("aborted"));
   });
 }
 
@@ -111,19 +131,6 @@ export const SendStore = {
     }
   },
 
-  async patch(id, changes) {
-    const db = await this.db();
-    if (!db) return;
-    try {
-      await runTx(db, "readwrite", async (os) => {
-        const cur = await reqValue(os.get(id));
-        if (cur) os.put({ ...cur, ...changes });
-      });
-    } catch (e) {
-      this._fail("patch", e);
-    }
-  },
-
   async remove(id) {
     const db = await this.db();
     if (!db) return;
@@ -134,13 +141,15 @@ export const SendStore = {
     }
   },
 
+  // Delete every record of a queue. The deletes are issued from getAllKeys's onsuccess (same tx, no
+  // await between) so WebKit can't auto-commit before them.
   async removeQueue(queueId) {
     const db = await this.db();
     if (!db) return;
     try {
-      await runTx(db, "readwrite", async (os) => {
-        const keys = await reqValue(os.index("by_queue").getAllKeys(queueId));
-        (keys || []).forEach((k) => os.delete(k));
+      await runReadWrite(db, (os) => {
+        os.index("by_queue").getAllKeys(queueId).onsuccess = (e) =>
+          (e.target.result || []).forEach((k) => os.delete(k));
       });
     } catch (e) {
       this._fail("removeQueue", e);
@@ -148,23 +157,27 @@ export const SendStore = {
   },
 
   // Every not-yet-sent item for this user, oldest first, GCing anything stale (>24h) on the way.
-  // Returns [] on any failure so callers can treat "no durable queue" and "store broken" alike.
+  // The scan + deletes run inside getAll's onsuccess (same tx, no await mid-transaction), and the
+  // result is collected + sorted on tx.oncomplete. Returns [] on any failure so callers treat "no
+  // durable queue" and "store broken" alike.
   async listUnfinished(userId) {
     const db = await this.db();
     if (!db) return [];
     try {
-      const all = await runTx(db, "readwrite", async (os) => {
-        const rows = (await reqValue(os.index("by_user").getAll(userId))) || [];
-        const cutoff = Date.now() - GC_MS;
-        const live = [];
-        for (const r of rows) {
-          if (!r.createdAt || r.createdAt < cutoff) os.delete(r.id);
-          else if (r.status !== "sent") live.push(r);
-        }
-        return live;
+      const live = await runReadWrite(db, (os) => {
+        const box = { value: [] };
+        os.index("by_user").getAll(userId).onsuccess = (e) => {
+          const rows = e.target.result || [];
+          const cutoff = Date.now() - GC_MS;
+          for (const r of rows) {
+            if (!r.createdAt || r.createdAt < cutoff) os.delete(r.id);
+            else if (r.status !== "sent") box.value.push(r);
+          }
+        };
+        return box;
       });
-      all.sort((a, b) => a.createdAt - b.createdAt || a.order - b.order);
-      return all;
+      (live || []).sort((a, b) => a.createdAt - b.createdAt || a.order - b.order);
+      return live || [];
     } catch (e) {
       this._fail("listUnfinished", e);
       return [];

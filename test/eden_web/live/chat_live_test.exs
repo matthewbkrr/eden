@@ -1587,6 +1587,7 @@ defmodule EdenWeb.ChatLiveTest do
       # rf1 already landed BEFORE the "reload" (its message exists, stamped with the group).
       path = Path.join(System.tmp_dir!(), "rf1-#{System.unique_integer([:positive])}.txt")
       File.write!(path, "already here")
+      on_exit(fn -> File.rm(path) end)
 
       {:ok, _} =
         Chat.create_attachments(

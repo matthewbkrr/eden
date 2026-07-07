@@ -6120,11 +6120,12 @@ defmodule EdenWeb.ChatLive do
               const store = window.__edenSendStore
               const userId = this.el.dataset.senderId
               const createdAt = Date.now()
+              const records = []
               seqItems.forEach((it, order) => {
                 it.storeId = queueId + ":" + order
                 const f = store && this.el.edenFiles?.get(it.key)
                 if (!f) return
-                store.put({
+                const rec = {
                   id: it.storeId,
                   userId,
                   queueId,
@@ -6143,7 +6144,9 @@ defmodule EdenWeb.ChatLive do
                   file: f,
                   status: "queued",
                   createdAt,
-                })
+                }
+                records.push(rec)
+                store.put(rec)
               })
               if (store) store.requestPersist()
               this.pushEvent(
@@ -6159,8 +6162,10 @@ defmodule EdenWeb.ChatLive do
                 (reply) => {
                   const gid = reply && reply.group_id
                   if (gid) this.stampGroup(fileCids, gid)
-                  // Record the server-minted group_id so a resumed row rejoins its merged bubble.
-                  if (store && gid) seqItems.forEach((it) => store.patch(it.storeId, { groupId: gid }))
+                  // Re-put the full records with the server-minted group_id (upsert — robust even if
+                  // the initial put hasn't committed yet, so no lost-group-id race), so a resumed row
+                  // rejoins its merged bubble.
+                  if (store && gid) records.forEach((rec) => store.put({ ...rec, groupId: gid }))
                   ;(this.seqQueues = this.seqQueues || []).push({ queueId, items: seqItems })
                   this.pumpSeq()
                 },
