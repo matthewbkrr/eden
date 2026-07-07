@@ -5898,6 +5898,9 @@ defmodule EdenWeb.ChatLive do
             if (this._onRegroup) window.removeEventListener("ed:regroup", this._onRegroup)
             this.sendTimers.forEach((t) => clearTimeout(t))
             this.sendTimers.clear()
+            // The nodeless (thread) stall watchdog lives on the hook, not in sendTimers — clear it
+            // too so it can't fire pumpSeq/pushEvent on a torn-down hook.
+            if (this._seqStall) clearTimeout(this._seqStall)
             this.closeFailMenu()
           },
           reconnected() {
@@ -7925,13 +7928,17 @@ defmodule EdenWeb.ChatLive do
               const keys = [...tray.querySelectorAll(".ed-thread-tray__item")].map((n) => n.dataset.key)
               const files = keys.map((k) => this.pickedFiles.get(k)).filter(Boolean)
               const owner = window.__edSendQueue
-              if (owner && keys.length && files.length === keys.length) {
+              const root = Number(this.threadRoot)
+              // Only take over — and only THEN clear the input/captured Files — when we can fully
+              // serve it: feeder up, a valid root, and every staged file captured. Otherwise fall
+              // through to the server album path so a caption/files are never silently dropped.
+              if (owner && Number.isInteger(root) && root > 0 && keys.length && files.length === keys.length) {
                 e.preventDefault()
                 e.stopPropagation()
                 const caption = (this.input.value || "").trim()
                 this.input.value = ""
                 this.pickedFiles.clear()
-                owner.enqueueThreadSeq({ files, caption, rootId: this.threadRoot })
+                owner.enqueueThreadSeq({ files, caption, rootId: root })
               }
               // Tray present → never the plain-text path (whether we took over or deferred).
               return
@@ -13678,9 +13685,17 @@ defmodule EdenWeb.ChatLive do
   defp cancel_seq_staged(socket, root_id) do
     upload = if root_id, do: :thread_attachment, else: :attachment
 
-    Enum.reduce(live_entries(socket.assigns.uploads[upload]), socket, fn entry, acc ->
-      cancel_upload(acc, upload, entry.ref)
-    end)
+    # Both configs are declared unconditionally in mount, so this is always present — but guard
+    # anyway so a future refactor that drops one can't crash the LiveView from a queue_start event.
+    case socket.assigns.uploads[upload] do
+      nil ->
+        socket
+
+      config ->
+        Enum.reduce(live_entries(config), socket, fn entry, acc ->
+          cancel_upload(acc, upload, entry.ref)
+        end)
+    end
   end
 
   # Client-supplied album plan → %{album_cid => %{expected, sources: []}}. Bounded and typed so a
