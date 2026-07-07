@@ -1410,6 +1410,82 @@ defmodule EdenWeb.ChatLiveTest do
       refute assigns.sending_media
     end
 
+    test "cancelling the IN-FLIGHT album photo drops just it; the album sends the rest", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qf",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [%{"cid" => "alf", "count" => 2}],
+        "file_cids" => []
+      })
+
+      # Photo 1 is UPLOADING (partway) when the user cancels it → seq_reset aborts it + decrements
+      # the album's expected to 1 (the aborted photo never accumulated).
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qf",
+        "client_id" => "pf1",
+        "kind" => "media",
+        "album_cid" => "alf"
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "1.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(f1, "1.png", 30)
+      render_hook(view, "seq_reset", %{})
+
+      # Photo 2 uploads → the album is posted with just it.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qf",
+        "client_id" => "pf2",
+        "kind" => "media",
+        "album_cid" => "alf"
+      })
+
+      f2 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "2.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(f2, "2.png", 100)
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      album = Enum.find(msgs, &(&1.client_id == "alf"))
+      assert album && length(album.attachments) == 1
+    end
+
+    test "cancelling ALL album photos sends no album + finalizes the queue", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qz",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [%{"cid" => "alz", "count" => 2}],
+        "file_cids" => []
+      })
+
+      # Cancel both still-queued photos → expected 2→1→0 → the album is dropped entirely.
+      render_hook(view, "seq_drop", %{"queue_id" => "qz", "kind" => "media", "album_cid" => "alz"})
+
+      render_hook(view, "seq_drop", %{"queue_id" => "qz", "kind" => "media", "album_cid" => "alz"})
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      refute Enum.any?(msgs, &(&1.client_id == "alz"))
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.send_queues == []
+      refute assigns.sending_media
+    end
+
     test "a lone file gets no group_id (renders as a normal bubble)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

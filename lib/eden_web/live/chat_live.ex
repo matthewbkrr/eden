@@ -777,8 +777,8 @@ defmodule EdenWeb.ChatLive do
       |> cancel_seq_entries()
       |> assign(seq_pending: nil)
       # The aborted item never lands, so drop it from its queue's accounting (a file decrements
-      # files_left; an album photo drops the whole album) — else files_left/albums never reach zero
-      # and the queue can't finalize, leaving sending_media stuck true.
+      # files_left; an album photo decrements THAT album's expected — per-photo, phase D) — else
+      # files_left/albums never reach zero and the queue can't finalize, leaving sending_media stuck.
       |> drop_pending_from_queue(pending)
       |> maybe_end_sending()
 
@@ -7317,6 +7317,15 @@ defmodule EdenWeb.ChatLive do
           // optimistic node) — drop it from its queue and pump the next.
           onSeqDone(id) {
             this.seqFeeding = null
+            // A finished album photo: retire its tile's ring + cancel-X (its source is now
+            // accumulated server-side, so cancelling it here would only fade the tile while the
+            // album still sends it — phase D review). A done photo simply shows clean.
+            const tile = this.pending?.querySelector(`[data-item-cid="${id}"]`)
+            if (tile) {
+              tile.classList.remove("ed-tile--sending")
+              tile.querySelector(".ed-sending-cancel")?.remove()
+              tile.querySelector(".ed-media-sending__ring")?.remove()
+            }
             for (const q of this.seqQueues || []) {
               const idx = q.items.findIndex((it) => it.clientId === id)
               if (idx >= 0) {
