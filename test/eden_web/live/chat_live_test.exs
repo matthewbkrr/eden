@@ -1537,6 +1537,65 @@ defmodule EdenWeb.ChatLiveTest do
       assert match?({_sid, _gid, _prev, :last}, assigns.last_group)
     end
 
+    test "an in-flight group keeps landed rows off :last so they fuse with the uploading tail",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qi",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["i1", "i2"]
+      })
+
+      # i1 lands while i2 is STILL queued (the send is in flight) → i1 must be :first, not :last, so
+      # it fuses with the #pending optimistic tail into one bubble (no detached tail).
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qi",
+        "client_id" => "i1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "i1.txt", content: "a", type: "text/plain"}
+        ])
+
+      render_upload(f1, "i1.txt", 100)
+      render(view)
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      i1 = Enum.find(msgs, &(&1.client_id == "i1"))
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.group_pos[i1.id] == :first
+
+      # i2 lands and drains the queue → i2 is the tail (:last), i1 stays :first — the closed bubble.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qi",
+        "client_id" => "i2",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f2 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "i2.txt", content: "b", type: "text/plain"}
+        ])
+
+      render_upload(f2, "i2.txt", 100)
+      render(view)
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      i2 = Enum.find(msgs, &(&1.client_id == "i2"))
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.group_pos[i1.id] == :first
+      assert assigns.group_pos[i2.id] == :last
+    end
+
     test "deleting the last file of a group re-fuses: the new last regains its position", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
