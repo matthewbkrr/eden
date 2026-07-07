@@ -2722,7 +2722,12 @@ msgstr "Пропустить пока"
 msgid "System matches your device's light or dark setting."
 msgstr "«Системная» повторяет светлую или тёмную тему устройства."
 
-#: lib/eden_web/controllers/invite_controller.ex:37
+#: lib/eden_web/controllers/invite_controller.ex:41
+#, elixir-autogen, elixir-format
+msgid "Please choose a password of at least 8 characters."
+msgstr "Выберите пароль не короче 8 символов."
+
+#: lib/eden_web/controllers/invite_controller.ex:38
 #, elixir-autogen, elixir-format
 msgid "The passwords didn't match — please try again."
 msgstr "Пароли не совпали — попробуйте снова."

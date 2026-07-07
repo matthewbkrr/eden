@@ -39,6 +39,10 @@ msgstr ""
 msgid "does not match confirmation"
 msgstr ""
 
+## Custom validate_confirmation message (registration repeat-password, #306)
+msgid "does not match the password"
+msgstr ""
+
 ## From Ecto.Changeset.no_assoc_constraint/3
 msgid "is still associated with this entry"
 msgstr ""
