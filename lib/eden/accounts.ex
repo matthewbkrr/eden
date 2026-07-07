@@ -155,16 +155,34 @@ defmodule Eden.Accounts do
   again. Same authority as `deactivate_user/2`. Returns `{:ok, user}` |
   `{:error, :forbidden}`.
   """
+  # Nobody reactivates themselves out of their own admin session (cheap pre-check).
+  def reactivate_user(%Scope{user: %User{id: id}}, %User{id: id}), do: {:error, :forbidden}
+
   def reactivate_user(%Scope{user: %User{} = actor}, %User{} = target) do
-    with :ok <- authorize_activation(actor, target),
+    # Re-read the target under `FOR UPDATE` (#305 review P2) so the authority guard AND the
+    # terminal-deletion check run against the FRESH row, not AdminLive's in-memory struct. Without
+    # the lock a reactivate racing a concurrent permanent-delete could set `active=true` on an
+    # already-anonymized row (deleted_at ≠ nil, active=true) — from which a reset link would log
+    # the erased account back in.
+    case Repo.transact(fn -> reactivate_locked(actor, target.id) end) do
+      {:ok, updated} -> {:ok, broadcast_user_update(updated)}
+      err -> err
+    end
+  end
+
+  defp reactivate_locked(actor, target_id) do
+    with %User{} = target <-
+           Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE")),
+         # The SAME authority as deactivate_user/2 (#311 review), re-checked on the fresh, locked
+         # row so a role change racing the reactivate can't slip past. The self-check is already
+         # handled by the guard clause above; authorize_activation re-asserts it harmlessly.
+         :ok <- authorize_activation(actor, target),
          # A permanently-deleted (anonymized, #303) account can never be brought back —
          # `active=false` there is terminal, not the reversible deactivation of #251.
-         false <- User.deleted?(target),
-         {:ok, updated} <- set_active(target, true) do
-      {:ok, broadcast_user_update(updated)}
+         false <- User.deleted?(target) do
+      set_active(target, true)
     else
-      true -> {:error, :forbidden}
-      other -> other
+      _ -> {:error, :forbidden}
     end
   end
 
@@ -582,6 +600,10 @@ defmodule Eden.Accounts do
     with %User{} = target <-
            Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE")),
          true <- can_reset_password?(actor, target),
+         # active? already refuses a deleted account (delete sets active=false); deleted? is
+         # belt-and-suspenders (#305 review P2) so no reset link can be minted for an anonymized
+         # row even if a bug flipped it back to active=true.
+         false <- User.deleted?(target),
          true <- User.active?(target) do
       raw = Eden.Tokens.generate()
 
