@@ -58,6 +58,12 @@ defmodule Eden.Chat.Message do
     # consecutive same-author messages (flat layout). Never persisted.
     field :compact, :boolean, virtual: true, default: false
 
+    # Position within a run of consecutive same-sender messages sharing a group_id
+    # (TG-attachments) — `:first | :middle | :last`, or `nil` for a solo/ungrouped row.
+    # Drives the merged-bubble render (meta once at the bottom, corners fused). Computed
+    # per-render (mark_group_pos), never persisted.
+    field :group_pos, :any, virtual: true, default: nil
+
     # "user" | "system". A system message (no human sender) carries its payload
     # in `meta` (e.g. %{"action" => "join_request", "requester_id" => id,
     # "requester_name" => name, "status" => "pending"}). #41 knock flow.

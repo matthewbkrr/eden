@@ -1873,6 +1873,23 @@ defmodule Eden.Chat do
     end
   end
 
+  @doc """
+  The visible rows of one file group (TG-attachments), oldest→newest, preloaded — used to re-fuse
+  the merged bubble after a member is deleted/hidden. Scoped like the main stream (drops tombstones
+  and the user's hidden rows via `visible_messages`), so a deleted member falls out and the
+  survivors reshape. `nil`/non-binary group_id returns [].
+  """
+  def list_group_messages(%Scope{user: user}, conversation_id, group_id)
+      when is_binary(group_id) do
+    visible_messages(user, conversation_id)
+    |> where([m], m.group_id == ^group_id)
+    |> order_by([m], asc: m.id)
+    |> preload(^@message_preloads)
+    |> Repo.all()
+  end
+
+  def list_group_messages(_scope, _conversation_id, _group_id), do: []
+
   # Shared base query for a conversation's main-stream messages visible to `user`:
   # excludes thread replies, plus the per-user invisibility centralized in
   # exclude_invisible/2.
@@ -2432,7 +2449,8 @@ defmodule Eden.Chat do
       Phoenix.PubSub.broadcast(
         @pubsub,
         user_topic(user.id),
-        {:message_hidden, message.conversation_id, message.id}
+        # group_id rides along so the web layer can re-fuse a merged file bubble (TG-attachments).
+        {:message_hidden, message.conversation_id, message.id, message.group_id}
       )
 
       :ok
@@ -2619,7 +2637,7 @@ defmodule Eden.Chat do
       Phoenix.PubSub.broadcast(
         @pubsub,
         user_topic(user.id),
-        {:message_hidden, m.conversation_id, m.id}
+        {:message_hidden, m.conversation_id, m.id, m.group_id}
       )
     end)
 

@@ -915,7 +915,7 @@ defmodule Eden.ChatTest do
     test "broadcasts to the user's own sessions", %{bob: bob, conv: conv, msg: msg} do
       Chat.subscribe_user(scope(bob))
       :ok = Chat.delete_message_for_me(scope(bob), msg.id)
-      assert_receive {:message_hidden, conversation_id, message_id}
+      assert_receive {:message_hidden, conversation_id, message_id, _group_id}
       assert conversation_id == conv.id
       assert message_id == msg.id
     end

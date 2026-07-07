@@ -208,6 +208,11 @@ defmodule EdenWeb.ChatLive do
         thread_search: "",
         thread_results: nil,
         last_flat: nil,
+        # The newest grouped-file run tracker {sender_id, group_id, id, pos} — lets a live file
+        # message continue/break its merged-bubble run (TG-attachments), like last_flat for compact.
+        last_group: nil,
+        # Per-id group position, restored on a re-streamed row so the merged bubble keeps shape.
+        group_pos: %{},
         # The newest run tracker for the THREAD panel, mirroring last_flat for the
         # main stream — lets a live thread reply continue/break the compact run (#105).
         thread_last_flat: nil,
@@ -2250,7 +2255,11 @@ defmodule EdenWeb.ChatLive do
       # like restream_root_if_loaded): a bare stream_insert of a paginated-out message would
       # APPEND it to the bottom, out of order. It re-renders edited when scrolled into view.
       open?(socket, message.conversation_id) and Map.has_key?(socket.assigns.compacts, message.id) ->
-        streamed = %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
+        streamed =
+          restore_group_pos(
+            socket,
+            %{message | compact: Map.get(socket.assigns.compacts, message.id, false)}
+          )
 
         {:noreply,
          socket
@@ -2338,6 +2347,9 @@ defmodule EdenWeb.ChatLive do
        |> assign(:thread_unreads, Map.delete(socket.assigns.thread_unreads, message.id))
        # #136: drop the deleted message's media from an open profile gallery.
        |> maybe_drop_gallery(message)
+       # Re-fuse the merged file bubble if a group member was the one deleted.
+       |> reshape_group(message.conversation_id, message.group_id)
+       |> forget_row(message.id)
        |> refresh_thread_list()}
     else
       {:noreply, socket}
@@ -2358,14 +2370,17 @@ defmodule EdenWeb.ChatLive do
 
   # Delete-for-me (on the user's own topic): drop the message from this session
   # and refresh the sidebar preview (the hidden message may have been the last one).
-  def handle_info({:message_hidden, conversation_id, message_id}, socket) do
+  def handle_info({:message_hidden, conversation_id, message_id, group_id}, socket) do
     socket =
       if open?(socket, conversation_id),
         do:
           socket
           |> stream_delete_by_dom_id(:messages, "messages-#{message_id}")
           |> stream_delete_by_dom_id(:thread, "thread-#{message_id}")
-          |> close_thread_if_root_gone(message_id),
+          |> close_thread_if_root_gone(message_id)
+          # Re-fuse the merged file bubble if a group member was hidden.
+          |> reshape_group(conversation_id, group_id)
+          |> forget_row(message_id),
         else: socket
 
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
@@ -10094,14 +10109,17 @@ defmodule EdenWeb.ChatLive do
     # A photo/video message renders Telegram-style: no frame, the media fills the
     # bubble, the time overlays it. Files keep the normal padded bubble.
     assigns =
-      assign(
-        assigns,
+      assigns
+      |> assign(
         :media?,
         Enum.any?(
           assigns.message.attachments,
           &(&1.kind in ~w(image video) and not &1.as_file and not AlbumLayout.strip_photo?(&1))
         )
       )
+      # Position in a merged file-group run (TG-attachments): nil for a solo/ungrouped bubble,
+      # else :first | :middle | :last. Drives the fused corners, fixed width, and meta-once.
+      |> assign(:grp, assigns.message.group_pos)
 
     ~H"""
     <%!-- data-client-id on MY own rows lets the rise-in observer skip them: the
@@ -10109,8 +10127,9 @@ defmodule EdenWeb.ChatLive do
           silently (no double-animation / jerk). Others' messages still rise in. --%>
     <div
       id={@id}
-      class={["ed-msg flex", @mine && "justify-end"]}
+      class={["ed-msg flex", @mine && "justify-end", @grp in [:middle, :last] && "ed-msg--grp-cont"]}
       data-client-id={@mine && @message.client_id}
+      data-group-id={@message.group_id}
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
     >
       <.select_overlay id={@message.id} preview={select_preview(@message)} />
@@ -10122,7 +10141,11 @@ defmodule EdenWeb.ChatLive do
           class={[
             "ed-bubble",
             (@mine && "ed-bubble--me") || "ed-bubble--them",
-            @media? && "ed-bubble--media"
+            @media? && "ed-bubble--media",
+            @grp && "ed-bubble--grp",
+            @grp == :first && "ed-bubble--grp-first",
+            @grp == :middle && "ed-bubble--grp-mid",
+            @grp == :last && "ed-bubble--grp-last"
           ]}
           id={"bubble-#{@message.id}"}
           data-message-id={@message.id}
@@ -10178,8 +10201,10 @@ defmodule EdenWeb.ChatLive do
               </span>
             </div>
           <% else %>
+            <%!-- In a merged file group the sender name rides only the FIRST row (a solo/ungrouped
+                  bubble is nil → shown as before). --%>
             <span
-              :if={@group and not @mine and @message.sender}
+              :if={@group and not @mine and @message.sender and @grp in [nil, :first]}
               class="block"
               style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
             >
@@ -10198,12 +10223,14 @@ defmodule EdenWeb.ChatLive do
             <%!-- Caption + meta share a flow-root block so a long caption can't stretch
                   a media bubble wider than the photo (#135-twin): the wrap is constrained
                   to the media width (CSS width:0/min-width:100%) and the caption wraps to
-                  it, while the meta floats bottom-right with text wrapping before it (#108). --%>
-            <div class="ed-bubble__cap">
+                  it, while the meta floats bottom-right with text wrapping before it (#108).
+                  In a merged file group the time+tick shows ONCE, on the LAST row (the middle
+                  rows drop the cap entirely so the cards stack flush). --%>
+            <div :if={@message.body != "" or @grp in [nil, :last]} class="ed-bubble__cap">
               <span :if={@message.body != ""} class="break-words">
                 {Markup.to_iodata(@message.body)}
               </span>
-              <span class="ed-bubble__meta">
+              <span :if={@grp in [nil, :last]} class="ed-bubble__meta">
                 <.msg_meta
                   at={@message.inserted_at}
                   ticks={@mine and not @group}
@@ -11695,6 +11722,8 @@ defmodule EdenWeb.ChatLive do
     {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
     # Room flat layout: collapse consecutive same-author runs + facepiles.
     {messages, last_flat} = mark_compact(messages, conversation)
+    # Merged file bubbles (TG-attachments): mark each row's position in its group run.
+    {messages, last_group} = mark_group_pos(messages)
 
     socket
     # Drop chat A's STAGED attachments before opening B — they belong to the
@@ -11751,8 +11780,10 @@ defmodule EdenWeb.ChatLive do
           else: %{}
         ),
       last_flat: last_flat,
+      last_group: last_group,
       thread_last_flat: nil,
       compacts: Map.new(messages, &{&1.id, &1.compact}),
+      group_pos: Map.new(messages, &{&1.id, &1.group_pos}),
       thread_participants: facepiles(scope, conversation, messages),
       # In-room search is per-room state — closed on every selection.
       room_search_open: false,
@@ -11782,6 +11813,7 @@ defmodule EdenWeb.ChatLive do
     case Chat.list_messages_around(scope, conversation.id, anchor_id) do
       {:ok, messages, has_more} ->
         {messages, last_flat} = mark_compact(messages, conversation)
+        {messages, last_group} = mark_group_pos(messages)
 
         socket
         |> assign(
@@ -11789,7 +11821,9 @@ defmodule EdenWeb.ChatLive do
           oldest_id: messages |> List.first() |> then(&(&1 && &1.id)),
           oldest_msg: List.first(messages),
           last_flat: last_flat,
+          last_group: last_group,
           compacts: Map.new(messages, &{&1.id, &1.compact}),
+          group_pos: Map.new(messages, &{&1.id, &1.group_pos}),
           thread_participants: facepiles(scope, conversation, messages)
         )
         |> stream(:messages, messages, reset: true)
@@ -12057,6 +12091,135 @@ defmodule EdenWeb.ChatLive do
 
   defp compact?(_message, nil), do: false
 
+  # Grouped-file bubble runs (TG-attachments): mark each message's `group_pos` from runs of
+  # CONSECUTIVE same-sender messages sharing a non-nil group_id — `:first | :middle | :last`,
+  # or nil for a solo/ungrouped row (a run of one, e.g. after deletes, renders as a normal
+  # bubble). Returns the run tracker {sender_id, group_id, id, pos} for live appends. Pure.
+  defp mark_group_pos(messages) do
+    marked =
+      messages
+      |> Enum.chunk_by(&group_run_key/1)
+      |> Enum.flat_map(&group_positions/1)
+
+    {marked, group_tail(marked)}
+  end
+
+  # A solo/ungrouped message keys uniquely (by id) so it never merges with a neighbour; a grouped
+  # message keys by {sender, group_id} so consecutive members of the same send chunk together.
+  defp group_run_key(%{group_id: nil, id: id}), do: {:solo, id}
+  defp group_run_key(%{group_id: group_id, sender_id: sender_id}), do: {sender_id, group_id}
+
+  defp group_positions([message]), do: [%{message | group_pos: nil}]
+
+  defp group_positions([first | _] = run) do
+    last = List.last(run)
+
+    Enum.map(run, fn message ->
+      pos =
+        cond do
+          message.id == first.id -> :first
+          message.id == last.id -> :last
+          true -> :middle
+        end
+
+      %{message | group_pos: pos}
+    end)
+  end
+
+  defp group_tail([]), do: nil
+
+  # Carry the last message STRUCT (not just its id) so a live continuation can re-stream it with
+  # an updated position without re-fetching it.
+  defp group_tail(messages) do
+    m = List.last(messages)
+    {m.sender_id, m.group_id, m, m.group_pos}
+  end
+
+  # Live insert (DMs): continue or break the grouped-file run. A message that continues the tail
+  # group promotes the previous row (nil→:first, :last→:middle, re-streamed) and lands as :last;
+  # anything else is a solo row (nil) until its own next member arrives. Mirrors the flat compact
+  # seam. Returns {message_with_pos, socket} and records the new tail + group_pos map.
+  defp mark_group_new(socket, message) do
+    case socket.assigns.last_group do
+      {sid, gid, prev, prev_pos}
+      when sid == message.sender_id and not is_nil(message.group_id) and gid == message.group_id ->
+        new_prev_pos = if prev_pos == nil, do: :first, else: :middle
+        message = %{message | group_pos: :last}
+        {message, socket |> restream_prev_group(prev, new_prev_pos) |> track_group(message)}
+
+      _ ->
+        message = %{message | group_pos: nil}
+        {message, track_group(socket, message)}
+    end
+  end
+
+  defp track_group(socket, message) do
+    assign(socket,
+      last_group: {message.sender_id, message.group_id, message, message.group_pos},
+      group_pos: Map.put(socket.assigns.group_pos, message.id, message.group_pos)
+    )
+  end
+
+  defp restream_prev_group(socket, prev, new_pos) do
+    prev = %{prev | group_pos: new_pos}
+
+    socket
+    |> stream_insert(:messages, prev)
+    |> assign(group_pos: Map.put(socket.assigns.group_pos, prev.id, new_pos))
+  end
+
+  # Restore group_pos on a re-streamed row (a reaction/thumbnail broadcast carries none), from
+  # what we recorded when the row was first streamed — so the merged bubble keeps its shape.
+  defp restore_group_pos(socket, message),
+    do: %{message | group_pos: Map.get(socket.assigns.group_pos, message.id, message.group_pos)}
+
+  # Re-fuse a merged file group after a member was deleted/hidden: refetch the group's still-visible
+  # rows, recompute positions, and re-stream only those whose position changed — so a surviving
+  # `:last` regains its time, a lone survivor drops to a normal bubble, a promoted `:first` regains
+  # the sender name. A foreign row interleaving the group is the accepted edge (halves re-fuse on
+  # reload). No-op for an ungrouped delete.
+  defp reshape_group(socket, _conversation_id, nil), do: socket
+
+  defp reshape_group(socket, conversation_id, group_id) do
+    rows = Chat.list_group_messages(socket.assigns.current_scope, conversation_id, group_id)
+    {marked, tail} = mark_group_pos(rows)
+
+    socket =
+      Enum.reduce(marked, socket, fn m, s ->
+        cond do
+          # Not in the loaded window (a group straddling the top pagination boundary): a
+          # stream_insert would APPEND it out of order, so leave it — it renders right when
+          # scrolled into view. group_pos tracks exactly the loaded rows, like `compacts`.
+          not Map.has_key?(s.assigns.group_pos, m.id) ->
+            s
+
+          Map.get(s.assigns.group_pos, m.id) == m.group_pos ->
+            s
+
+          true ->
+            s
+            |> stream_insert(:messages, m)
+            |> assign(group_pos: Map.put(s.assigns.group_pos, m.id, m.group_pos))
+        end
+      end)
+
+    # Keep the tail tracker pointing at the group's new last member when this group WAS the tail,
+    # so a later insert continues/breaks the run correctly (tail is nil if the group emptied out).
+    case socket.assigns.last_group do
+      {_sid, ^group_id, _prev, _pos} -> assign(socket, last_group: tail)
+      _ -> socket
+    end
+  end
+
+  # Drop a removed message's per-row render state so the maps don't accumulate stale ids over a
+  # long-lived session (a small unbounded growth). Both maps only ever track loaded rows.
+  defp forget_row(socket, message_id) do
+    assign(socket,
+      group_pos: Map.delete(socket.assigns.group_pos, message_id),
+      compacts: Map.delete(socket.assigns.compacts, message_id)
+    )
+  end
+
   # Continue/break the thread panel's compact run for a live reply (#105), mirroring
   # the main stream's last_flat logic. Threads are rooms-only, so always flat.
   defp mark_thread_compact(socket, reply) do
@@ -12115,15 +12278,16 @@ defmodule EdenWeb.ChatLive do
       Chat.mark_read(socket.assigns.current_scope, message.conversation_id)
     end
 
-    # Room flat layout: continue (or break) the compact run live.
+    # Room flat layout: continue/break the compact run live. DM: continue/break the grouped-file
+    # merged-bubble run (rooms don't merge file bubbles — that's the threads phase).
     {message, socket} =
-      case {socket.assigns.selected, socket.assigns.last_flat} do
-        {%{channel_id: cid}, last} when not is_nil(cid) ->
-          marked = %{message | compact: compact?(message, last)}
+      case socket.assigns.selected do
+        %{channel_id: cid} when not is_nil(cid) ->
+          marked = %{message | compact: compact?(message, socket.assigns.last_flat)}
           {marked, assign(socket, last_flat: {message.sender_id, message.inserted_at})}
 
         _ ->
-          {message, socket}
+          mark_group_new(socket, message)
       end
 
     {:noreply,
@@ -12150,7 +12314,11 @@ defmodule EdenWeb.ChatLive do
     # in. ({:message_edited} already gates this way.)
     socket =
       if Map.has_key?(socket.assigns.compacts, message.id) do
-        stream_insert(socket, :messages, restore_compact(socket, message))
+        stream_insert(
+          socket,
+          :messages,
+          restore_group_pos(socket, restore_compact(socket, message))
+        )
       else
         socket
       end
