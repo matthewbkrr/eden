@@ -1495,6 +1495,89 @@ defmodule EdenWeb.ChatLiveTest do
       refute assigns.sending_media
     end
 
+    test "a 3-file group renders as one merged bubble: first/mid/last, sender+meta collapse",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qg",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["g1", "g2", "g3"]
+      })
+
+      for {cid, name} <- [{"g1", "g1.txt"}, {"g2", "g2.txt"}, {"g3", "g3.txt"}] do
+        render_hook(view, "seq_item", %{
+          "queue_id" => "qg",
+          "client_id" => cid,
+          "kind" => "file",
+          "album_cid" => nil
+        })
+
+        f =
+          file_input(view, "#composer", :attachment_seq, [
+            %{name: name, content: "report #{cid}", type: "text/plain"}
+          ])
+
+        render_upload(f, name, 100)
+      end
+
+      html = render(view)
+      # The run of three fuses: first / middle / last position classes are all present.
+      assert html =~ "ed-bubble--grp-first"
+      assert html =~ "ed-bubble--grp-mid"
+      assert html =~ "ed-bubble--grp-last"
+      # The group_pos map tracks all three; the tail is the last member.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      positions = assigns.group_pos |> Map.values() |> Enum.sort()
+      assert :first in positions and :middle in positions and :last in positions
+      assert match?({_sid, _gid, _prev, :last}, assigns.last_group)
+    end
+
+    test "deleting the last file of a group re-fuses: the new last regains its position", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qd",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["e1", "e2", "e3"]
+      })
+
+      for {cid, name} <- [{"e1", "e1.txt"}, {"e2", "e2.txt"}, {"e3", "e3.txt"}] do
+        render_hook(view, "seq_item", %{
+          "queue_id" => "qd",
+          "client_id" => cid,
+          "kind" => "file",
+          "album_cid" => nil
+        })
+
+        f =
+          file_input(view, "#composer", :attachment_seq, [
+            %{name: name, content: "report #{cid}", type: "text/plain"}
+          ])
+
+        render_upload(f, name, 100)
+      end
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      e2 = Enum.find(msgs, &(&1.client_id == "e2"))
+      e3 = Enum.find(msgs, &(&1.client_id == "e3"))
+
+      # Delete the LAST file (e3) for everyone → the group re-fuses: e2 (was :middle) becomes :last.
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), e3.id)
+      render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.group_pos[e2.id] == :last
+    end
+
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

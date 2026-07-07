@@ -570,6 +570,38 @@ html {
     border-bottom-right-radius: var(--ed-radius-sm);
     margin-left: auto;
   }
+  /* Merged file group (TG-attachments): consecutive same-sender file messages sharing a
+     group_id render as one fixed-width stack — the cards fill the width (long names ellipsize
+     against a stable edge, not each bubble sizing to its own name), the rows pull flush, and the
+     seams between them fuse while the pile's outer corners keep the bubble radius. */
+  .ed-bubble--grp {
+    width: min(22rem, 85vw);
+    max-width: 85vw;
+  }
+  .ed-bubble--grp .ed-file {
+    width: 100%;
+    max-width: 100%;
+    margin-bottom: 0;
+  }
+  /* Pull continuation rows flush against the one above so the stack reads as ONE bubble (the list
+     gap is 0.5rem). */
+  .ed-msg--grp-cont {
+    margin-top: -0.5rem;
+  }
+  /* Square + tighten the seam edges so the touching rows fuse into a single continuous shape; the
+     pile keeps its rounded outer corners (first's top, last's bottom + the me/them tail nub). */
+  .ed-bubble--grp-first,
+  .ed-bubble--grp-mid {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    padding-bottom: 0.3rem;
+  }
+  .ed-bubble--grp-mid,
+  .ed-bubble--grp-last {
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    padding-top: 0.3rem;
+  }
   .ed-bubble__meta {
     /* #108: float right so the time + read-ticks pin to the bubble's bottom-right
        (Telegram-style) instead of trailing wherever the last text line ends. The
