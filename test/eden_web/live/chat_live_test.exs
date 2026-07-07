@@ -1079,7 +1079,7 @@ defmodule EdenWeb.ChatLiveTest do
       refute view |> element("#composer-body") |> render() =~ "a caption"
     end
 
-    test "the stall-watchdog reset aborts the stuck send: entries cancelled + error, no re-show",
+    test "the stall reset cancels the wedged entries + clears sending_media (no overlay re-show)",
          ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
@@ -1093,17 +1093,15 @@ defmodule EdenWeb.ChatLiveTest do
       render_hook(view, "media_sending", %{"id" => "cid-stall"})
       refute has_element?(view, "[data-upload-preview]")
 
-      # The upload stalled (no real row, no error); the watchdog asks the server to abort.
-      # It does NOT re-show the overlay (its live previews are gone after a switch, and the
-      # still-staged entry would be silently dropped by the next switch): the entry is
-      # cancelled and a failure flash is surfaced, so nothing lingers and the loss is visible.
-      html = render_hook(view, "media_send_reset", %{})
+      # On a stall the client marks the node as a failed card (red !, resend/delete) and asks
+      # the server to reset: cancel the wedged staged entries + clear the send flags, so nothing
+      # lingers to be nuked on a switch and new picks aren't blocked. No overlay re-show, no
+      # flash (the inline ! is the visible failure).
+      render_hook(view, "media_send_reset", %{})
       refute has_element?(view, "[data-upload-preview]")
-      assert html =~ "didn&#39;t upload" or html =~ "didn't upload"
 
-      # The abort must also clear sending_media (not just the entries), else the send state
-      # wedges: a fresh stage would stay hidden. Prove it by staging again — the overlay,
-      # gated on `not @sending_media`, returns.
+      # sending_media must be cleared (not just the entries), else the send state wedges: a
+      # fresh stage would stay hidden. Prove it by staging again — the overlay returns.
       file2 =
         file_input(view, "#composer", :attachment, [
           %{name: "b.png", content: File.read!(real_png_path()), type: "image/png"}
@@ -1111,6 +1109,118 @@ defmodule EdenWeb.ChatLiveTest do
 
       render_upload(file2, "b.png", 20)
       assert has_element?(view, "[data-upload-preview]")
+    end
+
+    test "cancel_upload on an already-cancelled ref is a no-op, not a crash (P0)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "a.png", 20)
+      render_hook(view, "media_sending", %{"id" => "cid-stall"})
+
+      # The stall path cancels every wedged entry (media_send_reset). The failed card's own
+      # Resend/Delete then re-drive off that stale ref — a redundant cancel_upload used to
+      # raise Phoenix.LiveView.Upload's "no such entry" and take the LiveView down. The ref is
+      # gone from the config, so a repeat cancel must be a safe no-op.
+      render_hook(view, "media_send_reset", %{})
+      render_hook(view, "cancel_upload", %{"ref" => "0"})
+
+      assert Process.alive?(view.pid)
+    end
+
+    test "a failed-card Resend sends via the dedicated :attachment_retry channel", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # The client stashes the retry metadata (retry_prepare) BEFORE feeding the cloned File, so
+      # pending_retry is ready when the auto-upload completes. Then the pristine :attachment_retry
+      # config takes the file (auto_upload → handle_retry_progress consumes + sends on done).
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "retry-cid-1",
+        "caption" => "",
+        "as_file" => false,
+        "media" => true
+      })
+
+      file =
+        file_input(view, "#composer", :attachment_retry, [
+          %{name: "resend.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "resend.png", 100)
+
+      # The retry landed as a real message (streams in via {:new_message}), carrying the fresh
+      # client_id so the retrying card swaps out client-side.
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.client_id == "retry-cid-1" and &1.attachments != []))
+    end
+
+    test "retry_reset drops the pending retry + entries without crashing", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "retry-cid-2",
+        "caption" => "",
+        "as_file" => false,
+        "media" => false
+      })
+
+      file =
+        file_input(view, "#composer", :attachment_retry, [
+          %{name: "resend.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      # Partway (not done) — a stalled retry whose watchdog fires retry_reset.
+      render_upload(file, "resend.png", 30)
+      render_hook(view, "retry_reset", %{})
+
+      assert Process.alive?(view.pid)
+    end
+
+    test "a second Resend while one is in flight is refused, not merged (#310 review P1)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # First retry: stash metadata + start its upload (still in flight). media: true matches the
+      # PNG (the server classifies by magic bytes → image → album path, so the album-level
+      # client_id from opts stamps the message).
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "cid-first",
+        "caption" => "",
+        "as_file" => false,
+        "media" => true
+      })
+
+      file =
+        file_input(view, "#composer", :attachment_retry, [
+          %{name: "first.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      # render_upload advances CUMULATIVELY, so 40 then 60 reaches 100 (40+100 would overflow the
+      # test UploadClient). The 40% tick also exercises handle_retry_progress's media_progress push.
+      render_upload(file, "first.png", 40)
+
+      # A second Resend arrives while the first is in flight. The single pending_retry slot must
+      # NOT be clobbered — else the first file would send under the second's client_id/conversation.
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "cid-second",
+        "caption" => "",
+        "as_file" => false,
+        "media" => true
+      })
+
+      render_upload(file, "first.png", 60)
+
+      # The message landed under the FIRST retry's client_id — the second prepare was refused.
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.client_id == "cid-first"))
+      refute Enum.any?(msgs, &(&1.client_id == "cid-second"))
     end
 
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do

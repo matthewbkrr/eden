@@ -1703,6 +1703,11 @@ msgstr ""
 msgid "Not delivered"
 msgstr ""
 
+#: lib/eden_web/live/chat_live.ex:3317
+#, elixir-autogen, elixir-format
+msgid "Not sent"
+msgstr ""
+
 #: lib/eden_web/live/chat_live.ex:3240
 #: lib/eden_web/live/chat_live.ex:3671
 #, elixir-autogen, elixir-format

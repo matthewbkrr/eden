@@ -3486,8 +3486,6 @@ html {
   .ed-file--sending {
     cursor: default;
     position: relative;
-    /* room for the cancel-X so a long filename doesn't run under it */
-    padding-right: 2.25rem;
   }
   .ed-file--sending:hover {
     background: color-mix(in oklch, currentColor 10%, transparent);
@@ -3532,6 +3530,67 @@ html {
   }
   .ed-file__ring .ed-media-sending__ring-fill {
     stroke: currentColor;
+  }
+
+  /* Failed upload (#…): the stalled file card turns into a "Not sent" card with a red !
+     and Resend / Delete actions, so a wedged upload is a visible, recoverable state — never
+     a silent drop. The ! glyph reads on the cobalt --me bubble (near-white). */
+  .ed-file--failed {
+    cursor: default;
+    align-items: flex-start;
+  }
+  /* A failed card being re-sent (#…): a slight dim while the dedicated retry upload runs; its
+     restored progress ring is the live cue, and the client_id swap removes it the moment the send
+     lands. Kept at 0.9 so white-on-cobalt text stays above AA during the transient state (#310
+     review P3) — the ring, not the dim, is the signal. */
+  .ed-msg--retrying {
+    opacity: 0.9;
+  }
+  /* Failed "!" reads as an ERROR, not a neutral glyph: a danger-tinted well behind it (#310 review
+     P3). --ed-danger over the cobalt "me" bubble stays legible; the icon itself keeps inherit so
+     it never drops below the bubble-text contrast. */
+  .ed-file--failed .ed-file__icon {
+    background: color-mix(in oklch, var(--ed-danger) 32%, transparent);
+    color: inherit;
+  }
+  .ed-file--failed .ed-file__size {
+    opacity: 0.85;
+  }
+  .ed-file__actions {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 0.375rem;
+  }
+  .ed-file__act {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: 550 0.8125rem/1 var(--ed-font);
+    cursor: pointer;
+    opacity: 0.92;
+  }
+  .ed-file__act:hover {
+    text-decoration: underline;
+  }
+  .ed-file__act--danger {
+    opacity: 0.85;
+  }
+  .ed-file__act:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 2px;
+    border-radius: var(--ed-radius-sm);
+  }
+  /* Failed media/as-file pile: a compact red-! + delete bar under the media. */
+  .ed-upload-failed__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.375rem;
+  }
+  .ed-upload-failed__bang {
+    display: inline-grid;
+    place-items: center;
   }
 
   /* Queued-upload hint (#119): a calm, right-aligned pill at the foot of the pending list
@@ -3579,10 +3638,14 @@ html {
     outline: 2px solid var(--ed-ring);
     outline-offset: 2px;
   }
-  .ed-file--sending .ed-sending-cancel {
-    top: 50%;
-    right: 0.5rem;
-    transform: translateY(-50%);
+  /* Cancel-X centered INSIDE the file card's ring (Telegram-style, #137) — the icon slot
+     is the positioning context, so inset:0 + margin:auto centers it over the progress arc,
+     which tracks around it. Matches the media node. */
+  .ed-file--sending .ed-file__icon .ed-sending-cancel {
+    inset: 0;
+    margin: auto;
+    width: 1.75rem;
+    height: 1.75rem;
   }
   /* Over media the cancel sits dead-center INSIDE the ring (which is also centered), a touch
      smaller so the progress arc reads around it (Telegram-style). inset:0 + margin:auto
