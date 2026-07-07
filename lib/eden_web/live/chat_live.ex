@@ -10858,9 +10858,6 @@ defmodule EdenWeb.ChatLive do
           </div>
 
           <div :if={@files != []} class="ed-compose__files">
-            <p class="ed-compose__files-note">
-              {gettext("Files send as separate messages.")}
-            </p>
             <div
               :for={entry <- @files}
               class="ed-attach-file"
