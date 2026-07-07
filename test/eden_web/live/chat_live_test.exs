@@ -1183,6 +1183,46 @@ defmodule EdenWeb.ChatLiveTest do
       assert Process.alive?(view.pid)
     end
 
+    test "a second Resend while one is in flight is refused, not merged (#310 review P1)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # First retry: stash metadata + start its upload (still in flight). media: true matches the
+      # PNG (the server classifies by magic bytes → image → album path, so the album-level
+      # client_id from opts stamps the message).
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "cid-first",
+        "caption" => "",
+        "as_file" => false,
+        "media" => true
+      })
+
+      file =
+        file_input(view, "#composer", :attachment_retry, [
+          %{name: "first.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      # render_upload advances CUMULATIVELY, so 40 then 60 reaches 100 (40+100 would overflow the
+      # test UploadClient). The 40% tick also exercises handle_retry_progress's media_progress push.
+      render_upload(file, "first.png", 40)
+
+      # A second Resend arrives while the first is in flight. The single pending_retry slot must
+      # NOT be clobbered — else the first file would send under the second's client_id/conversation.
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "cid-second",
+        "caption" => "",
+        "as_file" => false,
+        "media" => true
+      })
+
+      render_upload(file, "first.png", 60)
+
+      # The message landed under the FIRST retry's client_id — the second prepare was refused.
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.client_id == "cid-first"))
+      refute Enum.any?(msgs, &(&1.client_id == "cid-second"))
+    end
+
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

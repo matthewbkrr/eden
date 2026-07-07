@@ -3539,13 +3539,18 @@ html {
     cursor: default;
     align-items: flex-start;
   }
-  /* A failed card being re-sent (#…): dim it while the dedicated retry upload runs; its restored
-     progress ring is the live cue, and the client_id swap removes it the moment the send lands. */
+  /* A failed card being re-sent (#…): a slight dim while the dedicated retry upload runs; its
+     restored progress ring is the live cue, and the client_id swap removes it the moment the send
+     lands. Kept at 0.9 so white-on-cobalt text stays above AA during the transient state (#310
+     review P3) — the ring, not the dim, is the signal. */
   .ed-msg--retrying {
-    opacity: 0.72;
+    opacity: 0.9;
   }
+  /* Failed "!" reads as an ERROR, not a neutral glyph: a danger-tinted well behind it (#310 review
+     P3). --ed-danger over the cobalt "me" bubble stays legible; the icon itself keeps inherit so
+     it never drops below the bubble-text contrast. */
   .ed-file--failed .ed-file__icon {
-    background: color-mix(in oklch, currentColor 16%, transparent);
+    background: color-mix(in oklch, var(--ed-danger) 32%, transparent);
     color: inherit;
   }
   .ed-file--failed .ed-file__size {
