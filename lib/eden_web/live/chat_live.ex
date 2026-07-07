@@ -676,6 +676,67 @@ defmodule EdenWeb.ChatLive do
 
   def handle_event("queue_start", _params, socket), do: {:reply, %{ok: false}, socket}
 
+  # Resume a send interrupted by a page reload (TG-attachments, phase E): the client rebuilt this
+  # queue from its durable IndexedDB records and re-opens it here. Like queue_start, but it REUSES
+  # the send's original group_id (if the caller owns that group — else mints a fresh one) so resumed
+  # rows rejoin their merged bubble, and it reports which items already landed before the reload
+  # (`already_sent` file client_ids + `done_albums`) so the client drops them instead of re-uploading
+  # — the idempotent resume, backed by the (sender_id, client_id) unique index.
+  def handle_event("queue_resume", params, socket) when is_map(params) do
+    queue_id = sanitize_cid(params["queue_id"])
+    conv_id = selected_id(socket)
+    file_cids = sanitize_album_ids(params["file_cids"])
+    albums = build_album_specs(params["albums"])
+    caption = if is_binary(params["caption"]), do: params["caption"], else: ""
+    caption_id = sanitize_cid(params["caption_id"])
+    as_file = params["as_file"] == true
+    scope = socket.assigns.current_scope
+
+    if queue_id == nil or is_nil(conv_id) or (albums == %{} and file_cids == []) do
+      {:reply, %{ok: false}, socket}
+    else
+      group_id = resolve_resume_group_id(scope, conv_id, params["group_id"], file_cids)
+
+      sent = Chat.sent_client_ids(scope, conv_id, file_cids ++ List.wrap(caption_id))
+      already_sent = Enum.filter(file_cids, &(&1 in sent))
+      done_albums = Chat.sent_client_ids(scope, conv_id, Map.keys(albums))
+
+      remaining_albums = Map.drop(albums, done_albums)
+      files_left = length(file_cids) - length(already_sent)
+
+      socket =
+        if files_left <= 0 and remaining_albums == %{} do
+          # Everything already landed before the reload — nothing to re-upload.
+          socket
+        else
+          queue = %{
+            queue_id: queue_id,
+            group_id: group_id,
+            conv_id: conv_id,
+            root_id: nil,
+            caption: caption,
+            caption_id: caption_id,
+            as_file: as_file,
+            albums: remaining_albums,
+            files_left: files_left,
+            # The trailing files-only caption may already have been posted — don't re-send it.
+            caption_used: caption_id != nil and caption_id in sent
+          }
+
+          assign(socket,
+            sending_media: true,
+            send_queues: Enum.take(socket.assigns.send_queues ++ [queue], -16)
+          )
+        end
+
+      {:reply,
+       %{ok: true, group_id: group_id, already_sent: already_sent, done_albums: done_albums},
+       socket}
+    end
+  end
+
+  def handle_event("queue_resume", _params, socket), do: {:reply, %{ok: false}, socket}
+
   # Announce the next item BEFORE feeding its clone (reply-gated, like retry_prepare): the reply
   # guarantees seq_pending is set before the entry's first progress tick, so a fast upload can't
   # race ahead of its metadata. Single slot → busy-gate a second item while one is in flight.
@@ -4749,7 +4810,12 @@ defmodule EdenWeb.ChatLive do
                           if (posters[i]?.startsWith("data:")) img.src = posters[i]
                         })
                       }
+                      // A twin left a merged file group — re-fuse the remaining optimistic rows so
+                      // the shrinking in-flight bubble stays one bubble (its owner is the SendQueue
+                      // hook, which listens for this).
+                      const gid = twin.dataset.groupId
                       twin.remove()
+                      if (gid) window.dispatchEvent(new CustomEvent("ed:regroup", { detail: { groupId: gid } }))
                       continue
                     }
                   }
@@ -5690,6 +5756,13 @@ defmodule EdenWeb.ChatLive do
             this.input = this.el.querySelector('input[name="message[body]"]')
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
+            // Resume any send whose upload was cut off by a reload (phase E): rebuild its optimistic
+            // rows from the durable store and re-feed the unfinished items. Fire-and-forget (async).
+            this.resumeSends()
+            // Re-fuse a merged file group's optimistic rows when a twin swaps out (fired by the
+            // riser after it removes a completed twin), so the in-flight bubble stays one bubble.
+            this._onRegroup = (e) => this.reGroupOptimistic(e.detail && e.detail.groupId)
+            window.addEventListener("ed:regroup", this._onRegroup)
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
             // "Send as file" (#122): a type="button" so it's never the implicit Enter
             // submitter. On click, flag the next submit as uncompressed-document and
@@ -5805,6 +5878,7 @@ defmodule EdenWeb.ChatLive do
             }
             this.el.edenFiles?.clear()
             window.removeEventListener("offline", this.onOffline)
+            if (this._onRegroup) window.removeEventListener("ed:regroup", this._onRegroup)
             this.sendTimers.forEach((t) => clearTimeout(t))
             this.sendTimers.clear()
             this.closeFailMenu()
@@ -6014,7 +6088,14 @@ defmodule EdenWeb.ChatLive do
                 // Armed per-item in pumpSeq (see the album note above), not here.
                 this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size, key)
                 fileCids.push(cid)
-                seqItems.push({ kind: "file", clientId: cid, key })
+                // sizeLabel (the human-readable size) rides so a reload can rebuild the file card
+                // from the durable record without re-deriving it (phase E).
+                seqItems.push({
+                  kind: "file",
+                  clientId: cid,
+                  key,
+                  sizeLabel: fe.dataset.size,
+                })
               })
               // A files-only caption rides BELOW the whole pile as its own trailing message
               // (#149) — draw its optimistic text node after the file cards. A photo+caption
@@ -6033,6 +6114,38 @@ defmodule EdenWeb.ChatLive do
               // and replies the group_id (stamped on the file group). Then pump the items one at a
               // time. #122 asFile rides so photos store uncompressed + render as documents.
               const queueId = this.uuid()
+              // Persist each item (its File + metadata) to IndexedDB BEFORE the send (phase E) so a
+              // reload mid-upload can resume it from the durable blob. Best-effort — no-ops if the
+              // store is unavailable. `storeId` lets seq_done / cancel drop the record as items resolve.
+              const store = window.__edenSendStore
+              const userId = this.el.dataset.senderId
+              const createdAt = Date.now()
+              seqItems.forEach((it, order) => {
+                it.storeId = queueId + ":" + order
+                const f = store && this.el.edenFiles?.get(it.key)
+                if (!f) return
+                store.put({
+                  id: it.storeId,
+                  userId,
+                  queueId,
+                  order,
+                  convId: this.convId,
+                  caption,
+                  captionId,
+                  asFile,
+                  kind: it.kind,
+                  albumCid: it.albumCid || null,
+                  clientId: it.clientId,
+                  groupId: null,
+                  name: f.name,
+                  sizeLabel: it.sizeLabel || null,
+                  type: f.type,
+                  file: f,
+                  status: "queued",
+                  createdAt,
+                })
+              })
+              if (store) store.requestPersist()
               this.pushEvent(
                 "queue_start",
                 {
@@ -6044,7 +6157,10 @@ defmodule EdenWeb.ChatLive do
                   file_cids: fileCids,
                 },
                 (reply) => {
-                  if (reply && reply.group_id) this.stampGroup(fileCids, reply.group_id)
+                  const gid = reply && reply.group_id
+                  if (gid) this.stampGroup(fileCids, gid)
+                  // Record the server-minted group_id so a resumed row rejoins its merged bubble.
+                  if (store && gid) seqItems.forEach((it) => store.patch(it.storeId, { groupId: gid }))
                   ;(this.seqQueues = this.seqQueues || []).push({ queueId, items: seqItems })
                   this.pumpSeq()
                 },
@@ -7151,7 +7267,9 @@ defmodule EdenWeb.ChatLive do
                   else this.onSeqDone(item.clientId)
                   return
                 }
-                const f = this.el.edenFiles?.get(item.key)
+                // A resumed item (phase E) carries its durable blob directly; a fresh send looks the
+                // File up in edenFiles by key.
+                const f = item.file || this.el.edenFiles?.get(item.key)
                 const input = this.el.querySelector('input[type="file"][name="attachment_seq"]')
                 if (f && input) {
                   // Clone with a nudged lastModified so LiveView's identity-dedup stages it fresh;
@@ -7186,12 +7304,115 @@ defmodule EdenWeb.ChatLive do
             for (const q of this.seqQueues || []) {
               const idx = q.items.findIndex((it) => it.clientId === id)
               if (idx >= 0) {
+                this.forgetStored(q.items[idx])
                 q.items.splice(idx, 1)
                 break
               }
             }
             this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
             this.pumpSeq()
+          },
+          // Drop an item's durable record (phase E) once it's resolved (sent/cancelled/failed), so a
+          // later reload doesn't re-upload it. No-op without a store / storeId.
+          forgetStored(item) {
+            if (item && item.storeId && window.__edenSendStore) window.__edenSendStore.remove(item.storeId)
+          },
+          // Resume interrupted sends after a reload (phase E): scan the durable store for this user's
+          // unfinished items IN THE CURRENT conversation, rebuild their optimistic rows, and re-open
+          // + re-feed each queue. Other-conversation queues wait for a load into that chat (they GC
+          // after 24h). Idempotent across tabs: the server dedups by client_id, so a redundant resume
+          // can't double-send.
+          async resumeSends() {
+            const store = window.__edenSendStore
+            const userId = this.el.dataset.senderId
+            if (!store || !userId || !this.pending) return
+            let records
+            try {
+              records = await store.listUnfinished(userId)
+            } catch (_e) {
+              return
+            }
+            records = (records || []).filter((r) => String(r.convId) === String(this.convId))
+            if (!records.length) return
+            const byQueue = new Map()
+            for (const r of records) {
+              if (!byQueue.has(r.queueId)) byQueue.set(r.queueId, [])
+              byQueue.get(r.queueId).push(r)
+            }
+            for (const [queueId, recs] of byQueue) this.resumeQueue(queueId, recs)
+          },
+          resumeQueue(queueId, recs) {
+            recs.sort((a, b) => a.order - b.order)
+            const first = recs[0]
+            const items = recs.map((r) => ({
+              kind: r.kind,
+              albumCid: r.albumCid,
+              clientId: r.clientId,
+              storeId: r.id,
+              file: r.file,
+            }))
+            // Rebuild the optimistic FILE cards so the resume is visible (a media album re-uploads
+            // silently and its real row streams in on completion).
+            recs.forEach((r) => {
+              if (r.kind !== "file") return
+              const node = this.addOptimisticFile(r.clientId, "", r.name || "", r.sizeLabel || "", null)
+              if (node && r.groupId) node.dataset.groupId = r.groupId
+            })
+            const fileCids = recs.filter((r) => r.kind === "file").map((r) => r.clientId)
+            const albumMap = new Map()
+            recs
+              .filter((r) => r.kind === "media")
+              .forEach((r) => albumMap.set(r.albumCid, (albumMap.get(r.albumCid) || 0) + 1))
+            const albums = [...albumMap.entries()].map(([cid, count]) => ({ cid, count }))
+            this.pushEvent(
+              "queue_resume",
+              {
+                queue_id: queueId,
+                group_id: first.groupId || null,
+                conv_id: first.convId,
+                caption: first.caption || "",
+                caption_id: first.captionId || null,
+                as_file: !!first.asFile,
+                albums,
+                file_cids: fileCids,
+                client_ids: items.map((it) => it.clientId),
+              },
+              (reply) => {
+                if (!(reply && reply.ok)) {
+                  // Not resumable (conversation gone / left) — drop the durable queue + rebuilt cards.
+                  window.__edenSendStore?.removeQueue(queueId)
+                  items.forEach((it) =>
+                    this.pending?.querySelector(`[data-client-id="${it.clientId}"]`)?.remove(),
+                  )
+                  return
+                }
+                const gid = reply.group_id
+                const sent = new Set(reply.already_sent || [])
+                const doneAlbums = new Set(reply.done_albums || [])
+                const remaining = []
+                for (const it of items) {
+                  const done =
+                    sent.has(it.clientId) || (it.kind === "media" && doneAlbums.has(it.albumCid))
+                  if (done) {
+                    // Delivered before the reload — its real row is already loaded; drop record + card.
+                    this.forgetStored(it)
+                    this.pending?.querySelector(`[data-client-id="${it.clientId}"]`)?.remove()
+                  } else {
+                    if (gid) {
+                      const n = this.pending?.querySelector(`[data-client-id="${it.clientId}"]`)
+                      if (n) n.dataset.groupId = gid
+                    }
+                    remaining.push(it)
+                  }
+                }
+                // Fuse the rebuilt optimistic file rows into the merged bubble (as at Send).
+                if (gid) this.reGroupOptimistic(gid)
+                if (remaining.length) {
+                  ;(this.seqQueues = this.seqQueues || []).push({ queueId, items: remaining })
+                  this.pumpSeq()
+                }
+              },
+            )
           },
           // Cancel-X on a still-sending file card: drop its queued item so it never sends; if it was
           // the in-flight one, abort the upload (seq_reset frees the slot) and pump the rest.
@@ -7200,7 +7421,7 @@ defmodule EdenWeb.ChatLive do
             let queueId = null
             for (const q of this.seqQueues || []) {
               const idx = q.items.findIndex((it) => it.clientId === clientId)
-              if (idx >= 0) { queueId = q.queueId; q.items.splice(idx, 1) }
+              if (idx >= 0) { queueId = q.queueId; this.forgetStored(q.items[idx]); q.items.splice(idx, 1) }
             }
             this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
             if (feeding) {
@@ -7221,6 +7442,7 @@ defmodule EdenWeb.ChatLive do
             let queueId = null
             for (const q of this.seqQueues || []) {
               if (q.items.some((it) => it.albumCid === albumCid)) queueId = q.queueId
+              q.items.filter((it) => it.albumCid === albumCid).forEach((it) => this.forgetStored(it))
               q.items = q.items.filter((it) => it.albumCid !== albumCid)
             }
             this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
@@ -7256,20 +7478,46 @@ defmodule EdenWeb.ChatLive do
           dropSeqFeedingFromQueue(feeding) {
             for (const q of this.seqQueues || []) {
               if (feeding.albumCid) {
+                q.items.filter((it) => it.albumCid === feeding.albumCid).forEach((it) => this.forgetStored(it))
                 q.items = q.items.filter((it) => it.albumCid !== feeding.albumCid)
               } else {
                 const idx = q.items.findIndex((it) => it.clientId === feeding.clientId)
-                if (idx >= 0) q.items.splice(idx, 1)
+                if (idx >= 0) { this.forgetStored(q.items[idx]); q.items.splice(idx, 1) }
               }
             }
             this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
           },
-          // Stamp the send's server-minted group_id onto its optimistic file rows so a later phase
-          // can render them as one merged bubble. Harmless now (no CSS reads it yet).
+          // Stamp the send's server-minted group_id onto its optimistic file rows, then fuse them
+          // into the merged bubble so the upload happens INSIDE the formed fixed-width bubble (not
+          // separate cards that glue together at the end).
           stampGroup(fileCids, groupId) {
             ;(fileCids || []).forEach((cid) => {
               const row = this.pending?.querySelector(`[data-client-id="${cid}"]`)
               if (row) row.dataset.groupId = groupId
+            })
+            this.reGroupOptimistic(groupId)
+          },
+          // Optimistic mirror of the server's merged-bubble render (mark_group_pos): apply the
+          // fixed-width + fused-seam classes to a group's optimistic rows still in #pending, so an
+          // in-flight send already looks like one bubble. Re-run whenever the set changes (a twin
+          // swaps out on completion, via the riser's ed:regroup event).
+          reGroupOptimistic(groupId) {
+            if (!groupId || !this.pending) return
+            const rows = [...this.pending.querySelectorAll(`.ed-msg[data-group-id="${groupId}"]`)]
+            const n = rows.length
+            rows.forEach((row, i) => {
+              const pos = n <= 1 ? null : i === 0 ? "first" : i === n - 1 ? "last" : "mid"
+              const bubble = row.querySelector(".ed-bubble")
+              row.classList.toggle("ed-msg--grp-cont", pos === "mid" || pos === "last")
+              if (!bubble) return
+              bubble.classList.toggle("ed-bubble--grp", pos != null)
+              bubble.classList.toggle("ed-bubble--grp-first", pos === "first")
+              bubble.classList.toggle("ed-bubble--grp-mid", pos === "mid")
+              bubble.classList.toggle("ed-bubble--grp-last", pos === "last")
+              // Time+ticks show once, on the last/solo row — hide the meta on first/middle (mirrors
+              // the server render's `meta on :last only`).
+              const cap = bubble.querySelector(".ed-bubble__cap")
+              if (cap) cap.style.display = pos === "first" || pos === "mid" ? "none" : ""
             })
           },
           // Feed the next queued batch (#119) into the now-free :attachment config. Only ever
@@ -13210,6 +13458,23 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp sanitize_group_id(_), do: nil
+
+  # Reuse the send's original group_id on resume (phase E) when the caller owns that group (so a
+  # resumed row rejoins its bubble); otherwise mint a fresh one for a multi-file send.
+  defp resolve_resume_group_id(scope, conversation_id, raw, file_cids) do
+    case sanitize_group_id(raw) do
+      nil ->
+        mint_group_id(file_cids)
+
+      group_id ->
+        if Chat.group_owned_by?(scope, conversation_id, group_id),
+          do: group_id,
+          else: mint_group_id(file_cids)
+    end
+  end
+
+  defp mint_group_id(file_cids),
+    do: if(length(file_cids) >= 2, do: Ecto.UUID.generate(), else: nil)
 
   # Cancel every staged attachment upload (the composer tray) + reset the send flags.
   # Used by the explicit "clear tray"/Escape action and, via drop_staged_on_switch,

@@ -1578,6 +1578,65 @@ defmodule EdenWeb.ChatLiveTest do
       assert assigns.group_pos[e2.id] == :last
     end
 
+    test "queue_resume re-opens an interrupted send, skipping items that already landed", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      gid = "88888888-8888-8888-8888-888888888888"
+
+      # rf1 already landed BEFORE the "reload" (its message exists, stamped with the group).
+      path = Path.join(System.tmp_dir!(), "rf1-#{System.unique_integer([:positive])}.txt")
+      File.write!(path, "already here")
+
+      {:ok, _} =
+        Chat.create_attachments(
+          Scope.for_user(ctx.alice),
+          ctx.conversation.id,
+          [%{path: path, filename: "rf1.txt", client_id: "rf1"}],
+          %{group_id: gid}
+        )
+
+      # The client rebuilt the queue from IndexedDB after a reload: both rf1 (sent) + rf2 (not).
+      render_hook(view, "queue_resume", %{
+        "queue_id" => "qr",
+        "group_id" => gid,
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["rf1", "rf2"],
+        "client_ids" => ["rf1", "rf2"]
+      })
+
+      # The server re-stashed a queue with only rf2 remaining (rf1 already sent) and REUSED the
+      # group_id (owned by alice), so the resumed row rejoins the merged bubble.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      q = List.last(assigns.send_queues)
+      assert q.files_left == 1
+      assert q.group_id == gid
+
+      # Feed the remaining file → it lands under the same group.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qr",
+        "client_id" => "rf2",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "rf2.txt", content: "resumed", type: "text/plain"}
+        ])
+
+      render_upload(f, "rf2.txt", 100)
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      rf2 = Enum.find(msgs, &(&1.client_id == "rf2"))
+      assert rf2 && rf2.group_id == gid
+      # No duplicate of rf1 (idempotent): still exactly one message with that client_id.
+      assert Enum.count(msgs, &(&1.client_id == "rf1")) == 1
+    end
+
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

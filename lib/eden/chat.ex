@@ -1890,6 +1890,45 @@ defmodule Eden.Chat do
 
   def list_group_messages(_scope, _conversation_id, _group_id), do: []
 
+  @doc """
+  Of `client_ids`, the ones that ALREADY have a message from the scoped user in `conversation_id`
+  (TG-attachments resume, phase E) — so a reloaded send skips re-uploading what already landed.
+  Backs the idempotent resume alongside the `(sender_id, client_id)` unique index.
+  """
+  def sent_client_ids(%Scope{user: user}, conversation_id, client_ids) when is_list(client_ids) do
+    cids = Enum.filter(client_ids, &is_binary/1)
+
+    if cids == [] do
+      []
+    else
+      Repo.all(
+        from(m in Message,
+          where:
+            m.conversation_id == ^conversation_id and m.sender_id == ^user.id and
+              m.client_id in ^cids,
+          select: m.client_id
+        )
+      )
+    end
+  end
+
+  @doc """
+  True when a `group_id` is safe for the scoped user to (re)use in `conversation_id` — i.e. no
+  message in that group was sent by anyone else (phase E resume ownership check, so a client can't
+  smuggle a resumed row into another user's group). An empty/all-mine group is owned.
+  """
+  def group_owned_by?(%Scope{user: user}, conversation_id, group_id) when is_binary(group_id) do
+    not Repo.exists?(
+      from(m in Message,
+        where:
+          m.conversation_id == ^conversation_id and m.group_id == ^group_id and
+            m.sender_id != ^user.id
+      )
+    )
+  end
+
+  def group_owned_by?(_scope, _conversation_id, _group_id), do: false
+
   # Shared base query for a conversation's main-stream messages visible to `user`:
   # excludes thread replies, plus the per-user invisibility centralized in
   # exclude_invisible/2.
