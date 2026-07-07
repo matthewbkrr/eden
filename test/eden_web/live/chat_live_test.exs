@@ -1223,6 +1223,34 @@ defmodule EdenWeb.ChatLiveTest do
       refute Enum.any?(msgs, &(&1.client_id == "cid-second"))
     end
 
+    test "mixed batch: the album sends when its photo is done, even while a file still lags",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "pic.png", content: File.read!(real_png_path()), type: "image/png"},
+          %{name: "doc.bin", content: :binary.copy(<<7>>, 4000), type: "application/octet-stream"}
+        ])
+
+      # A media album + a file ride one batch; the album carries its optimistic id, the file its own.
+      render_hook(view, "media_sending", %{
+        "album_ids" => ["cid-album"],
+        "files" => %{"1" => "cid-doc"}
+      })
+
+      # The photo finishes while the doc is still uploading. The album must NOT wait for (or be
+      # discarded by) the lagging doc — it sends the moment its own media entries are done.
+      render_upload(file, "doc.bin", 30)
+      render_upload(file, "pic.png", 100)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      album = Enum.find(msgs, &(&1.client_id == "cid-album"))
+      assert album, "the album should have been sent despite the lagging file"
+      assert album.attachments != []
+    end
+
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
