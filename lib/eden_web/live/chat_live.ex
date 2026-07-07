@@ -685,7 +685,11 @@ defmodule EdenWeb.ChatLive do
         album_cid: sanitize_cid(params["album_cid"])
       }
 
-      if pending.queue_id == nil or pending.client_id == nil do
+      # The queue must still be stashed — else (e.g. it was evicted on overflow) accepting the item
+      # would upload an entry no progress handler can consume, orphaning it + wedging seq_pending.
+      queue_exists? = Enum.any?(socket.assigns.send_queues, &(&1.queue_id == pending.queue_id))
+
+      if pending.queue_id == nil or pending.client_id == nil or not queue_exists? do
         {:reply, %{ok: false}, socket}
       else
         {:reply, %{ok: true}, assign(socket, seq_pending: pending)}
@@ -7126,7 +7130,10 @@ defmodule EdenWeb.ChatLive do
               (reply) => {
                 if (!(reply && reply.ok)) {
                   this.seqFeeding = null
-                  setTimeout(() => this.pumpSeq(), 80)
+                  // Busy = another item in flight → retry shortly. Any other refusal (e.g. a stale
+                  // queue) → drop this item instead of looping forever on it.
+                  if (reply && reply.busy) setTimeout(() => this.pumpSeq(), 80)
+                  else this.onSeqDone(item.clientId)
                   return
                 }
                 const f = this.el.edenFiles?.get(item.key)
