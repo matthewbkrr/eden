@@ -1160,6 +1160,32 @@ defmodule EdenWeb.ChatLiveTest do
       assert Enum.any?(msgs, &(&1.client_id == "retry-cid-1" and &1.attachments != []))
     end
 
+    test "a file Resend inherits the send's group_id so the row rejoins its bubble", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      gid = "55555555-5555-5555-5555-555555555555"
+
+      render_hook(view, "retry_prepare", %{
+        "client_id" => "retry-grp-1",
+        "caption" => "",
+        "as_file" => false,
+        "media" => false,
+        "group_id" => gid
+      })
+
+      file =
+        file_input(view, "#composer", :attachment_retry, [
+          %{name: "r.txt", content: "report gamma", type: "text/plain"}
+        ])
+
+      render_upload(file, "r.txt", 100)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      m = Enum.find(msgs, &(&1.client_id == "retry-grp-1"))
+      assert m && m.group_id == gid
+    end
+
     test "retry_reset drops the pending retry + entries without crashing", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
@@ -1249,6 +1275,224 @@ defmodule EdenWeb.ChatLiveTest do
       album = Enum.find(msgs, &(&1.client_id == "cid-album"))
       assert album, "the album should have been sent despite the lagging file"
       assert album.attachments != []
+    end
+
+    # ── Sequential send engine (TG-attachments) ──────────────────────────────────────────────
+    test "sequential send: each file lands as its own message under one shared group_id", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q1",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["f1", "f2"]
+      })
+
+      # Item 1: announce, feed one clone, complete.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q1",
+        "client_id" => "f1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "a.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(f1, "a.txt", 100)
+
+      # Item 2: the previous entry was consumed, so the next clone stages cleanly.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q1",
+        "client_id" => "f2",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f2 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "b.txt", content: "yo", type: "text/plain"}
+        ])
+
+      render_upload(f2, "b.txt", 100)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      m1 = Enum.find(msgs, &(&1.client_id == "f1"))
+      m2 = Enum.find(msgs, &(&1.client_id == "f2"))
+      assert m1 && m2, "both files should land as their own messages, progressively"
+      # ≥2 files → one shared group_id (the merged bubble).
+      assert m1.group_id && m1.group_id == m2.group_id
+    end
+
+    test "sequential album: photos accumulate into ONE album message", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q2",
+        "caption" => "trip",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [%{"cid" => "alb1", "count" => 2}],
+        "file_cids" => []
+      })
+
+      for {cid, name} <- [{"p1", "1.png"}, {"p2", "2.png"}] do
+        render_hook(view, "seq_item", %{
+          "queue_id" => "q2",
+          "client_id" => cid,
+          "kind" => "media",
+          "album_cid" => "alb1"
+        })
+
+        f =
+          file_input(view, "#composer", :attachment_seq, [
+            %{name: name, content: File.read!(real_png_path()), type: "image/png"}
+          ])
+
+        render_upload(f, name, 100)
+      end
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      album = Enum.find(msgs, &(&1.client_id == "alb1"))
+      assert album, "the album message should land once all its photos uploaded"
+      assert length(album.attachments) == 2
+      # The caption rides the album; the album carries no group_id (only files group).
+      assert album.body == "trip"
+      assert is_nil(album.group_id)
+    end
+
+    test "a lone file gets no group_id (renders as a normal bubble)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q3",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["solo"]
+      })
+
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q3",
+        "client_id" => "solo",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "solo.txt", content: "x", type: "text/plain"}
+        ])
+
+      render_upload(f, "solo.txt", 100)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      solo = Enum.find(msgs, &(&1.client_id == "solo"))
+      assert solo && is_nil(solo.group_id)
+    end
+
+    test "seq_reset skips a stalled item; the batch continues to the next (no crash)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q4",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["s1", "s2"]
+      })
+
+      # Item 1 stalls partway → the watchdog fires seq_reset (abort + free the slot).
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q4",
+        "client_id" => "s1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "s1.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(f1, "s1.txt", 30)
+      render_hook(view, "seq_reset", %{})
+      assert Process.alive?(view.pid)
+
+      # Item 2 still completes — the batch kept going.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q4",
+        "client_id" => "s2",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f2 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "s2.txt", content: "yo", type: "text/plain"}
+        ])
+
+      render_upload(f2, "s2.txt", 100)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.client_id == "s2"))
+
+      # The skipped item (s1) must be accounted for: files_left reaches 0, so the queue finalizes
+      # and the in-flight flag clears — else seq_reset would leak files_left and wedge sending_media.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.send_queues == []
+      refute assigns.sending_media
+    end
+
+    test "seq_drop accounts for a queued file cancelled before it was fed", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q5",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["d1", "d2"]
+      })
+
+      # Send d1 normally.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q5",
+        "client_id" => "d1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "d1.txt", content: "report delta", type: "text/plain"}
+        ])
+
+      render_upload(f1, "d1.txt", 100)
+
+      # The user cancels d2 while it's still QUEUED (never fed) → the client drops its count.
+      render_hook(view, "seq_drop", %{"queue_id" => "q5", "kind" => "file", "album_cid" => nil})
+
+      # d1 delivered; the queue finalized despite d2 never being sent (no wedged sending_media).
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.client_id == "d1"))
+      refute Enum.any?(msgs, &(&1.client_id == "d2"))
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.send_queues == []
+      refute assigns.sending_media
     end
 
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do
