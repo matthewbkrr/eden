@@ -1,7 +1,8 @@
 defmodule EdenWeb.AdminLive do
   @moduledoc """
   Platform admin panel (#174, RFC Phase 2). Gated to admins by the `:require_admin`
-  on_mount hook (checked at mount and on every patch). Lists everyone and lets an
+  on_mount hook, which runs at **mount** (this LiveView is patch-free — no `handle_params` /
+  `push_patch` — so mount-time enforcement covers it; a future patch route MUST re-check). Lists everyone and lets an
   admin edit a user's **admin-managed** identity fields (corp email / Должность /
   structure via `Accounts.apply_managed_fields/3`); a **super_admin** can also
   change a user's platform role (`Accounts.set_user_role/3`). An admin can also mint a
@@ -68,8 +69,10 @@ defmodule EdenWeb.AdminLive do
   def handle_event("dismiss_invite_url", _params, socket),
     do: {:noreply, assign(socket, new_invite_url: nil)}
 
-  def handle_event("revoke_invite", %{"id" => id}, socket) do
-    case Enum.find(socket.assigns.invites, &(to_string(&1.id) == id)) do
+  # Match params (not `%{"id" => id}`) so a forged event with no "id" no-ops instead of raising
+  # FunctionClauseError — it isn't in the nil-selection guard's event list (#304 review P3).
+  def handle_event("revoke_invite", params, socket) do
+    case Enum.find(socket.assigns.invites, &(to_string(&1.id) == params["id"])) do
       nil ->
         {:noreply, socket}
 
@@ -385,9 +388,10 @@ defmodule EdenWeb.AdminLive do
             <div class="flex items-center gap-2">
               <input
                 type="text"
+                id="invite-url-copy"
                 value={@new_invite_url}
                 readonly
-                onclick="this.select()"
+                phx-hook=".SelectAllOnClick"
                 class="ed-input flex-1"
                 style="font-size:0.75rem;"
                 aria-label={gettext("Invite link")}
@@ -593,9 +597,10 @@ defmodule EdenWeb.AdminLive do
               <div :if={@reset_link} class="mt-2 space-y-1.5">
                 <input
                   type="text"
+                  id="reset-link-copy"
                   value={@reset_link}
                   readonly
-                  onclick="this.select()"
+                  phx-hook=".SelectAllOnClick"
                   class="ed-input"
                   style="font-size:0.75rem;"
                   aria-label={gettext("Reset link")}
@@ -606,9 +611,11 @@ defmodule EdenWeb.AdminLive do
               </div>
 
               <%!-- Reset two-factor (#250): recovery when the person lost their
-                    authenticator AND backup codes. Only shown if they have it on. --%>
+                    authenticator AND backup codes. Only shown if they have it on — and never on
+                    your OWN row (admin_reset_totp refuses self, so the control would only ever
+                    fail; #253 review P3, matching the deactivate/delete self-exclusions). --%>
               <div
-                :if={Accounts.totp_enrolled?(@selected)}
+                :if={Accounts.totp_enrolled?(@selected) and @selected.id != @current_scope.user.id}
                 class="mt-3 pt-3 border-t"
                 style="border-color: var(--ed-border);"
               >
@@ -684,6 +691,17 @@ defmodule EdenWeb.AdminLive do
         </div>
       </div>
     </div>
+
+    <%!-- Click-to-select for the copy-once link inputs (#304 review P3). The old
+          onclick="this.select()" is dead under the nonce CSP (no inline handlers); a colocated
+          hook restores select-all-on-click so "Copy it now" is a single gesture. --%>
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectAllOnClick">
+      export default {
+        mounted() {
+          this.el.addEventListener("click", () => this.el.select())
+        },
+      }
+    </script>
     """
   end
 
