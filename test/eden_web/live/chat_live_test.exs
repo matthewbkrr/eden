@@ -1446,6 +1446,53 @@ defmodule EdenWeb.ChatLiveTest do
 
       assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
       assert Enum.any?(msgs, &(&1.client_id == "s2"))
+
+      # The skipped item (s1) must be accounted for: files_left reaches 0, so the queue finalizes
+      # and the in-flight flag clears — else seq_reset would leak files_left and wedge sending_media.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.send_queues == []
+      refute assigns.sending_media
+    end
+
+    test "seq_drop accounts for a queued file cancelled before it was fed", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q5",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["d1", "d2"]
+      })
+
+      # Send d1 normally.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "q5",
+        "client_id" => "d1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "d1.txt", content: "report delta", type: "text/plain"}
+        ])
+
+      render_upload(f1, "d1.txt", 100)
+
+      # The user cancels d2 while it's still QUEUED (never fed) → the client drops its count.
+      render_hook(view, "seq_drop", %{"queue_id" => "q5", "kind" => "file", "album_cid" => nil})
+
+      # d1 delivered; the queue finalized despite d2 never being sent (no wedged sending_media).
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.client_id == "d1"))
+      refute Enum.any?(msgs, &(&1.client_id == "d2"))
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.send_queues == []
+      refute assigns.sending_media
     end
 
     test "a text send while a media upload is still in progress doesn't crash (P0)", ctx do

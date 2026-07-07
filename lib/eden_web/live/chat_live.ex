@@ -631,7 +631,6 @@ defmodule EdenWeb.ChatLive do
     caption = if is_binary(params["caption"]), do: params["caption"], else: ""
     caption_id = sanitize_cid(params["caption_id"])
     as_file = params["as_file"] == true
-    root_id = socket.assigns.thread_root && socket.assigns.thread_root.id
 
     if queue_id == nil or (albums == %{} and file_cids == []) do
       {:reply, %{ok: false}, socket}
@@ -643,7 +642,10 @@ defmodule EdenWeb.ChatLive do
         queue_id: queue_id,
         group_id: group_id,
         conv_id: selected_id(socket),
-        root_id: root_id,
+        # root_id threads a seq send into a room thread — reserved for the threads phase; the main
+        # composer (the only seq caller today) leaves it nil, so create_attachments posts to the
+        # conversation, not a thread.
+        root_id: nil,
         caption: caption,
         caption_id: caption_id,
         as_file: as_file,
@@ -657,7 +659,10 @@ defmodule EdenWeb.ChatLive do
         |> cancel_seq_staged()
         |> assign(
           sending_media: true,
-          send_queues: Enum.take(socket.assigns.send_queues ++ [queue], 16)
+          # Tail, not head: on overflow keep the NEWEST queues (the one we just appended + reply
+          # {ok} for), so the client's items always find their stashed queue. Realistic depth is
+          # 1-2 (the feeder drains sequentially); the cap is a runaway backstop.
+          send_queues: Enum.take(socket.assigns.send_queues ++ [queue], -16)
         )
 
       {:reply, %{ok: true, group_id: group_id}, socket}
@@ -695,12 +700,32 @@ defmodule EdenWeb.ChatLive do
   # failed client-side and re-sendable via the retry channel, inheriting its group_id). Idempotent
   # — a double fire (stall race) finds the slot already clear.
   def handle_event("seq_reset", _params, socket) do
-    {:noreply,
-     socket
-     |> cancel_seq_entries()
-     |> assign(seq_pending: nil)
-     |> maybe_end_sending()}
+    pending = socket.assigns.seq_pending
+
+    socket =
+      socket
+      |> cancel_seq_entries()
+      |> assign(seq_pending: nil)
+      # The aborted item never lands, so drop it from its queue's accounting (a file decrements
+      # files_left; an album photo drops the whole album) — else files_left/albums never reach zero
+      # and the queue can't finalize, leaving sending_media stuck true.
+      |> drop_pending_from_queue(pending)
+      |> maybe_end_sending()
+
+    {:noreply, socket}
   end
+
+  # A queued item the client cancelled BEFORE it was fed (so no seq_pending server-side): drop its
+  # accounting so the queue can still finalize. Mirrors seq_reset for the not-yet-in-flight case.
+  def handle_event("seq_drop", params, socket) when is_map(params) do
+    queue_id = sanitize_cid(params["queue_id"])
+    kind = if params["kind"] == "media", do: :media, else: :file
+    album_cid = sanitize_cid(params["album_cid"])
+
+    {:noreply, socket |> drop_queue_item(queue_id, kind, album_cid) |> maybe_end_sending()}
+  end
+
+  def handle_event("seq_drop", _params, socket), do: {:noreply, socket}
 
   # The watchdog hook fires this when an upload stalled (30s no progress): the link died
   # after the optimistic node + media_sending, so "send" never fired and the entries are
@@ -5731,7 +5756,8 @@ defmodule EdenWeb.ChatLive do
             this.handleEvent("seq_progress", ({ id, percent }) => {
               const node = this.pending?.querySelector(`[data-client-id="${id}"]`)
               this.setRing(node, percent)
-              this.armStall(node && node.closest(".ed-msg, .ed-flat"))
+              // Re-arm the CURRENT item's watchdog (seq-aware: fails only this item, fires seq_reset).
+              this.armSeqStall(node && node.closest(".ed-msg, .ed-flat"))
             })
             // One sequential item finished uploading (its real message/album streamed in and
             // swapped its optimistic node) — feed the next item in the queue.
@@ -5773,11 +5799,21 @@ defmodule EdenWeb.ChatLive do
             // Re-arm the stall watchdog for in-flight upload nodes (frozen on disconnect):
             // LiveView resumes the paused upload now, so the clock restarts from a clean 0.
             if (this.pending) {
+              // Retry nodes keep their own dedicated channel + watchdog — re-arm them as before.
               for (const row of this.pending.children) {
-                if (!row.classList.contains("ed-msg-failed") &&
+                if (row.dataset.retry === "true" &&
+                    !row.classList.contains("ed-msg-failed") &&
                     row.querySelector(".ed-media-sending__ring-fill")) {
                   this.armStall(row)
                 }
+              }
+              // Sequential send: only the ONE in-flight item was uploading — re-arm just its node
+              // (queued items stay unarmed until their turn), so the watchdog restarts cleanly and,
+              // if the resumed upload is truly wedged, skips to the next after the timeout.
+              if (this.seqFeeding) {
+                const it = this.seqFeeding
+                const node = this.pending.querySelector(`[data-client-id="${it.albumCid || it.clientId}"]`)
+                this.armSeqStall(node && node.closest(".ed-msg, .ed-flat"))
               }
             }
           },
@@ -5938,11 +5974,11 @@ defmodule EdenWeb.ChatLive do
                 albumSpecs.push({ cid, count: batch.length })
                 // The caption rides only the FIRST album (matches attachment_steps).
                 const cap = i === 0 ? caption : ""
-                this.armStall(
-                  asFileDocs
-                    ? this.addOptimisticAsFile(cid, batch, cap)
-                    : this.addOptimisticMedia(cid, batch, cap),
-                )
+                // No armStall here: items upload ONE at a time, so the watchdog is armed per-item
+                // in pumpSeq when it starts (arming all nodes at Send would false-fail items still
+                // WAITING their turn once a slow batch runs past the 90s timeout).
+                if (asFileDocs) this.addOptimisticAsFile(cid, batch, cap)
+                else this.addOptimisticMedia(cid, batch, cap)
                 // Queue each photo (looked up in edenFiles by its tile key) under this album — the
                 // album message is posted once all its photos have uploaded.
                 batch.forEach((tile) => {
@@ -5956,9 +5992,8 @@ defmodule EdenWeb.ChatLive do
                 // The stash key (name:size:lastModified) so a failed card can look its File
                 // back up in edenFiles and re-send it.
                 const key = fe.dataset.name + ":" + fe.dataset.sizeRaw + ":" + fe.dataset.modified
-                this.armStall(
-                  this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size, key),
-                )
+                // Armed per-item in pumpSeq (see the album note above), not here.
+                this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size, key)
                 fileCids.push(cid)
                 seqItems.push({ kind: "file", clientId: cid, key })
               })
@@ -7105,8 +7140,18 @@ defmodule EdenWeb.ChatLive do
                   })
                   input.value = ""
                   this.feedInput(input, [clone])
+                  // Arm the stall watchdog for THIS item now that it's actually uploading (queued
+                  // items stay unarmed until their turn); seq_progress re-arms on each tick.
+                  const node = this.pending?.querySelector(
+                    `[data-client-id="${item.albumCid || item.clientId}"]`,
+                  )
+                  this.armSeqStall(node)
                 } else {
-                  // The File is gone (edenFiles cleared / never stashed) — skip it and pump on.
+                  // The File is gone (edenFiles cleared / never stashed) — the server already set
+                  // seq_pending from the reply, so tell it to release the slot + drop this item's
+                  // count (seq_reset), else the queue can't finalize and later items are refused.
+                  this.pushEvent("seq_reset", {})
+                  this.seqFeeding = null
                   this.onSeqDone(item.clientId)
                 }
               },
@@ -7130,22 +7175,30 @@ defmodule EdenWeb.ChatLive do
           // the in-flight one, abort the upload (seq_reset frees the slot) and pump the rest.
           cancelSeqItem(clientId) {
             const feeding = this.seqFeeding && this.seqFeeding.clientId === clientId
+            let queueId = null
             for (const q of this.seqQueues || []) {
               const idx = q.items.findIndex((it) => it.clientId === clientId)
-              if (idx >= 0) q.items.splice(idx, 1)
+              if (idx >= 0) { queueId = q.queueId; q.items.splice(idx, 1) }
             }
             this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
             if (feeding) {
+              // In flight: seq_reset aborts it AND drops its server-side count.
               this.pushEvent("seq_reset", {})
               this.seqFeeding = null
               this.pumpSeq()
+            } else if (queueId) {
+              // Queued (never fed): the server still counts it — tell it to drop the count so the
+              // queue can finalize (else sending_media stays stuck).
+              this.pushEvent("seq_drop", { queue_id: queueId, kind: "file", album_cid: null })
             }
           },
           // Cancel-X on a whole album node: drop all of that album's queued photos; abort if one is
           // in flight. (Per-photo cancel is a later phase; this cancels the album as a unit.)
           cancelSeqAlbum(albumCid) {
             const feeding = this.seqFeeding && this.seqFeeding.albumCid === albumCid
+            let queueId = null
             for (const q of this.seqQueues || []) {
+              if (q.items.some((it) => it.albumCid === albumCid)) queueId = q.queueId
               q.items = q.items.filter((it) => it.albumCid !== albumCid)
             }
             this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
@@ -7153,7 +7206,41 @@ defmodule EdenWeb.ChatLive do
               this.pushEvent("seq_reset", {})
               this.seqFeeding = null
               this.pumpSeq()
+            } else if (queueId) {
+              // Queued album (no photo fed yet): drop the whole album's count server-side.
+              this.pushEvent("seq_drop", { queue_id: queueId, kind: "media", album_cid: albumCid })
             }
+          },
+          // Stall watchdog for the CURRENT sequential item (one at a time, so no batch/sibling fail
+          // like the concurrent armStall). If it goes 90s with no progress: mark its node failed
+          // (Resend/Delete), tell the server to abort + drop this item's count (seq_reset), remove
+          // it (and, for an album, its remaining photos) from the client queue, and pump the next —
+          // the batch keeps going. Frozen on disconnect, re-armed by seq_progress.
+          armSeqStall(node) {
+            if (!node) return
+            if (node._stall) clearTimeout(node._stall)
+            node._stall = setTimeout(() => {
+              if (!node.isConnected) return
+              const feeding = this.seqFeeding
+              this.markUploadFailed(node)
+              this.pushEvent("seq_reset", {})
+              if (feeding) this.dropSeqFeedingFromQueue(feeding)
+              this.seqFeeding = null
+              this.pumpSeq()
+            }, 90000)
+          },
+          // Remove the in-flight item from the client queue on stall/abort — a file just itself, an
+          // album photo the WHOLE album (it failed as a unit), so no straggler feeds a dropped album.
+          dropSeqFeedingFromQueue(feeding) {
+            for (const q of this.seqQueues || []) {
+              if (feeding.albumCid) {
+                q.items = q.items.filter((it) => it.albumCid !== feeding.albumCid)
+              } else {
+                const idx = q.items.findIndex((it) => it.clientId === feeding.clientId)
+                if (idx >= 0) q.items.splice(idx, 1)
+              }
+            }
+            this.seqQueues = (this.seqQueues || []).filter((q) => q.items.length)
           },
           // Stamp the send's server-minted group_id onto its optimistic file rows so a later phase
           // can render them as one merged bubble. Harmless now (no CSS reads it yet).
@@ -12763,7 +12850,7 @@ defmodule EdenWeb.ChatLive do
     source = consume_seq_media(socket, entry)
     spec = %{spec | sources: spec.sources ++ [source]}
 
-    queue =
+    {socket, queue} =
       if length(spec.sources) >= spec.expected do
         {caption, caption_used} =
           if not queue.caption_used and queue.caption != "",
@@ -12771,11 +12858,22 @@ defmodule EdenWeb.ChatLive do
             else: {"", queue.caption_used}
 
         opts = %{body: caption, client_id: [acid], as_file: queue.as_file}
-        _ = Chat.create_attachments(scope, queue.conv_id, spec.sources, opts)
+        result = Chat.create_attachments(scope, queue.conv_id, spec.sources, opts)
         Enum.each(spec.sources, &File.rm(&1.path))
-        %{queue | albums: Map.delete(queue.albums, acid), caption_used: caption_used}
+
+        # A failed album must mark its optimistic node failed (retriable) — not silently vanish.
+        socket =
+          case result do
+            {:ok, _} ->
+              socket
+
+            {:error, reason} ->
+              socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(acid)
+          end
+
+        {socket, %{queue | albums: Map.delete(queue.albums, acid), caption_used: caption_used}}
       else
-        %{queue | albums: Map.put(queue.albums, acid, spec)}
+        {socket, %{queue | albums: Map.put(queue.albums, acid, spec)}}
       end
 
     socket
@@ -12851,6 +12949,44 @@ defmodule EdenWeb.ChatLive do
       |> assign(sending_media: false, last_media_pct: nil, reply_to: nil, last_typing_at: nil)
     else
       socket
+    end
+  end
+
+  defp drop_pending_from_queue(socket, nil), do: socket
+
+  defp drop_pending_from_queue(socket, pending),
+    do: drop_queue_item(socket, pending.queue_id, pending.kind, pending.album_cid)
+
+  # Remove one skipped/cancelled item from its queue's accounting so the queue can still finalize:
+  # a file decrements files_left; an album photo drops the WHOLE album (its optimistic node is
+  # marked failed as a unit in phase C — per-photo album cancel is a later phase), reclaiming any
+  # temps it accumulated.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp drop_queue_item(socket, nil, _kind, _album_cid), do: socket
+
+  defp drop_queue_item(socket, queue_id, kind, album_cid) do
+    case Enum.find(socket.assigns.send_queues, &(&1.queue_id == queue_id)) do
+      nil ->
+        socket
+
+      queue ->
+        queue = drop_from_queue(queue, kind, album_cid)
+        socket |> put_queue(queue) |> finalize_queue_if_done(queue)
+    end
+  end
+
+  defp drop_from_queue(queue, :file, _album_cid),
+    do: %{queue | files_left: max(queue.files_left - 1, 0)}
+
+  # sobelow_skip ["Traversal.FileModule"]
+  defp drop_from_queue(queue, :media, album_cid) do
+    case Map.get(queue.albums, album_cid) do
+      nil ->
+        queue
+
+      spec ->
+        Enum.each(spec.sources, &File.rm(&1.path))
+        %{queue | albums: Map.delete(queue.albums, album_cid)}
     end
   end
 
