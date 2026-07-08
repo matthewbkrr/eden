@@ -708,7 +708,10 @@ defmodule EdenWeb.ChatLiveTest do
       # ...and a FURTHER file can still be attached: the bar's paperclip drops out while something is
       # staged (only one :attachment input may exist), but the overlay owns the "Add more" input — so
       # attaching never dead-ends during an in-flight send (#330 review).
-      assert has_element?(view, ~s([data-upload-preview] label[aria-label="Add more"] input[type="file"]))
+      assert has_element?(
+               view,
+               ~s([data-upload-preview] label[aria-label="Add more"] input[type="file"])
+             )
     end
 
     test "Send as file (#122) stores the photo uncompressed and renders a document card", ctx do
