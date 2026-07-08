@@ -40,6 +40,10 @@ defmodule EdenWeb.ChatLive do
   # no-progress stall watchdog, so a genuinely wedged upload still surfaces as failed.
   @upload_chunk_timeout 60_000
 
+  # Every allow_upload uses Chat.upload_chunk_size() (512KB) — see its @doc: LiveView serializes chunks
+  # over the socket, so a bigger chunk = fewer round-trips on a high-latency link (uploads are RTT-bound,
+  # not bandwidth-bound). The /live socket's max_frame_size is DERIVED from it in endpoint.ex.
+
   # Uploads cancelable via the shared "cancel_upload" event. A closed map, so a
   # crafted "upload" value can neither crash the LiveView (vs String.to_existing_atom)
   # nor reach an unrelated upload (e.g. :channel_avatar). #104.
@@ -282,6 +286,7 @@ defmodule EdenWeb.ChatLive do
         # the file "stalls" — while a lone file (full bandwidth) uploads fine. Raise the per-chunk
         # timeout to @upload_chunk_timeout (still under the 90s no-progress watchdog) so a batch on
         # a thin link keeps going instead of stalling.
+        chunk_size: Chat.upload_chunk_size(),
         chunk_timeout: @upload_chunk_timeout,
         # Feed the in-stream optimistic node a determinate progress ring (#95) —
         # Telegram-style, instead of an indeterminate spinner that can't show how
@@ -297,6 +302,7 @@ defmodule EdenWeb.ChatLive do
         accept: :any,
         max_entries: Chat.max_staged_entries(),
         max_file_size: Chat.max_attachment_bytes(),
+        chunk_size: Chat.upload_chunk_size(),
         chunk_timeout: @upload_chunk_timeout,
         auto_upload: true,
         progress: &handle_retry_progress/3
@@ -311,6 +317,7 @@ defmodule EdenWeb.ChatLive do
         accept: :any,
         max_entries: Chat.max_staged_entries(),
         max_file_size: Chat.max_attachment_bytes(),
+        chunk_size: Chat.upload_chunk_size(),
         chunk_timeout: @upload_chunk_timeout,
         auto_upload: true,
         progress: &handle_seq_progress/3
@@ -323,6 +330,7 @@ defmodule EdenWeb.ChatLive do
         accept: :any,
         max_entries: Chat.max_album_entries(),
         max_file_size: Chat.max_attachment_bytes(),
+        chunk_size: Chat.upload_chunk_size(),
         chunk_timeout: @upload_chunk_timeout
       )
       # Thread-reply album (#104): same accept/caps as :attachment, a separate upload so
@@ -332,13 +340,17 @@ defmodule EdenWeb.ChatLive do
         accept: :any,
         max_entries: Chat.max_album_entries(),
         max_file_size: Chat.max_attachment_bytes(),
+        chunk_size: Chat.upload_chunk_size(),
         chunk_timeout: @upload_chunk_timeout
       )
       # Channel avatar (#70): a single image, processed server-side to a square.
       |> allow_upload(:channel_avatar,
         accept: ~w(.png .jpg .jpeg .gif .webp),
         max_entries: 1,
-        max_file_size: 5_000_000
+        max_file_size: 5_000_000,
+        chunk_size: Chat.upload_chunk_size(),
+        # 60s (not the 10s default): a 512KB chunk on a slow uplink can exceed 10s (#327 review).
+        chunk_timeout: @upload_chunk_timeout
       )
       # Group avatar (#178): click the big avatar in the profile panel → pick → it's
       # set at once (auto_upload + progress), processed server-side to a square.
@@ -346,6 +358,9 @@ defmodule EdenWeb.ChatLive do
         accept: ~w(.png .jpg .jpeg .gif .webp),
         max_entries: 1,
         max_file_size: 5_000_000,
+        chunk_size: Chat.upload_chunk_size(),
+        # 60s (not the 10s default): a 512KB chunk on a slow uplink can exceed 10s (#327 review).
+        chunk_timeout: @upload_chunk_timeout,
         auto_upload: true,
         progress: &consume_group_avatar/3
       )

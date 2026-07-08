@@ -81,6 +81,11 @@ defmodule Eden.Chat do
   # can't pin a media worker (and starve the :media queue) indefinitely.
   @media_cmd_timeout_ms 20_000
 
+  # LiveView chunks uploads over the socket and SERIALIZES them (client pushes a chunk, waits for the
+  # server's `ok`, reads the next), so upload time ≈ (bytes / chunk) × RTT — bandwidth barely matters.
+  # 512KB (vs the 64KB LiveView default) cuts round-trips ~8× on a high-latency cross-border link.
+  @upload_chunk_size 512_000
+
   # #289: notification-chime presets. Each is a synthesized tone pattern played
   # client-side (window.edSound.play), so there are no audio assets to ship; the
   # closed set guards the client-supplied name. The head is the default.
@@ -95,6 +100,12 @@ defmodule Eden.Chat do
 
   @doc "Most media one pick may stage at once (#193); split server-side into albums of #{@max_album_entries}."
   def max_staged_entries, do: @max_staged_entries
+
+  @doc "Per-chunk upload size (bytes) for every `allow_upload`. Bigger = fewer serialized round-trips on a high-latency link (uploads are RTT-bound, not bandwidth-bound)."
+  def upload_chunk_size, do: @upload_chunk_size
+
+  @doc "`max_frame_size` for the /live WebSocket. DERIVED from `upload_chunk_size` (must exceed one chunk + framing overhead) so bumping the chunk can never silently trip Bandit's :max_frame_size_exceeded — 4× is ample headroom."
+  def upload_max_frame_size, do: @upload_chunk_size * 4
 
   @doc "Accepted upload size in bytes for a given attachment kind."
   def max_attachment_bytes("image"), do: @max_image_bytes

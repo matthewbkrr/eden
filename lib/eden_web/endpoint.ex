@@ -11,8 +11,16 @@ defmodule EdenWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  # max_frame_size must fit a whole upload chunk in ONE WebSocket frame — LiveView pushes each chunk as
+  # a binary frame, so the cap must exceed the chunk + protocol overhead, else a bumped chunk_size would
+  # trip Bandit's :max_frame_size_exceeded. DERIVED from the chunk (Eden.Chat.upload_max_frame_size/0 =
+  # 4× the chunk) so the two can't drift out of sync (#327 review). LiveView's own diff/event frames are
+  # tiny; longpoll carries chunks in the POST body (not frame-capped), so it needs nothing here.
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
+    websocket: [
+      connect_info: [session: @session_options],
+      max_frame_size: Eden.Chat.upload_max_frame_size()
+    ],
     longpoll: [connect_info: [session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
