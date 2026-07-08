@@ -164,4 +164,74 @@ defmodule EdenWeb.ChatLive.ThreadPanel do
       cancel_upload(acc, :thread_attachment, entry.ref)
     end)
   end
+
+  # Continue/break the thread panel's compact run for a live reply (#105), mirroring the main stream's
+  # last_flat logic. Threads are rooms-only, so always flat. compact?/mark_compact/restore_compact stay
+  # in ChatLive (co-owned by the main flat stream); we call them there (a documented runtime two-way
+  # ref — a shared MessageComponents/Compact module is the eventual cleanup, #237 step 3).
+  def mark_thread_compact(socket, reply) do
+    marked = %{reply | compact: EdenWeb.ChatLive.compact?(reply, socket.assigns.thread_last_flat)}
+    {marked, assign(socket, thread_last_flat: {reply.sender_id, reply.inserted_at})}
+  end
+
+  # Re-stream a root ONLY when it's in the loaded message window (tracked by the `compacts` map). The
+  # `:messages` stream is unbounded with manual paging, so inserting a paged-out root would resurrect
+  # it out of order at the stream end.
+  def restream_root_if_loaded(socket, root) do
+    if Map.has_key?(socket.assigns.compacts, root.id),
+      do: stream_insert(socket, :messages, EdenWeb.ChatLive.restore_compact(socket, root)),
+      else: socket
+  end
+
+  # Tear down the open thread panel (composer, staged attachments, typing, search). Does NOT touch a
+  # selection — callers decide (close_thread drops it, forward_selection kept the carry).
+  def close_thread_panel(socket) do
+    socket
+    |> cancel_staged_thread_attachments()
+    |> clear_thread_typing()
+    |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
+    |> reset_thread_search()
+  end
+
+  def open_thread(socket, root_id) do
+    scope = socket.assigns.current_scope
+
+    case Chat.list_thread(scope, root_id) do
+      {:ok, root, replies} ->
+        # Opening a thread reads it: clear the unread (server + the local badge)
+        # and surface the follow state in the header bell.
+        Chat.mark_thread_read(scope, root.id)
+        %{following: following} = Chat.thread_follow_state(scope, root.id)
+        # Collapse consecutive same-author replies, same as the main flat stream,
+        # so the panel doesn't repeat avatar+name on every reply (#105).
+        {replies, thread_last_flat} =
+          EdenWeb.ChatLive.mark_compact(replies, socket.assigns.selected)
+
+        socket
+        |> cancel_staged_thread_attachments()
+        |> assign(
+          thread_root: root,
+          thread_following: following,
+          thread_unreads: Map.put(socket.assigns.thread_unreads, root.id, 0),
+          thread_last_flat: thread_last_flat,
+          reply_composer: to_form(%{"body" => ""}, as: "reply"),
+          # Fresh thread → clear a quote-reply staged in the previously-open one; without
+          # this it would silently carry over (same conversation, so it'd validate).
+          thread_reply_to: nil,
+          # Fresh thread → drop any edit staged against the previously-open thread's reply.
+          thread_editing: nil,
+          # Fresh thread → no stale typers from a previously-open one (#103).
+          thread_typing_users: %{},
+          last_thread_typing_at: nil
+        )
+        |> reset_thread_select()
+        |> stream(:thread, replies, reset: true)
+        |> restream_root_if_loaded(root)
+        # Fresh thread (or a jump to a thread-search result) → search starts closed (#189).
+        |> reset_thread_search()
+
+      {:error, _} ->
+        put_flash(socket, :error, gettext("Thread not found."))
+    end
+  end
 end
