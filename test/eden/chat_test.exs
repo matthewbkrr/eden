@@ -143,6 +143,16 @@ defmodule Eden.ChatTest do
       assert conv.title == "Trip"
       assert length(conv.memberships) == 3
     end
+
+    test "a crafted NUL in the title is stripped, not raised at Postgres (#267)", %{
+      alice: alice,
+      bob: bob
+    } do
+      assert {:ok, conv} =
+               Chat.create_conversation(scope(alice), [bob.id], title: "Ev\0il", group: true)
+
+      assert conv.title == "Evil"
+    end
   end
 
   describe "group avatar (#178)" do

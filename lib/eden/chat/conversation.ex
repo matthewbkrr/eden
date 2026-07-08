@@ -53,6 +53,10 @@ defmodule Eden.Chat.Conversation do
   def changeset(conversation, attrs) do
     conversation
     |> cast(attrs, [:title, :is_group])
+    # Same sanitizer as the rename path (title_changeset): a crafted create-title
+    # with an embedded NUL would otherwise reach Postgres and raise Postgrex.Error
+    # instead of yielding a clean value (#267).
+    |> update_change(:title, &normalize_title/1)
     |> validate_length(:title, max: 100)
   end
 

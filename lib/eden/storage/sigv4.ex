@@ -58,6 +58,12 @@ defmodule Eden.Storage.SigV4 do
   end
 
   defp canonical_path(p) when p in [nil, ""], do: "/"
+  # The path is signed here as unreserved-encoded per segment, while the caller
+  # sends the raw `<endpoint>/<bucket>/<key>` on the wire. Today they agree because
+  # every eden key is `Base.url_encode64` (unreserved-only), so encoding is a no-op.
+  # If keys ever gain reserved chars (user-named objects / presigned URLs), sign the
+  # EXACT encoded path that goes on the wire — encode once, use for both — or the
+  # signature won't match (#267, mirrors the query-string rule below).
   defp canonical_path(path), do: path |> String.split("/") |> Enum.map_join("/", &uri_encode/1)
 
   defp canonical_query(q) when q in [nil, ""], do: ""
