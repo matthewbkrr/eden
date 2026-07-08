@@ -82,6 +82,7 @@ defmodule Eden.Images do
   defp check_size(bytes) when byte_size(bytes) <= @max_bytes, do: :ok
   defp check_size(_bytes), do: {:error, :too_large}
 
-  defp check_pixels(w, h) when is_integer(w) and is_integer(h) and w * h <= @max_pixels, do: :ok
+  # Strict `<`: the cap is the first REJECTED value, not the last accepted one (#238).
+  defp check_pixels(w, h) when is_integer(w) and is_integer(h) and w * h < @max_pixels, do: :ok
   defp check_pixels(_w, _h), do: {:error, :unprocessable}
 end

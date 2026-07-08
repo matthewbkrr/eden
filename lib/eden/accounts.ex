@@ -545,6 +545,22 @@ defmodule Eden.Accounts do
   defp broadcast_sessions_revoked(user_id),
     do: Phoenix.PubSub.broadcast_from(@pubsub, self(), sessions_topic(user_id), :sessions_revoked)
 
+  @doc """
+  Deletes auth tokens past their validity so the token tables don't grow unbounded:
+  session tokens older than the 60-day window (a *valid* token is filtered by
+  `verify_session_token_query/1`, but an expired one is never deleted on its own) and
+  password-reset tokens past `expires_at`. Idempotent — an empty run is a no-op — so the
+  daily prune (`Eden.Accounts.TokenPruner`) is safe to retry. Returns deleted counts (#238).
+  """
+  def prune_expired_tokens do
+    {sessions, _} = Repo.delete_all(UserToken.expired_session_tokens_query())
+
+    {resets, _} =
+      Repo.delete_all(from t in PasswordResetToken, where: t.expires_at < ^DateTime.utc_now())
+
+    %{sessions: sessions, resets: resets}
+  end
+
   @doc "Subscribes a connected LiveView to its user's session-revocation signal (#256)."
   def subscribe_user_sessions(%Scope{user: %User{id: id}}),
     do: Phoenix.PubSub.subscribe(@pubsub, sessions_topic(id))

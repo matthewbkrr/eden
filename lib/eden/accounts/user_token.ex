@@ -45,5 +45,15 @@ defmodule Eden.Accounts.UserToken do
     from UserToken, where: [token: ^hash(token), context: ^context]
   end
 
+  @doc """
+  Query selecting session tokens past the validity window — the rows
+  `verify_session_token_query/1` already treats as expired, for periodic pruning
+  (#238). Boundary matches: `inserted_at > ago(N)` is valid, so `<=` is expired.
+  """
+  def expired_session_tokens_query do
+    from t in UserToken,
+      where: t.context == "session" and t.inserted_at <= ago(@session_validity_in_days, "day")
+  end
+
   defp hash(token), do: :crypto.hash(@hash_algorithm, token)
 end

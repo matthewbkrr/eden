@@ -164,6 +164,32 @@ defmodule EdenWeb.FileControllerTest do
       assert disposition =~ ~s(filename="quarterly report.txt")
       assert disposition =~ "filename*=UTF-8''quarterly%20report.txt"
     end
+
+    test "a metacharacter surviving name sanitization can't break out of the header (#238)", %{
+      conn: conn,
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      path = image_path("just plain text, not an image")
+
+      # `Attachment.sanitize_filename/1` already strips `"` `\` /control at create, but a
+      # `;` (the Content-Disposition param separator) survives it and reaches the header.
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: path,
+          filename: "ev;il.txt"
+        })
+
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{hd(message.attachments).id}")
+      [disposition] = get_resp_header(conn, "content-disposition")
+
+      # The quoted ASCII fallback neutralizes the `;` to `_`, so nothing after the opening
+      # quote can be read as an extra header parameter...
+      assert disposition =~ ~s(filename="ev_il.txt")
+      # ...while the accurate name still rides the percent-encoded filename*.
+      assert disposition =~ "filename*=UTF-8''ev%3Bil.txt"
+    end
   end
 
   describe "GET /files/:id/thumb" do

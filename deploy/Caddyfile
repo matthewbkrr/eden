@@ -28,7 +28,11 @@
 {$SITE_ADDRESS::80} {
 	encode zstd gzip
 	# HSTS — honored by browsers only over HTTPS, so it's inert in the IP phase.
-	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	# `preload` makes the domain ELIGIBLE for the browser preload list (requires
+	# max-age >= 1y + includeSubDomains, both met). Actually shipping it to browsers
+	# is a separate one-time opt-in at https://hstspreload.org — and hard to undo, so
+	# submit only once the domain phase is settled (#238).
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 	reverse_proxy app:4000 {
 		# Overwrite X-Forwarded-For with the REAL client as a SINGLE value, so the app's
 		# Plug.RewriteOn gets exactly one IP and the #236 per-IP login/invite throttle keys on the

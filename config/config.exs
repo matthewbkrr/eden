@@ -16,7 +16,11 @@ config :eden,
 config :eden, Oban,
   repo: Eden.Repo,
   queues: [default: 10, media: 5],
-  plugins: [{Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}]
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    # Reclaim expired auth tokens once a day (#238) — off-peak, no urgency.
+    {Oban.Plugins.Cron, crontab: [{"23 3 * * *", Eden.Accounts.TokenPruner}]}
+  ]
 
 # Blob storage. Local disk on dev; swap the adapter (S3-compatible) in prod via
 # config without touching callers. See Eden.Storage.

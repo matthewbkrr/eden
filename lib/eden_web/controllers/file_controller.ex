@@ -160,7 +160,11 @@ defmodule EdenWeb.FileController do
 
   # Generic files download with their original name; media renders inline.
   defp disposition(%{kind: "file", filename: name}) when is_binary(name) do
-    fallback = String.replace(name, ~r/[^\x20-\x7e]/, "_")
+    # The ASCII fallback also strips the quoted-string metacharacters `"` `\` `;`:
+    # a `"` in the name would otherwise close `filename="…"` early and let the rest
+    # be read as extra header params. CRLF is already impossible (control chars fall
+    # outside \x20-\x7e). Modern browsers use the accurate `filename*` (#238).
+    fallback = String.replace(name, ~r/[^\x20-\x7e]|["\\;]/, "_")
     encoded = URI.encode(name, &URI.char_unreserved?/1)
     ~s(attachment; filename="#{fallback}"; filename*=UTF-8''#{encoded})
   end
