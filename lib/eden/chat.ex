@@ -4122,7 +4122,8 @@ defmodule Eden.Chat do
       {:error, {:unprocessable, Exception.message(e)}}
   end
 
-  defp guard_dimensions(width, height) when width * height <= @max_source_pixels, do: :ok
+  # Strict `<`: the cap is the first REJECTED value, matching Images.check_pixels (#238).
+  defp guard_dimensions(width, height) when width * height < @max_source_pixels, do: :ok
   defp guard_dimensions(_width, _height), do: {:error, :too_large}
 
   defp store_thumbnail(attachment, jpeg) do
@@ -4419,12 +4420,13 @@ defmodule Eden.Chat do
       out
     ]
 
-    result =
+    try do
       with {:ok, _} <- run_media_cmd("ffmpeg", args), do: read_frame(out)
-
-    # Best-effort cleanup of the extracted frame; the poster is stored separately.
-    File.rm(out)
-    result
+    after
+      # Best-effort cleanup of the extracted frame; the poster is stored separately.
+      # In try/after so a raise in run_media_cmd/read_frame can't leak the temp (#238).
+      File.rm(out)
+    end
   end
 
   # sobelow_skip ["Traversal.FileModule"]
