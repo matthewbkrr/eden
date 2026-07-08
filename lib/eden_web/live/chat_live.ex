@@ -1842,7 +1842,9 @@ defmodule EdenWeb.ChatLive do
   # closes the thread panel (like the bar's forward_selection), so the plaque lands on the room's
   # main composer and the drop is visible there — not hidden behind the still-open thread panel.
   def handle_event("forward_prompt", %{"id" => id} = params, socket) do
-    socket = if params["surface"] == "thread", do: close_thread_panel(socket), else: socket
+    socket =
+      if params["surface"] == "thread", do: ThreadPanel.close_thread_panel(socket), else: socket
+
     {:noreply, carry(socket, [id])}
   end
 
@@ -1857,7 +1859,7 @@ defmodule EdenWeb.ChatLive do
     socket =
       socket
       |> assign(selection: nil, sel_delete: nil, select_surface: nil)
-      |> then(&if(from_thread?, do: close_thread_panel(&1), else: &1))
+      |> then(&if(from_thread?, do: ThreadPanel.close_thread_panel(&1), else: &1))
       |> carry(ids)
 
     {:noreply, socket}
@@ -2010,11 +2012,11 @@ defmodule EdenWeb.ChatLive do
   ## Threads
 
   def handle_event("open_thread", %{"id" => id}, socket) do
-    {:noreply, open_thread(socket, id)}
+    {:noreply, ThreadPanel.open_thread(socket, id)}
   end
 
   def handle_event("close_thread", _params, socket) do
-    {:noreply, socket |> ThreadPanel.reset_thread_select() |> close_thread_panel()}
+    {:noreply, socket |> ThreadPanel.reset_thread_select() |> ThreadPanel.close_thread_panel()}
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
@@ -2369,7 +2371,7 @@ defmodule EdenWeb.ChatLive do
         # Authoritative unread from the server: covers the auto-followed root
         # author (no local key yet) and viewers reading right now (now zero).
         |> ThreadPanel.sync_thread_unread(root.id)
-        |> restream_root_if_loaded(root)
+        |> ThreadPanel.restream_root_if_loaded(root)
         |> ThreadPanel.bump_facepile(root.id, reply.sender)
         |> ThreadPanel.refresh_thread_list()
       else
@@ -2377,7 +2379,7 @@ defmodule EdenWeb.ChatLive do
       end
 
     if viewing? do
-      {reply, socket} = mark_thread_compact(socket, reply)
+      {reply, socket} = ThreadPanel.mark_thread_compact(socket, reply)
 
       {:noreply,
        socket
@@ -2398,7 +2400,7 @@ defmodule EdenWeb.ChatLive do
           Chat.thread_participants(socket.assigns.current_scope, root.conversation_id, [root.id])
 
         socket
-        |> restream_root_if_loaded(root)
+        |> ThreadPanel.restream_root_if_loaded(root)
         |> assign(
           :thread_participants,
           Map.merge(socket.assigns.thread_participants, participants)
@@ -12434,20 +12436,20 @@ defmodule EdenWeb.ChatLive do
 
   # Marks each message's virtual `compact` flag and returns the run tracker
   # for live appends. DMs keep bubbles — no marking there.
-  defp mark_compact(messages, %{channel_id: nil}), do: {messages, nil}
+  def mark_compact(messages, %{channel_id: nil}), do: {messages, nil}
 
-  defp mark_compact(messages, _room) do
+  def mark_compact(messages, _room) do
     Enum.map_reduce(messages, nil, fn message, prev ->
       {%{message | compact: compact?(message, prev)}, {message.sender_id, message.inserted_at}}
     end)
   end
 
-  defp compact?(message, {sender_id, ts}) do
+  def compact?(message, {sender_id, ts}) do
     message.sender_id == sender_id and
       DateTime.diff(message.inserted_at, ts) < @compact_window_s
   end
 
-  defp compact?(_message, nil), do: false
+  def compact?(_message, nil), do: false
 
   # Grouped-file bubble runs (TG-attachments): mark each message's `group_pos` from runs of
   # CONSECUTIVE same-sender messages sharing a non-nil group_id — `:first | :middle | :last`,
@@ -12605,17 +12607,10 @@ defmodule EdenWeb.ChatLive do
     )
   end
 
-  # Continue/break the thread panel's compact run for a live reply (#105), mirroring
-  # the main stream's last_flat logic. Threads are rooms-only, so always flat.
-  defp mark_thread_compact(socket, reply) do
-    marked = %{reply | compact: compact?(reply, socket.assigns.thread_last_flat)}
-    {marked, assign(socket, thread_last_flat: {reply.sender_id, reply.inserted_at})}
-  end
-
   # Re-streaming a row (reaction/thumbnail) loses the virtual compact flag (the
   # broadcast struct doesn't carry it); restore it from what we recorded when the
   # row was first streamed so the flat layout stays put.
-  defp restore_compact(socket, message),
+  def restore_compact(socket, message),
     do: %{message | compact: Map.get(socket.assigns.compacts, message.id, message.compact)}
 
   # After paging in an older batch, the message that WAS the on-screen top may now
@@ -12747,7 +12742,7 @@ defmodule EdenWeb.ChatLive do
     case Chat.thread_root_for(socket.assigns.current_scope, message_id) do
       {:ok, root_id} ->
         socket
-        |> open_thread(root_id)
+        |> ThreadPanel.open_thread(root_id)
         |> push_event("focus_message", %{domId: "thread-#{message_id}"})
 
       _ ->
@@ -12758,66 +12753,6 @@ defmodule EdenWeb.ChatLive do
         |> maybe_load_around(message_id)
         |> assign_focus(message_id)
     end
-  end
-
-  # Tear down the open thread panel (composer, staged attachments, typing, search). Does NOT
-  # touch a selection — callers decide (close_thread drops it, forward_selection kept the carry).
-  defp close_thread_panel(socket) do
-    socket
-    |> ThreadPanel.cancel_staged_thread_attachments()
-    |> ThreadPanel.clear_thread_typing()
-    |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
-    |> ThreadPanel.reset_thread_search()
-  end
-
-  defp open_thread(socket, root_id) do
-    scope = socket.assigns.current_scope
-
-    case Chat.list_thread(scope, root_id) do
-      {:ok, root, replies} ->
-        # Opening a thread reads it: clear the unread (server + the local badge)
-        # and surface the follow state in the header bell.
-        Chat.mark_thread_read(scope, root.id)
-        %{following: following} = Chat.thread_follow_state(scope, root.id)
-        # Collapse consecutive same-author replies, same as the main flat stream,
-        # so the panel doesn't repeat avatar+name on every reply (#105).
-        {replies, thread_last_flat} = mark_compact(replies, socket.assigns.selected)
-
-        socket
-        |> ThreadPanel.cancel_staged_thread_attachments()
-        |> assign(
-          thread_root: root,
-          thread_following: following,
-          thread_unreads: Map.put(socket.assigns.thread_unreads, root.id, 0),
-          thread_last_flat: thread_last_flat,
-          reply_composer: to_form(%{"body" => ""}, as: "reply"),
-          # Fresh thread → clear a quote-reply staged in the previously-open one; without
-          # this it would silently carry over (same conversation, so it'd validate).
-          thread_reply_to: nil,
-          # Fresh thread → drop any edit staged against the previously-open thread's reply.
-          thread_editing: nil,
-          # Fresh thread → no stale typers from a previously-open one (#103).
-          thread_typing_users: %{},
-          last_thread_typing_at: nil
-        )
-        |> ThreadPanel.reset_thread_select()
-        |> stream(:thread, replies, reset: true)
-        |> restream_root_if_loaded(root)
-        # Fresh thread (or a jump to a thread-search result) → search starts closed (#189).
-        |> ThreadPanel.reset_thread_search()
-
-      {:error, _} ->
-        put_flash(socket, :error, gettext("Thread not found."))
-    end
-  end
-
-  # Re-stream a root ONLY when it's in the loaded message window (tracked by the
-  # `compacts` map). The `:messages` stream is unbounded with manual paging, so
-  # inserting a paged-out root would resurrect it out of order at the stream end.
-  defp restream_root_if_loaded(socket, root) do
-    if Map.has_key?(socket.assigns.compacts, root.id),
-      do: stream_insert(socket, :messages, restore_compact(socket, root)),
-      else: socket
   end
 
   defp parse_folder_id(""), do: nil
