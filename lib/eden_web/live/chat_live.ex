@@ -10647,7 +10647,7 @@ defmodule EdenWeb.ChatLive do
             <%!-- In a merged file group the sender name rides only the FIRST row (a solo/ungrouped
                   bubble is nil → shown as before). --%>
             <span
-              :if={@group and not @mine and @message.sender and @grp in [nil, :first]}
+              :if={@group and not @mine and not is_nil(@message.sender) and @grp in [nil, :first]}
               class="block"
               style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
             >
