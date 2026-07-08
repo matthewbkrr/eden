@@ -17,9 +17,6 @@ defmodule EdenWeb.ChatLive.ThreadPanel do
 
   alias Eden.Chat
 
-  # Thread-reply typing throttle (#103), mirrored from ChatLive (the two typing paths share it).
-  @typing_throttle_ms 2_000
-
   # In-thread search (#189): same nil-vs-[] convention as run_room_search.
   def run_thread_search(socket, root_id, q) do
     if String.trim(q) == "" do
@@ -119,7 +116,7 @@ defmodule EdenWeb.ChatLive.ThreadPanel do
     now = System.monotonic_time(:millisecond)
     last = socket.assigns.last_thread_typing_at
 
-    if String.trim(body) != "" and (is_nil(last) or now - last >= @typing_throttle_ms) do
+    if String.trim(body) != "" and (is_nil(last) or now - last >= Chat.typing_throttle_ms()) do
       Chat.broadcast_typing(
         socket.assigns.current_scope,
         socket.assigns.selected.id,

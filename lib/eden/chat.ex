@@ -3716,6 +3716,9 @@ defmodule Eden.Chat do
   def broadcast_typing(%Scope{user: user}, conversation_id, root_id \\ nil),
     do: broadcast(conversation_id, {:typing, user.id, user.display_name, root_id})
 
+  @doc "Throttle window (ms) for outgoing typing broadcasts — one source for the room AND thread composers (#11/#103)."
+  def typing_throttle_ms, do: 2_000
+
   defp broadcast(conversation_id, message),
     do: Phoenix.PubSub.broadcast(@pubsub, topic(conversation_id), message)
 

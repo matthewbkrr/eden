@@ -23,11 +23,10 @@ defmodule EdenWeb.ChatLive do
   # Per-page size for the profile media gallery (#136); a "Load more" fetches the next page.
   @gallery_page 30
 
-  # Typing indicator (#11): throttle outgoing "typing" broadcasts to at most one
-  # per this window while composing; each received broadcast keeps the indicator
-  # alive for the (longer) TTL, after which it auto-expires. TTL > throttle so a
-  # continuous typer never flickers off between broadcasts.
-  @typing_throttle_ms 2_000
+  # Typing indicator (#11): throttle outgoing "typing" broadcasts to at most one per the window
+  # (Chat.typing_throttle_ms/0 — one source, shared with the thread composer); each received
+  # broadcast keeps the indicator alive for the (longer) TTL, after which it auto-expires. TTL >
+  # throttle so a continuous typer never flickers off between broadcasts.
   @typing_ttl_ms 4_000
   # "Last seen" heartbeat (#102): touch last_active_at on connect and periodically
   # while active, from this (sandboxed) LiveView process. Frozen while idle. The
@@ -13686,7 +13685,7 @@ defmodule EdenWeb.ChatLive do
     now = System.monotonic_time(:millisecond)
     last = socket.assigns.last_typing_at
 
-    if String.trim(body) != "" and (is_nil(last) or now - last >= @typing_throttle_ms) do
+    if String.trim(body) != "" and (is_nil(last) or now - last >= Chat.typing_throttle_ms()) do
       Chat.broadcast_typing(socket.assigns.current_scope, socket.assigns.selected.id)
       assign(socket, last_typing_at: now)
     else
