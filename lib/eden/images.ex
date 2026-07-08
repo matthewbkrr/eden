@@ -8,7 +8,12 @@ defmodule Eden.Images do
   """
   @avatar_size 512
   @max_bytes 5 * 1024 * 1024
-  @max_pixels 100_000_000
+  # Header pixel cap for the avatar/compress decode paths — checked on the lazy image
+  # before any full decode. 40 MP (≈6325²) clears default phone-camera photos (12–24 MP)
+  # with headroom while bounding a decompression bomb's memory: over the cap, compress_photo
+  # degrades to `:keep` (store the original as-is) and square_avatar rejects. Tighter than
+  # the thumbnail-worker cap since these run on the request path (#231).
+  @max_pixels 40_000_000
 
   # "Golden middle" photo compression (#122), matching the messenger norm (WhatsApp ~1600px/
   # q80, Telegram 1280/q80): fit the long edge to @photo_max and re-encode a metadata-stripped
