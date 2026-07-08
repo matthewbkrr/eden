@@ -84,8 +84,9 @@ defmodule Eden.Chat do
   # LiveView chunks uploads over the socket and SERIALIZES them (client pushes a chunk, waits for the
   # server's `ok`, reads the next), so upload time ≈ (bytes / chunk) × RTT — bandwidth barely matters.
   # 1MB (vs the 64KB LiveView default) cuts round-trips ~16× on a high-latency cross-border link: a
-  # 1MB file is one round-trip, a 5MB photo five. Larger would coarsen the progress ring and risk the
-  # 60s chunk_timeout on a slow uplink, so this is the practical sweet spot. `upload_max_frame_size/0`
+  # 1MB file is one round-trip, a 5MB photo five. Larger would coarsen the progress ring and push the
+  # per-chunk transfer past @upload_chunk_timeout / the 90s watchdog on a slow uplink, so this is the
+  # practical sweet spot (chunk_timeout is set to give 1MB headroom). `upload_max_frame_size/0`
   # (endpoint.ex) derives the WS frame cap from this, so bumping it here keeps them in lockstep.
   @upload_chunk_size 1_000_000
 
