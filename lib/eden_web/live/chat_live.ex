@@ -768,7 +768,11 @@ defmodule EdenWeb.ChatLive do
         queue_id: sanitize_cid(params["queue_id"]),
         client_id: sanitize_cid(params["client_id"]),
         kind: if(params["kind"] == "media", do: :media, else: :file),
-        album_cid: sanitize_cid(params["album_cid"])
+        album_cid: sanitize_cid(params["album_cid"]),
+        # Client-measured pixel dims (#231): a video's box-reservation hint so we can drop
+        # the synchronous ffprobe. Layout-only; the media worker stays authoritative.
+        width: sanitize_dim(params["width"]),
+        height: sanitize_dim(params["height"])
       }
 
       # The queue must still be stashed — else (e.g. it was evicted on overflow) accepting the item
@@ -6072,7 +6076,19 @@ defmodule EdenWeb.ChatLive do
                 const photoCids = batch.map(() => this.uuid())
                 batch.forEach((tile, j) => {
                   const key = this.tileFileKey(tile)
-                  if (key) seqItems.push({ kind: "media", albumCid: cid, clientId: photoCids[j], key })
+                  if (!key) return
+                  // The staged tile already measured the media's pixel size for the optimistic
+                  // node — carry it so a video reserves its box server-side without a synchronous
+                  // ffprobe (#231). Images ignore it (server reads their header).
+                  const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
+                  seqItems.push({
+                    kind: "media",
+                    albumCid: cid,
+                    clientId: photoCids[j],
+                    key,
+                    w: (el && (el.naturalWidth || el.videoWidth)) || 0,
+                    h: (el && (el.naturalHeight || el.videoHeight)) || 0,
+                  })
                 })
                 // No armStall here: items upload ONE at a time, so the watchdog is armed per-item
                 // in pumpSeq when it starts (arming all nodes at Send would false-fail items still
@@ -7246,6 +7262,26 @@ defmodule EdenWeb.ChatLive do
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
           },
+          // Measure a video File's DISPLAY pixel size (rotation-applied) off its metadata — the
+          // #231 box-reservation hint for the thread path, which has no optimistic tile to read
+          // dims from. A non-video (image) resolves to {0,0} (the server reads its header); any
+          // load error resolves to {0,0} too, so the worker just fills the dims later.
+          measureMediaDims(file) {
+            return new Promise((resolve) => {
+              if (!/^video\//.test(file.type || "")) return resolve({ w: 0, h: 0 })
+              const v = document.createElement("video")
+              v.preload = "metadata"
+              v.muted = true
+              const url = URL.createObjectURL(file)
+              const finish = (w, h) => {
+                URL.revokeObjectURL(url)
+                resolve({ w: w || 0, h: h || 0 })
+              }
+              v.onloadedmetadata = () => finish(v.videoWidth, v.videoHeight)
+              v.onerror = () => finish(0, 0)
+              v.src = url
+            })
+          },
           // Route a thread album/file send through the sequential feeder (phase F trim). Called by
           // .ThreadSendQueue with the raw File objects it captured (threads have no client-side
           // compose overlay + no optimistic nodes — flat replies stream in from the server as each
@@ -7254,7 +7290,7 @@ defmodule EdenWeb.ChatLive do
           // in queue_start). The reply body is the caption — inline on the first album, or a trailing
           // reply when it's files-only. Each item carries its File directly (item.file) so pumpSeq
           // feeds it without needing the main composer's edenFiles stash.
-          enqueueThreadSeq({ files, caption, rootId }) {
+          async enqueueThreadSeq({ files, caption, rootId }) {
             // The root id must reach the server as a NUMBER (sanitize_root_id requires an integer;
             // a string "123" would decode as a binary and be dropped → the send would leak to the
             // main stream). dataset values are strings, so coerce + guard here.
@@ -7263,15 +7299,20 @@ defmodule EdenWeb.ChatLive do
             const isMedia = (f) => /^(image|video)\//.test(f.type || "")
             const media = files.filter(isMedia)
             const docs = files.filter((f) => !isMedia(f))
+            // Threads build no optimistic tile, so measure each VIDEO's dims off the File here
+            // (images get theirs from the server header read) — the video reply then reserves its
+            // box on arrival instead of popping when the worker fills it, without a server ffprobe (#231).
+            const dims = await Promise.all(media.map((f) => this.measureMediaDims(f)))
             const albumSpecs = []
             const seqItems = []
             for (let i = 0; i < media.length; i += this.maxAlbum()) {
               const batch = media.slice(i, i + this.maxAlbum())
               const cid = this.uuid()
               albumSpecs.push({ cid, count: batch.length })
-              batch.forEach((f) =>
-                seqItems.push({ kind: "media", albumCid: cid, clientId: this.uuid(), file: f }),
-              )
+              batch.forEach((f, j) => {
+                const d = dims[i + j] || { w: 0, h: 0 }
+                seqItems.push({ kind: "media", albumCid: cid, clientId: this.uuid(), file: f, w: d.w, h: d.h })
+              })
             }
             const fileCids = []
             docs.forEach((f) => {
@@ -7320,6 +7361,9 @@ defmodule EdenWeb.ChatLive do
                 client_id: item.clientId,
                 kind: item.kind,
                 album_cid: item.albumCid || null,
+                // Client-measured dims (#231) — a video's box-reservation hint.
+                width: item.w || null,
+                height: item.h || null,
               },
               (reply) => {
                 if (!(reply && reply.ok)) {
@@ -13271,7 +13315,7 @@ defmodule EdenWeb.ChatLive do
   defp seq_settle_media(socket, entry, pending, queue) do
     acid = pending.album_cid
     spec = Map.get(queue.albums, acid, %{expected: 1, sources: []})
-    source = consume_seq_media(socket, entry)
+    source = consume_seq_media(socket, entry) |> put_client_dims(pending)
     spec = %{spec | sources: spec.sources ++ [source]}
 
     {socket, queue} =
@@ -13357,6 +13401,13 @@ defmodule EdenWeb.ChatLive do
       {:ok, %{path: stable, filename: entry.client_name, client_id: nil}}
     end)
   end
+
+  # Carry the client-measured video dims (#231) onto the consumed source so Chat.media_dimensions
+  # can reserve the box without a synchronous ffprobe. Images ignore these (they use the header read).
+  defp put_client_dims(source, %{width: w, height: h}) when is_map(source),
+    do: Map.merge(source, %{width: w, height: h})
+
+  defp put_client_dims(source, _pending), do: source
 
   defp put_queue(socket, queue) do
     assign(
@@ -13500,6 +13551,11 @@ defmodule EdenWeb.ChatLive do
 
   defp sanitize_cid(cid) when is_binary(cid) and byte_size(cid) <= 64, do: cid
   defp sanitize_cid(_), do: nil
+
+  # A client-measured pixel dimension (#231): a positive int, capped so a forged value can't drive
+  # an absurd aspect-ratio into the layout CSS. Layout hint only — never a storage/serving decision.
+  defp sanitize_dim(n) when is_integer(n) and n > 0 and n <= 100_000, do: n
+  defp sanitize_dim(_), do: nil
 
   # A thread root id (phase F) is a positive integer message id; anything else → nil (main stream).
   # The reply path (Chat.create_album_reply) re-validates access + threading, so a forged id fails

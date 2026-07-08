@@ -3232,6 +3232,50 @@ defmodule Eden.ChatTest do
       assert_receive {:thumbnail_ready, _broadcast}
     end
 
+    test "a video's client-provided dimensions reserve the box at create — no ffprobe (#231)",
+         %{alice: alice, conv: conv} do
+      # No :ffmpeg tag — the whole point: create no longer shells ffprobe. A fake but
+      # video-classified clip (ftyp/isom magic) is stored :as_is and takes the client hint
+      # for dims, so this runs even where ffmpeg is absent.
+      video = <<0, 0, 0, 24>> <> "ftypisom" <> :binary.copy(<<0>>, 16)
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: image_path(video),
+          filename: "clip.mp4",
+          width: 640,
+          height: 480
+        })
+
+      att = hd(message.attachments)
+      assert att.kind == "video"
+      assert att.width == 640
+      assert att.height == 480
+    end
+
+    @tag :ffmpeg
+    test "the worker keeps the client video dims instead of overwriting with ffprobe (#231)",
+         %{alice: alice, conv: conv} do
+      # A portrait clip's client DISPLAY dims must survive the worker's ENCODED ffprobe dims,
+      # else the box would flip and pop (#117). Here the hint 640×480 must not become 320×240.
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: real_mp4(),
+          filename: "clip.mp4",
+          width: 640,
+          height: 480
+        })
+
+      att = hd(message.attachments)
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: att.id})
+
+      updated = Repo.get(Attachment, att.id)
+      assert is_binary(updated.thumbnail_key)
+      assert updated.duration in 800..1300
+      assert updated.width == 640
+      assert updated.height == 480
+    end
+
     @tag :ffmpeg
     test "records duration even when no poster frame can be extracted (audio-only mp4)",
          %{alice: alice, conv: conv} do

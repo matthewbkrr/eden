@@ -2422,7 +2422,7 @@ defmodule Eden.Chat do
     key = Storage.build_key("attachments", ext)
 
     with :ok <- Storage.put(key, source.path) do
-      {width, height} = media_dimensions(kind, source.path)
+      {width, height} = media_dimensions(kind, source)
 
       {:ok,
        %{
@@ -2474,24 +2474,26 @@ defmodule Eden.Chat do
     end
   end
 
-  # Original pixel dimensions for an image (from the header, lazily). Video
-  # dimensions are read by the media worker (libvips can't decode video), so
-  # they start nil here.
-  defp media_dimensions("image", path), do: image_dimensions(path)
+  # Original pixel dimensions for an image — read from the header, LAZILY (no full
+  # decode), so it's cheap enough to stay on the request path and still reserve the
+  # box (#117) with zero decode.
+  defp media_dimensions("image", %{path: path}), do: image_dimensions(path)
 
-  # Read a clip's pixel size synchronously at create (#117) so the just-sent video
-  # row reserves its box (video_ratio) instead of "popping to size" when the async
-  # poster worker later fills dimensions. Best-effort: a missing ffmpeg or an
-  # unreadable clip falls back to {nil, nil} exactly as before — the worker fills
-  # them on its own pass, so nothing regresses where ffmpeg is absent (CI/tests).
-  defp media_dimensions("video", path) do
-    case ffprobe_meta(path) do
-      {:ok, %{width: w, height: h}} when is_integer(w) and is_integer(h) -> {w, h}
-      _ -> {nil, nil}
-    end
-  end
+  # Video dimensions come from the CLIENT (the optimistic tile already measured
+  # `videoWidth/Height` for free) so the just-sent video row reserves its box (#117)
+  # WITHOUT a synchronous ffprobe subprocess on the LiveView process (#231). Purely a
+  # layout hint; the media worker re-probes and stays authoritative. No hint (a legacy
+  # or `create_attachment_message` path) → {nil, nil}, and the worker fills them — the
+  # same graceful fallback as before, minus the blocking subprocess at create.
+  defp media_dimensions("video", source), do: client_dims(source)
 
-  defp media_dimensions(_kind, _path), do: {nil, nil}
+  defp media_dimensions(_kind, _source), do: {nil, nil}
+
+  defp client_dims(%{width: w, height: h})
+       when is_integer(w) and w > 0 and is_integer(h) and h > 0,
+       do: {w, h}
+
+  defp client_dims(_source), do: {nil, nil}
 
   ## Message management (delete, forward)
 
@@ -4474,10 +4476,10 @@ defmodule Eden.Chat do
 
   defp store_video_preview(attachment, poster_jpeg, meta) when is_binary(poster_jpeg) do
     poster_key = Storage.build_key("thumbnails", "jpg")
+    meta = video_meta(attachment, Map.put(meta, :thumbnail_key, poster_key))
 
     with :ok <- Storage.put_binary(poster_key, poster_jpeg),
-         {:ok, _attachment} <-
-           update_attachment(attachment, Map.put(meta, :thumbnail_key, poster_key)) do
+         {:ok, _attachment} <- update_attachment(attachment, meta) do
       broadcast_thumbnail(attachment.message_id)
       :ok
     else
@@ -4490,7 +4492,7 @@ defmodule Eden.Chat do
   # No poster, but ffprobe gave us metadata — persist it so the UI still knows the
   # duration/dimensions (and that this is a real video).
   defp store_video_preview(attachment, nil, meta) when map_size(meta) > 0 do
-    with {:ok, _attachment} <- update_attachment(attachment, meta) do
+    with {:ok, _attachment} <- update_attachment(attachment, video_meta(attachment, meta)) do
       broadcast_thumbnail(attachment.message_id)
       :ok
     end
@@ -4498,6 +4500,21 @@ defmodule Eden.Chat do
 
   defp store_video_preview(_attachment, nil, _meta),
     do: {:error, {:unprocessable, :no_video_data}}
+
+  # ffprobe's width/height are the ENCODED dims; the client hint (#231) is the DISPLAY
+  # (rotation-applied) size the box was reserved with. Keep whichever dimension the row
+  # already has so a portrait clip doesn't flip landscape and pop (#117) — the worker
+  # only FILLS dims the create path left nil (legacy / create_attachment_message). Duration
+  # and thumbnail_key always update.
+  defp video_meta(attachment, meta) do
+    meta
+    |> keep_existing_dim(attachment, :width)
+    |> keep_existing_dim(attachment, :height)
+  end
+
+  defp keep_existing_dim(meta, attachment, key) do
+    if is_nil(Map.get(attachment, key)), do: meta, else: Map.delete(meta, key)
+  end
 
   defp update_attachment(attachment, attrs) do
     attachment |> Attachment.changeset(attrs) |> Repo.update()
