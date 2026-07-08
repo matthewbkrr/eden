@@ -16,15 +16,15 @@ defmodule Eden.ImagesTest do
   end
 
   describe "pixel cap (#231)" do
-    test "square_avatar rejects an image whose header exceeds the 32 MP cap" do
-      # 6000×6000 = 36 MP, over the cap, but a few-KB solid PNG — the guard must fire
+    test "square_avatar rejects an image whose header exceeds the 40 MP cap" do
+      # 7000×7000 = 49 MP, over the cap, but a few-KB solid PNG — the guard must fire
       # on the header before any full decode.
-      {path, _size} = image_file(6000, 6000)
+      {path, _size} = image_file(7000, 7000)
       assert {:error, :unprocessable} = Images.square_avatar(path)
     end
 
     test "compress_photo degrades to :keep for an over-cap image (stores the original)" do
-      {path, size} = image_file(6000, 6000)
+      {path, size} = image_file(7000, 7000)
       assert :keep = Images.compress_photo(path, size)
     end
 
@@ -33,9 +33,10 @@ defmodule Eden.ImagesTest do
       assert {:ok, jpeg} = Images.square_avatar(path)
       assert is_binary(jpeg)
       # compress_photo returns {:ok, …} or :keep depending on how much it shrinks —
-      # both are success (never an error) for an in-cap image.
-      assert Images.compress_photo(path, size) in [:keep] or
-               match?({:ok, _, _, _}, Images.compress_photo(path, size))
+      # both are success (never an error) for an in-cap image. Bind once (don't re-run
+      # the encode inside the assertion).
+      compressed = Images.compress_photo(path, size)
+      assert compressed == :keep or match?({:ok, _, _, _}, compressed)
     end
   end
 end
