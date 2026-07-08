@@ -391,8 +391,12 @@ maps the task to the right one:
 - `ecto-thinking` — schemas, changesets, contexts, queries, migrations, preloads.
 - `otp-thinking` — GenServer/Supervisor/Task/Registry, concurrency, fault tolerance.
 
-(`oban-thinking` is referenced by the router but not vendored — Oban isn't a
-dependency yet; see `.claude/skills/ATTRIBUTION.md`.)
+(`oban-thinking` is referenced by the router but not vendored — see
+`.claude/skills/ATTRIBUTION.md`. Note **Oban IS a dependency**: it runs in the
+supervision tree (`lib/eden/application.ex`) with a `:media` queue
+(`Eden.Chat.ThumbnailWorker`) and a daily `Oban.Plugins.Cron` job
+(`Eden.Accounts.TokenPruner`, #238). Prefer an Oban worker + Cron for periodic /
+background work over a hand-rolled GenServer sweep.)
 
 ### UI / frontend work — use the design skills
 
