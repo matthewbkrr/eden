@@ -2565,6 +2565,69 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ ~s(&quot;#{outsider.id}&quot;)
     end
 
+    test "sequential upload into a thread lands each file as a reply under the root (phase F)",
+         ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThreadSeq"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      # The .ThreadSendQueue hook routes a staged album/file send through the MAIN sequential feeder
+      # carrying the root id (phase F). Drive the exact events it emits.
+      render_hook(view, "queue_start", %{
+        "queue_id" => "tq1",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["tf1", "tf2"],
+        "root_id" => root.id
+      })
+
+      render_hook(view, "seq_item", %{
+        "queue_id" => "tq1",
+        "client_id" => "tf1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f1 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "a.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(f1, "a.txt", 100)
+
+      render_hook(view, "seq_item", %{
+        "queue_id" => "tq1",
+        "client_id" => "tf2",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      f2 =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "b.txt", content: "yo", type: "text/plain"}
+        ])
+
+      render_upload(f2, "b.txt", 100)
+
+      scope = Scope.for_user(ctx.alice)
+      # Both files are thread replies under the root, sharing a group_id.
+      assert {:ok, %{reply_count: 2}, [r1, r2]} = Chat.list_thread(scope, root.id)
+      assert r1.client_id == "tf1" and r2.client_id == "tf2"
+      assert r1.root_id == root.id and r2.root_id == root.id
+      assert r1.group_id && r1.group_id == r2.group_id
+      # And they stay out of the room's main stream.
+      {:ok, msgs} = Chat.list_messages(scope, room.id)
+      refute Enum.any?(msgs, &(&1.client_id in ["tf1", "tf2"]))
+    end
+
     test "thread replies collapse consecutive same-author runs in the panel (#105)", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Threads105"})

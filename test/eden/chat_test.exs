@@ -2987,6 +2987,115 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "create_attachments/4 into a room thread (root_id, phase F)" do
+    # The sequential upload engine drives thread attachments by passing opts[:root_id]: each step
+    # becomes a REPLY under the root (grouped by group_id, out of the main stream) instead of a
+    # top-level message. Mirrors the DM/room #58 split, routed through create_album_reply.
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "talk"})
+      :ok = Chat.join_room(room.id, bob.id)
+      {:ok, root} = Chat.create_message(scope(alice), room.id, %{"body" => "root post"})
+      %{room: room, root: root}
+    end
+
+    test "a file group posts as thread replies under the root, grouped + out of the main stream",
+         %{alice: alice, room: room, root: root} do
+      gid = "44444444-4444-4444-4444-444444444444"
+
+      sources = [
+        %{path: image_path("doc one"), filename: "a.txt", client_id: "tc1"},
+        %{path: image_path("doc two"), filename: "b.txt", client_id: "tc2"}
+      ]
+
+      assert {:ok, [f1, f2]} =
+               Chat.create_attachments(scope(alice), room.id, sources, %{
+                 group_id: gid,
+                 root_id: root.id
+               })
+
+      # Each file is a reply under the root, sharing the send's group_id.
+      assert f1.root_id == root.id and f2.root_id == root.id
+      assert f1.group_id == gid and f2.group_id == gid
+
+      # Replies never leak into the room's main stream.
+      {:ok, messages} = Chat.list_messages(scope(alice), room.id)
+      refute Enum.any?(messages, &(&1.id in [f1.id, f2.id]))
+
+      # The root now owns both replies, in order.
+      assert {:ok, %{reply_count: 2}, replies} = Chat.list_thread(scope(alice), root.id)
+      assert Enum.map(replies, & &1.id) == [f1.id, f2.id]
+    end
+
+    test "an album posts as a single thread reply with its photos in order (no group_id)", %{
+      alice: alice,
+      room: room,
+      root: root
+    } do
+      sources = [
+        %{path: image_path(@png_signature <> "a"), filename: "1.png"},
+        %{path: image_path(@png_signature <> "b"), filename: "2.png"}
+      ]
+
+      assert {:ok, [album]} =
+               Chat.create_attachments(scope(alice), room.id, sources, %{
+                 body: "look",
+                 root_id: root.id
+               })
+
+      assert album.root_id == root.id
+      assert album.body == "look"
+      assert Enum.map(album.attachments, & &1.kind) == ["image", "image"]
+
+      # An album stays one-message-N-attachments → no group_id; and it's a reply, not main-stream.
+      assert is_nil(album.group_id)
+      {:ok, messages} = Chat.list_messages(scope(alice), room.id)
+      refute Enum.any?(messages, &(&1.id == album.id))
+    end
+
+    test "notify-once still holds: a threaded file group rings a follower a single time", %{
+      alice: alice,
+      bob: bob,
+      room: room,
+      root: root
+    } do
+      # bob replies first so he follows the thread and is a notify target.
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "in"})
+      sub(bob)
+      gid = "55555555-5555-5555-5555-555555555555"
+
+      sources = [
+        %{path: image_path("doc one"), filename: "a.txt"},
+        %{path: image_path("doc two"), filename: "b.txt"},
+        %{path: image_path("doc three"), filename: "c.txt"}
+      ]
+
+      assert {:ok, _} =
+               Chat.create_attachments(scope(alice), room.id, sources, %{
+                 group_id: gid,
+                 root_id: root.id
+               })
+
+      rid = room.id
+      assert_receive {:notify, %{conversation_id: ^rid}}
+      refute_receive {:notify, %{conversation_id: ^rid}}
+    end
+
+    test "a forged root id fails the send instead of posting anywhere", %{bob: bob, room: room} do
+      before = Repo.aggregate(Message, :count)
+
+      assert {:error, :not_found} =
+               Chat.create_attachments(
+                 scope(bob),
+                 room.id,
+                 [%{path: image_path("x"), filename: "x.txt"}],
+                 %{root_id: 9_999_999}
+               )
+
+      assert Repo.aggregate(Message, :count) == before
+    end
+  end
+
   describe "generate_thumbnail/1" do
     setup %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
