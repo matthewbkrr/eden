@@ -1,15 +1,27 @@
+# Global options. A Cloudflare-proxied domain means the TCP peer Caddy sees is a Cloudflare edge,
+# NOT the visitor — so `trusted_proxies` lists Cloudflare's ranges and Caddy resolves {client_ip}
+# to the real visitor (skipping the CF hop in X-Forwarded-For). Safe BEFORE Cloudflare too: a direct
+# visitor isn't in these ranges, so {client_ip} is simply the peer (identical to the pre-CF setup).
+# Keep the list in sync with https://www.cloudflare.com/ips/ (it changes rarely).
+#
+# To also receive Let's Encrypt expiry notices in the direct (non-CF) domain phase, add
+# `email you@example.com` inside this block. (Don't wire it to a possibly-empty env var — a blank
+# `email` is a parse error.)
+{
+	servers {
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	}
+}
+
 # SITE_ADDRESS controls the phase:
 #   ":80"          → plain HTTP on any host (initial IP bring-up); no TLS, no HSTS.
 #   "chat.ihi.ru"  → automatic HTTPS via Let's Encrypt, with http→https redirect.
 # reverse_proxy upgrades WebSockets (the LiveView socket) automatically.
 #
-# Caddy auto-renews certs without an ACME email. To also receive Let's Encrypt
-# expiry notices, add a global options block ABOVE this site:
-#   {
-#       email you@example.com
-#   }
-# (Don't wire it to an env var that can be empty — a blank `email` is a parse
-# error, and a bogus default address fails ACME registration in the domain phase.)
+# NOTE (Cloudflare-proxied phase): once the domain is proxied through Cloudflare, Caddy can no longer
+# solve the Let's Encrypt ACME challenge (it now lands on Cloudflare). At that cutover, switch the TLS
+# below to a Cloudflare Origin Certificate — `tls /etc/caddy/origin.pem /etc/caddy/origin-key.pem` —
+# and set Cloudflare's SSL/TLS mode to Full (strict). See deploy/README.md.
 #
 # `:80` is the fallback if SITE_ADDRESS is empty/unset — an empty site address
 # would otherwise make Caddy read `{ … }` as a global-options block and crash.
@@ -18,10 +30,11 @@
 	# HSTS — honored by browsers only over HTTPS, so it's inert in the IP phase.
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	reverse_proxy app:4000 {
-		# Overwrite X-Forwarded-For with the true TCP peer so a client can't spoof
-		# it — the app trusts this header for conn.remote_ip, which the #236 per-IP
-		# login/invite throttle keys on. Caddy is the edge, so {remote_host} is the
-		# real client.
-		header_up X-Forwarded-For {remote_host}
+		# Overwrite X-Forwarded-For with the REAL client as a SINGLE value, so the app's
+		# Plug.RewriteOn gets exactly one IP and the #236 per-IP login/invite throttle keys on the
+		# true visitor. {client_ip} is the direct peer today, or the pre-Cloudflare visitor once the
+		# domain is proxied (resolved via the trusted_proxies list above). One value → the client
+		# can't smuggle extra hops into the chain.
+		header_up X-Forwarded-For {client_ip}
 	}
 }

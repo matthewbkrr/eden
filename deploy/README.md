@@ -109,6 +109,55 @@ Invite the first users: create invite links from within the app (or via
 
 Later, to ship a fix: merge the PR to `main`, then run the **Deploy** workflow.
 
+## 6a. Put Cloudflare in front (lower latency for far users)
+
+The box has a fat pipe and a tuned stack (BBR + `fq` + 33 MB buffers), so for a
+distant audience the bottleneck is pure round-trip distance (~160 ms). Cloudflare
+terminates TLS at an edge ~20 ms from the user and serves static/media from cache,
+which cuts cold page loads (~480 → ~60 ms), static, media downloads and uploads.
+(Live per-click actions still need the origin, so they stay ~1 RTT.)
+
+**Real client IP is already handled** by `Caddyfile`: it lists Cloudflare's ranges
+under `servers > trusted_proxies` and forwards `{client_ip}`, so `conn.remote_ip`
+(and the #236 per-IP throttle) stays the true visitor rather than a Cloudflare edge.
+Keep the range list in sync with <https://www.cloudflare.com/ips/>.
+
+Cutover (do the TLS switch **with** the DNS flip, or the origin's Let's Encrypt cert
+will fail to renew once ACME challenges land on Cloudflare):
+
+1. **Add the zone** `ihi.ru` to Cloudflare (Free plan) and point the registrar's
+   nameservers at Cloudflare.
+2. **Origin cert** (no more ACME on the box): Cloudflare dashboard → SSL/TLS →
+   *Origin Server* → *Create Certificate* (15-year). Save the cert + key on the
+   server:
+   ```sh
+   install -m 644 origin.pem     /opt/eden/origin.pem
+   install -m 600 origin-key.pem /opt/eden/origin-key.pem
+   ```
+   Mount them into Caddy (add under the `caddy` service `volumes:` in
+   `docker-compose.yml`):
+   ```yaml
+   - ./origin.pem:/etc/caddy/origin.pem:ro
+   - ./origin-key.pem:/etc/caddy/origin-key.pem:ro
+   ```
+   and switch the site's TLS in `Caddyfile` (inside the `{$SITE_ADDRESS::80}` block):
+   ```
+   tls /etc/caddy/origin.pem /etc/caddy/origin-key.pem
+   ```
+3. **DNS**: in Cloudflare, `chat` A → `95.169.166.216`, **Proxied** (orange cloud).
+4. **SSL/TLS mode**: *Full (strict)* (validates the origin cert end-to-end).
+5. `cd /opt/eden && docker compose up -d` (or `docker compose restart caddy`).
+6. **Verify** — the client IP still resolves correctly (not a Cloudflare IP), so the
+   throttle isn't keyed on the edge:
+   ```sh
+   docker compose logs --since 5m app | grep -i "log_in"   # after a test login
+   curl -sI https://chat.ihi.ru/healthz | grep -i "cf-ray"  # served via Cloudflare
+   ```
+   Then re-run the speed check from a far client (`curl -w` from README's perf notes).
+
+**Harden (recommended):** firewall the origin so only Cloudflare can reach `:80/:443`
+(hides the origin IP and blocks anyone from bypassing CF to spoof the client IP).
+
 ## 7. Backups
 ```sh
 chmod +x /opt/eden/backup.sh
