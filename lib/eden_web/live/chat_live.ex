@@ -33,12 +33,13 @@ defmodule EdenWeb.ChatLive do
   # idle/active transitions also touch, so this only needs coarse granularity.
   @touch_active_ms 300_000
 
-  # Per-chunk upload timeout (#…). LiveView's default is 10s; a multi-file send opens one upload
-  # channel PER file, so on a thin cross-border link the concurrent chunks split the bandwidth and
-  # a 64KB chunk can't land in 10s → the push errors and the file stalls (a lone file uploads fine
-  # on full bandwidth). 60s tolerates ~1KB/s per concurrent upload and still sits under the 90s
-  # no-progress stall watchdog, so a genuinely wedged upload still surfaces as failed.
-  @upload_chunk_timeout 60_000
+  # Per-chunk upload timeout. LiveView's default is 10s. Uploads are chunked at Chat.upload_chunk_size
+  # (1MB) and serialized, so one chunk must land within this window — a 1MB chunk on a slow uplink
+  # (say ~110kbps) takes ~70s, so 80s gives it headroom while staying under the 90s no-progress stall
+  # watchdog (a genuinely wedged upload still surfaces as failed). Below ~100kbps a 1MB chunk can't
+  # finish in time and fails to a retriable card — acceptable for the corporate audience (office/home
+  # links), and the chunk size is the knob if that ever needs revisiting.
+  @upload_chunk_timeout 80_000
 
   # Every allow_upload uses Chat.upload_chunk_size() (512KB) — see its @doc: LiveView serializes chunks
   # over the socket, so a bigger chunk = fewer round-trips on a high-latency link (uploads are RTT-bound,
