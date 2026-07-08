@@ -16,6 +16,7 @@ defmodule EdenWeb.ChatLive do
 
   alias Eden.{Accounts, Channels, Chat}
   alias EdenWeb.ChatLive.AlbumLayout
+  alias EdenWeb.ChatLive.ThreadPanel
   alias EdenWeb.Markup
 
   @page 50
@@ -1598,7 +1599,7 @@ defmodule EdenWeb.ChatLive do
   def handle_event("thread_search", %{"q" => q}, socket) do
     case socket.assigns.thread_root do
       %{id: root_id} ->
-        results = run_thread_search(socket, root_id, q)
+        results = ThreadPanel.run_thread_search(socket, root_id, q)
         {:noreply, assign(socket, thread_search: q, thread_results: results)}
 
       _ ->
@@ -2014,7 +2015,7 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("close_thread", _params, socket) do
-    {:noreply, socket |> reset_thread_select() |> close_thread_panel()}
+    {:noreply, socket |> ThreadPanel.reset_thread_select() |> close_thread_panel()}
   end
 
   # The Threads list panel (#57): the room's followed threads, drill into any.
@@ -2058,7 +2059,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          socket
          |> assign(thread_following: following, thread_unreads: unreads)
-         |> refresh_thread_list()}
+         |> ThreadPanel.refresh_thread_list()}
 
       _ ->
         {:noreply, socket}
@@ -2246,7 +2247,7 @@ defmodule EdenWeb.ChatLive do
     {:noreply,
      socket
      |> assign(reply_composer: to_form(%{"body" => body}, as: "reply"))
-     |> maybe_broadcast_thread_typing(body)}
+     |> ThreadPanel.maybe_broadcast_thread_typing(body)}
   end
 
   def handle_event("send_reply", %{"reply" => %{"body" => body} = reply}, socket) do
@@ -2328,7 +2329,7 @@ defmodule EdenWeb.ChatLive do
   def handle_info({:message_edited, message}, socket) do
     cond do
       not is_nil(message.root_id) ->
-        if thread_open_for?(socket, message.root_id),
+        if ThreadPanel.thread_open_for?(socket, message.root_id),
           do: {:noreply, stream_insert(socket, :thread, message)},
           else: {:noreply, socket}
 
@@ -2345,11 +2346,11 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          socket
          |> stream_insert(:messages, streamed)
-         |> maybe_update_thread_root(message)
+         |> ThreadPanel.maybe_update_thread_root(message)
          |> refresh_sidebar()}
 
       open?(socket, message.conversation_id) ->
-        {:noreply, socket |> maybe_update_thread_root(message) |> refresh_sidebar()}
+        {:noreply, socket |> ThreadPanel.maybe_update_thread_root(message) |> refresh_sidebar()}
 
       true ->
         {:noreply, refresh_sidebar(socket)}
@@ -2359,7 +2360,7 @@ defmodule EdenWeb.ChatLive do
   # A reply landed in a thread of the open conversation: refresh the root's
   # footer (count/time/facepile), the viewer's unread, and the panel if open.
   def handle_info({:thread_reply, root, reply}, socket) do
-    viewing? = thread_open_for?(socket, root.id)
+    viewing? = ThreadPanel.thread_open_for?(socket, root.id)
     # Reading the thread keeps it read on the server (the DB just incremented it).
     if viewing?, do: Chat.mark_thread_read(socket.assigns.current_scope, root.id)
 
@@ -2368,10 +2369,10 @@ defmodule EdenWeb.ChatLive do
         socket
         # Authoritative unread from the server: covers the auto-followed root
         # author (no local key yet) and viewers reading right now (now zero).
-        |> sync_thread_unread(root.id)
+        |> ThreadPanel.sync_thread_unread(root.id)
         |> restream_root_if_loaded(root)
-        |> bump_facepile(root.id, reply.sender)
-        |> refresh_thread_list()
+        |> ThreadPanel.bump_facepile(root.id, reply.sender)
+        |> ThreadPanel.refresh_thread_list()
       else
         socket
       end
@@ -2403,13 +2404,13 @@ defmodule EdenWeb.ChatLive do
           :thread_participants,
           Map.merge(socket.assigns.thread_participants, participants)
         )
-        |> sync_thread_unread(root.id)
-        |> refresh_thread_list()
+        |> ThreadPanel.sync_thread_unread(root.id)
+        |> ThreadPanel.refresh_thread_list()
       else
         socket
       end
 
-    if thread_open_for?(socket, root.id) do
+    if ThreadPanel.thread_open_for?(socket, root.id) do
       {:noreply, assign(socket, thread_root: root)}
     else
       {:noreply, socket}
@@ -2424,14 +2425,14 @@ defmodule EdenWeb.ChatLive do
        socket
        |> stream_delete_by_dom_id(:messages, "messages-#{message.id}")
        |> stream_delete_by_dom_id(:thread, "thread-#{message.id}")
-       |> close_thread_if_root_gone(message.id)
+       |> ThreadPanel.close_thread_if_root_gone(message.id)
        |> assign(:thread_unreads, Map.delete(socket.assigns.thread_unreads, message.id))
        # #136: drop the deleted message's media from an open profile gallery.
        |> maybe_drop_gallery(message)
        # Re-fuse the merged file bubble if a group member was the one deleted.
        |> reshape_group(message.conversation_id, message.group_id)
        |> forget_row(message.id)
-       |> refresh_thread_list()}
+       |> ThreadPanel.refresh_thread_list()}
     else
       {:noreply, socket}
     end
@@ -2443,7 +2444,7 @@ defmodule EdenWeb.ChatLive do
       {:noreply,
        socket
        |> assign(:thread_unreads, Map.replace(socket.assigns.thread_unreads, root_id, 0))
-       |> refresh_thread_list()}
+       |> ThreadPanel.refresh_thread_list()}
     else
       {:noreply, socket}
     end
@@ -2458,7 +2459,7 @@ defmodule EdenWeb.ChatLive do
           socket
           |> stream_delete_by_dom_id(:messages, "messages-#{message_id}")
           |> stream_delete_by_dom_id(:thread, "thread-#{message_id}")
-          |> close_thread_if_root_gone(message_id)
+          |> ThreadPanel.close_thread_if_root_gone(message_id)
           # Re-fuse the merged file bubble if a group member was hidden.
           |> reshape_group(conversation_id, group_id)
           |> forget_row(message_id),
@@ -3279,18 +3280,18 @@ defmodule EdenWeb.ChatLive do
               phx-click="open_threads"
               title={gettext("Threads")}
               aria-label={
-                if unread_thread_count(@thread_unreads) > 0,
+                if ThreadPanel.unread_thread_count(@thread_unreads) > 0,
                   do:
                     gettext("Threads, %{count} unread",
-                      count: unread_thread_count(@thread_unreads)
+                      count: ThreadPanel.unread_thread_count(@thread_unreads)
                     ),
                   else: gettext("Threads")
               }
               aria-expanded={to_string(@thread_list_open)}
             >
               <.icon name="hero-chat-bubble-left-right-mini" class="size-5" />
-              <span :if={unread_thread_count(@thread_unreads) > 0} class="ed-thread-badge">
-                {unread_thread_count(@thread_unreads)}
+              <span :if={ThreadPanel.unread_thread_count(@thread_unreads) > 0} class="ed-thread-badge">
+                {ThreadPanel.unread_thread_count(@thread_unreads)}
               </span>
             </button>
             <button
@@ -12366,21 +12367,6 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # In-thread search (#189): same nil-vs-[] convention as run_room_search.
-  defp run_thread_search(socket, root_id, q) do
-    if String.trim(q) == "" do
-      nil
-    else
-      Chat.search_thread(socket.assigns.current_scope, root_id, q)
-    end
-  end
-
-  # Reset the in-thread search panel — on close, on opening a different thread, and
-  # after jumping to a result (so the panel doesn't linger over the focused reply).
-  defp reset_thread_search(socket) do
-    assign(socket, thread_search_open: false, thread_search: "", thread_results: nil)
-  end
-
   # A pending knock was approved while its window is open: the room now appears
   # in the sidebar — clear the knock window so the user can open it.
   defp maybe_clear_knock(%{assigns: %{knock_room: %{id: id}}} = socket) do
@@ -12741,34 +12727,6 @@ defmodule EdenWeb.ChatLive do
     Chat.thread_participants(scope, room.id, root_ids)
   end
 
-  # A reply arrived: bump the facepile locally (no query) — newest first, capped.
-  defp bump_facepile(socket, root_id, sender) do
-    participants =
-      [sender | Map.get(socket.assigns.thread_participants, root_id, [])]
-      |> Enum.uniq_by(& &1.id)
-      |> Enum.take(5)
-
-    assign(
-      socket,
-      :thread_participants,
-      Map.put(socket.assigns.thread_participants, root_id, participants)
-    )
-  end
-
-  defp thread_open_for?(socket, root_id) do
-    match?(%{id: ^root_id}, socket.assigns.thread_root)
-  end
-
-  # The open panel's root was deleted (for both) or hidden (for me): the panel
-  # would keep showing the stale root forever — close it instead.
-  defp close_thread_if_root_gone(socket, message_id) do
-    if thread_open_for?(socket, message_id) do
-      assign(socket, thread_root: nil)
-    else
-      socket
-    end
-  end
-
   # Permalinks may point at a reply — those live in the thread panel, not the
   # main stream, so open the thread first and focus inside it.
   defp focus_message_target(socket, message_id) do
@@ -12803,21 +12761,14 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # A thread selection is bound to the open thread — drop it when the thread opens/closes/switches
-  # (a main-stream selection is left alone).
-  defp reset_thread_select(%{assigns: %{select_surface: :thread}} = socket),
-    do: assign(socket, selection: nil, sel_delete: nil, select_surface: nil)
-
-  defp reset_thread_select(socket), do: socket
-
   # Tear down the open thread panel (composer, staged attachments, typing, search). Does NOT
   # touch a selection — callers decide (close_thread drops it, forward_selection kept the carry).
   defp close_thread_panel(socket) do
     socket
-    |> cancel_staged_thread_attachments()
-    |> clear_thread_typing()
+    |> ThreadPanel.cancel_staged_thread_attachments()
+    |> ThreadPanel.clear_thread_typing()
     |> assign(thread_root: nil, thread_reply_to: nil, thread_editing: nil)
-    |> reset_thread_search()
+    |> ThreadPanel.reset_thread_search()
   end
 
   defp open_thread(socket, root_id) do
@@ -12834,7 +12785,7 @@ defmodule EdenWeb.ChatLive do
         {replies, thread_last_flat} = mark_compact(replies, socket.assigns.selected)
 
         socket
-        |> cancel_staged_thread_attachments()
+        |> ThreadPanel.cancel_staged_thread_attachments()
         |> assign(
           thread_root: root,
           thread_following: following,
@@ -12850,65 +12801,25 @@ defmodule EdenWeb.ChatLive do
           thread_typing_users: %{},
           last_thread_typing_at: nil
         )
-        |> reset_thread_select()
+        |> ThreadPanel.reset_thread_select()
         |> stream(:thread, replies, reset: true)
         |> restream_root_if_loaded(root)
         # Fresh thread (or a jump to a thread-search result) → search starts closed (#189).
-        |> reset_thread_search()
+        |> ThreadPanel.reset_thread_search()
 
       {:error, _} ->
         put_flash(socket, :error, gettext("Thread not found."))
     end
   end
 
-  # Set one thread's unread badge from the authoritative server state — drops the
-  # key when the viewer doesn't follow. Keeps the local map in lockstep with the
-  # DB across every lifecycle event (new reply, reply delete), not just guesses.
-  defp sync_thread_unread(socket, root_id) do
-    %{following: following, unread: unread} =
-      Chat.thread_follow_state(socket.assigns.current_scope, root_id)
-
-    unreads =
-      if following,
-        do: Map.put(socket.assigns.thread_unreads, root_id, unread),
-        else: Map.delete(socket.assigns.thread_unreads, root_id)
-
-    assign(socket, :thread_unreads, unreads)
-  end
-
   # Re-stream a root ONLY when it's in the loaded message window (tracked by the
   # `compacts` map). The `:messages` stream is unbounded with manual paging, so
   # inserting a paged-out root would resurrect it out of order at the stream end.
-  # #164: keep an open thread panel's root header live when the root message itself is edited
-  # (it renders from @thread_root, not the :messages stream).
-  defp maybe_update_thread_root(socket, %{id: mid} = message) do
-    case socket.assigns.thread_root do
-      %{id: ^mid} -> assign(socket, thread_root: message)
-      _ -> socket
-    end
-  end
-
   defp restream_root_if_loaded(socket, root) do
     if Map.has_key?(socket.assigns.compacts, root.id),
       do: stream_insert(socket, :messages, restore_compact(socket, root)),
       else: socket
   end
-
-  # Reload the Threads list panel when it's open (cheap; only while shown).
-  defp refresh_thread_list(socket) do
-    if socket.assigns.thread_list_open and socket.assigns.selected do
-      assign(
-        socket,
-        :thread_list,
-        Chat.list_followed_threads(socket.assigns.current_scope, socket.assigns.selected.id)
-      )
-    else
-      socket
-    end
-  end
-
-  # How many followed threads carry unread replies — the toolbar badge.
-  defp unread_thread_count(unreads), do: Enum.count(unreads, fn {_id, n} -> n > 0 end)
 
   defp parse_folder_id(""), do: nil
 
@@ -13783,28 +13694,6 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # Thread-reply typing (#103): same throttle, tagged with the thread root's id so
-  # receivers route it to the thread panel only. No-op without an open thread.
-  defp maybe_broadcast_thread_typing(%{assigns: %{selected: nil}} = socket, _body), do: socket
-  defp maybe_broadcast_thread_typing(%{assigns: %{thread_root: nil}} = socket, _body), do: socket
-
-  defp maybe_broadcast_thread_typing(socket, body) do
-    now = System.monotonic_time(:millisecond)
-    last = socket.assigns.last_thread_typing_at
-
-    if String.trim(body) != "" and (is_nil(last) or now - last >= @typing_throttle_ms) do
-      Chat.broadcast_typing(
-        socket.assigns.current_scope,
-        socket.assigns.selected.id,
-        socket.assigns.thread_root.id
-      )
-
-      assign(socket, last_thread_typing_at: now)
-    else
-      socket
-    end
-  end
-
   # (Re)arm a typer's TTL in `field` (:typing_users for the room, :thread_typing_users
   # for the open thread, #103). Each arm gets a fresh token carried in the expiry
   # message; only the matching (latest) expiry drops the typer, so an earlier timer that
@@ -13819,9 +13708,6 @@ defmodule EdenWeb.ChatLive do
 
   defp drop_typing(socket, field, user_id),
     do: assign(socket, field, Map.delete(socket.assigns[field], user_id))
-
-  defp clear_thread_typing(socket),
-    do: assign(socket, thread_typing_users: %{}, last_thread_typing_at: nil)
 
   defp clear_typing(socket) do
     # Pending timers just fire later with stale tokens and are ignored — no cancel
@@ -13903,23 +13789,6 @@ defmodule EdenWeb.ChatLive do
       end
     after
       Enum.each(sources, &File.rm(&1.path))
-    end
-  end
-
-  # #164: same as save_edit, for a thread reply edited in the thread composer. The
-  # {:message_edited} broadcast routes the updated reply to the :thread stream.
-  defp save_thread_edit(socket, body) do
-    %{current_scope: scope, thread_editing: %{id: id}} = socket.assigns
-
-    case Chat.edit_message(scope, id, body) do
-      {:ok, _edited} ->
-        {:noreply,
-         socket
-         |> assign(thread_editing: nil)
-         |> push_event("set_thread_composer_body", %{body: ""})}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Couldn't save the edit."))}
     end
   end
 
@@ -14093,7 +13962,7 @@ defmodule EdenWeb.ChatLive do
 
       # #164: an active thread-reply edit routes send_reply to edit_message, not a new reply.
       socket.assigns.thread_editing ->
-        save_thread_edit(socket, body)
+        ThreadPanel.save_thread_edit(socket, body)
 
       is_nil(root) ->
         {:noreply, socket}
@@ -14626,7 +14495,7 @@ defmodule EdenWeb.ChatLive do
       # lingering staged entries so the tray clears, then keep a typed caption as a
       # plain text reply (otherwise no-op).
       [] ->
-        socket = cancel_staged_thread_attachments(socket)
+        socket = ThreadPanel.cancel_staged_thread_attachments(socket)
 
         if String.trim(body) == "",
           do: {:noreply, socket},
@@ -14641,7 +14510,7 @@ defmodule EdenWeb.ChatLive do
                  reply_to_id: reply_to_id
                }) do
             {:ok, _reply} ->
-              {:noreply, reset_reply_composer(socket)}
+              {:noreply, ThreadPanel.reset_reply_composer(socket)}
 
             {:error, _reason} ->
               {:noreply, put_flash(socket, :error, gettext("That reply can't be sent."))}
@@ -14664,7 +14533,7 @@ defmodule EdenWeb.ChatLive do
       {:ok, _reply} ->
         # The hook path (client_id present) cleared its input client-side; the form
         # path resets the composer here. The reply itself arrives via {:thread_reply}.
-        socket = if client_id, do: socket, else: reset_reply_composer(socket)
+        socket = if client_id, do: socket, else: ThreadPanel.reset_reply_composer(socket)
         ack(socket, client_id)
 
       {:error, %Ecto.Changeset{}} ->
@@ -14676,22 +14545,6 @@ defmodule EdenWeb.ChatLive do
         |> put_flash(:error, gettext("Thread not found."))
         |> nack(client_id)
     end
-  end
-
-  defp reset_reply_composer(socket),
-    do:
-      assign(socket,
-        reply_composer: to_form(%{"body" => ""}, as: "reply"),
-        thread_reply_to: nil,
-        last_thread_typing_at: nil
-      )
-
-  # Drop any staged thread-reply attachments (#104) — on close, or when switching to a
-  # different thread, so they don't bleed into the next reply.
-  defp cancel_staged_thread_attachments(socket) do
-    Enum.reduce(socket.assigns.uploads.thread_attachment.entries, socket, fn entry, acc ->
-      cancel_upload(acc, :thread_attachment, entry.ref)
-    end)
   end
 
   # Consume a staged channel-avatar upload (#70), if any → {channel, error_or_nil}.
