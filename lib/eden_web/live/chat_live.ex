@@ -7273,10 +7273,18 @@ defmodule EdenWeb.ChatLive do
               v.preload = "metadata"
               v.muted = true
               const url = URL.createObjectURL(file)
+              let settled = false
               const finish = (w, h) => {
+                if (settled) return
+                settled = true
+                clearTimeout(timer)
                 URL.revokeObjectURL(url)
                 resolve({ w: w || 0, h: h || 0 })
               }
+              // A pathological clip may fire NEITHER loadedmetadata NOR error — never leave the
+              // Promise pending (it would hang enqueueThreadSeq's Promise.all + the whole send). Cap
+              // the wait; on timeout fall back to {0,0} and let the worker fill the dims (#340 review).
+              const timer = setTimeout(() => finish(0, 0), 3000)
               v.onloadedmetadata = () => finish(v.videoWidth, v.videoHeight)
               v.onerror = () => finish(0, 0)
               v.src = url
@@ -13555,6 +13563,16 @@ defmodule EdenWeb.ChatLive do
   # A client-measured pixel dimension (#231): a positive int, capped so a forged value can't drive
   # an absurd aspect-ratio into the layout CSS. Layout hint only — never a storage/serving decision.
   defp sanitize_dim(n) when is_integer(n) and n > 0 and n <= 100_000, do: n
+  # `seq_item` is a pushEvent, so a numeric field arrives as an integer — but tolerate a string
+  # too (a future form/param path, or a client that stringifies), so the hint is never silently
+  # dropped (#340 review).
+  defp sanitize_dim(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> sanitize_dim(n)
+      _ -> nil
+    end
+  end
+
   defp sanitize_dim(_), do: nil
 
   # A thread root id (phase F) is a positive integer message id; anything else → nil (main stream).
