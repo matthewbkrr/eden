@@ -598,6 +598,22 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-typing-row")
     end
 
+    test "opening a group with another member's text message doesn't crash the render (#P0)",
+         ctx do
+      carol = user_fixture(%{username: "carol_grp_p0", display_name: "Carol"})
+      {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
+      # A NON-media text message from another member: the render branch that raised
+      # BadBooleanError on `@message.sender and @grp in [...]` — a %User{} on the left of `and`,
+      # which fires for every group message you didn't send. DMs (@group=false) never hit it.
+      {:ok, _} = Chat.create_message(Scope.for_user(ctx.bob), group.id, %{"body" => "hi group"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{group.id}")
+      assert html =~ "hi group"
+      # The sender name rides the first row of a group message.
+      assert html =~ ctx.bob.display_name
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})
