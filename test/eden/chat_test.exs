@@ -3153,6 +3153,21 @@ defmodule Eden.ChatTest do
       assert Image.height(thumb) == 200
     end
 
+    test "an over-cap image is rejected before decode — no thumbnail, worker cancels (#231)",
+         %{alice: alice, conv: conv} do
+      # 7000×7000 = 49 MP, over the 48 MP source cap. create stores it (dimensions from
+      # the lazy header) but make_thumbnail's guard fires before any full decode, so no
+      # thumbnail is produced — bounding the :media worker's memory (the OOM vector).
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(7000, 7000)})
+
+      att = hd(message.attachments)
+      assert att.width == 7000 and att.height == 7000
+
+      assert {:error, {:unprocessable, _}} = Chat.generate_thumbnail(att)
+      refute Repo.get(Attachment, att.id).thumbnail_key
+    end
+
     test "the worker generates the thumbnail and is idempotent", %{alice: alice, conv: conv} do
       {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png()})
       args = %{attachment_id: hd(message.attachments).id}

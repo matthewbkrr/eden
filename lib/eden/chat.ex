@@ -73,9 +73,12 @@ defmodule Eden.Chat do
   @heic_max 1920
   @heic_quality 85
   # Reject decompression bombs before decoding: cap the source's *header* pixel
-  # count, read from the lazy image without decoding. Generous enough for modern
-  # high-MP phone cameras (~16000×12000), tight enough to stop absurd PNG bombs.
-  @max_source_pixels 192_000_000
+  # count, read from the lazy image without decoding. 48 MP (≈6928²) clears any real
+  # photo/screenshot yet bounds a PNG/WebP bomb's full decode — the worker thumbnails
+  # at :media concurrency 5, so an unbounded header (a few-MB file declaring ~190 MP)
+  # would decode to ~576 MB ×5 → OOM on the single-VPS prod (#231). PNG has no
+  # shrink-on-load, so the header guard is the only line of defence for that format.
+  @max_source_pixels 48_000_000
 
   # Hard ceiling on a single ffmpeg/ffprobe run, so a crafted or corrupt video
   # can't pin a media worker (and starve the :media queue) indefinitely.
