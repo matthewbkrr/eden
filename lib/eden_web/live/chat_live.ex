@@ -3569,7 +3569,6 @@ defmodule EdenWeb.ChatLive do
             data-not-sent={gettext("Not sent")}
             data-sending-label={gettext("Sending {name}")}
             data-cancel-label={gettext("Cancel upload")}
-            data-queued-label={gettext("In queue")}
             phx-submit="send"
             phx-change="composer_changed"
             class={[
@@ -5745,21 +5744,9 @@ defmodule EdenWeb.ChatLive do
               }
             })
             this.queue = []
-            // Upload queue (#119): File batches picked WHILE a media send is uploading.
-            // They can't enter the shared :attachment config (would merge into the in-flight
-            // album), so they wait here and are fed in one at a time as the config frees
-            // (config-free edge in updated()). prevSm/prevComposeOpen track that edge: the
-            // shared config is occupied while EITHER a send uploads (sm) OR a batch is staged
-            // in the compose overlay; the queue feeds the next batch the moment it frees.
-            this.mediaQueue = []
-            this.prevSm = this.el.dataset.sendingMedia === "true"
+            // Tracks the compose-overlay open transition (used by the #164 text→media caption
+            // seed in updated()).
             this.prevComposeOpen = !!this.el.querySelector("[data-upload-preview]")
-            // Client-side "a media send is occupying the config" flag (#119). Set the instant
-            // Send is pressed (synchronously, before the media_sending round-trip) and cleared
-            // once the config is free again (in updated()). The server's data-sending-media
-            // lags by a round-trip — on a slow link that lag is seconds, so a pick made right
-            // after Send would otherwise miss the gate and merge into the in-flight album.
-            this.mediaInFlight = this.prevSm
             // Per-send delivery watchdogs by client_id (#142): a clock shows while a
             // send awaits ack; if none arrives in time the clock flips to a red ●!.
             // ~20s when online (covers several LiveView reconnects on a flaky link);
@@ -5817,14 +5804,6 @@ defmodule EdenWeb.ChatLive do
               if (isFile && (input.name === "attachment_retry" || input.name === "attachment_seq")) return
               // Capture video object URLs for previews wherever the batch ends up.
               this.captureVideoUrls(e)
-              // #119: a pick WHILE a media send is uploading can't enter the shared
-              // :attachment config (it would merge into the in-flight album). Hold its
-              // Files in the queue and stop the native stage; updated() feeds the next
-              // batch once the config frees. Paste routes here too (it dispatches `input`).
-              // mediaInFlight is the immediate client truth (set at Send); the server flag
-              // is the fallback. Checked BEFORE the this.sending reset below so the pick
-              // can't clear the very signal it's testing.
-              const busy = this.mediaInFlight || this.el.dataset.sendingMedia === "true"
               // A pick larger than the config accepts at once (max_staged_entries, #193) would
               // tag the excess :too_many_files — a CONFIG-level error that blocks the WHOLE
               // upload (nothing stages, the ring freezes, the 30s watchdog then drops the node).
@@ -5837,17 +5816,11 @@ defmodule EdenWeb.ChatLive do
                 this.pushEvent("media_too_many", { max: this.maxStaged() })
                 return
               }
-              if (isFile && input.files?.length && busy) {
-                e.stopImmediatePropagation()
-                e.preventDefault()
-                this.mediaQueue.push([...input.files])
-                input.value = ""
-                this.updateQueueHint()
-                return
-              }
-              // A fresh (non-queued) pick starts a new staging cycle — clear the
-              // send-in-flight guard so its preview overlay shows again (#130). The
-              // event is left to propagate so LiveView stages the file natively.
+              // A pick while another send uploads is fine now (the sequential engine feeds
+              // :attachment_seq, so a fresh pick just stages into the staging-only :attachment tray
+              // and opens the compose overlay as usual — TG-style, no "in queue" gating). Clear the
+              // send-in-flight guard so the preview overlay shows again (#130); the event propagates
+              // so LiveView stages the file natively.
               if (isFile) this.sending = false
             }
             this.el.addEventListener("input", this.onPick, true)
@@ -5953,10 +5926,6 @@ defmodule EdenWeb.ChatLive do
             if (this.el.dataset.conversationId !== this.convId) {
               this.convId = this.el.dataset.conversationId
               this.queue = []
-              // Queued batches (#119) belong to the chat they were picked in; drop them on
-              // a switch (they were never sent) so they can't feed into the new chat.
-              this.mediaQueue = []
-              this.updateQueueHint()
               this.sending = false
               this.sendTimers.forEach((t) => clearTimeout(t))
               this.sendTimers.clear()
@@ -6006,12 +5975,6 @@ defmodule EdenWeb.ChatLive do
               const ov = this.el.querySelector("[data-upload-preview]")
               if (ov) ov.style.display = "none"
             }
-            // #119: feed the next queued batch the moment the shared config FREES — covers a
-            // send completing (sm→false) AND a surfaced batch being cancelled (the compose
-            // overlay closes). The config is free only when nothing uploads AND nothing is
-            // staged, so this also naturally waits out the just-finished entry lingering a
-            // beat (it only fires once the overlay is gone). One guarded path, sequential.
-            const sm = this.el.dataset.sendingMedia === "true"
             const composeOpen = !!this.el.querySelector("[data-upload-preview]")
             // #164 text→media: when the overlay OPENS during a text edit, seed its caption with
             // the edit text (in #composer-body) so the conversion's caption defaults to the
@@ -6021,13 +5984,6 @@ defmodule EdenWeb.ChatLive do
               const cap = this.el.querySelector("#compose-caption")
               if (cap && !cap.value && this.input) cap.value = this.input.value
             }
-            const configFree = !sm && !composeOpen
-            // Never stay gated once the config is genuinely free (else a lost media_sending
-            // would leave mediaInFlight stuck true and silently queue every later pick).
-            if (configFree) this.mediaInFlight = false
-            const justFreed = configFree && (this.prevSm || this.prevComposeOpen)
-            if (justFreed && this.mediaQueue.length) this.dequeueNext()
-            this.prevSm = sm
             this.prevComposeOpen = composeOpen
           },
           onSubmit(e) {
@@ -6228,9 +6184,6 @@ defmodule EdenWeb.ChatLive do
               // preview back for a frame after Send (visible under screen-recording
               // load, where transients stretch to several frames).
               this.sending = true
-              // #119: this batch now occupies the shared config until it completes — gate
-              // further picks into the queue from this instant (not after the round-trip).
-              this.mediaInFlight = true
               // Pause any previewed clip first: a played <video> left running while the
               // overlay goes display:none keeps the media session active and flashes the OS
               // media-controls HUD until the server re-render tears the overlay down.
@@ -6932,7 +6885,9 @@ defmodule EdenWeb.ChatLive do
                 // translucent fill stacks on the cobalt bubble as "two bubbles" and the time
                 // overlay + cancel-X collide). The card sits in the padded bubble; a normal
                 // .ed-bubble__cap holds the optional caption + the meta row (time + ticks).
-                bubble.className = "ed-bubble ed-bubble--me"
+                // --file gives the steady fixed width (card fills it), matching the real row so the
+                // riser's swap doesn't reshape the bubble.
+                bubble.className = "ed-bubble ed-bubble--me ed-bubble--file"
                 bubble.appendChild(content)
                 const cap = document.createElement("div")
                 cap.className = "ed-bubble__cap"
@@ -7685,54 +7640,6 @@ defmodule EdenWeb.ChatLive do
               const cap = bubble.querySelector(".ed-bubble__cap")
               if (cap) cap.style.display = pos === "first" || pos === "mid" ? "none" : ""
             })
-          },
-          // Feed the next queued batch (#119) into the now-free :attachment config. Only ever
-          // called by updated() on the config-FREE edge, so the config is already clear (no
-          // lingering entry to pile onto). feedInput stages the batch and the server re-opens
-          // the compose overlay — the user captions + Sends normally, exactly like a first
-          // batch. _dequeuing guards against a re-entrant call (belt-and-suspenders; the edge
-          // trigger already won't re-fire).
-          dequeueNext() {
-            if (this._dequeuing) return
-            if (this.el.dataset.sendingMedia === "true") return
-            if (this.el.querySelector("[data-upload-preview]")) return
-            if (!this.mediaQueue.length) return
-            // Exclude the dedicated Resend input (#310 review P0): it's the FIRST file input in
-            // #composer now, so a bare positional selector would feed the #119 queue into the
-            // auto-upload retry config (silent loss + cross-retry leak) instead of :attachment.
-            const input = this.el.querySelector('input[type="file"]:not([name="attachment_retry"]):not([name="attachment_seq"])')
-            // No input to feed (composer gone) — leave the batch queued, don't lose it.
-            if (!input) return
-            this._dequeuing = true
-            try {
-              const batch = this.mediaQueue.shift()
-              this.updateQueueHint()
-              if (batch.length && input.isConnected) this.feedInput(input, batch)
-            } finally {
-              this._dequeuing = false
-            }
-          },
-          // Foot-of-list pill (#119) showing how many batches wait behind the in-flight
-          // send, so a pick made while uploading isn't invisible (it matters most on a slow
-          // link, where the wait is real). Lives in #pending (phx-update="ignore", stable);
-          // untagged, so a conversation switch's cleanup drops it along with the queue.
-          updateQueueHint() {
-            const n = this.mediaQueue.length
-            if (!n) {
-              this.queuePill?.remove()
-              this.queuePill = null
-              return
-            }
-            if (!this.queuePill || !this.queuePill.isConnected) {
-              this.queuePill = document.createElement("div")
-              this.queuePill.className = "ed-queued"
-              this.queuePill.innerHTML =
-                '<span class="hero-clock-micro size-3.5"></span><span></span>'
-            }
-            const label = this.el.dataset.queuedLabel || "In queue"
-            this.queuePill.lastElementChild.textContent = label + ": " + n
-            // Re-append so it stays at the foot, below any optimistic nodes.
-            this.pending?.appendChild(this.queuePill)
           },
           // The last flat row to compare against for the compact rule: a queued
           // optimistic node wins (rapid double-send), else the last streamed
@@ -10568,15 +10475,19 @@ defmodule EdenWeb.ChatLive do
   defp message_bubble(assigns) do
     # A photo/video message renders Telegram-style: no frame, the media fills the
     # bubble, the time overlays it. Files keep the normal padded bubble.
+    media? =
+      Enum.any?(
+        assigns.message.attachments,
+        &(&1.kind in ~w(image video) and not &1.as_file and not AlbumLayout.strip_photo?(&1))
+      )
+
     assigns =
       assigns
-      |> assign(
-        :media?,
-        Enum.any?(
-          assigns.message.attachments,
-          &(&1.kind in ~w(image video) and not &1.as_file and not AlbumLayout.strip_photo?(&1))
-        )
-      )
+      |> assign(:media?, media?)
+      # A file-card message (attachments, but not inline media — includes "send as file" photos).
+      # Give it the same fixed-width, card-fills bubble as a merged file group so a SOLO file doesn't
+      # size to its own name (varying widths + a big empty bubble) — TG shows files at a steady width.
+      |> assign(:file?, assigns.message.attachments != [] and not media?)
       # Position in a merged file-group run (TG-attachments): nil for a solo/ungrouped bubble,
       # else :first | :middle | :last. Drives the fused corners, fixed width, and meta-once.
       |> assign(:grp, assigns.message.group_pos)
@@ -10602,6 +10513,7 @@ defmodule EdenWeb.ChatLive do
             "ed-bubble",
             (@mine && "ed-bubble--me") || "ed-bubble--them",
             @media? && "ed-bubble--media",
+            @file? && "ed-bubble--file",
             @grp && "ed-bubble--grp",
             @grp == :first && "ed-bubble--grp-first",
             @grp == :middle && "ed-bubble--grp-mid",

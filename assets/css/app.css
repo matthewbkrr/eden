@@ -570,15 +570,17 @@ html {
     border-bottom-right-radius: var(--ed-radius-sm);
     margin-left: auto;
   }
-  /* Merged file group (TG-attachments): consecutive same-sender file messages sharing a
-     group_id render as one fixed-width stack — the cards fill the width (long names ellipsize
-     against a stable edge, not each bubble sizing to its own name), the rows pull flush, and the
-     seams between them fuse while the pile's outer corners keep the bubble radius. */
-  .ed-bubble--grp {
+  /* File bubbles (TG-attachments): a file message — solo (.ed-bubble--file) or a merged same-sender
+     group (.ed-bubble--grp) — renders at a STEADY width with the card filling it, so long names
+     ellipsize against a stable edge instead of each bubble sizing to its own name (varying widths +
+     a big empty bubble). A group additionally pulls its rows flush and fuses the seams. */
+  .ed-bubble--grp,
+  .ed-bubble--file {
     width: min(22rem, 85vw);
     max-width: 85vw;
   }
-  .ed-bubble--grp .ed-file {
+  .ed-bubble--grp .ed-file,
+  .ed-bubble--file .ed-file {
     width: 100%;
     max-width: 100%;
     margin-bottom: 0;
@@ -3619,22 +3621,6 @@ html {
   .ed-upload-failed__bang {
     display: inline-grid;
     place-items: center;
-  }
-
-  /* Queued-upload hint (#119): a calm, right-aligned pill at the foot of the pending list
-     showing how many batches are waiting behind the in-flight send, so a pick made while
-     uploading isn't invisible (matters most on a slow link where the wait is real). */
-  .ed-queued {
-    align-self: flex-end;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 0.625rem;
-    border-radius: var(--ed-radius-full);
-    background: var(--ed-surface-2);
-    color: var(--ed-muted);
-    font-size: 0.8125rem;
-    line-height: 1;
   }
 
   /* In-flight cancel-X on an optimistic upload node (#137): a calm dark badge that reads on
