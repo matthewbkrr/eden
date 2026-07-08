@@ -37,9 +37,14 @@ defmodule EdenWeb.ShellComponents do
       <%!-- The channel list scrolls; the bottom block (settings/logout) is
             pinned outside it so it never scrolls away with many channels. --%>
       <div class="ed-rail__scroll">
+        <%!-- Mode switches use `patch`, not `navigate`: the rail lives only in ChatLive and every
+              target here is a ChatLive route, so patching keeps the LiveView mounted (handle_params
+              re-scopes the channel via enter_channel / leave_channel_mode). A `navigate` would
+              remount, which aborts an in-flight sequential upload and makes resumeSends restart it
+              on the way back (the "upload starts over when I switch modes" bug). --%>
         <span class="ed-rail__slot">
           <.link
-            navigate={~p"/app"}
+            patch={~p"/app"}
             class={[
               "ed-rail__btn ed-rail__btn--home",
               @active == :messenger && "ed-rail__btn--active"
@@ -77,7 +82,7 @@ defmodule EdenWeb.ShellComponents do
                 channel, so only the second link renders. --%>
           <.link
             :if={channel.entry_room_id}
-            navigate={~p"/channels/#{channel.id}/r/#{channel.entry_room_id}"}
+            patch={~p"/channels/#{channel.id}/r/#{channel.entry_room_id}"}
             class={[
               "ed-rail__btn hidden md:inline-flex",
               @active == channel.id && "ed-rail__btn--active"
@@ -89,7 +94,7 @@ defmodule EdenWeb.ShellComponents do
             <.rail_channel_face channel={channel} />
           </.link>
           <.link
-            navigate={~p"/channels/#{channel.id}"}
+            patch={~p"/channels/#{channel.id}"}
             class={[
               "ed-rail__btn",
               channel.entry_room_id && "md:hidden",

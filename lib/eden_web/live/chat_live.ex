@@ -3234,8 +3234,10 @@ defmodule EdenWeb.ChatLive do
             class="flex items-center gap-3 px-4 h-14 border-b shrink-0"
             style="border-color: var(--ed-border);"
           >
+            <%!-- patch, not navigate: same-LiveView mode switch, so an in-flight upload survives
+                  (see the rail note in shell_components). --%>
             <.link
-              navigate={if @channel, do: ~p"/channels/#{@channel.id}", else: ~p"/app"}
+              patch={if @channel, do: ~p"/channels/#{@channel.id}", else: ~p"/app"}
               class="ed-btn--icon md:hidden"
               aria-label={gettext("Back")}
             >
