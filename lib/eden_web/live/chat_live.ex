@@ -3666,14 +3666,12 @@ defmodule EdenWeb.ChatLive do
                   plane") so the caption is the only live input and nothing leaks here. --%>
             <div
               class="flex items-center gap-2"
-              inert={live_entries(@uploads.attachment) != [] and not @sending_media}
+              inert={live_entries(@uploads.attachment) != []}
             >
-              <%!-- Attach stays live while a send uploads (#119): picking the next batch
-                    queues it client-side (the SendQueue hook intercepts the pick, holds the
-                    Files off the shared :attachment config, and feeds them in once the
-                    in-flight send frees the config). Only ONE batch is ever in the config,
-                    so the #95 single-in-flight invariant (exact progress average + FIFO
-                    swap) still holds — only the visible block is gone. --%>
+              <%!-- Attach stays live while a PREVIOUS send uploads (TG-style): a fresh pick just
+                    stages into the compose overlay and opens it as a new send — the sequential engine
+                    (:attachment_seq) queues it behind the in-flight one, so no waiting, no "in queue"
+                    gating. The overlay owns "Add more" once something is staged (below). --%>
               <label
                 class="ed-btn--icon cursor-pointer"
                 aria-label={gettext("Attach a file")}
@@ -3684,7 +3682,7 @@ defmodule EdenWeb.ChatLive do
                       compose modal is open it owns "Add more", so the bar's drops out
                       (#130). The bar is behind the scrim then anyway. --%>
                 <.live_file_input
-                  :if={live_entries(@uploads.attachment) == [] or @sending_media}
+                  :if={live_entries(@uploads.attachment) == []}
                   upload={@uploads.attachment}
                   class="sr-only"
                 />
@@ -3744,8 +3742,13 @@ defmodule EdenWeb.ChatLive do
                   never vanishes. Its caption is a SEPARATE field (name="message[caption]"),
                   so it never mirrors into the bar's chat input (name="message[body]").
                   data-upload-preview routes the send through the SendQueue media path. --%>
+            <%!-- Shows whenever something is staged — INCLUDING while a previous send is still
+                  uploading (@sending_media), so attaching another file during an upload opens the
+                  lightbox normally (TG-style) instead of the file vanishing. The client hides it for
+                  the brief send round-trip (this.sending) so the just-sent batch doesn't flash; once
+                  its staged entries are cancelled the overlay clears, and a fresh pick re-opens it. --%>
             <.compose_overlay
-              :if={live_entries(@uploads.attachment) != [] and not @sending_media}
+              :if={live_entries(@uploads.attachment) != []}
               upload={@uploads.attachment}
               form={@composer}
               editing={@editing != nil}

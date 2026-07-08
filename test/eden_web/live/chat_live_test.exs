@@ -653,15 +653,17 @@ defmodule EdenWeb.ChatLiveTest do
       render_upload(file, "a.png")
       assert has_element?(view, "[data-upload-preview]")
 
-      # The hook captures the caption at submit and pushes it WITH media_sending{id}:
-      # both ride the socket, so neither depends on @composer surviving the upload. The
-      # overlay closes at once (normal composer returns) even though the entry is staged.
+      # The hook captures the caption at submit and pushes it WITH media_sending{id}: both ride the
+      # socket, so neither depends on @composer surviving the upload. The overlay now tracks STAGED
+      # entries, not @sending_media (so attaching another file DURING an upload opens it — TG-style);
+      # media_sending only flags the send, the entry stays staged, so the overlay stays open here and
+      # closes on the real submit below (674, entries consumed). The chat input is live underneath.
       render_hook(view, "media_sending", %{"id" => "cid-7", "caption" => "look"})
-      refute has_element?(view, "[data-upload-preview]")
+      assert has_element?(view, "[data-upload-preview]")
       assert has_element?(view, "#composer-body")
-      # The attach affordance is NO LONGER gated during a send (#119): picking the next
-      # batch is allowed and queues client-side. Serialization is kept on the shared upload
-      # config (one batch consumed at a time), not by blocking the button (#95 invariant holds).
+
+      # The attach affordance is NO LONGER gated during a send: picking the next file stages normally
+      # and opens the overlay (the sequential engine queues it), no button-blocking (#95 invariant holds).
       refute has_element?(view, "#composer label.pointer-events-none")
 
       # Submit: the stashed {id, caption} stamps the album so its optimistic twin swaps
@@ -672,6 +674,41 @@ defmodule EdenWeb.ChatLiveTest do
                Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
 
       refute has_element?(view, "[data-upload-preview]")
+    end
+
+    test "attaching a file DURING an upload opens the overlay (not gated on @sending_media)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # A send is in flight — the sequential engine's queue_start flips @sending_media true (and
+      # cancels the just-sent tray, so nothing is staged → overlay closed).
+      render_hook(view, "queue_start", %{
+        "queue_id" => "q1",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["f1"]
+      })
+
+      refute has_element?(view, "[data-upload-preview]")
+
+      # Attach ANOTHER file mid-upload: it stages and the overlay OPENS. The bug was that the overlay
+      # was gated on `not @sending_media`, so a pick during a send stayed hidden — the file "vanished"
+      # even though the sequential engine had queued it.
+      file =
+        file_input(view, "#composer", :attachment, [
+          %{name: "b.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(file, "b.png", 30)
+      assert has_element?(view, "[data-upload-preview]")
+
+      # ...and a FURTHER file can still be attached: the bar's paperclip drops out while something is
+      # staged (only one :attachment input may exist), but the overlay owns the "Add more" input — so
+      # attaching never dead-ends during an in-flight send (#330 review).
+      assert has_element?(view, ~s([data-upload-preview] label[aria-label="Add more"] input[type="file"]))
     end
 
     test "Send as file (#122) stores the photo uncompressed and renders a document card", ctx do
@@ -1107,7 +1144,10 @@ defmodule EdenWeb.ChatLiveTest do
 
       render_upload(file, "a.png", 20)
       render_hook(view, "media_sending", %{"id" => "cid-stall"})
-      refute has_element?(view, "[data-upload-preview]")
+
+      # Overlay tracks staged entries now (not @sending_media): the wedged entry is still staged, so
+      # the overlay stays open until the reset cancels those entries below.
+      assert has_element?(view, "[data-upload-preview]")
 
       # On a stall the client marks the node as a failed card (red !, resend/delete) and asks
       # the server to reset: cancel the wedged staged entries + clear the send flags, so nothing
