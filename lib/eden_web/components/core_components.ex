@@ -555,14 +555,20 @@ defmodule EdenWeb.CoreComponents do
       <script :type={Phoenix.LiveView.ColocatedHook} name=".FlashAutoHide">
         // Info flashes self-dismiss after a few seconds; errors stay until dismissed.
         export default {
-          mounted() {
+          mounted() { this.arm() },
+          // A second info flash reuses this same DOM node (morphdom patches the text in
+          // place, so mounted() doesn't re-run) — re-arm on the patch or the first flash's
+          // timer would dismiss the new one early.
+          updated() { this.arm() },
+          destroyed() { clearTimeout(this._t) },
+          arm() {
+            clearTimeout(this._t)
             if (this.el.dataset.autohide !== "true") return
             this._t = setTimeout(() => {
               const x = this.el.querySelector("[data-flash-close]")
               x && x.click()
             }, 5000)
-          },
-          destroyed() { clearTimeout(this._t) }
+          }
         }
       </script>
     </div>

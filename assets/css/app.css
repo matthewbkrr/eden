@@ -3821,9 +3821,25 @@ html {
     height: 1.125rem;
     border-radius: 9999px;
     background: var(--ed-surface);
+    /* A hairline border defines the off-thumb edge in light, where surface-vs-surface-2
+       is only a ~2% L delta and the shadow alone barely separates them (#266). */
+    border: 1px solid var(--ed-border);
     box-shadow: 0 1px 2px oklch(0 0 0 / 0.18);
     transform: translateY(-50%);
     transition: transform 0.18s var(--ed-ease);
+  }
+  /* Coarse pointers (touch): keep the 24px pill visual but grow the tap target to the
+     44px min via a transparent overlay — cheaper than padding the label, no reflow (#266). */
+  @media (pointer: coarse) {
+    .ed-switch::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 2.75rem;
+      transform: translateY(-50%);
+    }
   }
   .ed-switch.is-on {
     background: var(--ed-primary);
@@ -3960,6 +3976,19 @@ html {
   .ed-folder-indicator, .ed-search { transition: none; }
   .ed-lightbox__nav, .ed-lightbox__close, .ed-compose__remove { transition: none; }
   .ed-admin-row { transition: none; }
+}
+
+/* Blanket fallback (#266): neutralize EVERY transition-duration so nothing was missed —
+   including the swipe snap-back (.ed-bubble transform, the one vestibular gap) and the
+   ~40 colour/background/border fades. Transitions only: keyframe animations keep their
+   own explicit reduced-motion fallbacks above, so functional spinners still run. This
+   makes DESIGN.md's "every transition has a reduced-motion fallback" literally hold. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* This file is for your main application CSS */

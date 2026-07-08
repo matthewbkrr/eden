@@ -19,17 +19,25 @@
     </script>
     <script nonce={assigns[:csp_nonce]}>
       (() => {
+        // Storage throws in some private-browsing / cookies-blocked modes; guard every
+        // access so a failure only skips PERSISTENCE (theme still applies for the load),
+        // instead of crashing this head IIFE and flashing the default theme.
+        const store = {
+          get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+          set(k, v) { try { localStorage.setItem(k, v); } catch (_) {} },
+          del(k) { try { localStorage.removeItem(k); } catch (_) {} },
+        };
         const setTheme = (theme) => {
           if (theme === "system") {
-            localStorage.removeItem("phx:theme");
+            store.del("phx:theme");
             document.documentElement.removeAttribute("data-theme");
           } else {
-            localStorage.setItem("phx:theme", theme);
+            store.set("phx:theme", theme);
             document.documentElement.setAttribute("data-theme", theme);
           }
         };
         if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "system");
+          setTheme(store.get("phx:theme") || "system");
         }
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
         

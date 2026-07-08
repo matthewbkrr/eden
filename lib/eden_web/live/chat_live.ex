@@ -8359,7 +8359,14 @@ defmodule EdenWeb.ChatLive do
             const type = this.el.dataset.type || ""
             const box = this.modal()
             const video = box.querySelector(".ed-video-modal__player")
-            video.innerHTML = `<source src="${src}"${type ? ` type="${type}"` : ""}>`
+            // Build the <source> programmatically (no innerHTML) — src/type are
+            // server-controlled today, but this keeps the markup path injection-proof
+            // by construction, like the neighbouring hooks.
+            video.replaceChildren()
+            const source = document.createElement("source")
+            source.src = src
+            if (type) source.type = type
+            video.appendChild(source)
             video.load()
             box.classList.add("ed-video-modal--open")
             document.body.style.overflow = "hidden"
