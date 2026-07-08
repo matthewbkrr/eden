@@ -89,4 +89,31 @@ defmodule EdenWeb.Presence do
   @doc "Applies a manual status change for `user_id` on `pid` (no idle override)."
   def set_status(pid, user_id, manual),
     do: apply_effective(pid, user_id, effective(manual, false))
+
+  ## Conversation-scoped presence (#209)
+  #
+  # Telegram-style "invisible": globally offline (never on @topic), but a user who is
+  # invisible AND has this exact 1:1 open publishes "online" HERE, on a per-conversation
+  # topic only the conversation's members ever subscribe to (the same member-only boundary
+  # `Chat.broadcast_typing/3` rides). Ephemeral like the global track — auto-cleared when the
+  # LiveView pid exits. Only "online" ever lives here (no away/dnd), so no rank resolution.
+
+  @doc "The presence topic scoped to one conversation — readable only by its members (#209)."
+  def conv_topic(conversation_id), do: "conv:#{conversation_id}:presence"
+
+  @doc "Tracks `user_id` as online on the conversation-scoped topic for `pid` (#209)."
+  def track_conv(pid, conversation_id, user_id),
+    do: track(pid, conv_topic(conversation_id), to_string(user_id), %{status: "online"})
+
+  @doc "Removes `user_id`'s scoped track (idempotent — a no-op when not tracked)."
+  def untrack_conv(pid, conversation_id, user_id),
+    do: untrack(pid, conv_topic(conversation_id), to_string(user_id))
+
+  @doc "Ids currently scoped-online in a conversation: `%{integer_id => \"online\"}` (#209)."
+  def conv_statuses(conversation_id) do
+    conversation_id
+    |> conv_topic()
+    |> list()
+    |> Map.new(fn {id, _metas} -> {String.to_integer(id), "online"} end)
+  end
 end

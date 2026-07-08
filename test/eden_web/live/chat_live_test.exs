@@ -26,6 +26,16 @@ defmodule EdenWeb.ChatLiveTest do
     path
   end
 
+  # Poll until `fun` is truthy — for Phoenix.Presence's eventual consistency across processes,
+  # where a track/untrack from another LiveView isn't instantly visible to a read here (#209 tests).
+  defp wait_until(fun, tries \\ 200) do
+    cond do
+      fun.() -> :ok
+      tries > 0 -> Process.sleep(5) && wait_until(fun, tries - 1)
+      true -> flunk("condition never became true")
+    end
+  end
+
   # A noisy JPEG big enough that #122 server compression would downscale it (> @photo_max),
   # so a stored width of 2400 proves the photo was kept uncompressed. Returns raw bytes.
   defp big_jpeg(width, height) do
@@ -503,6 +513,97 @@ defmodule EdenWeb.ChatLiveTest do
       render_hook(view, "presence_active", %{})
       render(view)
       refute Eden.Accounts.get_user!(alice.id).last_active_at
+    end
+
+    # ── Telegram-style scoped presence for invisible users (#209) ───────────────────────────
+    test "an invisible peer with the 1:1 open shows online to the partner, offline everywhere else",
+         ctx do
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "invisible")
+
+      # Alice (invisible) opens the 1:1 → she publishes "online" only on the scoped topic. Wait for
+      # the track to PROPAGATE before reading it as bob (Phoenix.Presence is eventually consistent
+      # across processes — reading conv_statuses too early can miss it under concurrent load).
+      alice_conn = log_in_user(ctx.conn, alice)
+      {:ok, _alice_view, _} = live(alice_conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      wait_until(fn ->
+        Map.has_key?(EdenWeb.Presence.conv_statuses(ctx.conversation.id), alice.id)
+      end)
+
+      # Bob opens the SAME 1:1 → his header reads the scoped topic at open and shows her online.
+      bob_conn = log_in_user(Phoenix.ConnTest.build_conn(), ctx.bob)
+      {:ok, bob_view, _} = live(bob_conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert has_element?(bob_view, "[data-profile-trigger] .ed-avatar__dot")
+
+      # ...but globally offline: the sidebar/profile read the GLOBAL map, which never has her.
+      refute Map.has_key?(EdenWeb.Presence.statuses(), alice.id)
+      refute has_element?(bob_view, "#conversations-#{ctx.conversation.id} .ed-avatar__dot")
+    end
+
+    test "a non-member never sees the invisible user online (#209)", ctx do
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "invisible")
+      alice_conn = log_in_user(ctx.conn, alice)
+      {:ok, _alice_view, _} = live(alice_conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # carol shares no conversation with alice+bob — the membership gate that guards the message
+      # + typing topics also guards the scoped presence, so she can never subscribe or read it.
+      carol = user_fixture(%{username: "carol"})
+      carol_conn = log_in_user(Phoenix.ConnTest.build_conn(), carol)
+
+      case live(carol_conn, ~p"/app/c/#{ctx.conversation.id}") do
+        {:error, {:live_redirect, _}} ->
+          :ok
+
+        {:ok, carol_view, _} ->
+          refute has_element?(carol_view, "[data-profile-trigger] .ed-avatar__dot")
+      end
+
+      refute Map.has_key?(EdenWeb.Presence.statuses(), alice.id)
+    end
+
+    test "typing reaches the partner even while invisible (#209)", ctx do
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "invisible")
+      alice_conn = log_in_user(ctx.conn, alice)
+      {:ok, _alice_view, _} = live(alice_conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      bob_conn = log_in_user(Phoenix.ConnTest.build_conn(), ctx.bob)
+      {:ok, bob_view, _} = live(bob_conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Typing rides the conversation topic, not presence, so it's unaffected by invisibility.
+      Chat.broadcast_typing(Scope.for_user(alice), ctx.conversation.id)
+      assert has_element?(bob_view, ".ed-typing-row__label", "Alice is typing")
+    end
+
+    test "an invisible peer going idle drops to offline for the partner (#209)", ctx do
+      {:ok, alice} = Eden.Accounts.set_presence_status(ctx.alice, "invisible")
+
+      alice_conn = log_in_user(ctx.conn, alice)
+      {:ok, alice_view, _} = live(alice_conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      wait_until(fn ->
+        Map.has_key?(EdenWeb.Presence.conv_statuses(ctx.conversation.id), alice.id)
+      end)
+
+      bob_conn = log_in_user(Phoenix.ConnTest.build_conn(), ctx.bob)
+      {:ok, bob_view, _} = live(bob_conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert has_element?(bob_view, "[data-profile-trigger] .ed-avatar__dot")
+
+      # Alice backgrounds / idles (#206) → untracks scoped. Wait for the untrack to PROPAGATE, then
+      # force bob to recompute — the handler re-reads conv_statuses (now without alice); the payload
+      # is ignored, so an empty diff is enough to drive the recompute.
+      render_hook(alice_view, "presence_idle", %{})
+
+      wait_until(fn ->
+        not Map.has_key?(EdenWeb.Presence.conv_statuses(ctx.conversation.id), alice.id)
+      end)
+
+      send(bob_view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.conv_topic(ctx.conversation.id),
+        payload: %{joins: %{}, leaves: %{}}
+      })
+
+      refute has_element?(bob_view, "[data-profile-trigger] .ed-avatar__dot")
     end
 
     test "a peer's away status colors their sidebar dot live (#102)", ctx do

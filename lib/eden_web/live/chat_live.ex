@@ -119,6 +119,9 @@ defmodule EdenWeb.ChatLive do
         focus_nonce: 0,
         other_read_at: nil,
         statuses: EdenWeb.Presence.statuses(),
+        # #209: per-conversation scoped presence for the OPEN 1:1 — %{user_id => "online"}, seeded on
+        # open_conv_presence, read only in the header (header_peer_status/4). Empty until a 1:1 opens.
+        conv_presence: %{},
         my_status: scope.user.presence_status,
         # Auto-away (#102): true while this session is idle. Effective status is
         # recomputed from (my_status, idle?) — "auto" shows away when idle.
@@ -1066,11 +1069,13 @@ defmodule EdenWeb.ChatLive do
   # last_active touch here — an idle user is still online, so the heartbeat keeps
   # "last seen" fresh until they actually disconnect.
   def handle_event("presence_idle", _params, socket) do
-    {:noreply, maybe_apply_idle(assign(socket, idle?: true))}
+    # #209: idle/backgrounded also drops an invisible user's conversation-scoped "online"
+    # (the partner sees offline), independent of the auto-only global idle write.
+    {:noreply, socket |> assign(idle?: true) |> maybe_apply_idle() |> apply_conv_presence()}
   end
 
   def handle_event("presence_active", _params, socket) do
-    {:noreply, maybe_apply_idle(assign(socket, idle?: false))}
+    {:noreply, socket |> assign(idle?: false) |> maybe_apply_idle() |> apply_conv_presence()}
   end
 
   # Tab hidden (#206): stop auto-marking incoming messages read while the user isn't looking
@@ -2699,6 +2704,25 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # #209: a diff on the conversation-scoped topic — recompute the partner's scoped status for the
+  # OPEN 1:1 only. MUST precede the global handler (which matches any presence_diff) so a scoped diff
+  # never triggers a global statuses/0 recompute or a sidebar re-stream. Guarded on the topic matching
+  # the current selection, so a stale in-flight diff from a just-left conversation can't mutate
+  # conv_presence after a fast switch.
+  def handle_info(
+        %Phoenix.Socket.Broadcast{event: "presence_diff", topic: "conv:" <> _ = topic},
+        %{assigns: %{selected: %{id: id, is_group: false, channel_id: nil}}} = socket
+      ) do
+    if topic == EdenWeb.Presence.conv_topic(id),
+      do: {:noreply, assign(socket, conv_presence: EdenWeb.Presence.conv_statuses(id))},
+      else: {:noreply, socket}
+  end
+
+  # A scoped diff with no matching 1:1 open (nil/group/room selection, or a just-left chat) — drop it
+  # here so it can't fall through to the global handler.
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", topic: "conv:" <> _}, socket),
+    do: {:noreply, socket}
+
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: payload}, socket) do
     # Header status + open profile read @statuses (plain assigns) and refresh on
     # this update for free. The sidebar dots live in a `phx-update="stream"` list,
@@ -2733,6 +2757,9 @@ defmodule EdenWeb.ChatLive do
       socket
       |> assign(current_scope: scope, my_status: status)
       |> apply_presence()
+      # #209: reconcile the scoped track too — going invisible while a 1:1 is open starts it;
+      # going visible untracks it (the partner now sees me via the global status instead).
+      |> apply_conv_presence()
 
     {:noreply, assign(socket, statuses: EdenWeb.Presence.statuses())}
   end
@@ -3317,7 +3344,7 @@ defmodule EdenWeb.ChatLive do
               <.avatar
                 name={title(@selected, @current_scope.user)}
                 src={conversation_avatar_src(@selected, @current_scope.user)}
-                status={peer_status(@selected, @current_scope.user, @statuses)}
+                status={header_peer_status(@selected, @current_scope.user, @statuses, @conv_presence)}
                 size={:sm}
               />
               <div class="min-w-0">
@@ -3326,9 +3353,9 @@ defmodule EdenWeb.ChatLive do
                 </div>
                 <div
                   :if={not @selected.is_group}
-                  style={"font-size:0.6875rem; color: var(#{status_color_var(peer_status(@selected, @current_scope.user, @statuses))});"}
+                  style={"font-size:0.6875rem; color: var(#{status_color_var(header_peer_status(@selected, @current_scope.user, @statuses, @conv_presence))});"}
                 >
-                  <%= if status = peer_status(@selected, @current_scope.user, @statuses) do %>
+                  <%= if status = header_peer_status(@selected, @current_scope.user, @statuses, @conv_presence) do %>
                     {status_label(status)}
                   <% else %>
                     <.last_seen peer={peer(@selected, @current_scope.user)} />
@@ -12182,6 +12209,8 @@ defmodule EdenWeb.ChatLive do
     |> refresh_rooms()
     # Reading a room clears its unread, which lowers the channel's rail badge.
     |> then(fn s -> if conversation.channel_id, do: refresh_rail(s), else: s end)
+    # #209: subscribe to + publish on the conversation-scoped presence topic (1:1 only).
+    |> open_conv_presence()
   end
 
   # Reload the message stream to a window that INCLUDES `anchor_id` (a permalink / jump
@@ -12805,8 +12834,49 @@ defmodule EdenWeb.ChatLive do
     # Leaving a conversation's topic means its typers are no longer relevant —
     # clear them here so every deselect path (not just chat-switch) drops them
     # (#94 review). Stale TTL timers fire later and self-ignore on token mismatch.
-    socket |> assign(subscribed_id: nil) |> clear_typing()
+    socket |> close_conv_presence() |> assign(subscribed_id: nil) |> clear_typing()
   end
+
+  # Open (#209): a 1:1 subscribes to its member-only scoped presence topic, seeds the partner's
+  # scoped status, and publishes MY own if I'm an active invisible user. The membership check that
+  # let me open this conversation is the same boundary that authorizes reading its presence. Groups
+  # and rooms don't participate — an invisible user stays fully offline there.
+  defp open_conv_presence(
+         %{assigns: %{selected: %{is_group: false, channel_id: nil} = conv}} = socket
+       ) do
+    # Presence is per live SESSION — track/subscribe only on the connected mount, never the HTTP
+    # dead render (whose short-lived process would otherwise leave a phantom scoped track, #102 pattern).
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Eden.PubSub, EdenWeb.Presence.conv_topic(conv.id))
+
+      socket
+      |> assign(:conv_presence, EdenWeb.Presence.conv_statuses(conv.id))
+      |> apply_conv_presence()
+    else
+      assign(socket, :conv_presence, %{})
+    end
+  end
+
+  defp open_conv_presence(socket), do: assign(socket, :conv_presence, %{})
+
+  # Close (#209): drop my scoped track + unsubscribe the topic for the conversation being left, and
+  # clear the local map. Reads the still-current `selected` (unsubscribe runs before the new one is
+  # assigned). A no-op reset for groups/rooms/none.
+  defp close_conv_presence(
+         %{
+           assigns: %{
+             selected: %{is_group: false, channel_id: nil} = conv,
+             current_scope: %{user: user}
+           }
+         } =
+           socket
+       ) do
+    EdenWeb.Presence.untrack_conv(self(), conv.id, user.id)
+    Phoenix.PubSub.unsubscribe(Eden.PubSub, EdenWeb.Presence.conv_topic(conv.id))
+    assign(socket, :conv_presence, %{})
+  end
+
+  defp close_conv_presence(socket), do: assign(socket, :conv_presence, %{})
 
   defp title(%{is_group: true, title: title}, _user) when is_binary(title) and title != "",
     do: title
@@ -12977,6 +13047,20 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # Header-only presence (#209): the 1:1 header shows an invisible partner as "online" via the
+  # conversation-scoped topic, while every GLOBAL surface (sidebar, message avatars, profile card)
+  # keeps calling peer_status/3 and sees them offline. Scoped "online" wins; else the global status;
+  # else nil → the header's "last seen" fallback. A normal peer is never in conv_presence, so this
+  # is identical to peer_status/3 for them.
+  defp header_peer_status(%{is_group: true}, _user, _statuses, _conv_presence), do: nil
+
+  defp header_peer_status(conversation, user, statuses, conv_presence) do
+    case others(conversation, user) do
+      [other | _] -> Map.get(conv_presence, other.id) || Map.get(statuses, other.id)
+      [] -> nil
+    end
+  end
+
   # Effective presence status of a specific user id (nil = offline/untracked).
   defp status_of(user_id, statuses), do: Map.get(statuses, user_id)
 
@@ -13003,6 +13087,26 @@ defmodule EdenWeb.ChatLive do
 
     socket
   end
+
+  # Reconcile MY conversation-scoped track (#209): an invisible user with a pure 1:1 open and
+  # active (not idle/backgrounded) publishes "online" to that conversation's members only; every
+  # other state untracks. Never touches the global topic — that's apply_presence's job. Called
+  # wherever the inputs change: opening a chat, idle/active, and a manual status change.
+  defp apply_conv_presence(
+         %{assigns: %{selected: selected, current_scope: %{user: user}} = a} = socket
+       ) do
+    if scoped_online?(selected, a.my_status, a.idle?) do
+      EdenWeb.Presence.track_conv(self(), selected.id, user.id)
+    else
+      if selected, do: EdenWeb.Presence.untrack_conv(self(), selected.id, user.id)
+    end
+
+    socket
+  end
+
+  # Only a pure 1:1 (no group, no channel room), invisible, and active earns a scoped "online".
+  defp scoped_online?(%{is_group: false, channel_id: nil}, "invisible", false), do: true
+  defp scoped_online?(_conversation, _status, _idle), do: false
 
   # The rail self-dot status: keep "invisible" (a hollow dot you always see), else
   # the effective status incl. auto-away — so your own dot matches how others see
