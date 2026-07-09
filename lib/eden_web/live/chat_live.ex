@@ -11558,7 +11558,9 @@ defmodule EdenWeb.ChatLive do
         <div class="flex flex-col">
           <%!-- Compact identity header: a small avatar with name/@handle/status stacked tight
                 beside it, on the SAME left axis as the bio + corp rows below — reads at a glance
-                for a short profile instead of a tall centered stack (mirrors the chat header). --%>
+                for a short profile instead of a tall centered stack (mirrors the chat header).
+                The avatar deliberately uses the DEFAULT size (2.5rem/40px, the message-row size)
+                rather than the old :lg (3.5rem) — sized for this compact row, not a hero stack. --%>
           <div class="flex items-center gap-3">
             <.avatar
               name={@user.display_name}
