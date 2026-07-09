@@ -76,12 +76,26 @@ defmodule EdenWeb.PresenceTest do
     user = user_fixture()
     Phoenix.PubSub.subscribe(Eden.PubSub, Presence.topic())
     {:ok, _ref} = Presence.track_user(self(), user.id, "online")
-    assert_receive %Phoenix.Socket.Broadcast{event: "presence_diff"}
+    key = to_string(user.id)
+
+    # The GLOBAL topic also carries other async tests' presence diffs — wait for the one that names
+    # THIS user (a plain assert_receive could match a foreign diff and fail the key check, flaking CI).
+    assert_diff_names(key)
 
     Presence.set_status(self(), user.id, "away")
 
-    assert_receive %Phoenix.Socket.Broadcast{event: "presence_diff", payload: payload}
-    key = to_string(user.id)
-    assert Map.has_key?(payload.joins, key) or Map.has_key?(payload.leaves, key)
+    assert_diff_names(key)
+  end
+
+  # Drain presence_diffs on the shared global topic until one names `key` in joins or leaves.
+  defp assert_diff_names(key) do
+    receive do
+      %Phoenix.Socket.Broadcast{event: "presence_diff", payload: p} ->
+        if Map.has_key?(p.joins, key) or Map.has_key?(p.leaves, key),
+          do: :ok,
+          else: assert_diff_names(key)
+    after
+      1000 -> flunk("no presence_diff named #{key}")
+    end
   end
 end
