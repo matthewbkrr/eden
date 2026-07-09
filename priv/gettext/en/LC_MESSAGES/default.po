@@ -1725,6 +1725,11 @@ msgstr ""
 msgid "Sending {name}"
 msgstr ""
 
+#: lib/eden_web/live/chat_live.ex:3605
+#, elixir-autogen, elixir-format
+msgid "Sending media"
+msgstr ""
+
 #: lib/eden_web/live/chat_live.ex:9828
 #, elixir-autogen, elixir-format
 msgid "Send as an uncompressed file"

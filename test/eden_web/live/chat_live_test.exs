@@ -2790,6 +2790,29 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ ~s(&quot;#{outsider.id}&quot;)
     end
 
+    test "attaching a file in a thread shows the staging preview tray (#104)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThreadStage"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, root} = Chat.create_message(Scope.for_user(ctx.alice), room.id, %{"body" => "root"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      render_click(view, "open_thread", %{"id" => to_string(root.id)})
+
+      refute has_element?(view, ".ed-thread-tray")
+
+      f =
+        file_input(view, "#reply-composer", :thread_attachment, [
+          %{name: "pic.png", content: File.read!(real_png_path()), type: "image/png"}
+        ])
+
+      render_upload(f, "pic.png", 100)
+
+      assert has_element?(view, ".ed-thread-tray")
+    end
+
     test "sequential upload into a thread lands each file as a reply under the root (phase F)",
          ctx do
       {:ok, channel} =
