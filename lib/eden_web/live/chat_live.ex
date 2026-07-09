@@ -3602,6 +3602,7 @@ defmodule EdenWeb.ChatLive do
             data-resend-many={gettext("Resend {count} messages")}
             data-not-sent={gettext("Not sent")}
             data-sending-label={gettext("Sending {name}")}
+            data-sending-media-label={gettext("Sending media")}
             data-cancel-label={gettext("Cancel upload")}
             phx-submit="send"
             phx-change="composer_changed"
@@ -7394,12 +7395,16 @@ defmodule EdenWeb.ChatLive do
             if (!pending) return
             // Albums first (they upload first), in spec order; the caption rides the FIRST album inline
             // (mirrors the server); a files-only caption rides its own trailing reply, no twin here.
+            const mediaLabel = this.el.dataset.sendingMediaLabel
             albumSpecs.forEach((spec, ai) => {
               const files = seqItems
                 .filter((it) => it.kind === "media" && it.albumCid === spec.cid)
                 .map((it) => it.file)
               const cap = hasMedia && ai === 0 ? caption : ""
-              this.appendThreadOptimistic(pending, this.buildSendingAlbum(files), spec.cid, cap)
+              const row = this.appendThreadOptimistic(pending, this.buildSendingAlbum(files), spec.cid, cap)
+              // Screen-reader feedback for the sending album (its spinner is aria-hidden); file cards
+              // get theirs from sendingLabel below.
+              if (row && mediaLabel) row.setAttribute("aria-label", mediaLabel)
             })
             const label = this.el.dataset.sendingLabel
             fileCids.forEach((cid) => {
@@ -7503,7 +7508,8 @@ defmodule EdenWeb.ChatLive do
             return card
           },
           fmtBytes(bytes) {
-            if (!bytes) return ""
+            // `== null` (not `!bytes`) so a legitimate 0-byte file renders "0 B", not "" (review #347).
+            if (bytes == null) return ""
             const u = ["B", "KB", "MB", "GB"]
             let n = bytes
             let i = 0

@@ -43,6 +43,7 @@ async function watchPending(alice) {
             hasSpinner: !!n.querySelector(".hero-arrow-path"),
             hasFileCard: !!n.querySelector(".ed-file--sending"),
             name: (n.querySelector(".ed-file__name") || {}).textContent || "",
+            ariaLabel: n.getAttribute("aria-label") || "",
           })
         }
     })
@@ -72,6 +73,8 @@ test("sending an album in a thread shows an optimistic sending node (#346)", asy
   const seen = await readSeen(alice)
   const album = seen.find((s) => s.hasImg && s.hasSpinner)
   expect(album, `optimistic album node seen (got ${JSON.stringify(seen)})`).toBeTruthy()
+  // Screen-reader feedback: the album row carries a sending aria-label (its spinner is aria-hidden).
+  expect(album.ariaLabel.length, "album row has a sending aria-label").toBeGreaterThan(0)
 
   // The tray cleared and the optimistic node was swapped out (riser) — #thread-pending is empty.
   await expect(alice.locator("#reply-composer .ed-thread-tray")).toHaveCount(0)

@@ -1733,6 +1733,11 @@ msgstr "Переотправить {count} сообщений"
 msgid "Sending {name}"
 msgstr "Отправка {name}"
 
+#: lib/eden_web/live/chat_live.ex:3605
+#, elixir-autogen, elixir-format
+msgid "Sending media"
+msgstr "Отправка медиа"
+
 #: lib/eden_web/live/chat_live.ex:9828
 #, elixir-autogen, elixir-format
 msgid "Send as an uncompressed file"
