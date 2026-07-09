@@ -2390,6 +2390,27 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ~s(.ed-popover button[phx-click="message_user"]))
     end
 
+    test "the profile popover shows the managed corporate identity (#173)", ctx do
+      # Managed fields are admin/sync-owned; set them directly for the render test.
+      Eden.Repo.update!(
+        Ecto.Changeset.change(ctx.bob, %{
+          position: "Инженер",
+          structure: "Разработка",
+          corp_email: "bob@corp.ru"
+        })
+      )
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      html = render_click(view, "show_profile", %{"id" => to_string(ctx.bob.id)})
+
+      # The full corporate identity rides the card, not just the handle (#173).
+      assert html =~ "Инженер"
+      assert html =~ "Разработка"
+      assert html =~ "bob@corp.ru"
+    end
+
     test "a profile you don't share a conversation with is unavailable", ctx do
       dave = user_fixture(%{username: "dave"})
       conn = log_in_user(ctx.conn, ctx.alice)
