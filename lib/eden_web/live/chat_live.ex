@@ -11555,26 +11555,36 @@ defmodule EdenWeb.ChatLive do
         aria-label={gettext("Profile")}
         tabindex="-1"
       >
-        <div class="flex flex-col items-center text-center">
-          <.avatar
-            name={@user.display_name}
-            src={avatar_src(@user)}
-            status={@status}
-            dot_label={false}
-            size={:lg}
-          />
-          <h2 class="mt-3 font-semibold" style="font-size:1.0625rem;">{@user.display_name}</h2>
-          <p style="color: var(--ed-muted); font-size:0.8125rem;">@{@user.username}</p>
-          <p
-            class="mt-0.5"
-            style={"font-size:0.75rem; color: var(#{status_color_var(@status)});"}
-          >
-            {status_label(@status)}
-          </p>
+        <div class="flex flex-col">
+          <%!-- Compact identity header: a small avatar with name/@handle/status stacked tight
+                beside it, on the SAME left axis as the bio + corp rows below — reads at a glance
+                for a short profile instead of a tall centered stack (mirrors the chat header). --%>
+          <div class="flex items-center gap-3">
+            <.avatar
+              name={@user.display_name}
+              src={avatar_src(@user)}
+              status={@status}
+              dot_label={false}
+            />
+            <div class="min-w-0 leading-tight">
+              <h2 class="font-semibold truncate" style="font-size:0.9375rem;">
+                {@user.display_name}
+              </h2>
+              <p class="truncate" style="color: var(--ed-muted); font-size:0.8125rem;">
+                @{@user.username}
+              </p>
+              <p
+                class="mt-0.5"
+                style={"font-size:0.75rem; color: var(#{status_color_var(@status)});"}
+              >
+                {status_label(@status)}
+              </p>
+            </div>
+          </div>
 
           <p
             :if={@user.bio}
-            class="mt-4 whitespace-pre-line break-words text-left w-full"
+            class="mt-4 whitespace-pre-line break-words"
             style="font-size:0.875rem; color: var(--ed-ink);"
           >
             {@user.bio}
@@ -11583,13 +11593,8 @@ defmodule EdenWeb.ChatLive do
           <.managed_identity user={@user} />
         </div>
 
-        <.link
-          :if={@self}
-          navigate={~p"/settings"}
-          class="ed-btn ed-btn--ghost w-full mt-6 justify-center"
-        >
-          <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("Edit profile")}
-        </.link>
+        <%!-- The own card carries no action — editing lives in Settings, not worth a quick-access
+              button; another person's card offers Message. --%>
         <button
           :if={!@self}
           class="ed-btn ed-btn--primary w-full mt-6"

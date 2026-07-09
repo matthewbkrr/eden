@@ -2378,7 +2378,7 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-gallery-empty")
     end
 
-    test "your own card shows Edit profile, not a Message button", ctx do
+    test "your own card carries no action button (no Message, no Edit)", ctx do
       carol = user_fixture(%{username: "carol", display_name: "Carol"})
       {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
       conn = log_in_user(ctx.conn, ctx.alice)
@@ -2386,7 +2386,9 @@ defmodule EdenWeb.ChatLiveTest do
 
       render_click(view, "show_profile", %{"id" => to_string(ctx.alice.id)})
       assert has_element?(view, ".ed-popover")
-      assert has_element?(view, ~s(.ed-popover a[href="/settings"]))
+      # Editing lives in Settings, not in this quick-access card (#209 follow-up), and you can't
+      # message yourself — so the own card is pure identity, no footer action.
+      refute has_element?(view, ~s(.ed-popover a[href="/settings"]))
       refute has_element?(view, ~s(.ed-popover button[phx-click="message_user"]))
     end
 
