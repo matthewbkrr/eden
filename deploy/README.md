@@ -183,13 +183,37 @@ Restore: `gunzip -c backups/eden-<stamp>.sql.gz | docker compose exec -T db psql
 
 ## 8. Disk watch
 Media lives on the `uploads` volume (local). 50 GB lasts months, driven by
-photo/video volume — not text. Watch it and move media to R2 (set `EDEN_S3_*` in
-`.env`, `up -d`) before it fills:
+photo/video volume — not text. `monitor.sh` (§9) alerts at 80%; move media to R2
+(set `EDEN_S3_*` in `.env`, `up -d`) before it fills. Check by hand any time:
 ```sh
-df -h /var/lib/docker        # overall
-# simple 80% alert via cron:
-( crontab -l 2>/dev/null; echo "0 * * * * [ \$(df --output=pcent /var/lib/docker | tail -1 | tr -dc 0-9) -ge 80 ] && echo 'eden disk >=80%' | logger -t eden-disk" ) | crontab -
+df -h /var/lib/docker
 ```
+
+## 9. Alerting (monitor.sh → Telegram)
+There's no email in this project, so `monitor.sh` alerts to **Telegram**. It checks disk
+%, the app container's health, and (optionally) pings a dead-man URL so a full-box outage
+is still caught externally.
+
+**Set up the bot (one-time):**
+1. In Telegram, message **@BotFather** → `/newbot`, follow the prompts, copy the **token**.
+2. Message your new bot once (any text) so it has your chat, then read the chat id:
+   ```sh
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates"   # find "chat":{"id":<CHAT_ID>
+   ```
+3. Put both in `.env` (`EDEN_ALERT_TELEGRAM_TOKEN`, `EDEN_ALERT_TELEGRAM_CHAT`), and test:
+   ```sh
+   ./monitor.sh   # triggers no alert when healthy; force one by setting EDEN_DISK_ALERT_PCT=0 once
+   ```
+4. **Dead-man switch (recommended):** create a free check at healthchecks.io (period ~15 min),
+   put its ping URL in `EDEN_HEALTHCHECK_URL`, and point its notification at the same bot. If the
+   whole box dies, the pings stop and it messages you — the one failure `monitor.sh` can't self-report.
+5. Schedule it:
+   ```sh
+   chmod +x /opt/eden/monitor.sh
+   ( crontab -l 2>/dev/null; echo "*/10 * * * * /opt/eden/monitor.sh >> /opt/eden/monitor.log 2>&1" ) | crontab -
+   ```
+Alerts are debounced (a still-bad condition re-alerts at most every 6 h). Without the Telegram
+vars it only logs to `monitor.log` (and pings the dead-man URL, if set).
 
 ## Operations cheatsheet
 ```sh
