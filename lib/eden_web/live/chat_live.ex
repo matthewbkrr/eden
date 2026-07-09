@@ -7356,6 +7356,10 @@ defmodule EdenWeb.ChatLive do
               seqItems.push({ kind: "file", clientId: cid, file: f })
             })
             if (!seqItems.length) return
+            // Show the picked items as "sending" in the thread panel NOW (before the push): the
+            // queue_start below cancels the staged :thread_attachment tray, so without this the files
+            // would vanish and nothing would show until each reply streamed in — the silent-send bug.
+            this.buildThreadOptimistic({ albumSpecs, seqItems, fileCids, caption, hasMedia: media.length > 0 })
             // A files-only caption rides its own trailing reply (like the main composer's #149
             // trailing text); a caption WITH media rides the first album inline (server-side).
             const captionId = !media.length && caption && fileCids.length ? this.uuid() : null
@@ -7376,6 +7380,188 @@ defmodule EdenWeb.ChatLive do
                 this.pumpSeq()
               },
             )
+          },
+          // ── Thread optimistic "sending" nodes (#346) ─────────────────────────────────────────
+          // Threads had NO on-send UI (phase F trim): queue_start cancels the staged :thread_attachment
+          // tray, so the picked files vanished and nothing showed until each reply streamed in — a
+          // silent, jarring send. Mint a flat "sending" row per album/file in #thread-pending, keyed by
+          // the client_id its real reply will carry, so the items stay visible while they upload; the
+          // .ScrollBottom riser (data-pending-id="thread-pending") swaps each out when its reply lands.
+          // No progress ring: seq_progress drives the MAIN pane's #pending, not this container (a ring
+          // here would freeze at 0%), so a static sending scrim + spinner reads it — rings later.
+          buildThreadOptimistic({ albumSpecs, seqItems, fileCids, caption, hasMedia }) {
+            const pending = document.getElementById("thread-pending")
+            if (!pending) return
+            // Albums first (they upload first), in spec order; the caption rides the FIRST album inline
+            // (mirrors the server); a files-only caption rides its own trailing reply, no twin here.
+            albumSpecs.forEach((spec, ai) => {
+              const files = seqItems
+                .filter((it) => it.kind === "media" && it.albumCid === spec.cid)
+                .map((it) => it.file)
+              const cap = hasMedia && ai === 0 ? caption : ""
+              this.appendThreadOptimistic(pending, this.buildSendingAlbum(files), spec.cid, cap)
+            })
+            const label = this.el.dataset.sendingLabel
+            fileCids.forEach((cid) => {
+              const it = seqItems.find((s) => s.kind === "file" && s.clientId === cid)
+              const row = this.appendThreadOptimistic(pending, this.buildSendingFileCard(it && it.file), cid, "")
+              // Function replacement so a filename with $-patterns ($&, $1) isn't interpreted.
+              if (row && label && it && it.file)
+                row.setAttribute("aria-label", label.replace("{name}", () => it.file.name || ""))
+            })
+            // Nudge the thread scroller to the new rows — the riser owns its scroll but only reacts to
+            // #thread-replies mutations, not #thread-pending.
+            const scroller = document.getElementById("thread-scroll")
+            if (scroller) requestAnimationFrame(() => (scroller.scrollTop = scroller.scrollHeight))
+          },
+          // A short-lived object URL for an optimistic thumbnail, auto-revoked well after any realistic
+          // upload+swap (the node is long gone by then) — leak-safe without coupling to the separate
+          // riser hook that removes the node.
+          threadObjUrl(file) {
+            const url = URL.createObjectURL(file)
+            setTimeout(() => URL.revokeObjectURL(url), 900000)
+            return url
+          },
+          // The inline media node for a thread album: a lone image → natural aspect (mirrors
+          // attachment_view); anything else → a square-tile grid (reusing balanceRows + the .ed-album
+          // CSS) under the sending scrim. A video shows a neutral fill (its real poster arrives with the
+          // reply; snapshotting a frame would need an async decode the "instant show" can't wait on).
+          buildSendingAlbum(files) {
+            const isImage = (f) => /^image\//.test((f && f.type) || "")
+            const media = document.createElement("div")
+            if (files.length === 1 && isImage(files[0])) {
+              media.className = "ed-media-sending ed-media-sending--single"
+              const img = document.createElement("img")
+              img.src = this.threadObjUrl(files[0])
+              img.alt = ""
+              media.appendChild(img)
+              this.addSendingSpinner(media)
+              return media
+            }
+            media.className = "ed-album ed-media-sending"
+            // Dims are unknown at send (no decode wait) → square tiles (albumAspect falls back to 1),
+            // cover-fit like the real album; the reply swaps in the justified mosaic.
+            const tiles = files.map((f) => ({ file: f, w: 0, h: 0 }))
+            for (const rowTiles of this.balanceRows(tiles)) {
+              const row = document.createElement("div")
+              row.className = "ed-album__row"
+              row.style.aspectRatio = String(rowTiles.reduce((s, t) => s + this.albumAspect(t), 0))
+              for (const t of rowTiles) {
+                const tile = document.createElement("span")
+                tile.className = "ed-album__tile"
+                tile.style.flex = this.albumAspect(t) + " 1 0"
+                if (isImage(t.file)) {
+                  const img = document.createElement("img")
+                  img.src = this.threadObjUrl(t.file)
+                  img.alt = ""
+                  tile.appendChild(img)
+                } else {
+                  tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
+                }
+                row.appendChild(tile)
+              }
+              media.appendChild(row)
+            }
+            this.addSendingSpinner(media)
+            return media
+          },
+          // A centered white spinner over the media sending scrim (reuses the already-compiled
+          // hero-arrow-path + animate-spin; inline-positioned so no new CSS, like addOptimisticMedia's
+          // inline boxes). aria-hidden — the row conveys its sending state via aria-label / content.
+          addSendingSpinner(media) {
+            const spin = document.createElement("span")
+            spin.className = "hero-arrow-path motion-safe:animate-spin"
+            spin.setAttribute("aria-hidden", "true")
+            spin.style.cssText =
+              "position:absolute; inset:0; margin:auto; width:1.75rem; height:1.75rem; color:#fff; z-index:1; filter:drop-shadow(0 1px 2px oklch(0 0 0 / 0.45));"
+            media.appendChild(spin)
+          },
+          // A thread file card in its "sending" state: the real card's layout (icon · name · size) with
+          // a spinner in the icon slot (no ring — see buildThreadOptimistic).
+          buildSendingFileCard(file) {
+            const card = document.createElement("div")
+            card.className = "ed-file ed-file--sending"
+            const icon = document.createElement("span")
+            icon.className = "ed-file__icon"
+            const spin = document.createElement("span")
+            spin.className = "hero-arrow-path motion-safe:animate-spin"
+            spin.setAttribute("aria-hidden", "true")
+            spin.style.cssText = "width:1.25rem; height:1.25rem; color:currentColor;"
+            icon.appendChild(spin)
+            card.appendChild(icon)
+            const meta = document.createElement("span")
+            meta.className = "ed-file__meta"
+            const nm = document.createElement("span")
+            nm.className = "ed-file__name"
+            nm.textContent = (file && file.name) || ""
+            const sz = document.createElement("span")
+            sz.className = "ed-file__size"
+            sz.textContent = file ? this.fmtBytes(file.size) : ""
+            meta.appendChild(nm)
+            meta.appendChild(sz)
+            card.appendChild(meta)
+            return card
+          },
+          fmtBytes(bytes) {
+            if (!bytes) return ""
+            const u = ["B", "KB", "MB", "GB"]
+            let n = bytes
+            let i = 0
+            while (n >= 1024 && i < u.length - 1) {
+              n /= 1024
+              i++
+            }
+            return (i === 0 ? n : n.toFixed(1)) + " " + u[i]
+          },
+          // Wrap an optimistic content node (album or file card) in a flat "sending" thread row tagged
+          // with its client_id, append to #thread-pending, and rise it in. Mirrors the flat branch of
+          // wrapAndAppendOptimistic (avatar gutter + name head, compact continuation) but targets the
+          // thread container. The riser removes it by client_id when its real reply streams in.
+          appendThreadOptimistic(pending, content, clientId, caption) {
+            const row = document.createElement("div")
+            row.dataset.clientId = clientId
+            const myId = this.el.dataset.senderId
+            const name = this.el.dataset.senderName || ""
+            // Compact if the row just above (a pending twin, else the last real reply) is mine & recent
+            // — the same rule flat_message uses, so a burst collapses its repeated headers.
+            const prev =
+              pending.querySelector(".ed-flat:last-child") ||
+              document.querySelector("#thread-replies > .ed-flat:last-child")
+            const compact =
+              !!prev &&
+              prev.dataset.senderId === myId &&
+              Date.now() / 1000 - Number(prev.dataset.ts || 0) < 300
+            row.className = compact ? "ed-flat ed-flat--compact" : "ed-flat"
+            row.dataset.senderId = myId
+            row.dataset.ts = Math.floor(Date.now() / 1000)
+            if (compact) {
+              row.innerHTML = '<div class="ed-flat__gutter"></div>'
+            } else {
+              row.innerHTML =
+                '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>'
+              row.querySelector(".ed-avatar span").textContent = (name.trim().charAt(0) || "?").toUpperCase()
+            }
+            const main = document.createElement("div")
+            main.className = "ed-flat__main"
+            if (!compact) {
+              const head = document.createElement("div")
+              head.className = "ed-flat__head"
+              head.innerHTML = '<span class="ed-flat__name"></span>'
+              head.querySelector(".ed-flat__name").textContent = name
+              main.appendChild(head)
+            }
+            main.appendChild(content)
+            if (caption) {
+              const body = document.createElement("div")
+              body.className = "break-words ed-flat__body"
+              body.textContent = caption
+              main.appendChild(body)
+            }
+            row.appendChild(main)
+            pending.appendChild(row)
+            row.classList.add("ed-msg--enter")
+            setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
+            return row
           },
           // ── Sequential send feeder (TG-attachments) ──────────────────────────────────────────
           // Feed ONE queued item's clone into :attachment_seq, wait for the server's seq_done, then
