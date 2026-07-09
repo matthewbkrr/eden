@@ -11580,7 +11580,7 @@ defmodule EdenWeb.ChatLive do
             {@user.bio}
           </p>
 
-          <.managed_identity user={@user} compact />
+          <.managed_identity user={@user} />
         </div>
 
         <.link
@@ -11605,24 +11605,22 @@ defmodule EdenWeb.ChatLive do
 
   # Admin-managed identity rows (#173) — shared by the full profile panel and the
   # popover so both stay consistent. Read-only; renders only when a field is set
-  # (filled by the admin panel #174 / a future sync). `compact` (the popover) shows
-  # only the headline field (position) to stay light; the full panel shows all.
+  # (filled by the admin panel #174 / a future sync). Both surfaces now show the full
+  # corporate identity (position, structure, corp email), so the card carries who a
+  # person is in the org, not just their handle (#209 follow-up).
   #
   # Spacing logic: the value is pinned tight under its label (small margin + tight
   # leading — the default 1.5 line-height was what made the pairs look loose), and
   # the gap BETWEEN rows is clearly larger, so it reads as grouped pairs.
   attr :user, :map, required: true
-  attr :compact, :boolean, default: false
 
   defp managed_identity(assigns) do
-    all = [
-      {gettext("Position"), assigns.user.position},
-      {gettext("Structure"), assigns.user.structure},
-      {gettext("Corporate email"), assigns.user.corp_email}
-    ]
-
     fields =
-      if(assigns.compact, do: Enum.take(all, 1), else: all)
+      [
+        {gettext("Position"), assigns.user.position},
+        {gettext("Structure"), assigns.user.structure},
+        {gettext("Corporate email"), assigns.user.corp_email}
+      ]
       |> Enum.filter(fn {_label, value} -> value end)
 
     assigns = assign(assigns, :fields, fields)
