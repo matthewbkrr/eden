@@ -1426,6 +1426,48 @@ defmodule EdenWeb.ChatLiveTest do
       assert is_nil(album.group_id)
     end
 
+    test "sequential video: the client's width/height reserve the box (#231)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qv",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [%{"cid" => "vid1", "count" => 1}],
+        "file_cids" => []
+      })
+
+      # seq_item carries the client-measured dims — the plumbing under test (sanitize_dim →
+      # seq_pending → put_client_dims → media_dimensions). A fake ftyp clip keeps it ffmpeg-free.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qv",
+        "client_id" => "v1",
+        "kind" => "media",
+        "album_cid" => "vid1",
+        "width" => 640,
+        "height" => 480
+      })
+
+      video = <<0, 0, 0, 24>> <> "ftypisom" <> :binary.copy(<<0>>, 16)
+
+      f =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "clip.mp4", content: video, type: "video/mp4"}
+        ])
+
+      render_upload(f, "clip.mp4", 100)
+
+      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      album = Enum.find(msgs, &(&1.client_id == "vid1"))
+      assert album, "the video message should land"
+      att = hd(album.attachments)
+      assert att.kind == "video"
+      assert att.width == 640
+      assert att.height == 480
+    end
+
     test "cancelling one album photo (phase D) sends the album with the rest", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
