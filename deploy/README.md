@@ -164,8 +164,22 @@ chmod +x /opt/eden/backup.sh
 # daily at 03:30:
 ( crontab -l 2>/dev/null; echo "30 3 * * * /opt/eden/backup.sh >> /opt/eden/backup.log 2>&1" ) | crontab -
 ```
-Backups land in `/opt/eden/backups/` (last 14 kept). **Ship them off-box**
-(R2/scp) — a backup on the same disk dies with the disk.
+Backups land in `/opt/eden/backups/` (last 14 kept). A backup on the same disk
+dies with the disk, so `backup.sh` also **mirrors each dump off-box** to S3/R2.
+
+**Set it up (recommended before launch):**
+1. Create a **dedicated** R2/S3 bucket for backups — a separate one from any media
+   bucket, with its own key (so a leaked media key can't reach the backups).
+2. Fill `EDEN_BACKUP_S3_*` in `.env` (bucket, endpoint, key/secret; for R2 keep
+   `PROVIDER=Cloudflare`, `REGION=auto`). Leave the bucket blank to stay local-only.
+3. That's it — `backup.sh` runs `rclone` in a throwaway `rclone/rclone` container
+   (nothing installed on the host) and `sync`s the local `backups/` dir to the
+   bucket, so the remote holds the same 14 newest dumps. First run pulls the image
+   (~50 MB). A ship failure exits non-zero and logs a WARNING (surfaced by cron mail
+   / the disk-watch below) — the local dump is always kept.
+
+Restore: `gunzip -c backups/eden-<stamp>.sql.gz | docker compose exec -T db psql -U <user> <db>`
+(pull the dump from the bucket first if the box is gone).
 
 ## 8. Disk watch
 Media lives on the `uploads` volume (local). 50 GB lasts months, driven by
