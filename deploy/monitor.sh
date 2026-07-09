@@ -37,9 +37,12 @@ alert() {
   fi
   echo "$(date '+%F %T') ALERT[$1] $2" >&2
   if [ -n "${tg_token}" ] && [ -n "${tg_chat}" ]; then
-    curl -sS --max-time 15 "https://api.telegram.org/bot${tg_token}/sendMessage" \
-      --data-urlencode chat_id="${tg_chat}" \
-      --data-urlencode text="🚨 eden: $2" >/dev/null 2>&1
+    # Keep the bot token OFF the process argv (ps auxww / docker inspect) — pass the URL
+    # (which carries the token) via `curl -K -` on stdin, not as a command-line argument.
+    printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "${tg_token}" \
+      | curl -sS --max-time 15 -K - \
+          --data-urlencode chat_id="${tg_chat}" \
+          --data-urlencode text="🚨 eden: $2" >/dev/null 2>&1
   fi
   touch "${marker}"
 }
