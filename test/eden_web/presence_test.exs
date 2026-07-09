@@ -69,6 +69,53 @@ defmodule EdenWeb.PresenceTest do
     assert Presence.effective(nil, true) == "online"
   end
 
+  describe "conversation-scoped presence (#209)" do
+    test "track_conv publishes online ONLY on that conversation's topic — not global, not others" do
+      user = user_fixture()
+      {:ok, _ref} = Presence.track_conv(self(), 1, user.id)
+
+      assert Presence.conv_statuses(1)[user.id] == "online"
+      # The whole point: scoped, never global (sidebar/profile stay offline) and never leaks to
+      # a different conversation.
+      refute Map.has_key?(Presence.statuses(), user.id)
+      assert Presence.conv_statuses(2) == %{}
+    end
+
+    test "untrack_conv removes the scoped track" do
+      user = user_fixture()
+      {:ok, _ref} = Presence.track_conv(self(), 1, user.id)
+      assert Presence.conv_statuses(1)[user.id] == "online"
+
+      Presence.untrack_conv(self(), 1, user.id)
+
+      refute Map.has_key?(Presence.conv_statuses(1), user.id)
+    end
+
+    test "a scoped track auto-clears when its process exits" do
+      user = user_fixture()
+      parent = self()
+      Phoenix.PubSub.subscribe(Eden.PubSub, Presence.conv_topic(1))
+
+      pid =
+        spawn(fn ->
+          {:ok, _} = Presence.track_conv(self(), 1, user.id)
+          send(parent, :tracked)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :tracked
+      assert_receive %Phoenix.Socket.Broadcast{event: "presence_diff"}
+      assert Presence.conv_statuses(1)[user.id] == "online"
+
+      Process.exit(pid, :kill)
+
+      # Presence monitors the tracked pid and untracks on its :DOWN — a real leave diff.
+      assert_receive %Phoenix.Socket.Broadcast{event: "presence_diff", payload: %{leaves: leaves}}
+      assert Map.has_key?(leaves, to_string(user.id))
+      refute Map.has_key?(Presence.conv_statuses(1), user.id)
+    end
+  end
+
   test "a status-only update really emits a presence_diff naming the user (#102)" do
     # Guards the sidebar re-stream gate against being circular: confirms the REAL
     # Phoenix.Presence diff for an away→online change carries the key in joins/leaves
