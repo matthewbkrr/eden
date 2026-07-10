@@ -3532,7 +3532,11 @@ defmodule EdenWeb.ChatLive do
               </p>
             </div>
             <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
-            <div class="flex flex-col gap-2 mt-2" id="pending-messages" phx-update="ignore"></div>
+            <%!-- No container gap/margin (#351): optimistic rows carry their OWN natural margin
+                  (bubbles + flat, compact-aware) so they sit EXACTLY where the real row will land in
+                  the stream — a fixed container gap couldn't match the variable stream spacing
+                  (compact rows are tight) and made the message jump on swap. --%>
+            <div class="flex flex-col" id="pending-messages" phx-update="ignore"></div>
           </div>
           <%!-- Live presence for the flat message list (#102): the rows live in a
                 `phx-update="stream"` container, so a server re-render never reaches
@@ -4921,7 +4925,11 @@ defmodule EdenWeb.ChatLive do
                 this.toBottom(false)
                 requestAnimationFrame(tick)
               }
-              requestAnimationFrame(tick)
+              // Pin SYNCHRONOUSLY first (#351) — the optimistic node was just appended in this same
+              // tick, so an immediate toBottom lands it at the bottom with NO one-frame gap where it
+              // sits below the fold and then jumps up. The rAF loop keeps it pinned through the later
+              // settle stages (composer resize, real-row swap, late media decode).
+              tick()
             }
             window.addEventListener("ed:after-send", this.onAfterSend)
             // A just-sent (or received) photo/video/file row grows AFTER we scrolled — its
@@ -6261,15 +6269,15 @@ defmodule EdenWeb.ChatLive do
             // queued item (own client_id, optimistic node, dedup, resend).
             for (const part of this.split(body)) {
               const clientId = this.uuid()
-              // 1:1 DMs draw an optimistic node NOW so a "sending" clock shows
-              // immediately (#142) — valuable on a slow cross-border link; the real row
-              // carries data-client-id, so the riser swaps it in atomically (clock → ✓,
-              // then ✓✓ on read). GROUPS (no receipt) and ROOMS (flat) keep #130's
-              // no-node happy path — they render no delivery status; a rejected send in
-              // any surface still materializes a retry node lazily in markFailed.
-              if (this.el.dataset.layout !== "flat" && this.el.dataset.isGroup !== "true") {
-                this.addOptimistic(clientId, part)
-              }
+              // EVERY surface draws an optimistic node NOW (#351) so a "sending" state shows
+              // immediately — valuable on a slow cross-border link, and a dropped connection no
+              // longer looks like a silent no-op (the old #130 no-node path made rooms/groups send
+              // in total silence). The real row carries data-client-id, so the riser swaps it in
+              // atomically. A 1:1 DM shows the sending clock (→ ✓ → ✓✓ on read); ROOMS (flat) +
+              // GROUPS (no receipt) render a FADED row with no clock — the fade IS the pending
+              // indicator. A nack flags whichever node in markFailed (which now finds it, not
+              // materializes a duplicate).
+              this.addOptimistic(clientId, part)
               this.queue.push({ clientId, body: part, sent: false })
             }
             // Glue to the bottom on our OWN send (#187): rooms (flat) and groups draw no
@@ -6430,24 +6438,21 @@ defmodule EdenWeb.ChatLive do
               row.appendChild(bubble)
             }
             // Target the send's pane (#348): a thread send sets this._sendTarget so the node lands
-            // in #thread-pending + pins #thread-scroll; the main send leaves it null (→ this.pending).
+            // in #thread-pending; the main send leaves it null (→ this.pending).
             const pend = (this._sendTarget && this._sendTarget.pending) || this.pending
-            const scr = (this._sendTarget && this._sendTarget.scroller) || this.scroller
             pend.appendChild(row)
-            // Rise the optimistic node in — this IS the smooth send animation the
-            // user sees. The real replacement carries data-client-id, so the
-            // observer skips it and it swaps in silently (no second animation).
-            row.classList.add("ed-msg--enter")
-            setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
-            // Glide the list up to reveal the new row (it eases in from the
-            // bottom) instead of snapping — no jerk. Instant under reduced motion.
-            if (scr) {
-              const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-              scr.scrollTo({
-                top: scr.scrollHeight,
-                behavior: smooth ? "smooth" : "auto",
-              })
-            }
+            // Fade the optimistic node in WITHOUT a rise (#351): a transform-free opacity fade so the
+            // real row swapping in mid-animation can't pop the layout (the old ed-msg--enter grew from
+            // the bottom → ~2px upward jump on a slow link). The faded bubble is the "sending"
+            // indicator; the swap resolves it to full opacity.
+            row.classList.add("ed-msg--sent")
+            setTimeout(() => row.classList.remove("ed-msg--sent"), 150)
+            // The MAIN pane's send-scroll is owned by ScrollBottom's onAfterSend (pins synchronously
+            // in this same tick — #351), so no scroll here; a smooth scrollTo only fought that instant
+            // pin (the real-row swap cut it off mid-glide — the visible jerk). A THREAD send (#348) has
+            // no onAfterSend, so pin its own pane instantly here.
+            const scr = this._sendTarget && this._sendTarget.scroller
+            if (scr) scr.scrollTop = scr.scrollHeight
             return row
           },
           // Optimistic media node (#95): a local preview of the staged photos with a

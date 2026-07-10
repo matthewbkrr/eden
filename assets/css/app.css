@@ -1271,6 +1271,26 @@ html {
     animation: ed-msg-in 0.2s var(--ed-ease);
     transform-origin: center bottom;
   }
+  /* Own-send optimistic (#351): appears in its FINAL box with only an opacity fade — NO
+     translate/scale. The rise-in (ed-msg--enter) grows from the bottom, so on a slow link the
+     real row swapping in MID-animation popped the layout up ~2px; a transform-free fade can't
+     shift the box, so the optimistic→real swap is seamless. The faded bubble (0.55) is the
+     "sending" indicator; the swap then resolves it to full opacity. */
+  .ed-msg--sent {
+    animation: ed-msg-fade 0.12s var(--ed-ease);
+  }
+  @keyframes ed-msg-fade {
+    from {
+      opacity: 0;
+    }
+  }
+  /* #pending-messages carries NO container gap/margin (#351) — optimistic rows use their OWN margin
+     so they sit EXACTLY where the real row lands. Flat rows already have .ed-flat / .ed-flat--compact
+     margins (compact-aware). Bubbles (DM/group) are spaced by flex `gap` in the stream, which the
+     pending container doesn't reproduce, so give them the same 0.5rem here. */
+  #pending-messages > .ed-msg {
+    margin-top: 0.5rem;
+  }
 
   /* "Not delivered" marker (#142): a tappable red ●! in the message's status slot
      that opens a resend/delete menu (replaced the #68 border + ✕ retry node). */
