@@ -76,7 +76,7 @@ test("editing a text thread reply + attaching media converts it to media (#164)"
   await rmenu.locator(".ed-menu__item", { hasText: "Edit" }).click()
   await expect(alice.locator("#reply-composer .ed-reply-bar--edit")).toBeVisible()
   await alice.locator('#reply-composer input[type="file"]').setInputFiles(fix("sample1.png"))
-  await expect(alice.locator("#reply-composer .ed-thread-tray")).toBeVisible()
+  await expect(alice.locator("#reply-composer [data-upload-preview]")).toBeVisible()
   await alice.locator("#reply-composer").evaluate((f) => f.requestSubmit())
 
   const converted = alice.locator("#thread-replies .ed-flat", { hasText: reply }).first()

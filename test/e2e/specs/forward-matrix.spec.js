@@ -31,7 +31,7 @@ const connect = (page) => page.waitForFunction(() => window.liveSocket?.isConnec
 const comp = (surface) =>
   surface === "thread"
     ? { form: "#reply-composer", body: "#reply-body", file: '#reply-composer input[type="file"]' }
-    : { form: "#composer", body: "#composer-body", file: '#composer input[type="file"]' }
+    : { form: "#composer", body: "#composer-body", file: '#composer input[name="attachment"]' }
 
 async function postText(page, form, bodySel, body) {
   await page.locator(bodySel).fill(body)
@@ -97,18 +97,15 @@ async function makeSource(page, surface, format) {
         : [fix("sample1.png")]
   await page.locator(c.file).setInputFiles(files)
   const cap = format === "caption" ? `cap ${t}` : null
-  if (surface === "thread") {
-    await expect(page.locator(`${c.form} .ed-thread-tray`)).toBeVisible({ timeout: 15000 })
-    if (cap) await page.locator(c.body).fill(cap)
-    await page.locator(c.form).evaluate((f) => f.requestSubmit())
-  } else {
-    // Gate on the SUBMIT BUTTON (actionable) rather than the overlay container: the container
-    // is transiently non-"visible" while it animates in / LiveView re-renders it.
-    const submit = page.locator('[data-upload-preview] button[type="submit"]')
-    await expect(submit).toBeVisible({ timeout: 15000 })
-    if (cap) await page.locator("#compose-caption").fill(cap)
-    await submit.click()
+  // Both surfaces now open the SAME compose lightbox (#348): only one overlay is open at a time
+  // (this surface's), so gate on the global submit button (the container is transiently
+  // non-"visible" while it animates in), fill the scoped caption, and submit.
+  const submit = page.locator('[data-upload-preview] button[type="submit"]')
+  await expect(submit).toBeVisible({ timeout: 15000 })
+  if (cap) {
+    await page.locator(surface === "thread" ? "#thread-compose-caption" : "#compose-caption").fill(cap)
   }
+  await submit.click()
   await expect(page.locator(`${stream} ${row}`).last().locator("img, a[download]").first()).toBeVisible({ timeout: 15000 })
   return { needle: cap, media: format }
 }
