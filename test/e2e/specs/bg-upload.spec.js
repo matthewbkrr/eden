@@ -25,7 +25,7 @@ test("a real optimistic file node is tagged with its conversation (#144)", async
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
   const convA = Number(await alice.locator("#composer").getAttribute("data-conversation-id"))
 
-  await alice.locator('#composer input[type="file"]').setInputFiles(sampleTxt)
+  await alice.locator('#composer input[name="attachment"]').setInputFiles(sampleTxt)
   await expect(alice.locator("[data-upload-preview]")).toBeVisible()
   await alice.locator('[data-upload-preview] button[type="submit"]').click()
 

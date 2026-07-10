@@ -63,7 +63,7 @@ test("an author edits a photo message via the media modal: adds a photo + captio
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
 
   // Send a single photo.
-  await alice.locator('#composer input[type="file"]').setInputFiles(fix("sample1.png"))
+  await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("sample1.png"))
   await expect(alice.locator("[data-upload-preview]")).toBeVisible()
   await alice.locator('[data-upload-preview] button[type="submit"]').click()
   const bubble = alice.locator("#messages .ed-bubble").last()
@@ -116,7 +116,7 @@ test("edit-media modal: removing a tile keeps the typed caption (#164)", async (
 
   // A 2-photo album, so removing one leaves one (Save stays enabled).
   await alice
-    .locator('#composer input[type="file"]')
+    .locator('#composer input[name="attachment"]')
     .setInputFiles([fix("sample1.png"), fix("sample2.png")])
   await expect(alice.locator("[data-upload-preview]")).toBeVisible()
   await alice.locator('[data-upload-preview] button[type="submit"]').click()
@@ -176,7 +176,7 @@ test("editing a text message + attaching media converts it to a media message (#
   await expect(alice.locator("#composer-body")).toHaveValue(text)
 
   // Attach a photo → the overlay opens and its caption is seeded with the edit text.
-  await alice.locator('#composer input[type="file"]').setInputFiles(fix("sample1.png"))
+  await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("sample1.png"))
   await expect(alice.locator("[data-upload-preview]")).toBeVisible()
   await expect(alice.locator("#compose-caption")).toHaveValue(text)
 

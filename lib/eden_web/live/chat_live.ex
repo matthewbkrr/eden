@@ -4125,44 +4125,27 @@ defmodule EdenWeb.ChatLive do
               <.icon name="hero-x-mark-micro" class="size-4" />
             </button>
           </div>
-          <%!-- Staged thread-reply album (#104): a compact thumbnail tray; the reply
-                input below doubles as the caption. Sends as one album on submit. --%>
-          <div :if={@uploads.thread_attachment.entries != []} class="ed-thread-tray">
-            <div
-              :for={entry <- @uploads.thread_attachment.entries}
-              class="ed-thread-tray__item"
-              data-key={"#{entry.client_name}:#{entry.client_size}:#{entry.client_last_modified}"}
-            >
-              <.live_img_preview
-                :if={image_entry?(entry)}
-                entry={entry}
-                class="ed-thread-tray__img"
-              />
-              <span :if={video_entry?(entry)} class="ed-thread-tray__file" aria-hidden="true">
-                <.icon name="hero-film" class="size-5" />
-              </span>
-              <span :if={!media_entry?(entry)} class="ed-thread-tray__file" aria-hidden="true">
-                <.icon name={entry_icon(entry)} class="size-5" />
-              </span>
-              <button
-                type="button"
-                class="ed-thread-tray__remove"
-                phx-click="cancel_upload"
-                phx-value-ref={entry.ref}
-                phx-value-upload="thread_attachment"
-                aria-label={gettext("Remove %{name}", name: entry.client_name)}
-              >
-                <.icon name="hero-x-mark-micro" class="size-3" />
-              </button>
-            </div>
-          </div>
-          <p :for={{name, err} <- compose_errors(@uploads.thread_attachment)} class="ed-attach-err">
-            {name}: {upload_error_text(err)}
-          </p>
+          <%!-- #348: thread attachments open the SAME compose lightbox as the main composer
+                (media grid + caption + send), not a cramped inline tray. A scoped caption id keeps
+                the two overlays from colliding; the send routes into this thread via .ThreadSendQueue
+                (which reads THIS overlay and delegates to the shared sequential feeder). --%>
+          <.compose_overlay
+            :if={live_entries(@uploads.thread_attachment) != []}
+            upload={@uploads.thread_attachment}
+            form={@reply_composer}
+            caption_id="thread-compose-caption"
+            upload_name="thread_attachment"
+          />
           <div class="flex items-center gap-2">
             <label class="ed-btn--icon cursor-pointer shrink-0" aria-label={gettext("Attach a file")}>
               <.icon name="hero-paper-clip-micro" class="size-5" />
-              <.live_file_input upload={@uploads.thread_attachment} class="sr-only" />
+              <%!-- Only ONE live_file_input may exist per upload (same id): when the lightbox is
+                    open it owns "Add more", so the bar's input drops out (#348, mirrors the main). --%>
+              <.live_file_input
+                :if={live_entries(@uploads.thread_attachment) == []}
+                upload={@uploads.thread_attachment}
+                class="sr-only"
+              />
             </label>
             <input
               type="text"
@@ -5887,7 +5870,7 @@ defmodule EdenWeb.ChatLive do
             this.handleEvent("media_progress", ({ id, ref, percent }) => {
               const node = ref
                 ? this.pending?.querySelector(`[data-upload-ref="${ref}"]`)
-                : this.pending?.querySelector(`[data-client-id="${id}"]`)
+                : this.findNode(id)
               this.setRing(node, percent)
               this.armStall(node && node.closest(".ed-msg, .ed-flat"))
             })
@@ -5897,8 +5880,7 @@ defmodule EdenWeb.ChatLive do
             this.handleEvent("seq_progress", ({ id, percent }) => {
               // A media photo drives its own TILE (data-item-cid); a file its card row (data-client-id).
               const node =
-                this.pending?.querySelector(`[data-item-cid="${id}"]`) ||
-                this.pending?.querySelector(`[data-client-id="${id}"]`)
+                this.findTile(id) || this.findNode(id)
               this.setRing(node, percent)
               // Re-arm the CURRENT item's watchdog (seq-aware: fails only this item/photo, fires seq_reset).
               this.armSeqStall(node)
@@ -6027,7 +6009,7 @@ defmodule EdenWeb.ChatLive do
             // message text — editable + blankable there. On the open transition only, so later
             // patches never clobber the user's caption edits.
             if (composeOpen && !this.prevComposeOpen && this.el.querySelector("[data-edit-active]")) {
-              const cap = this.el.querySelector("#compose-caption")
+              const cap = this.el.querySelector("[data-compose-caption]")
               if (cap && !cap.value && this.input) cap.value = this.input.value
             }
             this.prevComposeOpen = composeOpen
@@ -6080,7 +6062,7 @@ defmodule EdenWeb.ChatLive do
               // media_sending push (so it can't be lost if the upload is slow) and is
               // drawn in the optimistic node (so it shows during upload, not only on the
               // real row's arrival).
-              const caption = (this.el.querySelector("#compose-caption")?.value || "").trim()
+              const caption = (this.el.querySelector("[data-compose-caption]")?.value || "").trim()
               // Media tiles (image/video) are split into albums of maxAlbum (#193): the server
               // splits a big pick into a sequence of albums, so split the optimistic the SAME
               // way NOW — one node per batch, each with its own client_id — so every album
@@ -6455,17 +6437,22 @@ defmodule EdenWeb.ChatLive do
                 new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
               row.appendChild(bubble)
             }
-            this.pending.appendChild(row)
-            // Fade the optimistic node in WITHOUT a rise (#351): a transform-free opacity fade so
-            // the real row swapping in mid-animation can't pop the layout (the old ed-msg--enter
-            // grew from the bottom → ~2px upward jump on a slow link). The faded bubble is the
-            // "sending" indicator; the swap resolves it to full opacity.
+            // Target the send's pane (#348): a thread send sets this._sendTarget so the node lands
+            // in #thread-pending; the main send leaves it null (→ this.pending).
+            const pend = (this._sendTarget && this._sendTarget.pending) || this.pending
+            pend.appendChild(row)
+            // Fade the optimistic node in WITHOUT a rise (#351): a transform-free opacity fade so the
+            // real row swapping in mid-animation can't pop the layout (the old ed-msg--enter grew from
+            // the bottom → ~2px upward jump on a slow link). The faded bubble is the "sending"
+            // indicator; the swap resolves it to full opacity.
             row.classList.add("ed-msg--sent")
             setTimeout(() => row.classList.remove("ed-msg--sent"), 150)
-            // No scroll here (#351): the send dispatches ed:after-send and the ScrollBottom hook's
-            // onAfterSend pins to the bottom SYNCHRONOUSLY in this same tick. A smooth scrollTo here
-            // only fought that instant pin — the real-row swap re-pinned mid-glide and cut it off,
-            // which is the visible jerk on send. One owner of the send-scroll, pinned instantly.
+            // The MAIN pane's send-scroll is owned by ScrollBottom's onAfterSend (pins synchronously
+            // in this same tick — #351), so no scroll here; a smooth scrollTo only fought that instant
+            // pin (the real-row swap cut it off mid-glide — the visible jerk). A THREAD send (#348) has
+            // no onAfterSend, so pin its own pane instantly here.
+            const scr = this._sendTarget && this._sendTarget.scroller
+            if (scr) scr.scrollTop = scr.scrollHeight
             return row
           },
           // Optimistic media node (#95): a local preview of the staged photos with a
@@ -6987,7 +6974,12 @@ defmodule EdenWeb.ChatLive do
               }
               row.appendChild(bubble)
             }
-            this.pending.appendChild(row)
+            // Target the send's pane (#348): a thread send sets this._sendTarget → #thread-pending +
+            // #thread-scroll; the main send leaves it null (→ this.pending / this.scroller). Captured
+            // in locals so the deferred img-load pin uses the right scroller after _sendTarget clears.
+            const pend = (this._sendTarget && this._sendTarget.pending) || this.pending
+            const scr = (this._sendTarget && this._sendTarget.scroller) || this.scroller
+            pend.appendChild(row)
             row.classList.add("ed-msg--enter")
             setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
             // Pin to the just-sent photo. The preview image decodes async (no height yet),
@@ -6995,9 +6987,9 @@ defmodule EdenWeb.ChatLive do
             // keeps us glued to the bottom through the grow, so the photo never hides below
             // the fold even when the grow exceeds the ScrollBottom pinned threshold.
             const pin = () => {
-              if (!this.scroller) return
+              if (!scr) return
               const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-              this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" })
+              scr.scrollTo({ top: scr.scrollHeight, behavior: smooth ? "smooth" : "auto" })
             }
             pin()
             row.querySelectorAll("img").forEach((img) => {
@@ -7015,10 +7007,28 @@ defmodule EdenWeb.ChatLive do
             const p = Math.max(0, Math.min(100, Number(percent) || 0))
             fill.style.strokeDashoffset = c * (1 - p / 100)
           },
+          // Find an optimistic node / album tile by client_id across BOTH pending containers
+          // (#pending-messages for the main pane, #thread-pending for the thread panel), so the
+          // shared progress / done / cancel / failed handlers drive a thread send's nodes too
+          // (parity #348). client_ids are UUIDs — safe unquoted in an attribute selector.
+          findNode(id) {
+            return (
+              this.pending?.querySelector(`[data-client-id="${id}"]`) ||
+              document.getElementById("thread-pending")?.querySelector(`[data-client-id="${id}"]`) ||
+              null
+            )
+          },
+          findTile(id) {
+            return (
+              this.pending?.querySelector(`[data-item-cid="${id}"]`) ||
+              document.getElementById("thread-pending")?.querySelector(`[data-item-cid="${id}"]`) ||
+              null
+            )
+          },
           // Remove an optimistic media node by client_id (the server names the exact
           // one on failure) and cancel its stall watchdog.
           dropPending(id) {
-            const node = this.pending?.querySelector(`[data-client-id="${id}"]`)
+            const node = this.findNode(id)
             if (!node) return
             if (node._stall) clearTimeout(node._stall)
             node.remove()
@@ -7172,7 +7182,7 @@ defmodule EdenWeb.ChatLive do
           // Settle a Resend (#…): on success the real message's client_id swap already removed the
           // node, so just kill its watchdog; on failure re-mark it failed (Resend/Delete return).
           onRetryDone({ id, ok }) {
-            const node = this.pending?.querySelector(`[data-client-id="${id}"]`)
+            const node = this.findNode(id)
             if (!node) return
             if (node._stall) {
               clearTimeout(node._stall)
@@ -7294,80 +7304,73 @@ defmodule EdenWeb.ChatLive do
             input.dispatchEvent(new Event("input", { bubbles: true }))
             input.dispatchEvent(new Event("change", { bubbles: true }))
           },
-          // Measure a video File's DISPLAY pixel size (rotation-applied) off its metadata — the
-          // #231 box-reservation hint for the thread path, which has no optimistic tile to read
-          // dims from. A non-video (image) resolves to {0,0} (the server reads its header); any
-          // load error resolves to {0,0} too, so the worker just fills the dims later.
-          measureMediaDims(file) {
-            return new Promise((resolve) => {
-              if (!/^video\//.test(file.type || "")) return resolve({ w: 0, h: 0 })
-              const v = document.createElement("video")
-              v.preload = "metadata"
-              v.muted = true
-              const url = URL.createObjectURL(file)
-              let settled = false
-              const finish = (w, h) => {
-                if (settled) return
-                settled = true
-                clearTimeout(timer)
-                URL.revokeObjectURL(url)
-                resolve({ w: w || 0, h: h || 0 })
-              }
-              // A pathological clip may fire NEITHER loadedmetadata NOR error — never leave the
-              // Promise pending (it would hang enqueueThreadSeq's Promise.all + the whole send). Cap
-              // the wait; on timeout fall back to {0,0} and let the worker fill the dims (#340 review).
-              const timer = setTimeout(() => finish(0, 0), 3000)
-              v.onloadedmetadata = () => finish(v.videoWidth, v.videoHeight)
-              v.onerror = () => finish(0, 0)
-              v.src = url
-            })
-          },
-          // Route a thread album/file send through the sequential feeder (phase F trim). Called by
-          // .ThreadSendQueue with the raw File objects it captured (threads have no client-side
-          // compose overlay + no optimistic nodes — flat replies stream in from the server as each
-          // item lands, so this builds NO optimistic UI, just the queue). Media splits into albums
-          // of maxAlbum; files each become their own reply; ≥2 files share a group_id (server-minted
-          // in queue_start). The reply body is the caption — inline on the first album, or a trailing
-          // reply when it's files-only. Each item carries its File directly (item.file) so pumpSeq
-          // feeds it without needing the main composer's edenFiles stash.
-          async enqueueThreadSeq({ files, caption, rootId }) {
-            // The root id must reach the server as a NUMBER (sanitize_root_id requires an integer;
-            // a string "123" would decode as a binary and be dropped → the send would leak to the
-            // main stream). dataset values are strings, so coerce + guard here.
+          // Thread attachment send (#348): reads the thread's compose overlay — the SAME lightbox as
+          // the main composer — and runs the SAME optimistic builders + sequential feeder, but targeting
+          // the THREAD pane (#thread-pending / #thread-scroll) and stamping each item as a reply under
+          // `rootId`. Called by .ThreadSendQueue.onSubmit (owner = this SendQueue). `stash` is the thread
+          // composer's edenFiles (name:size:lastModified → File) so pumpSeq feeds the real bytes.
+          threadComposeSend(overlay, rootId, stash) {
             const root_id = Number(rootId)
             if (!Number.isInteger(root_id) || root_id <= 0) return
-            const isMedia = (f) => /^(image|video)\//.test(f.type || "")
-            const media = files.filter(isMedia)
-            const docs = files.filter((f) => !isMedia(f))
-            // Threads build no optimistic tile, so measure each VIDEO's dims off the File here
-            // (images get theirs from the server header read) — the video reply then reserves its
-            // box on arrival instead of popping when the worker fills it, without a server ffprobe (#231).
-            const dims = await Promise.all(media.map((f) => this.measureMediaDims(f)))
+            // A staged entry with a client-side error won't upload — keep the lightbox open so the
+            // error stays visible (mirrors the main send); never fake a node.
+            if (overlay.querySelector(".ed-attach-err")) return
+            const caption = (overlay.querySelector("[data-compose-caption]")?.value || "").trim()
+            const mediaTiles = [...overlay.querySelectorAll(".ed-compose__tile")]
+            const hasMedia = mediaTiles.length > 0
+            // Target the THREAD pane for every optimistic node this build appends (rings/cancel/failed
+            // all land in #thread-pending; the async feed then finds them via findNode/findTile).
+            this._sendTarget = {
+              pending: document.getElementById("thread-pending"),
+              scroller: document.getElementById("thread-scroll"),
+            }
             const albumSpecs = []
             const seqItems = []
-            for (let i = 0; i < media.length; i += this.maxAlbum()) {
-              const batch = media.slice(i, i + this.maxAlbum())
+            for (let i = 0; i < mediaTiles.length; i += this.maxAlbum()) {
+              const batch = mediaTiles.slice(i, i + this.maxAlbum())
               const cid = this.uuid()
               albumSpecs.push({ cid, count: batch.length })
-              batch.forEach((f, j) => {
-                const d = dims[i + j] || { w: 0, h: 0 }
-                seqItems.push({ kind: "media", albumCid: cid, clientId: this.uuid(), file: f, w: d.w, h: d.h })
+              const cap = i === 0 ? caption : ""
+              const photoCids = batch.map(() => this.uuid())
+              batch.forEach((tile, j) => {
+                const key = this.tileFileKey(tile)
+                if (!key) return
+                const el = tile.querySelector(".ed-compose__img, .ed-compose__video")
+                seqItems.push({
+                  kind: "media",
+                  albumCid: cid,
+                  clientId: photoCids[j],
+                  key,
+                  file: stash && stash.get(key),
+                  w: (el && (el.naturalWidth || el.videoWidth)) || 0,
+                  h: (el && (el.naturalHeight || el.videoHeight)) || 0,
+                })
               })
+              this.addOptimisticMedia(cid, batch, cap, photoCids)
             }
             const fileCids = []
-            docs.forEach((f) => {
+            ;[...overlay.querySelectorAll(".ed-attach-file[data-ref]")].forEach((fe) => {
               const cid = this.uuid()
+              const key = fe.dataset.name + ":" + fe.dataset.sizeRaw + ":" + fe.dataset.modified
+              this.addOptimisticFile(cid, fe.dataset.ref, fe.dataset.name, fe.dataset.size, key)
               fileCids.push(cid)
-              seqItems.push({ kind: "file", clientId: cid, file: f })
+              seqItems.push({
+                kind: "file",
+                clientId: cid,
+                key,
+                file: stash && stash.get(key),
+                sizeLabel: fe.dataset.size,
+              })
             })
+            // A files-only caption rides its own trailing reply (like the main composer #149).
+            let captionId = null
+            if (!hasMedia && caption && fileCids.length > 0) {
+              captionId = this.uuid()
+              const capNode = this.addOptimistic(captionId, caption)
+              if (capNode) capNode.dataset.convId = this.convId
+            }
+            this._sendTarget = null
             if (!seqItems.length) return
-            // Show the picked items as "sending" in the thread panel NOW (before the push): the
-            // queue_start below cancels the staged :thread_attachment tray, so without this the files
-            // would vanish and nothing would show until each reply streamed in — the silent-send bug.
-            this.buildThreadOptimistic({ albumSpecs, seqItems, fileCids, caption, hasMedia: media.length > 0 })
-            // A files-only caption rides its own trailing reply (like the main composer's #149
-            // trailing text); a caption WITH media rides the first album inline (server-side).
-            const captionId = !media.length && caption && fileCids.length ? this.uuid() : null
             const queueId = this.uuid()
             this.pushEvent(
               "queue_start",
@@ -7385,193 +7388,13 @@ defmodule EdenWeb.ChatLive do
                 this.pumpSeq()
               },
             )
-          },
-          // ── Thread optimistic "sending" nodes (#346) ─────────────────────────────────────────
-          // Threads had NO on-send UI (phase F trim): queue_start cancels the staged :thread_attachment
-          // tray, so the picked files vanished and nothing showed until each reply streamed in — a
-          // silent, jarring send. Mint a flat "sending" row per album/file in #thread-pending, keyed by
-          // the client_id its real reply will carry, so the items stay visible while they upload; the
-          // .ScrollBottom riser (data-pending-id="thread-pending") swaps each out when its reply lands.
-          // No progress ring: seq_progress drives the MAIN pane's #pending, not this container (a ring
-          // here would freeze at 0%), so a static sending scrim + spinner reads it — rings later.
-          buildThreadOptimistic({ albumSpecs, seqItems, fileCids, caption, hasMedia }) {
-            const pending = document.getElementById("thread-pending")
-            if (!pending) return
-            // Albums first (they upload first), in spec order; the caption rides the FIRST album inline
-            // (mirrors the server); a files-only caption rides its own trailing reply, no twin here.
-            const mediaLabel = this.el.dataset.sendingMediaLabel
-            albumSpecs.forEach((spec, ai) => {
-              const files = seqItems
-                .filter((it) => it.kind === "media" && it.albumCid === spec.cid)
-                .map((it) => it.file)
-              const cap = hasMedia && ai === 0 ? caption : ""
-              const row = this.appendThreadOptimistic(pending, this.buildSendingAlbum(files), spec.cid, cap)
-              // Screen-reader feedback for the sending album (its spinner is aria-hidden); file cards
-              // get theirs from sendingLabel below.
-              if (row && mediaLabel) row.setAttribute("aria-label", mediaLabel)
+            // Close the lightbox instantly (#111 parity); the server then cancels the staged
+            // :thread_attachment entries so they don't ALSO upload via the form submit.
+            overlay.querySelectorAll("video").forEach((v) => {
+              try { v.pause() } catch (_e) {}
             })
-            const label = this.el.dataset.sendingLabel
-            fileCids.forEach((cid) => {
-              const it = seqItems.find((s) => s.kind === "file" && s.clientId === cid)
-              const row = this.appendThreadOptimistic(pending, this.buildSendingFileCard(it && it.file), cid, "")
-              // Function replacement so a filename with $-patterns ($&, $1) isn't interpreted.
-              if (row && label && it && it.file)
-                row.setAttribute("aria-label", label.replace("{name}", () => it.file.name || ""))
-            })
-            // Nudge the thread scroller to the new rows — the riser owns its scroll but only reacts to
-            // #thread-replies mutations, not #thread-pending.
-            const scroller = document.getElementById("thread-scroll")
-            if (scroller) requestAnimationFrame(() => (scroller.scrollTop = scroller.scrollHeight))
-          },
-          // A short-lived object URL for an optimistic thumbnail, auto-revoked well after any realistic
-          // upload+swap (the node is long gone by then) — leak-safe without coupling to the separate
-          // riser hook that removes the node.
-          threadObjUrl(file) {
-            const url = URL.createObjectURL(file)
-            setTimeout(() => URL.revokeObjectURL(url), 900000)
-            return url
-          },
-          // The inline media node for a thread album: a lone image → natural aspect (mirrors
-          // attachment_view); anything else → a square-tile grid (reusing balanceRows + the .ed-album
-          // CSS) under the sending scrim. A video shows a neutral fill (its real poster arrives with the
-          // reply; snapshotting a frame would need an async decode the "instant show" can't wait on).
-          buildSendingAlbum(files) {
-            const isImage = (f) => /^image\//.test((f && f.type) || "")
-            const media = document.createElement("div")
-            if (files.length === 1 && isImage(files[0])) {
-              media.className = "ed-media-sending ed-media-sending--single"
-              const img = document.createElement("img")
-              img.src = this.threadObjUrl(files[0])
-              img.alt = ""
-              media.appendChild(img)
-              this.addSendingSpinner(media)
-              return media
-            }
-            media.className = "ed-album ed-media-sending"
-            // Dims are unknown at send (no decode wait) → square tiles (albumAspect falls back to 1),
-            // cover-fit like the real album; the reply swaps in the justified mosaic.
-            const tiles = files.map((f) => ({ file: f, w: 0, h: 0 }))
-            for (const rowTiles of this.balanceRows(tiles)) {
-              const row = document.createElement("div")
-              row.className = "ed-album__row"
-              row.style.aspectRatio = String(rowTiles.reduce((s, t) => s + this.albumAspect(t), 0))
-              for (const t of rowTiles) {
-                const tile = document.createElement("span")
-                tile.className = "ed-album__tile"
-                tile.style.flex = this.albumAspect(t) + " 1 0"
-                if (isImage(t.file)) {
-                  const img = document.createElement("img")
-                  img.src = this.threadObjUrl(t.file)
-                  img.alt = ""
-                  tile.appendChild(img)
-                } else {
-                  tile.innerHTML = '<span class="ed-album__tile-fill"></span>'
-                }
-                row.appendChild(tile)
-              }
-              media.appendChild(row)
-            }
-            this.addSendingSpinner(media)
-            return media
-          },
-          // A centered white spinner over the media sending scrim (reuses the already-compiled
-          // hero-arrow-path + animate-spin; inline-positioned so no new CSS, like addOptimisticMedia's
-          // inline boxes). aria-hidden — the row conveys its sending state via aria-label / content.
-          addSendingSpinner(media) {
-            const spin = document.createElement("span")
-            spin.className = "hero-arrow-path motion-safe:animate-spin"
-            spin.setAttribute("aria-hidden", "true")
-            spin.style.cssText =
-              "position:absolute; inset:0; margin:auto; width:1.75rem; height:1.75rem; color:#fff; z-index:1; filter:drop-shadow(0 1px 2px oklch(0 0 0 / 0.45));"
-            media.appendChild(spin)
-          },
-          // A thread file card in its "sending" state: the real card's layout (icon · name · size) with
-          // a spinner in the icon slot (no ring — see buildThreadOptimistic).
-          buildSendingFileCard(file) {
-            const card = document.createElement("div")
-            card.className = "ed-file ed-file--sending"
-            const icon = document.createElement("span")
-            icon.className = "ed-file__icon"
-            const spin = document.createElement("span")
-            spin.className = "hero-arrow-path motion-safe:animate-spin"
-            spin.setAttribute("aria-hidden", "true")
-            spin.style.cssText = "width:1.25rem; height:1.25rem; color:currentColor;"
-            icon.appendChild(spin)
-            card.appendChild(icon)
-            const meta = document.createElement("span")
-            meta.className = "ed-file__meta"
-            const nm = document.createElement("span")
-            nm.className = "ed-file__name"
-            nm.textContent = (file && file.name) || ""
-            const sz = document.createElement("span")
-            sz.className = "ed-file__size"
-            sz.textContent = file ? this.fmtBytes(file.size) : ""
-            meta.appendChild(nm)
-            meta.appendChild(sz)
-            card.appendChild(meta)
-            return card
-          },
-          fmtBytes(bytes) {
-            // `== null` (not `!bytes`) so a legitimate 0-byte file renders "0 B", not "" (review #347).
-            if (bytes == null) return ""
-            const u = ["B", "KB", "MB", "GB"]
-            let n = bytes
-            let i = 0
-            while (n >= 1024 && i < u.length - 1) {
-              n /= 1024
-              i++
-            }
-            return (i === 0 ? n : n.toFixed(1)) + " " + u[i]
-          },
-          // Wrap an optimistic content node (album or file card) in a flat "sending" thread row tagged
-          // with its client_id, append to #thread-pending, and rise it in. Mirrors the flat branch of
-          // wrapAndAppendOptimistic (avatar gutter + name head, compact continuation) but targets the
-          // thread container. The riser removes it by client_id when its real reply streams in.
-          appendThreadOptimistic(pending, content, clientId, caption) {
-            const row = document.createElement("div")
-            row.dataset.clientId = clientId
-            const myId = this.el.dataset.senderId
-            const name = this.el.dataset.senderName || ""
-            // Compact if the row just above (a pending twin, else the last real reply) is mine & recent
-            // — the same rule flat_message uses, so a burst collapses its repeated headers.
-            const prev =
-              pending.querySelector(".ed-flat:last-child") ||
-              document.querySelector("#thread-replies > .ed-flat:last-child")
-            const compact =
-              !!prev &&
-              prev.dataset.senderId === myId &&
-              Date.now() / 1000 - Number(prev.dataset.ts || 0) < 300
-            row.className = compact ? "ed-flat ed-flat--compact" : "ed-flat"
-            row.dataset.senderId = myId
-            row.dataset.ts = Math.floor(Date.now() / 1000)
-            if (compact) {
-              row.innerHTML = '<div class="ed-flat__gutter"></div>'
-            } else {
-              row.innerHTML =
-                '<div class="ed-flat__gutter"><span class="ed-avatar ed-avatar--sm"><span></span></span></div>'
-              row.querySelector(".ed-avatar span").textContent = (name.trim().charAt(0) || "?").toUpperCase()
-            }
-            const main = document.createElement("div")
-            main.className = "ed-flat__main"
-            if (!compact) {
-              const head = document.createElement("div")
-              head.className = "ed-flat__head"
-              head.innerHTML = '<span class="ed-flat__name"></span>'
-              head.querySelector(".ed-flat__name").textContent = name
-              main.appendChild(head)
-            }
-            main.appendChild(content)
-            if (caption) {
-              const body = document.createElement("div")
-              body.className = "break-words ed-flat__body"
-              body.textContent = caption
-              main.appendChild(body)
-            }
-            row.appendChild(main)
-            pending.appendChild(row)
-            row.classList.add("ed-msg--enter")
-            setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
-            return row
+            overlay.style.display = "none"
+            window.dispatchEvent(new CustomEvent("ed:after-send"))
           },
           // ── Sequential send feeder (TG-attachments) ──────────────────────────────────────────
           // Feed ONE queued item's clone into :attachment_seq, wait for the server's seq_done, then
@@ -7650,7 +7473,7 @@ defmodule EdenWeb.ChatLive do
             // A finished album photo: retire its tile's ring + cancel-X (its source is now
             // accumulated server-side, so cancelling it here would only fade the tile while the
             // album still sends it — phase D review). A done photo simply shows clean.
-            const tile = this.pending?.querySelector(`[data-item-cid="${id}"]`)
+            const tile = this.findTile(id)
             if (tile) {
               tile.classList.remove("ed-tile--sending")
               tile.querySelector(".ed-sending-cancel")?.remove()
@@ -7804,7 +7627,7 @@ defmodule EdenWeb.ChatLive do
           // decrements the album's expected — it sends with the rest); abort the upload if this
           // photo is the in-flight one.
           cancelSeqPhoto(cid) {
-            const tile = this.pending?.querySelector(`[data-item-cid="${cid}"]`)
+            const tile = this.findTile(cid)
             const feeding = this.seqFeeding && this.seqFeeding.clientId === cid
             let queueId = null
             let albumCid = null
@@ -7926,14 +7749,18 @@ defmodule EdenWeb.ChatLive do
           // optimistic node wins (rapid double-send), else the last streamed
           // message. Returns null in an empty room (first message — full row).
           lastFlatRow() {
-            if (this.pending && this.pending.lastElementChild) {
-              return this.pending.lastElementChild
+            // Compare against the SEND's pane (#348): a thread build reads #thread-pending /
+            // #thread-replies, the main build #pending-messages / #messages.
+            const pend = (this._sendTarget && this._sendTarget.pending) || this.pending
+            if (pend && pend.lastElementChild) {
+              return pend.lastElementChild
             }
-            const rows = document.querySelectorAll("#messages .ed-flat")
+            const sel = this._sendTarget ? "#thread-replies .ed-flat" : "#messages .ed-flat"
+            const rows = document.querySelectorAll(sel)
             return rows[rows.length - 1] || null
           },
           markFailed(clientId, body) {
-            let node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
+            let node = this.findNode(clientId)
             // Rooms/groups draw no optimistic node on the happy path (#130/#142), so a
             // rejected send has nothing to mark — materialize it now (faded), then flag
             // it failed. Media nacks drop their node (push_media_failed), so this only
@@ -8075,12 +7902,20 @@ defmodule EdenWeb.ChatLive do
             // "name:size:lastModified" to match the tray items' data-key, so a per-item removal (the
             // ✕) and a multi-pick tray both resolve correctly at submit. Delegated + capture so it
             // survives the input's re-renders.
-            this.pickedFiles = new Map()
+            // Mirror the main composer's stashes (#348): edenFiles feeds the sequential upload, and
+            // edenVideoUrls backs the lightbox's crash-safe .ImgPreview/.VideoPreview object URLs — so
+            // the SAME compose overlay renders here. Keyed name:size:lastModified (matches tileFileKey).
+            this.el.edenFiles = new Map()
+            this.el.edenVideoUrls = new Map()
             this.onPick = (e) => {
               const input = e.target
               if (!(input instanceof HTMLInputElement) || input.type !== "file") return
               for (const f of input.files || []) {
-                this.pickedFiles.set(`${f.name}:${f.size}:${f.lastModified}`, f)
+                const key = `${f.name}:${f.size}:${f.lastModified}`
+                if (!this.el.edenFiles.has(key)) this.el.edenFiles.set(key, f)
+                if (/^(video|image)\//.test(f.type || "") && !this.el.edenVideoUrls.has(key)) {
+                  this.el.edenVideoUrls.set(key, URL.createObjectURL(f))
+                }
               }
             }
             // Both events, capture: file inputs fire `change`, but LiveView's own capture listener
@@ -8103,7 +7938,9 @@ defmodule EdenWeb.ChatLive do
             if (this.el.dataset.threadRoot !== this.threadRoot) {
               this.threadRoot = this.el.dataset.threadRoot
               this.queue = []
-              this.pickedFiles.clear()
+              this.el.edenFiles.clear()
+              for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
+              this.el.edenVideoUrls.clear()
               this.sendTimers.forEach((t) => clearTimeout(t))
               this.sendTimers.clear()
               this.closeMenu()
@@ -8114,6 +7951,8 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("offline", this.onOffline)
             this.el.removeEventListener("input", this.onPick, true)
             this.el.removeEventListener("change", this.onPick, true)
+            for (const url of this.el.edenVideoUrls.values()) URL.revokeObjectURL(url)
+            this.el.edenVideoUrls.clear()
             this.sendTimers.forEach((t) => clearTimeout(t))
             this.sendTimers.clear()
             this.closeMenu()
@@ -8124,28 +7963,19 @@ defmodule EdenWeb.ChatLive do
             // a bar routes through the main composer's sequential feeder (phase F trim): one item at
             // a time (no batch stall), each landing as a thread reply progressively.
             if (this.el.querySelector(".ed-reply-bar")) return
-            const tray = this.el.querySelector(".ed-thread-tray")
-            if (tray) {
-              // Map the tray's staged entries (server truth, so a per-item ✕ is honoured) to the
-              // Files we captured, IN ORDER. Only take over when we can fully serve it (feeder up +
-              // every staged file captured); otherwise fall through to the server album path
-              // (send_thread_album) so a send is never dropped.
-              const keys = [...tray.querySelectorAll(".ed-thread-tray__item")].map((n) => n.dataset.key)
-              const files = keys.map((k) => this.pickedFiles.get(k)).filter(Boolean)
+            // Attachments open the SAME compose lightbox as the main composer (#348): hand the overlay
+            // to the owner's shared send flow (threadComposeSend), targeting THIS thread. The overlay's
+            // own caption + send button drive it; only take over when the feeder is up + the root valid.
+            const overlay = this.el.querySelector("[data-upload-preview]")
+            if (overlay) {
               const owner = window.__edSendQueue
               const root = Number(this.threadRoot)
-              // Only take over — and only THEN clear the input/captured Files — when we can fully
-              // serve it: feeder up, a valid root, and every staged file captured. Otherwise fall
-              // through to the server album path so a caption/files are never silently dropped.
-              if (owner && Number.isInteger(root) && root > 0 && keys.length && files.length === keys.length) {
+              if (owner && Number.isInteger(root) && root > 0) {
                 e.preventDefault()
                 e.stopPropagation()
-                const caption = (this.input.value || "").trim()
-                this.input.value = ""
-                this.pickedFiles.clear()
-                owner.enqueueThreadSeq({ files, caption, rootId: root })
+                owner.threadComposeSend(overlay, root, this.el.edenFiles)
               }
-              // Tray present → never the plain-text path (whether we took over or deferred).
+              // Overlay present → never the plain-text path (whether we took over or not).
               return
             }
             e.preventDefault()
@@ -8291,7 +8121,7 @@ defmodule EdenWeb.ChatLive do
           mounted() {
             // Cache the store now: in destroyed() the node is already detached, so
             // closest("#composer") would return null.
-            this.store = this.el.closest("#composer")?.edenVideoUrls
+            this.store = this.el.closest("#composer, #reply-composer")?.edenVideoUrls
             const url = this.store && this.store.get(this.key())
             if (url) {
               this.el.src = url
@@ -8348,7 +8178,7 @@ defmodule EdenWeb.ChatLive do
             return this.el.dataset.name + ":" + this.el.dataset.size + ":" + this.el.dataset.modified
           },
           mounted() {
-            this.store = this.el.closest("#composer")?.edenVideoUrls
+            this.store = this.el.closest("#composer, #reply-composer")?.edenVideoUrls
             const url = this.store && this.store.get(this.key())
             if (!url) return
             // A grid tile is an already-reserved square — just show it. A LONE photo's box
@@ -11087,6 +10917,14 @@ defmodule EdenWeb.ChatLive do
   attr :upload, :any, required: true
   attr :form, :any, required: true
   attr :editing, :boolean, default: false
+  # Scope (#348): the main composer and the thread composer each render their OWN overlay bound to
+  # their own upload; caption_id keeps the ids unique, and the hooks read the caption via the
+  # [data-compose-caption] marker (scoped to each composer's this.el), so the two never collide.
+  attr :caption_id, :string, default: "compose-caption"
+  # The upload this overlay is bound to, as the string the shared "cancel_upload" event expects
+  # (#348) — so a per-tile ✕ targets the RIGHT config ("attachment" for the main, "thread_attachment"
+  # for the thread). Defaults to the main composer's.
+  attr :upload_name, :string, default: "attachment"
 
   # Attachment compose modal (#58): a Telegram-style centered overlay (media grid +
   # caption + send) opened when files are staged. The composer bar stays rendered
@@ -11199,6 +11037,7 @@ defmodule EdenWeb.ChatLive do
                 class="ed-compose__remove"
                 phx-click="cancel_upload"
                 phx-value-ref={entry.ref}
+                phx-value-upload={@upload_name}
                 aria-label={gettext("Remove %{name}", name: entry.client_name)}
               >
                 <.icon name="hero-x-mark-micro" class="size-3.5" />
@@ -11236,6 +11075,7 @@ defmodule EdenWeb.ChatLive do
                 class="ed-btn--icon shrink-0"
                 phx-click="cancel_upload"
                 phx-value-ref={entry.ref}
+                phx-value-upload={@upload_name}
                 aria-label={gettext("Remove %{name}", name: entry.client_name)}
               >
                 <.icon name="hero-x-mark-mini" class="size-5" />
@@ -11255,7 +11095,8 @@ defmodule EdenWeb.ChatLive do
                 as the media's body. --%>
           <input
             type="text"
-            id="compose-caption"
+            id={@caption_id}
+            data-compose-caption
             name="message[caption]"
             value={@form[:caption].value}
             class="ed-input"
@@ -13925,6 +13766,14 @@ defmodule EdenWeb.ChatLive do
       # GenServer.call its dead upload channel → LiveView crash on the double-fire stall race.
       Enum.reduce(live_entries(s.assigns.uploads.attachment), s, fn entry, acc ->
         cancel_upload(acc, :attachment, entry.ref)
+      end)
+    end)
+    |> then(fn s ->
+      # #348: the thread composer stages into :thread_attachment (its lightbox is the SAME overlay),
+      # so a clear-tray / Escape / scrim-click (cancel_all_uploads) must drop it too — else the thread
+      # lightbox can't be dismissed. Only one overlay is open at a time, so the other reduce is a no-op.
+      Enum.reduce(live_entries(s.assigns.uploads.thread_attachment), s, fn entry, acc ->
+        cancel_upload(acc, :thread_attachment, entry.ref)
       end)
     end)
     # A cleared tray or a conversation switch abandons the staged send, so drop the

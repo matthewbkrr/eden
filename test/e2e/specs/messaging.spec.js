@@ -88,7 +88,7 @@ test.describe("messaging", () => {
     await bob.goto(dm)
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
 
-    await alice.locator('#composer input[type="file"]').setInputFiles(sampleTxt)
+    await alice.locator('#composer input[name="attachment"]').setInputFiles(sampleTxt)
     await expect(alice.locator("[data-upload-preview]")).toBeVisible()
     await shot(alice, testInfo, "file-staged")
     await alice.locator('[data-upload-preview] button[type="submit"]').click()

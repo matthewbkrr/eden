@@ -2790,7 +2790,8 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ ~s(&quot;#{outsider.id}&quot;)
     end
 
-    test "attaching a file in a thread shows the staging preview tray (#104)", ctx do
+    test "attaching a file in a thread opens the SAME compose lightbox as the main composer (#348)",
+         ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "ThreadStage"})
 
@@ -2801,7 +2802,7 @@ defmodule EdenWeb.ChatLiveTest do
       {:ok, view, _} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
       render_click(view, "open_thread", %{"id" => to_string(root.id)})
 
-      refute has_element?(view, ".ed-thread-tray")
+      refute has_element?(view, "#reply-composer [data-upload-preview]")
 
       f =
         file_input(view, "#reply-composer", :thread_attachment, [
@@ -2810,7 +2811,10 @@ defmodule EdenWeb.ChatLiveTest do
 
       render_upload(f, "pic.png", 100)
 
-      assert has_element?(view, ".ed-thread-tray")
+      # The compose lightbox (grid + scoped caption), NOT the old cramped inline tray.
+      assert has_element?(view, "#reply-composer [data-upload-preview]")
+      assert has_element?(view, "#reply-composer #thread-compose-caption")
+      refute has_element?(view, ".ed-thread-tray")
     end
 
     test "sequential upload into a thread lands each file as a reply under the root (phase F)",
@@ -2960,19 +2964,20 @@ defmodule EdenWeb.ChatLiveTest do
       # The thread composer offers an attach control.
       assert has_element?(view, ~s(#reply-composer input[type="file"]))
 
-      # Stage a photo → the thread tray appears.
+      # Stage a photo → the thread compose lightbox appears.
       file =
         file_input(view, "#reply-composer", :thread_attachment, [
           %{name: "t.png", content: File.read!(real_png_path()), type: "image/png"}
         ])
 
       render_upload(file, "t.png")
-      assert has_element?(view, ".ed-thread-tray")
+      assert has_element?(view, "#reply-composer [data-upload-preview]")
 
-      # Submit with an empty caption (the album is the content) → it sends as a thread
-      # reply with an attachment, and the staging tray clears.
+      # Submit with an empty caption (the album is the content) → it sends as a thread reply
+      # with an attachment, and the lightbox clears. (No-JS path: the server send_thread_album
+      # consumes the staged entries; with JS the .ThreadSendQueue hook drives threadComposeSend.)
       view |> form("#reply-composer", reply: %{body: ""}) |> render_submit()
-      refute has_element?(view, ".ed-thread-tray")
+      refute has_element?(view, "#reply-composer [data-upload-preview]")
       assert has_element?(view, "#thread-replies img")
     end
 
