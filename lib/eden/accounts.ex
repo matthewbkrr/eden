@@ -124,21 +124,29 @@ defmodule Eden.Accounts do
   """
   def bootstrap_super_admin(username, password, opts \\ [])
       when is_binary(username) and is_binary(password) do
-    if Repo.exists?(from(u in User, where: u.role == "super_admin")) do
-      {:error, :already_bootstrapped}
-    else
-      display_name = Keyword.get(opts, :display_name) || username
+    display_name = Keyword.get(opts, :display_name) || username
 
-      %User{}
-      |> User.registration_changeset(%{
-        "username" => username,
-        "display_name" => display_name,
-        "password" => password,
-        "password_confirmation" => password
-      })
-      |> Ecto.Changeset.put_change(:role, "super_admin")
-      |> Repo.insert()
-    end
+    Repo.transact(fn ->
+      # A transaction-scoped advisory lock serializes concurrent bootstraps so the exists-check
+      # can't race two callers into two super_admins. (A partial-unique index would be wrong — it
+      # would forbid the LATER, legitimate promotions set_user_role/3 makes.) Belt-and-suspenders
+      # for a one-shot operator command, but this mints an admin, so make the guard atomic.
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtext('eden.bootstrap_super_admin'))")
+
+      if Repo.exists?(from(u in User, where: u.role == "super_admin")) do
+        {:error, :already_bootstrapped}
+      else
+        %User{}
+        |> User.registration_changeset(%{
+          "username" => username,
+          "display_name" => display_name,
+          "password" => password,
+          "password_confirmation" => password
+        })
+        |> Ecto.Changeset.put_change(:role, "super_admin")
+        |> Repo.insert()
+      end
+    end)
   end
 
   @doc """
