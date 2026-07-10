@@ -112,6 +112,44 @@ defmodule Eden.Accounts do
   end
 
   @doc """
+  Creates the FIRST platform super_admin for go-live bootstrap on a fresh DB (#353).
+
+  Prod has no Mix, and `set_user_role/3` needs an EXISTING super_admin to authorize the
+  role change — a chicken-and-egg for the very first account — so this bypasses that gate.
+  It is itself guarded: it **refuses if any super_admin already exists**, so it can neither
+  mint a second one nor run twice by accident. Called only from `Eden.Release` (via
+  `bin/eden eval`), never from the web layer. The password comes from the caller (an env var
+  at run time) — never stored in code or logs. Returns `{:ok, user}` |
+  `{:error, :already_bootstrapped}` | `{:error, changeset}`.
+  """
+  def bootstrap_super_admin(username, password, opts \\ [])
+      when is_binary(username) and is_binary(password) do
+    display_name = Keyword.get(opts, :display_name) || username
+
+    Repo.transact(fn ->
+      # A transaction-scoped advisory lock serializes concurrent bootstraps so the exists-check
+      # can't race two callers into two super_admins. (A partial-unique index would be wrong — it
+      # would forbid the LATER, legitimate promotions set_user_role/3 makes.) Belt-and-suspenders
+      # for a one-shot operator command, but this mints an admin, so make the guard atomic.
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtext('eden.bootstrap_super_admin'))")
+
+      if Repo.exists?(from(u in User, where: u.role == "super_admin")) do
+        {:error, :already_bootstrapped}
+      else
+        %User{}
+        |> User.registration_changeset(%{
+          "username" => username,
+          "display_name" => display_name,
+          "password" => password,
+          "password_confirmation" => password
+        })
+        |> Ecto.Changeset.put_change(:role, "super_admin")
+        |> Repo.insert()
+      end
+    end)
+  end
+
+  @doc """
   Deactivates a user (#251, ADR-0002 Decision 8 — the manual half): sets `active =
   false` and **revokes every session**, so their live sessions are booted immediately
   (via the #256 `:sessions_revoked` signal) and they can't log back in.
