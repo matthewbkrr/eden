@@ -419,6 +419,12 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
 
 - `bin/server` — start the supervised app (sets `PHX_SERVER=true`).
 - `bin/migrate` — run migrations via `Eden.Release.migrate/0` (no Mix in prod).
+- **Go-live reset (#353, `deploy/README.md` §10)**: `Eden.Release.reset!/0` (TRUNCATE every table +
+  clear the local uploads root; armed only by `EDEN_ALLOW_RESET=yes-wipe-everything`) then
+  `Eden.Release.bootstrap_super_admin/0` (mints the FIRST super_admin from `EDEN_BOOTSTRAP_*` env —
+  bypasses the actor-gated `set_user_role/3`, but `Accounts.bootstrap_super_admin/3` refuses once
+  any super_admin exists). Both run via `bin/eden eval`; the flow is backup → reset → bootstrap →
+  invites, right before opening to real users.
 - `GET /healthz` — liveness probe, answered in the endpoint before the router
   (cheap, no DB). TLS terminates at Caddy (no app-level `force_ssl`, #85), so the
   probe hits plain HTTP without a redirect.

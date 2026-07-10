@@ -985,4 +985,42 @@ defmodule Eden.AccountsTest do
       assert :error = Accounts.verify_totp(activated, code)
     end
   end
+
+  describe "bootstrap_super_admin/3 (#353)" do
+    test "creates the first super_admin on a fresh DB" do
+      assert {:ok, user} = Accounts.bootstrap_super_admin("matveyihi", "password123")
+      assert user.username == "matveyihi"
+      assert user.role == "super_admin"
+      assert user.active
+      assert Accounts.super_admin?(user)
+      # The password is usable at login.
+      assert %{} = Accounts.get_user_by_username_and_password("matveyihi", "password123")
+    end
+
+    test "display_name defaults to the username" do
+      {:ok, a} = Accounts.bootstrap_super_admin("adminone", "password123")
+      assert a.display_name == "adminone"
+    end
+
+    test "display_name takes the :display_name option" do
+      {:ok, a} =
+        Accounts.bootstrap_super_admin("adminopt", "password123", display_name: "Custom Name")
+
+      assert a.display_name == "Custom Name"
+    end
+
+    test "refuses when a super_admin already exists (idempotent, no second one)" do
+      {:ok, _} = Accounts.bootstrap_super_admin("firstadmin", "password123")
+
+      assert {:error, :already_bootstrapped} =
+               Accounts.bootstrap_super_admin("secondadmin", "password123")
+
+      refute Accounts.get_user_by_username_and_password("secondadmin", "password123")
+    end
+
+    test "returns a changeset error on invalid input (short password)" do
+      assert {:error, %Ecto.Changeset{} = cs} = Accounts.bootstrap_super_admin("okname", "short")
+      refute cs.valid?
+    end
+  end
 end

@@ -215,6 +215,46 @@ is still caught externally.
 Alerts are debounced (a still-bad condition re-alerts at most every 6 h). Without the Telegram
 vars it only logs to `monitor.log` (and pings the dead-man URL, if set).
 
+## 10. Go-live reset (#353)
+
+Right before opening to real users, wipe the accumulated test data and mint the first admin.
+This is **DESTRUCTIVE and irreversible** — it empties every table and clears the uploads volume.
+Run it from `/opt/eden` on the server.
+
+**1. Back up first** (safety net even for test data):
+```sh
+./backup.sh    # or: docker compose exec -T db pg_dump -U <user> <db> | gzip > pre-reset.sql.gz
+```
+
+**2. Reset the DB + uploads.** Guarded by an exact confirmation value so it can't fire by accident:
+```sh
+docker compose exec -e EDEN_ALLOW_RESET=yes-wipe-everything app \
+  /app/bin/eden eval 'Eden.Release.reset!()'
+```
+This TRUNCATEs every table (the schema + migrations stay, so no `bin/migrate` needed) and clears
+the local uploads root's contents.
+
+**3. Bootstrap the first super_admin.** Keep the password OUT of shell history — type it into a
+variable first, then pass it BY NAME (never `=value` on the command line):
+```sh
+read -rs EDEN_BOOTSTRAP_PASSWORD; export EDEN_BOOTSTRAP_PASSWORD    # prompt, no echo
+docker compose exec \
+  -e EDEN_BOOTSTRAP_USERNAME=matveyihi \
+  -e EDEN_BOOTSTRAP_PASSWORD \
+  app /app/bin/eden eval 'Eden.Release.bootstrap_super_admin()'
+unset EDEN_BOOTSTRAP_PASSWORD
+```
+It prints `✓ super_admin bootstrapped: matveyihi (id=…)`, and **refuses if a super_admin already
+exists** (safe to re-run). Optional: `-e EDEN_BOOTSTRAP_DISPLAY_NAME='…'` (defaults to the username).
+
+**4. Create real invites.** Log in as `matveyihi` → **Settings → admin panel** (`/admin`) → mint
+invite links for the ~20 people (or set `EDEN_BOOTSTRAP_*` aside and use `Accounts.create_invite`
+via `bin/eden rpc`). Verify `https://chat.ihi.ru/healthz` → `ok` and that login works.
+
+> The reset runs against the LIVE app; any existing sessions are invalidated (their users are gone).
+> Fine at go-live (no real users yet). If migrations changed since the last deploy, run `bin/migrate`
+> first — the reset keeps the schema as-is.
+
 ## Operations cheatsheet
 ```sh
 cd /opt/eden
