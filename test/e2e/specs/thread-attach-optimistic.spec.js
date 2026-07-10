@@ -1,19 +1,17 @@
-// Thread attachments must show on-send feedback: attaching + sending files in a thread
-// used to be silent — queue_start cancels the staged tray, so the picked files vanished
-// and nothing showed until each reply streamed in. Now an optimistic "sending" row is
-// minted in #thread-pending (keyed by the client_id its real reply carries), and the
-// .ScrollBottom riser swaps it out when the reply lands.
+// Thread attachments must match the main composer (#348): attaching opens the SAME compose
+// lightbox (media grid + caption + send), and sending renders the SAME optimistic rows (progress
+// ring on media, .ed-file--sending card on files) in #thread-pending, swapped out by the riser
+// when each real reply streams in.
 //
 // The optimistic node is short-lived on localhost (the upload finishes fast), so we record
-// #thread-pending additions with a MutationObserver installed BEFORE Send rather than
-// racing to assert a live-in-DOM node.
+// #thread-pending additions with a MutationObserver installed BEFORE Send rather than racing
+// to assert a live-in-DOM node.
 const { test, expect, openMenu } = require("../helpers/fixtures")
 const path = require("path")
 const fix = (n) => path.join(__dirname, "..", "fixtures", n)
 
 const room = (seed) => `/channels/${seed.channel_id}/r/${seed.general_room_id}`
 
-// Open a fresh thread off a new root and return the reply-composer locator context.
 async function openThread(alice, seed, label) {
   await alice.goto(room(seed))
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
@@ -27,8 +25,6 @@ async function openThread(alice, seed, label) {
   await expect(alice.locator("#reply-composer")).toBeVisible()
 }
 
-// Record every data-client-id node added to #thread-pending (with what it contains) so a
-// fast swap can't hide the optimistic node from the assertion.
 async function watchPending(alice) {
   await alice.evaluate(() => {
     window.__optimSeen = []
@@ -40,10 +36,9 @@ async function watchPending(alice) {
           window.__optimSeen.push({
             clientId: n.dataset.clientId,
             hasImg: !!n.querySelector("img"),
-            hasSpinner: !!n.querySelector(".hero-arrow-path"),
+            hasMediaRing: !!n.querySelector(".ed-media-sending, .ed-media-sending__ring"),
             hasFileCard: !!n.querySelector(".ed-file--sending"),
             name: (n.querySelector(".ed-file__name") || {}).textContent || "",
-            ariaLabel: n.getAttribute("aria-label") || "",
           })
         }
     })
@@ -52,54 +47,69 @@ async function watchPending(alice) {
 }
 const readSeen = (alice) => alice.evaluate(() => window.__optimSeen || [])
 
-test("sending an album in a thread shows an optimistic sending node (#346)", async ({
+test("attaching in a thread opens the compose lightbox, not a cramped tray (#348)", async ({
   alice,
   seed,
 }, testInfo) => {
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
+  await openThread(alice, seed, "lightbox")
+  await alice.locator('#reply-composer input[type="file"]').setInputFiles([fix("sample1.png"), fix("sample2.png")])
+  // The SAME lightbox the main composer uses (media grid + caption + send) — not .ed-thread-tray.
+  await expect(alice.locator("#reply-composer [data-upload-preview]")).toBeVisible()
+  await expect(alice.locator("#reply-composer .ed-thread-tray")).toHaveCount(0)
+  await expect(alice.locator("#reply-composer .ed-compose__tile")).toHaveCount(2)
+  // Its caption field is scoped so it never collides with the main composer's.
+  await expect(alice.locator("#reply-composer #thread-compose-caption")).toBeVisible()
 
+  // A per-tile ✕ targets :thread_attachment (not :attachment) — one removed → one left.
+  await alice.locator("#reply-composer .ed-compose__remove").first().click()
+  await expect(alice.locator("#reply-composer .ed-compose__tile")).toHaveCount(1)
+  // Escape (cancel_all_uploads) must clear :thread_attachment too, dismissing the lightbox.
+  await alice.keyboard.press("Escape")
+  await expect(alice.locator("#reply-composer [data-upload-preview]")).toHaveCount(0)
+  expect(alice.__diag.pageErrors).toEqual([])
+})
+
+test("sending an album in a thread shows optimistic media with a ring (#348)", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
   await openThread(alice, seed, "album")
 
-  // Attach two photos → the staging tray shows before send.
   await alice.locator('#reply-composer input[type="file"]').setInputFiles([fix("sample1.png"), fix("sample2.png")])
-  await expect(alice.locator("#reply-composer .ed-thread-tray")).toBeVisible()
-  await expect(alice.locator("#reply-composer .ed-thread-tray__item")).toHaveCount(2)
+  await expect(alice.locator("#reply-composer [data-upload-preview]")).toBeVisible()
 
   await watchPending(alice)
   await alice.locator("#reply-composer").evaluate((f) => f.requestSubmit())
 
-  // The album reply streams into the thread; its optimistic twin was shown while it uploaded.
   await expect(alice.locator("#thread-replies .ed-album").first()).toBeVisible({ timeout: 15_000 })
   const seen = await readSeen(alice)
-  const album = seen.find((s) => s.hasImg && s.hasSpinner)
-  expect(album, `optimistic album node seen (got ${JSON.stringify(seen)})`).toBeTruthy()
-  // Screen-reader feedback: the album row carries a sending aria-label (its spinner is aria-hidden).
-  expect(album.ariaLabel.length, "album row has a sending aria-label").toBeGreaterThan(0)
+  const album = seen.find((s) => s.hasImg && s.hasMediaRing)
+  expect(album, `optimistic album with ring seen (got ${JSON.stringify(seen)})`).toBeTruthy()
 
-  // The tray cleared and the optimistic node was swapped out (riser) — #thread-pending is empty.
-  await expect(alice.locator("#reply-composer .ed-thread-tray")).toHaveCount(0)
+  // The lightbox cleared and the optimistic node was swapped out (riser) — #thread-pending is empty.
+  await expect(alice.locator("#reply-composer [data-upload-preview]")).toHaveCount(0)
   await expect(alice.locator("#thread-pending [data-client-id]")).toHaveCount(0, { timeout: 12_000 })
   expect(alice.__diag.pageErrors).toEqual([])
 })
 
-test("sending a file in a thread shows an optimistic sending card (#346)", async ({
+test("sending a file in a thread shows an optimistic sending card (#348)", async ({
   alice,
   seed,
 }, testInfo) => {
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
-
   await openThread(alice, seed, "file")
 
   await alice.locator('#reply-composer input[type="file"]').setInputFiles(fix("qa.txt"))
-  await expect(alice.locator("#reply-composer .ed-thread-tray")).toBeVisible()
+  await expect(alice.locator("#reply-composer [data-upload-preview]")).toBeVisible()
 
   await watchPending(alice)
   await alice.locator("#reply-composer").evaluate((f) => f.requestSubmit())
 
-  // The file reply lands; its optimistic sending card was shown (name + spinner, no ring).
   await expect(alice.locator("#thread-replies .ed-file").first()).toBeVisible({ timeout: 15_000 })
   const seen = await readSeen(alice)
-  const card = seen.find((s) => s.hasFileCard && s.hasSpinner)
+  const card = seen.find((s) => s.hasFileCard)
   expect(card, `optimistic file card seen (got ${JSON.stringify(seen)})`).toBeTruthy()
   expect(card.name).toContain("qa")
 
