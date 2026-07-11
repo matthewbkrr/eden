@@ -1,0 +1,1868 @@
+{
+ "I01 P0 краш initials + пустой DM empty-state": {
+  "ids": [
+   "R001",
+   "R060",
+   "R079",
+   "R201"
+  ],
+  "items": [
+   {
+    "id": "R001",
+    "priority": "P0",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 13131,
+    "title": "initials(\"\") падает на пустом авто-названии группы"
+   },
+   {
+    "id": "R060",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 3524,
+    "title": "Нет empty-state для пустого DM/группового диалога"
+   },
+   {
+    "id": "R079",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 13131,
+    "title": "Нет тестов на краевые случаи title/initials и пустой DM-панели"
+   },
+   {
+    "id": "R201",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1628,
+    "title": "initials/1 без защиты от nil/пустого имени (несогласовано с AdminLive)"
+   }
+  ]
+ },
+ "I02 P1 гейт #255 удалённого участника": {
+  "ids": [
+   "R005",
+   "R006",
+   "R109",
+   "R127",
+   "R136",
+   "R137",
+   "R143",
+   "R146"
+  ],
+  "items": [
+   {
+    "id": "R005",
+    "priority": "P1",
+    "file": "lib/eden/chat.ex",
+    "line": 2091,
+    "title": "get_messages/2 не применяет гейт #255 — вышедший участник группы вытягивает контент через carry (forward_rehydrate)"
+   },
+   {
+    "id": "R006",
+    "priority": "P1",
+    "file": "lib/eden/chat.ex",
+    "line": 2530,
+    "title": "Удалённый из группы участник может редактировать свои старые сообщения — инъекция контента в группу после удаления"
+   },
+   {
+    "id": "R109",
+    "priority": "P2",
+    "file": "test/eden/chat_test.exs",
+    "line": 2532,
+    "title": "Describe #255 не покрывает edit_message/edit_message_media вышедшим участником"
+   },
+   {
+    "id": "R127",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 1627,
+    "title": "search_messages не фильтрует kind=\"user\" и root_id — асимметрия с room-поиском"
+   },
+   {
+    "id": "R136",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2773,
+    "title": "create_reply / forward-в-тред допускают system-сообщение как root треда; valid_reply_to_id допускает цитату system-сообщения и thread-реплая"
+   },
+   {
+    "id": "R137",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2773,
+    "title": "create_reply/follow_thread принимают системное сообщение как рут треда"
+   },
+   {
+    "id": "R143",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3267,
+    "title": "toggle_reaction не проверяет kind — реакции на system-сообщения через форженный event"
+   },
+   {
+    "id": "R146",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3331,
+    "title": "forward_message не запрещает пересылку system-сообщения — в целевом чате появляется пустое сообщение"
+   }
+  ]
+ },
+ "I03 P1 Accounts: локаут super_admin + deleted-гварды + normalize + зачистка": {
+  "ids": [
+   "R002",
+   "R017",
+   "R018",
+   "R019",
+   "R048",
+   "R104",
+   "R113",
+   "R115"
+  ],
+  "items": [
+   {
+    "id": "R002",
+    "priority": "P1",
+    "file": "lib/eden/accounts.ex",
+    "line": 99,
+    "title": "Guard «последнего super_admin» считает деактивированных — достижим полный локаут админки"
+   },
+   {
+    "id": "R017",
+    "priority": "P2",
+    "file": "lib/eden/accounts.ex",
+    "line": 162,
+    "title": "deactivate_user авторизует по in-memory структуре — единственная админ-мутация без FOR UPDATE re-read (#263-идиома)"
+   },
+   {
+    "id": "R018",
+    "priority": "P2",
+    "file": "lib/eden/accounts.ex",
+    "line": 443,
+    "title": "apply_managed_fields и set_user_role не отклоняют удалённый (анонимизированный) аккаунт"
+   },
+   {
+    "id": "R019",
+    "priority": "P2",
+    "file": "lib/eden/accounts/user.ex",
+    "line": 230,
+    "title": "display_name не проходит normalize_text — NUL-байт валит запись (500), строка из пробелов проходит валидацию"
+   },
+   {
+    "id": "R048",
+    "priority": "P2",
+    "file": "lib/eden_web/live/admin_live.ex",
+    "line": 204,
+    "title": "Пост-коммитная зачистка при удалении аккаунта невозобновляема — сбой оставляет PII навсегда"
+   },
+   {
+    "id": "R104",
+    "priority": "P2",
+    "file": "test/eden/accounts_test.exs",
+    "line": 482,
+    "title": "Не закреплены тестами ключевые инварианты вокруг deactivated/deleted"
+   },
+   {
+    "id": "R113",
+    "priority": "P3",
+    "file": "lib/eden/accounts.ex",
+    "line": 77,
+    "title": "@doc set_user_role/3 противоречит реализации (self-change разрешён, :last_super_admin не задокументирован)"
+   },
+   {
+    "id": "R115",
+    "priority": "P3",
+    "file": "lib/eden/accounts.ex",
+    "line": 1037,
+    "title": "broadcast_invites_changed(nil) вместо вызова 0-арности"
+   }
+  ]
+ },
+ "I04 P1 Осиротевший owner канала": {
+  "ids": [
+   "R003",
+   "R004",
+   "R117"
+  ],
+  "items": [
+   {
+    "id": "R003",
+    "priority": "P1",
+    "file": "lib/eden/accounts.ex",
+    "line": 262,
+    "title": "Удаление/деактивация owner-а канала оставляет канал осиротевшим"
+   },
+   {
+    "id": "R004",
+    "priority": "P1",
+    "file": "lib/eden/channels.ex",
+    "line": 691,
+    "title": "Канал застревает без владельца, если единственный owner — удалённый/деактивированный аккаунт"
+   },
+   {
+    "id": "R117",
+    "priority": "P3",
+    "file": "lib/eden/channels.ex",
+    "line": 47,
+    "title": "Лимит каналов считается по creator_id, а не по владению"
+   }
+  ]
+ },
+ "I05 P1 #258 гонки: FK-constraint + stale_error_field (send/delete/edit/folder/worker/1:1)": {
+  "ids": [
+   "R007",
+   "R008",
+   "R027",
+   "R028",
+   "R030",
+   "R033",
+   "R035",
+   "R036",
+   "R037",
+   "R038",
+   "R042",
+   "R107",
+   "R130",
+   "R134"
+  ],
+  "items": [
+   {
+    "id": "R007",
+    "priority": "P1",
+    "file": "lib/eden/chat.ex",
+    "line": 2617,
+    "title": "apply_media_edit: Repo.delete/1 по удаляемым вложениям — тот же StaleEntryError-класс при конкурентном edit/delete"
+   },
+   {
+    "id": "R008",
+    "priority": "P1",
+    "file": "lib/eden/chat/message.ex",
+    "line": 91,
+    "title": "Гонка отправки против GC беседы: тихая потеря сообщения либо Postgrex.Error (нет FK-constraint в changeset)"
+   },
+   {
+    "id": "R027",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 354,
+    "title": "create_conversation/3 падает на нечисловом id участника (normalize_id вместо safe_id)"
+   },
+   {
+    "id": "R028",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 410,
+    "title": "Write-skew в leave_and_maybe_gc: одновременный выход двух последних участников оставляет беседу без GC навсегда"
+   },
+   {
+    "id": "R030",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 1335,
+    "title": "rename_folder/delete_folder падают Ecto.StaleEntryError при конкурентном удалении папки"
+   },
+   {
+    "id": "R033",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 2793,
+    "title": "create_reply/insert_forward_reply без foreign_key_constraint — краш при конкурентном удалении комнаты"
+   },
+   {
+    "id": "R035",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 3027,
+    "title": "Гонка: delete-for-both рута против конкурентного create_reply → tombstone-рут с живыми реплаями"
+   },
+   {
+    "id": "R036",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 3443,
+    "title": "soft_delete: Enum.each(attachments, &Repo.delete/1) — StaleEntryError при конкурентном двойном delete-for-both"
+   },
+   {
+    "id": "R037",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 3927,
+    "title": "Гонка find_or_create_direct: возможны два дубликата 1:1 для одной пары"
+   },
+   {
+    "id": "R038",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 4149,
+    "title": "Гонка воркера с удалением сообщения: StaleEntryError и утечка блоба превью"
+   },
+   {
+    "id": "R042",
+    "priority": "P2",
+    "file": "lib/eden/chat/message.ex",
+    "line": 88,
+    "title": "Message.changeset/photo_changeset без foreign_key_constraint — гонка с удалением комнаты роняет отправку (Postgrex.Error)"
+   },
+   {
+    "id": "R107",
+    "priority": "P2",
+    "file": "test/eden/chat_test.exs",
+    "line": 1684,
+    "title": "Describe «concurrent-delete hardening (#258)» покрывает только 2 функции — гонки send/edit/delete не тестируются"
+   },
+   {
+    "id": "R130",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2546,
+    "title": "edit_message: голый {:ok, edited} = Repo.update() без stale_error_field"
+   },
+   {
+    "id": "R134",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2719,
+    "title": "ensure_no_replies читает reply_count вне транзакции удаления — гонка даёт tombstone-root с осиротевшими реплаями"
+   }
+  ]
+ },
+ "I06 P1 Владелец meta системных сообщений + раздвоенный рендер": {
+  "ids": [
+   "R010",
+   "R147",
+   "R188",
+   "R189"
+  ],
+  "items": [
+   {
+    "id": "R010",
+    "priority": "P1",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 10394,
+    "title": "Протекающая абстракция: stringly-typed meta системных сообщений без владельца"
+   },
+   {
+    "id": "R147",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3344,
+    "title": "forward_message/4 с root_id молча игнорирует target_conversation_id"
+   },
+   {
+    "id": "R188",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 9473,
+    "title": "Рендер системных сообщений раздвоен: system_notice/1 (bubble) vs inline flat"
+   },
+   {
+    "id": "R189",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 10394,
+    "title": "Системный flat_message всегда рендерит «requested to join» независимо от meta"
+   }
+  ]
+ },
+ "I07 P1 failed-send/optimistic: тесты + мёртвый движок + caption/reply": {
+  "ids": [
+   "R009",
+   "R016",
+   "R061",
+   "R062",
+   "R063",
+   "R080",
+   "R081",
+   "R082",
+   "R085",
+   "R102",
+   "R103"
+  ],
+  "items": [
+   {
+    "id": "R009",
+    "priority": "P1",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 7762,
+    "title": "Нет e2e/тестов на failed-send: ●!, меню Resend/Delete, Resend N, watchdog"
+   },
+   {
+    "id": "R016",
+    "priority": "P2",
+    "file": "assets/js/send_store.js",
+    "line": 163,
+    "title": "Durable send-queue (IndexedDB resume) не покрыт e2e"
+   },
+   {
+    "id": "R061",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 4124,
+    "title": "send_reply_dispatch читает сырые .entries (не live_entries) — cancelled-призрак блокирует альбом-реплай"
+   },
+   {
+    "id": "R062",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 5122,
+    "title": "Нет e2e на touch/desktop swipe-to-reply и на wheel-swipe в ContextMenu"
+   },
+   {
+    "id": "R063",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 5752,
+    "title": "Дублирование optimistic-send: SendQueue (2116 строк JS) vs ThreadSendQueue"
+   },
+   {
+    "id": "R080",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 13498,
+    "title": "Нет теста на серверную ошибку create_attachments в seq-пути (пропадание ноды/подписи)"
+   },
+   {
+    "id": "R081",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 13500,
+    "title": "Подпись теряется, если альбом, на котором она «едет», падает при коммите"
+   },
+   {
+    "id": "R082",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 13517,
+    "title": "Серверная ошибка seq-альбома/файла молча удаляет оптимистичную ноду вместо retriable-состояния"
+   },
+   {
+    "id": "R085",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 14536,
+    "title": "Мёртвый параллельный движок отправки медиа (концепт до :attachment_seq)"
+   },
+   {
+    "id": "R102",
+    "priority": "P2",
+    "file": "test/e2e/specs/multi-select.spec.js",
+    "line": 5,
+    "title": "Нет теста на рассинхрон мульти-селекта при live-перерисовке/удалении выбранного"
+   },
+   {
+    "id": "R103",
+    "priority": "P2",
+    "file": "test/e2e/specs/upload-queue.spec.js",
+    "line": 28,
+    "title": "e2e upload-queue.spec.js проверяет удалённый UI (.ed-queued) — тест осиротел"
+   }
+  ]
+ },
+ "I08 P1 Reply в followed-треде не уведомляет при открытой комнате": {
+  "ids": [
+   "R011"
+  ],
+  "items": [
+   {
+    "id": "R011",
+    "priority": "P1",
+    "file": "lib/eden_web/notify_hook.ex",
+    "line": 77,
+    "title": "Reply в отслеживаемом треде не уведомляет, если открыта комната (но не панель треда)"
+   }
+  ]
+ },
+ "I09 Уведомления: live-apply + беззвучный knock + gating + Notifier": {
+  "ids": [
+   "R029",
+   "R096",
+   "R108",
+   "R120",
+   "R144",
+   "R150",
+   "R164",
+   "R165",
+   "R166",
+   "R202",
+   "R203"
+  ],
+  "items": [
+   {
+    "id": "R029",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 1077,
+    "title": "Knock-запрос в приватную комнату полностью беззвучен: системные сообщения не проходят через notify_new и не считаются unread"
+   },
+   {
+    "id": "R096",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1530,
+    "title": "Переключатели уведомлений в Settings не обновляют @notify_prefs — Notifier работает по устаревшим настройкам"
+   },
+   {
+    "id": "R108",
+    "priority": "P2",
+    "file": "test/eden/chat_test.exs",
+    "line": 1758,
+    "title": "Пробелы в тестах gating-матрицы: left-участник, forward, media_kind, tab_hidden-ветка фокуса, system-сообщения"
+   },
+   {
+    "id": "R120",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 256,
+    "title": "Стук в приватную комнату (join_request) не даёт никакого unread-сигнала админам"
+   },
+   {
+    "id": "R144",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3267,
+    "title": "Реакции на твои сообщения не уведомляют вовсе"
+   },
+   {
+    "id": "R150",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3832,
+    "title": "Gating не исключает деактивированных/удалённых пользователей — будущие push-адаптеры унаследуют дыру"
+   },
+   {
+    "id": "R164",
+    "priority": "P3",
+    "file": "lib/eden_web/components/notifier.ex",
+    "line": 67,
+    "title": "Notifier: сфокусированная вкладка обходит cross-tab дедуп только частично"
+   },
+   {
+    "id": "R165",
+    "priority": "P3",
+    "file": "lib/eden_web/components/notifier.ex",
+    "line": 71,
+    "title": "Фоновая вторая вкладка сводит focus-гейт на нет: OS-баннер о сообщении, которое пользователь прямо сейчас читает"
+   },
+   {
+    "id": "R166",
+    "priority": "P3",
+    "file": "lib/eden_web/components/notifier.ex",
+    "line": 88,
+    "title": "Firefox: renotify игнорируется, а chime подавлен показанным баннером — 2-е..N-е сообщения чата в away-режиме почти беззвучны"
+   },
+   {
+    "id": "R202",
+    "priority": "P3",
+    "file": "lib/eden_web/notify_hook.ex",
+    "line": 87,
+    "title": "Баннер медиа-сообщения с подписью не показывает признак медиа (нет «Фото · подпись» как в Telegram)"
+   },
+   {
+    "id": "R203",
+    "priority": "P3",
+    "file": "lib/eden_web/notify_hook.ex",
+    "line": 92,
+    "title": "notify_event шлёт клиенту сырой preview (до 500 символов) и внутренний avatar_key вместе с готовыми body/avatar_url"
+   }
+  ]
+ },
+ "I10 A11y контраст + токены": {
+  "ids": [
+   "R012",
+   "R013",
+   "R014",
+   "R015",
+   "R065",
+   "R072",
+   "R090",
+   "R098"
+  ],
+  "items": [
+   {
+    "id": "R012",
+    "priority": "P2",
+    "file": "assets/css/app.css",
+    "line": 1302,
+    "title": "--ed-danger как ЦВЕТ ТЕКСТА проваливает AA в тёмной теме (3.20:1)"
+   },
+   {
+    "id": "R013",
+    "priority": "P2",
+    "file": "assets/css/app.css",
+    "line": 1506,
+    "title": "Имя автора в композере-цитате (.ed-reply-bar__name) — 2.45:1 в тёмной теме"
+   },
+   {
+    "id": "R014",
+    "priority": "P2",
+    "file": "assets/css/app.css",
+    "line": 1654,
+    "title": "Время на медиа-таблетке (белое на чёрном 0.5) недотягивает над светлым фото (~3.54:1)"
+   },
+   {
+    "id": "R015",
+    "priority": "P2",
+    "file": "assets/css/app.css",
+    "line": 2435,
+    "title": "Счётчик ответов треда (.ed-thread-footer__count) — 2.78:1 в тёмной теме"
+   },
+   {
+    "id": "R065",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 7788,
+    "title": "Индикатор «не доставлено» невидим на своём (кобальтовом) пузыре"
+   },
+   {
+    "id": "R072",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 10659,
+    "title": "Имя автора в групповом сообщении (--ed-primary-strong) — 2.78:1 в тёмной теме"
+   },
+   {
+    "id": "R090",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 326,
+    "title": "Рецидив анти-паттерна: --ed-danger как цвет ТЕКСТА (22 места)"
+   },
+   {
+    "id": "R098",
+    "priority": "P2",
+    "file": "lib/eden_web/presence_helpers.ex",
+    "line": 32,
+    "title": "Текст статуса присутствия использует fill-токены — проваливает AA (online/away в светлой, dnd в тёмной)"
+   }
+  ]
+ },
+ "I11 A11y focus-trap модалок": {
+  "ids": [
+   "R067",
+   "R068",
+   "R073"
+  ],
+  "items": [
+   {
+    "id": "R067",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 8352,
+    "title": "Лайтбокс изображений: нет ловушки/возврата фокуса, role=dialog и alt у фото"
+   },
+   {
+    "id": "R068",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 8494,
+    "title": "Модалка видео: нет role=dialog/aria-modal и управления фокусом"
+   },
+   {
+    "id": "R073",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 10948,
+    "title": "Модалка предпросмотра вложений без FocusTrap (в отличие от всех прочих модалок)"
+   }
+  ]
+ },
+ "I12 A11y-прочее: клавиатура/aria/реордер/QR": {
+  "ids": [
+   "R093",
+   "R094",
+   "R174",
+   "R178",
+   "R181",
+   "R197"
+  ],
+  "items": [
+   {
+    "id": "R093",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1043,
+    "title": "Переупорядочивание папок только перетаскиванием — нет клавиатурной альтернативы"
+   },
+   {
+    "id": "R094",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1201,
+    "title": "Реордер папок работает только мышью (HTML5 DnD), нет touch-поддержки"
+   },
+   {
+    "id": "R174",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2052,
+    "title": "toggle_follow_thread игнорирует ошибки follow/unfollow_thread"
+   },
+   {
+    "id": "R178",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2927,
+    "title": "Меню канала (JS.toggle) не синхронизирует aria-expanded и без стрелочной навигации"
+   },
+   {
+    "id": "R181",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 3728,
+    "title": "Основной инпут композера без aria-label (доступное имя держится только на placeholder)"
+   },
+   {
+    "id": "R197",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 675,
+    "title": "QR-код TOTP в Settings не помечен aria-hidden (в отличие от welcome-варианта)"
+   }
+  ]
+ },
+ "I13 i18n + auth-флеши + глоссарий": {
+  "ids": [
+   "R099",
+   "R100",
+   "R101",
+   "R204",
+   "R206",
+   "R207",
+   "R208"
+  ],
+  "items": [
+   {
+    "id": "R099",
+    "priority": "P2",
+    "file": "lib/eden_web/user_auth.ex",
+    "line": 78,
+    "title": "Auth-флеши не локализованы — жёсткий английский в RU-приложении"
+   },
+   {
+    "id": "R100",
+    "priority": "P2",
+    "file": "priv/gettext/ru/LC_MESSAGES/default.po",
+    "line": 1902,
+    "title": "Три реальных UI-строки не переведены на русский"
+   },
+   {
+    "id": "R101",
+    "priority": "P2",
+    "file": "priv/gettext/ru/LC_MESSAGES/errors.po",
+    "line": 14,
+    "title": "errors.po почти не переведён — ошибки форм по-английски на русском UI"
+   },
+   {
+    "id": "R204",
+    "priority": "P3",
+    "file": "lib/eden_web/router.ex",
+    "line": 80,
+    "title": "WelcomeTotpLive и ResetLive живут в NotifyHook-сессиях, но не рендерят <.notifier> — уведомления там теряются"
+   },
+   {
+    "id": "R206",
+    "priority": "P3",
+    "file": "priv/gettext/ru/LC_MESSAGES/default.po",
+    "line": 1,
+    "title": "Глоссарий рассогласован: «беседа» vs «чат»"
+   },
+   {
+    "id": "R207",
+    "priority": "P3",
+    "file": "priv/gettext/ru/LC_MESSAGES/default.po",
+    "line": 1,
+    "title": "Неестественный порядок слов: «Skip for now» → «Пропустить пока»"
+   },
+   {
+    "id": "R208",
+    "priority": "P3",
+    "file": "priv/gettext/ru/LC_MESSAGES/default.po",
+    "line": 1,
+    "title": "Терминологический дрейф чат/беседа в RU-строках"
+   }
+  ]
+ },
+ "I14 Онбординг/пароль UX": {
+  "ids": [
+   "R087",
+   "R088",
+   "R089",
+   "R091",
+   "R092",
+   "R192",
+   "R193",
+   "R194",
+   "R196",
+   "R198",
+   "R205"
+  ],
+  "items": [
+   {
+    "id": "R087",
+    "priority": "P2",
+    "file": "lib/eden_web/live/login_live.ex",
+    "line": 26,
+    "title": "Экран входа — тупик при забытом пароле (нет подсказки/ссылки)"
+   },
+   {
+    "id": "R088",
+    "priority": "P2",
+    "file": "lib/eden_web/live/login_live.ex",
+    "line": 40,
+    "title": "На экране входа нет reveal-тумблера пароля и подсказки восстановления"
+   },
+   {
+    "id": "R089",
+    "priority": "P2",
+    "file": "lib/eden_web/live/reset_live.ex",
+    "line": 57,
+    "title": "Сброс и смена пароля без repeat-подтверждения и без show/hide (в отличие от регистрации #306)"
+   },
+   {
+    "id": "R091",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 525,
+    "title": "Смена пароля без поля подтверждения → опечатка выкидывает со всех устройств"
+   },
+   {
+    "id": "R092",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 529,
+    "title": "Смена пароля и /reset без повтора пароля и без show/hide — опечатка = полный локаут"
+   },
+   {
+    "id": "R192",
+    "priority": "P3",
+    "file": "lib/eden_web/live/invite_live.ex",
+    "line": 68,
+    "title": "Форма приглашения теряет ввод, набранный до подключения сокета (#153)"
+   },
+   {
+    "id": "R193",
+    "priority": "P3",
+    "file": "lib/eden_web/live/login_live.ex",
+    "line": 16,
+    "title": "На экране логина нет подсказки о восстановлении при забытом пароле"
+   },
+   {
+    "id": "R194",
+    "priority": "P3",
+    "file": "lib/eden_web/live/reset_live.ex",
+    "line": 40,
+    "title": "Онбординг-хром reset рассогласован: карточка с рамкой vs cardless-экраны"
+   },
+   {
+    "id": "R196",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 529,
+    "title": "Смена пароля в Settings без show/hide и без повтора нового пароля"
+   },
+   {
+    "id": "R198",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1359,
+    "title": "Любая ошибка changeset при смене пароля показывается как «минимум 8 символов»"
+   },
+   {
+    "id": "R205",
+    "priority": "P3",
+    "file": "lib/eden_web/user_auth.ex",
+    "line": 152,
+    "title": "Форс-2FA админа шлёт на /settings, а не на секцию Security"
+   }
+  ]
+ },
+ "I15 Группы/пересылка UX": {
+  "ids": [
+   "R053",
+   "R069",
+   "R076",
+   "R083",
+   "R084",
+   "R176",
+   "R190"
+  ],
+  "items": [
+   {
+    "id": "R053",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 927,
+    "title": "Forward при активном pending_forward «съедает» набранный текст и застейдженные вложения"
+   },
+   {
+    "id": "R069",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 8814,
+    "title": "Нет отдельной «Выйти из группы»; owner упирается в тупик после подтверждения"
+   },
+   {
+    "id": "R076",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 12503,
+    "title": "После одобрения knock нет авто-перехода в комнату и позитивного подтверждения"
+   },
+   {
+    "id": "R083",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 14181,
+    "title": "drop_forward: частичный успех молча оставляет часть сообщений непересланными"
+   },
+   {
+    "id": "R084",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 14194,
+    "title": "Частичный сбой multi-select пересылки: общий флеш и потеря carry"
+   },
+   {
+    "id": "R176",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2302,
+    "title": "Введённое имя группы молча теряется при выборе одного участника"
+   },
+   {
+    "id": "R190",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 11473,
+    "title": "Кнопка «Start» в модалке нового диалога не блокируется без выбранных участников"
+   }
+  ]
+ },
+ "I16 Треды: корректность unread/cap/tab-gate/facepile": {
+  "ids": [
+   "R032",
+   "R034",
+   "R054",
+   "R055",
+   "R124",
+   "R129",
+   "R135",
+   "R140",
+   "R177"
+  ],
+  "items": [
+   {
+    "id": "R032",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 2743,
+    "title": "sync_thread_after_delete декрементит фолловеров, у которых удалённый reply не был засчитан"
+   },
+   {
+    "id": "R034",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 2818,
+    "title": "list_thread обрезает тред до 500 СТАРЕЙШИХ реплаев без пагинации — новые ответы недостижимы"
+   },
+   {
+    "id": "R054",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2372,
+    "title": "{:thread_reply} гоняет DB-запрос thread_follow_state для каждой сессии на каждый ответ в комнате"
+   },
+   {
+    "id": "R055",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2375,
+    "title": "mark_thread_read по {:thread_reply} не гейтится tab_visible — фоновая вкладка «читает» тред за пользователя"
+   },
+   {
+    "id": "R124",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 1181,
+    "title": "leave_rooms не чистит ThreadMembership — ушедшие продолжают копить unread"
+   },
+   {
+    "id": "R129",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2505,
+    "title": "delete-for-me непрочитанного реплая оставляет его в unread_replies скрывшего"
+   },
+   {
+    "id": "R135",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2743,
+    "title": "Декремент thread-unread при удалении реплая — неточная эвристика по last_viewed_at"
+   },
+   {
+    "id": "R140",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2947,
+    "title": "thread_follow_state не нормализует root_id и не скоупится по членству"
+   },
+   {
+    "id": "R177",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2415,
+    "title": "Facepile не очищается, когда удалён последний реплай треда"
+   }
+  ]
+ },
+ "I17 Треды: broadcast + follow-tracking тесты": {
+  "ids": [
+   "R105",
+   "R106",
+   "R209"
+  ],
+  "items": [
+   {
+    "id": "R105",
+    "priority": "P2",
+    "file": "test/eden/chat_test.exs",
+    "line": 1363,
+    "title": "Broadcast-контракты {:thread_read} и {:thread_updated} не покрыты тестами"
+   },
+   {
+    "id": "R106",
+    "priority": "P2",
+    "file": "test/eden/chat_test.exs",
+    "line": 1467,
+    "title": "Гейт last_viewed_at в декременте sync_thread_after_delete не покрыт тестом"
+   },
+   {
+    "id": "R209",
+    "priority": "P3",
+    "file": "test/eden/chat_test.exs",
+    "line": 1126,
+    "title": "Форвард в тред не покрыт тестом на follow-tracking"
+   }
+  ]
+ },
+ "I18 Перф горячих путей": {
+  "ids": [
+   "R047",
+   "R051",
+   "R059",
+   "R118",
+   "R119",
+   "R132",
+   "R133",
+   "R148",
+   "R149",
+   "R152"
+  ],
+  "items": [
+   {
+    "id": "R047",
+    "priority": "P2",
+    "file": "lib/eden_web/live/admin_live.ex",
+    "line": 42,
+    "title": "Админ-панель грузит и рендерит ВСЕХ пользователей без пагинации"
+   },
+   {
+    "id": "R051",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 272,
+    "title": "Начальный стрим списка разговоров в mount избыточен — его тут же перезаписывает handle_params"
+   },
+   {
+    "id": "R059",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2568,
+    "title": "Двойной пересчёт rail/folders на каждое входящее сообщение в открытой комнате"
+   },
+   {
+    "id": "R118",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 144,
+    "title": "list_conversations прелоадит всех участников (включая ушедших) каждой беседы"
+   },
+   {
+    "id": "R119",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 210,
+    "title": "last_message_previews: DISTINCT ON без поддерживающего индекса — сортировка всех сообщений сайдбара на каждый рефреш"
+   },
+   {
+    "id": "R132",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2679,
+    "title": "delete-for-both реплая дёргает notify_members всей комнаты впустую"
+   },
+   {
+    "id": "R133",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2716,
+    "title": "delete_messages_for_both: полный цикл per-message (fetch+preload+txn+broadcast+notify_members)"
+   },
+   {
+    "id": "R148",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3471,
+    "title": "unshared_blob_keys: один EXISTS-запрос на каждый ключ (до ~20 на альбом)"
+   },
+   {
+    "id": "R149",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3759,
+    "title": "notify_new — 3-4 синхронных запроса + O(N) бродкастов в процессе отправителя на каждое сообщение"
+   },
+   {
+    "id": "R152",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3995,
+    "title": "resurface_direct выполняет UPDATE с JOIN на каждую доставку любого сообщения"
+   }
+  ]
+ },
+ "I19 Storage/медиа: audio-kind + filename + EXIF": {
+  "ids": [
+   "R039",
+   "R040",
+   "R154",
+   "R158",
+   "R210"
+  ],
+  "items": [
+   {
+    "id": "R039",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 4208,
+    "title": "kind \"audio\" никогда не присваивается: вкладка «Audio» мертва, m4a классифицируется как видео"
+   },
+   {
+    "id": "R040",
+    "priority": "P2",
+    "file": "lib/eden/chat/attachment.ex",
+    "line": 61,
+    "title": "Имя файла длиннее 255 байт валит всю отправку generic-ошибкой"
+   },
+   {
+    "id": "R154",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 4208,
+    "title": "kind \"audio\" недостижим: sniff не распознаёт ни один аудиоформат"
+   },
+   {
+    "id": "R158",
+    "priority": "P3",
+    "file": "lib/eden/images.ex",
+    "line": 44,
+    "title": "square_avatar: сырые vix-ошибки просачиваются мимо задокументированного контракта"
+   },
+   {
+    "id": "R210",
+    "priority": "P3",
+    "file": "test/eden/images_test.exs",
+    "line": 18,
+    "title": "Стрип метаданных (EXIF/GPS) нигде не проверяется тестом"
+   }
+  ]
+ },
+ "I20 Storage: S3 Range + адаптеры + file_controller": {
+  "ids": [
+   "R045",
+   "R046",
+   "R159",
+   "R160",
+   "R167",
+   "R168",
+   "R169",
+   "R170",
+   "R171"
+  ],
+  "items": [
+   {
+    "id": "R045",
+    "priority": "P2",
+    "file": "lib/eden_web/controllers/file_controller.ex",
+    "line": 90,
+    "title": "S3-раздача: Range не пробрасывается — каждый seek читает весь объект в память"
+   },
+   {
+    "id": "R046",
+    "priority": "P2",
+    "file": "lib/eden_web/controllers/group_avatar_controller.ex",
+    "line": 14,
+    "title": "GroupAvatarController не покрыт controller-тестами"
+   },
+   {
+    "id": "R159",
+    "priority": "P3",
+    "file": "lib/eden/storage.ex",
+    "line": 34,
+    "title": "function_exported? без Code.ensure_loaded? — facade может ошибочно вернуть :error"
+   },
+   {
+    "id": "R160",
+    "priority": "P3",
+    "file": "lib/eden/storage/local.ex",
+    "line": 24,
+    "title": "Local-адаптер пишет неатомарно (без temp+rename)"
+   },
+   {
+    "id": "R167",
+    "priority": "P3",
+    "file": "lib/eden_web/controllers/file_controller.ex",
+    "line": 82,
+    "title": "416 не очищает cache-control immutable (в отличие от 404)"
+   },
+   {
+    "id": "R168",
+    "priority": "P3",
+    "file": "lib/eden_web/controllers/file_controller.ex",
+    "line": 98,
+    "title": "Remote-путь раздачи (send_remote/send_remote_bytes) не покрыт тестами"
+   },
+   {
+    "id": "R169",
+    "priority": "P3",
+    "file": "lib/eden_web/controllers/file_controller.ex",
+    "line": 120,
+    "title": "Range-парсер принимает только строчное \"bytes=\""
+   },
+   {
+    "id": "R170",
+    "priority": "P3",
+    "file": "lib/eden_web/controllers/file_controller.ex",
+    "line": 146,
+    "title": "404 после установленных заголовков наследует content-disposition: attachment"
+   },
+   {
+    "id": "R171",
+    "priority": "P3",
+    "file": "lib/eden_web/controllers/file_controller.ex",
+    "line": 173,
+    "title": "Inline-медиа отдаются без filename — «Сохранить как» предлагает имя из URL"
+   }
+  ]
+ },
+ "I21 Channels-контекст: тесты + join_by_token rescue": {
+  "ids": [
+   "R020",
+   "R022",
+   "R023"
+  ],
+  "items": [
+   {
+    "id": "R020",
+    "priority": "P2",
+    "file": "lib/eden/channels.ex",
+    "line": 187,
+    "title": "Нет прямого теста контракта ensure_member/2 (авто-join по ссылке, #41)"
+   },
+   {
+    "id": "R022",
+    "priority": "P2",
+    "file": "lib/eden/channels.ex",
+    "line": 758,
+    "title": "transfer_ownership слабо покрыт краевыми случаями"
+   },
+   {
+    "id": "R023",
+    "priority": "P2",
+    "file": "lib/eden/channels.ex",
+    "line": 930,
+    "title": "join_by_token не оборачивает Postgrex.Error в rescue, в отличие от approve_pending"
+   }
+  ]
+ },
+ "I22 Рефактор #237: ChatLive/ThreadPanel/SettingsLive": {
+  "ids": [
+   "R050",
+   "R086",
+   "R195"
+  ],
+  "items": [
+   {
+    "id": "R050",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 1,
+    "title": "God-модуль ChatLive: 14852 строки, весь мессенджер в одном LiveView"
+   },
+   {
+    "id": "R086",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live/thread_panel.ex",
+    "line": 171,
+    "title": "ThreadPanel держит рантайм-ссылки обратно в ChatLive (незавершённый распил #237)"
+   },
+   {
+    "id": "R195",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 194,
+    "title": "SettingsLive: монолитный render/1 ~1070 строк на 8 несвязанных секций"
+   }
+  ]
+ },
+ "I23 Рефактор: Eden.Chat god → Search + дедуп предикатов/preload/id": {
+  "ids": [
+   "R021",
+   "R024",
+   "R025",
+   "R031",
+   "R041",
+   "R138",
+   "R139",
+   "R151",
+   "R153"
+  ],
+  "items": [
+   {
+    "id": "R021",
+    "priority": "P2",
+    "file": "lib/eden/channels.ex",
+    "line": 361,
+    "title": "Двусторонняя связь Chat<->Channels: сущность Room живёт в двух контекстах"
+   },
+   {
+    "id": "R024",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 1,
+    "title": "God-контекст Eden.Chat: 4522 строки на ~10 несвязанных поддоменов"
+   },
+   {
+    "id": "R025",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 265,
+    "title": "Дублирование unread-предиката в 4 запросах"
+   },
+   {
+    "id": "R031",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 1483,
+    "title": "Поиск — когезивный поддомен, готовый к выделению в Eden.Chat.Search"
+   },
+   {
+    "id": "R041",
+    "priority": "P2",
+    "file": "lib/eden/chat/folder_prefs.ex",
+    "line": 1,
+    "title": "FolderPrefs — переименованный catch-all: 5 из 6 полей не про папки"
+   },
+   {
+    "id": "R138",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2819,
+    "title": "@message_preloads продублирован инлайном в list_thread и broadcast_thumbnail"
+   },
+   {
+    "id": "R139",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2819,
+    "title": "list_thread дублирует @message_preloads двумя inline-копиями"
+   },
+   {
+    "id": "R151",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3983,
+    "title": "Два разных нормализатора id внутри Chat с разной семантикой отказа"
+   },
+   {
+    "id": "R153",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 4081,
+    "title": "fetch_by_client_id: неполный preload и отсутствие фильтров conversation_id/deleted_at в dedup-пути"
+   }
+  ]
+ },
+ "I24 Дедуп web-хелперов: avatar/initials + DOM-id local_time": {
+  "ids": [
+   "R074",
+   "R075",
+   "R078",
+   "R185",
+   "R191",
+   "R200"
+  ],
+  "items": [
+   {
+    "id": "R074",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 12175,
+    "title": "Рандомный DOM id в local_time ломает morphdom при ре-стриме"
+   },
+   {
+    "id": "R075",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 12175,
+    "title": "LocalTime/LastSeen получают новый DOM-id на КАЖДЫЙ рендер"
+   },
+   {
+    "id": "R078",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 13110,
+    "title": "Дублирование avatar-хелперов в 4 web-модулях"
+   },
+   {
+    "id": "R185",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 6996,
+    "title": "wrapAndAppendOptimistic: обработчик img 'load' (pin) навешивается once, но при провале загрузки не срабатывает"
+   },
+   {
+    "id": "R191",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 12175,
+    "title": "local_time генерирует новый DOM-id на каждый рендер → лишний re-mount хука"
+   },
+   {
+    "id": "R200",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1623,
+    "title": "Дубль avatar_src/initials в трёх модулях веб-слоя"
+   }
+  ]
+ },
+ "I25 Стрим/интеракции-баги: selection + merged-bubble + сниппет + rename + avatar-save": {
+  "ids": [
+   "R056",
+   "R058",
+   "R070",
+   "R071",
+   "R077",
+   "R095"
+  ],
+  "items": [
+   {
+    "id": "R056",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2432,
+    "title": "Удаление выбранного сообщения (broadcast) не чистит @selection — счётчик в баре завышен"
+   },
+   {
+    "id": "R058",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2527,
+    "title": "Прочтение собеседником в DM ломает слитые файловые пузыри (теряется group_pos)"
+   },
+   {
+    "id": "R070",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 9022,
+    "title": "Сниппет и подсветка результата поиска ломаются при typo-совпадении (trigram <%)"
+   },
+   {
+    "id": "R071",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 10192,
+    "title": "Выбранное сообщение теряет подсветку при live-перерисовке (реакция/правка/тик прочтения)"
+   },
+   {
+    "id": "R077",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 12918,
+    "title": "Переименование участника комнаты не обновляет имя в плоских строках открытой комнаты"
+   },
+   {
+    "id": "R095",
+    "priority": "P2",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1282,
+    "title": "Аватар сохраняется, даже если сохранение профиля упало на валидации"
+   }
+  ]
+ },
+ "I26 Клиентская отправка: addOptimistic conv-id + thread-pending + overflow-залипание": {
+  "ids": [
+   "R064",
+   "R066",
+   "R187"
+  ],
+  "items": [
+   {
+    "id": "R064",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 6442,
+    "title": "addOptimistic для flat-комнаты не тегирует ноду data-conv-id, поэтому markFailed-нода исчезает при переключении чата"
+   },
+   {
+    "id": "R066",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 7947,
+    "title": "Переключение корня треда затирает #thread-pending с in-flight optimistic-нодами"
+   },
+   {
+    "id": "R187",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 8330,
+    "title": "Lightbox/VideoExpand: body.style.overflow может залипнуть при навигации с открытым оверлеем"
+   }
+  ]
+ },
+ "I27 Мёртвый код/скаффолд/комментарии/индикатор связи/тема ошибки": {
+  "ids": [
+   "R043",
+   "R044",
+   "R110",
+   "R125",
+   "R161",
+   "R162",
+   "R163",
+   "R172",
+   "R173"
+  ],
+  "items": [
+   {
+    "id": "R043",
+    "priority": "P2",
+    "file": "lib/eden_web/components/layouts.ex",
+    "line": 85,
+    "title": "Нет видимого индикатора состояния связи (баннер переподключения — мёртвый код)"
+   },
+   {
+    "id": "R044",
+    "priority": "P2",
+    "file": "lib/eden_web/controllers/error_html.ex",
+    "line": 36,
+    "title": "Страница ошибки всегда тёмная (игнорирует светлую тему) + цвет мимо токена"
+   },
+   {
+    "id": "R110",
+    "priority": "P3",
+    "file": "CLAUDE.md",
+    "line": 59,
+    "title": "CLAUDE.md: «the UI signs them back in» после смены пароля не соответствует поведению"
+   },
+   {
+    "id": "R125",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 1282,
+    "title": "Ложный комментарий «a DM can carry threads too since #31»"
+   },
+   {
+    "id": "R161",
+    "priority": "P3",
+    "file": "lib/eden_web/components/layouts.ex",
+    "line": 36,
+    "title": "Мёртвый Phoenix-скаффолд в Layouts.app (логотип, Website/GitHub/Get Started)"
+   },
+   {
+    "id": "R162",
+    "priority": "P3",
+    "file": "lib/eden_web/components/layouts.ex",
+    "line": 36,
+    "title": "Мёртвый scaffold-код: Layouts.app / flash_group / theme_toggle не используются"
+   },
+   {
+    "id": "R163",
+    "priority": "P3",
+    "file": "lib/eden_web/components/layouts.ex",
+    "line": 128,
+    "title": "Мёртвый scaffold-лейаут Phoenix (Layouts.app/theme_toggle) с иконочными кнопками без aria-label"
+   },
+   {
+    "id": "R172",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 44,
+    "title": "Устаревший комментарий: chunk_size назван 512KB, фактически 1MB"
+   },
+   {
+    "id": "R173",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 109,
+    "title": "Устаревший комментарий про форму sel_delete (all_mine vs for_all)"
+   }
+  ]
+ },
+ "I28 Batch P3-корректностей (гонки/эвристики/валидации)": {
+  "ids": [
+   "R111",
+   "R116",
+   "R121",
+   "R122",
+   "R123",
+   "R131",
+   "R141",
+   "R142",
+   "R155",
+   "R156",
+   "R157",
+   "R182",
+   "R183",
+   "R199"
+  ],
+  "items": [
+   {
+    "id": "R111",
+    "priority": "P3",
+    "file": "assets/js/app.js",
+    "line": 120,
+    "title": "Глобальные dragover/drop preventDefault навешаны без парного удаления"
+   },
+   {
+    "id": "R116",
+    "priority": "P3",
+    "file": "lib/eden/accounts/user.ex",
+    "line": 214,
+    "title": "Regex username с ^…$ пропускает завершающий перевод строки"
+   },
+   {
+    "id": "R121",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 279,
+    "title": "Секундная точность last_read_at: сообщение той же секунды после mark_read теряет статус непрочитанного"
+   },
+   {
+    "id": "R122",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 692,
+    "title": "store_and_swap_group_avatar: ветка «reclaim при GC группы» недостижима (StaleEntryError)"
+   },
+   {
+    "id": "R123",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 829,
+    "title": "Гонка transfer_group_tx: два конкурентных transfer'а разным целям дают двух owner'ов"
+   },
+   {
+    "id": "R131",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2630,
+    "title": "No-op сохранение edit-media-модалки всё равно ставит edited_at"
+   },
+   {
+    "id": "R141",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3030,
+    "title": "deliver_reply: last_reply_at может откатиться назад при конкурентных реплаях"
+   },
+   {
+    "id": "R142",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3030,
+    "title": "last_reply_at может откатиться назад при конкурентных реплаях"
+   },
+   {
+    "id": "R155",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 4460,
+    "title": "run_with_timeout: Task.async (linked) — клауза {:exit, reason} фактически мертва"
+   },
+   {
+    "id": "R156",
+    "priority": "P3",
+    "file": "lib/eden/chat/conversation.ex",
+    "line": 86,
+    "title": "room_changeset кастует :position из пользовательских attrs (create/rename комнаты)"
+   },
+   {
+    "id": "R157",
+    "priority": "P3",
+    "file": "lib/eden/chat/membership.ex",
+    "line": 29,
+    "title": "Membership.changeset кастит user_id из attrs вопреки конвенции проекта"
+   },
+   {
+    "id": "R182",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 4159,
+    "title": "maxlength=\"4000\" в composer'е треда захардкожен вместо max_body()"
+   },
+   {
+    "id": "R183",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 4711,
+    "title": "GalleryMonths не проверяет конечность ts (в отличие от DateRail)"
+   },
+   {
+    "id": "R199",
+    "priority": "P3",
+    "file": "lib/eden_web/live/settings_live.ex",
+    "line": 1460,
+    "title": "rename_folder может дважды сработать на Enter (submit + blur) — двойной flash"
+   }
+  ]
+ },
+ "I29 Batch мелких UX/качества": {
+  "ids": [
+   "R126",
+   "R145",
+   "R175",
+   "R179",
+   "R184",
+   "R186"
+  ],
+  "items": [
+   {
+    "id": "R126",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 1608,
+    "title": "Скрытый 1:1 полностью выпадает из поиска — человека нельзя найти, чтобы написать снова"
+   },
+   {
+    "id": "R145",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 3291,
+    "title": "В скрытом (deleted-for-me) 1:1 реакции молча не работают до resurface"
+   },
+   {
+    "id": "R175",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2101,
+    "title": "«Reply» на потенциально удалённое/недоступное сообщение в меню без явного фидбэка"
+   },
+   {
+    "id": "R179",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 3155,
+    "title": "Двойной клик по сообщению всегда реагирует — нельзя отключить"
+   },
+   {
+    "id": "R184",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 5294,
+    "title": "Trackpad wheel swipe-to-reply может срабатывать при горизонтальной прокрутке над бабблом"
+   },
+   {
+    "id": "R186",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 8284,
+    "title": "Открытие фото в lightbox на тач/клике отложено на 250 мс ради двойного клика"
+   }
+  ]
+ },
+ "I30 Продукт/бэклог: упоминания/пины/черновики + admin-поиск + деактивированные в пикерах": {
+  "ids": [
+   "R049",
+   "R112",
+   "R180"
+  ],
+  "items": [
+   {
+    "id": "R049",
+    "priority": "P2",
+    "file": "lib/eden_web/live/admin_live.ex",
+    "line": 451,
+    "title": "В списке людей админки нет поиска/фильтра"
+   },
+   {
+    "id": "R112",
+    "priority": "P3",
+    "file": "lib/eden/accounts.ex",
+    "line": 45,
+    "title": "Деактивированные пользователи попадают в пикеры «новый чат» / «добавить в комнату» без пометки"
+   },
+   {
+    "id": "R180",
+    "priority": "P3",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 3486,
+    "title": "Нет @упоминаний, закреплённых сообщений и черновиков"
+   }
+  ]
+ },
+ "I31 Misc test-gaps + мелкое качество": {
+  "ids": [
+   "R026",
+   "R052",
+   "R057",
+   "R097",
+   "R114",
+   "R128"
+  ],
+  "items": [
+   {
+    "id": "R026",
+    "priority": "P2",
+    "file": "lib/eden/chat.ex",
+    "line": 302,
+    "title": "Не покрыт тестом путь «чат в замьюченной папке не считается в rail-бейдж мессенджера»"
+   },
+   {
+    "id": "R052",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 382,
+    "title": "Нет теста на корректную смену подписок при patch-навигации между разговорами/каналами"
+   },
+   {
+    "id": "R057",
+    "priority": "P2",
+    "file": "lib/eden_web/live/chat_live.ex",
+    "line": 2509,
+    "title": "Нет теста на сохранение group_pos при прочтении собеседником (DM merged-bubble)"
+   },
+   {
+    "id": "R097",
+    "priority": "P2",
+    "file": "lib/eden_web/presence.ex",
+    "line": 61,
+    "title": "Не тестируется разрешение статуса при нескольких сессиях (min_by по rank)"
+   },
+   {
+    "id": "R114",
+    "priority": "P3",
+    "file": "lib/eden/accounts.ex",
+    "line": 498,
+    "title": "set_avatar: осиротевшие блобы при сбое update и при гонке двух загрузок"
+   },
+   {
+    "id": "R128",
+    "priority": "P3",
+    "file": "lib/eden/chat.ex",
+    "line": 2323,
+    "title": "Блобы, записанные в prepare_album до транзакции, осиротевают при падении процесса — реконсилятора нет"
+   }
+  ]
+ }
+}
