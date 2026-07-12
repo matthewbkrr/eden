@@ -715,6 +715,60 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ ctx.bob.display_name
     end
 
+    test "a solo auto-named group (all others removed) renders without crashing (#355 R001)",
+         ctx do
+      carol = user_fixture(%{username: "carol_solo355", display_name: "Carol"})
+      {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
+      # alice (owner) removes everyone else → no other ACTIVE members, so the auto title is ""
+      # (Enum.map_join of []). Before the fix, title == "" → initials("") → String.upcase(nil)
+      # crashed the WHOLE sidebar render (every conversation streams there).
+      :ok = Chat.remove_group_member(Scope.for_user(ctx.alice), group.id, ctx.bob.id)
+      :ok = Chat.remove_group_member(Scope.for_user(ctx.alice), group.id, carol.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      # live/3 raises if the render crashes — this streams the sidebar (conversation_item →
+      # title/avatar-initials call-site).
+      {:ok, view, html} = live(conn, ~p"/app/c/#{group.id}")
+      # A real fallback label instead of a blank name.
+      assert html =~ "Group"
+
+      # The SECOND call-site — the group profile panel (conv_profile_panel → initials(title)) —
+      # must also render without crashing.
+      assert render_click(view, "open_profile", %{}) =~ "Group"
+    end
+
+    test "a freshly-created DM opens with a peer-greeting empty-state, not a bare pane (#355 R060)",
+         ctx do
+      # ctx.conversation is an empty 1:1 alice↔bob.
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert html =~ ~s(id="messages-empty")
+      assert html =~ "No messages yet"
+      # DM copy greets the peer by name — NOT the room "#..." copy.
+      assert html =~ "Say hi to #{ctx.bob.display_name}"
+      refute html =~ "Be the first to post in"
+    end
+
+    test "a freshly-created group opens with a group empty-state (#355 R060)", ctx do
+      carol = user_fixture(%{username: "carol_empty355", display_name: "Carol"})
+      {:ok, group} = Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id])
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{group.id}")
+      assert html =~ ~s(id="messages-empty")
+      assert html =~ "Be the first to write in this group."
+    end
+
+    test "a room still shows its own empty-state copy (#355 R060 regression)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Empty355"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      assert html =~ ~s(id="messages-empty")
+      assert html =~ "Be the first to post in ##{room.name}"
+    end
+
     test "a malformed react payload is ignored, not a crash (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "x"})

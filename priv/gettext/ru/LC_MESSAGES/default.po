@@ -1887,6 +1887,21 @@ msgstr "Закрыть"
 msgid "Be the first to post in #%{room}."
 msgstr "Будьте первым в #%{room}."
 
+#: lib/eden_web/live/chat_live.ex:13006
+#, elixir-autogen, elixir-format
+msgid "Be the first to write in this group."
+msgstr "Напишите первое сообщение в группе."
+
+#: lib/eden_web/live/chat_live.ex:12988
+#, elixir-autogen, elixir-format
+msgid "Group"
+msgstr "Группа"
+
+#: lib/eden_web/live/chat_live.ex:13009
+#, elixir-autogen, elixir-format
+msgid "Say hi to %{name} 👋"
+msgstr "Поздоровайтесь с %{name} 👋"
+
 #: lib/eden_web/live/settings_live.ex:887
 #, elixir-autogen, elixir-format
 msgid "Double-click reaction"

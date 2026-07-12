@@ -3516,20 +3516,19 @@ defmodule EdenWeb.ChatLive do
                 <% end %>
               <% end %>
             </div>
-            <%!-- Room empty-state (#154), shown while #messages holds no streamed rows. It MUST
-                  live OUTSIDE the stream container (CSS :has() on the sibling reveals it): a
+            <%!-- Empty-state (#154, #355 R060), shown while #messages holds no streamed rows. It
+                  MUST live OUTSIDE the stream container (CSS :has() on the sibling reveals it): a
                   non-stream child inside #messages breaks LiveView's append anchoring — with
                   .DateRail's ds-* separators present, appended messages land at the TOP of the
-                  list instead of the bottom (the "forward/message only shows after refresh"
-                  bug). Rooms only (DMs / threads carry their own placeholders). --%>
-            <div :if={@selected.channel_id} id="messages-empty" role="status" class="ed-room-empty">
+                  list instead of the bottom (the "forward/message only shows after refresh" bug).
+                  Rendered for EVERY conversation (rooms + DMs + groups) — a freshly-created DM/group
+                  used to open with a bare empty pane; the sub-copy adapts to the surface. --%>
+            <div id="messages-empty" role="status" class="ed-room-empty">
               <div class="ed-room-empty__medallion" aria-hidden="true">
                 <.icon name="hero-chat-bubble-left-right" class="size-7" />
               </div>
               <p class="ed-room-empty__title">{gettext("No messages yet")}</p>
-              <p class="ed-room-empty__sub">
-                {gettext("Be the first to post in #%{room}.", room: @selected.name)}
-              </p>
+              <p class="ed-room-empty__sub">{empty_state_sub(@selected, @current_scope.user)}</p>
             </div>
             <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
             <%!-- No container gap/margin (#351): optimistic rows carry their OWN natural margin
@@ -12983,6 +12982,12 @@ defmodule EdenWeb.ChatLive do
     |> active_members()
     |> Enum.reject(&(&1.user_id == user.id))
     |> Enum.map_join(", ", & &1.user.display_name)
+    |> case do
+      # A group whose owner removed everyone else has no other active members → an empty auto-name.
+      # Give it a real label instead of "" (#355 R001) — the sidebar/header no longer show a blank.
+      "" -> gettext("Group")
+      name -> name
+    end
   end
 
   defp title(conversation, user) do
@@ -12991,6 +12996,17 @@ defmodule EdenWeb.ChatLive do
       [] -> gettext("Just you")
     end
   end
+
+  # Empty-state sub-copy (#355 R060), adapted to the surface: a room prompts posting to it, a group
+  # invites the first message, a 1:1 greets the peer by name.
+  defp empty_state_sub(%{channel_id: cid, name: name}, _user) when not is_nil(cid),
+    do: gettext("Be the first to post in #%{room}.", room: name)
+
+  defp empty_state_sub(%{is_group: true}, _user),
+    do: gettext("Be the first to write in this group.")
+
+  defp empty_state_sub(conversation, user),
+    do: gettext("Say hi to %{name} 👋", name: title(conversation, user))
 
   defp others(conversation, user) do
     conversation.memberships
@@ -13128,7 +13144,13 @@ defmodule EdenWeb.ChatLive do
   defp group_avatar_error(:unprocessable), do: gettext("Couldn't process that image.")
   defp group_avatar_error(_other), do: gettext("Couldn't upload that image.")
 
-  defp initials(name), do: name |> String.first() |> String.upcase()
+  # Guarded (#355 R001): a solo auto-named group renders title == "" → String.first("") is nil →
+  # String.upcase(nil) crashed the WHOLE sidebar render (every conversation streams there, so one
+  # bad group blocked opening the messenger). Fall back to "?" for "" / nil, like AdminLive.
+  defp initials(name) when is_binary(name) and name != "",
+    do: name |> String.first() |> String.upcase()
+
+  defp initials(_), do: "?"
 
   # Presence status of a 1:1's other participant (nil for groups / offline), used
   # to color the avatar dot + header label (#102).

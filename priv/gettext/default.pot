@@ -1879,6 +1879,21 @@ msgstr ""
 msgid "Be the first to post in #%{room}."
 msgstr ""
 
+#: lib/eden_web/live/chat_live.ex:13006
+#, elixir-autogen, elixir-format
+msgid "Be the first to write in this group."
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:12988
+#, elixir-autogen, elixir-format
+msgid "Group"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex:13009
+#, elixir-autogen, elixir-format
+msgid "Say hi to %{name} 👋"
+msgstr ""
+
 #: lib/eden_web/live/settings_live.ex:887
 #, elixir-autogen, elixir-format
 msgid "Double-click reaction"
