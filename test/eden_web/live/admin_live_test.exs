@@ -194,7 +194,7 @@ defmodule EdenWeb.AdminLiveTest do
       assert html =~ "Select a person"
     end
 
-    test "permanent deletion runs the web-layer cleanup: purges folders + revokes invites (#305 review)",
+    test "permanent deletion enqueues the durable cross-context scrub: purges folders + revokes invites (#305 review, #357/R048)",
          %{conn: conn} do
       wscope = Eden.Accounts.Scope.for_user(user_fixture(%{username: "offboard"}))
       worker = wscope.user
@@ -208,7 +208,10 @@ defmodule EdenWeb.AdminLiveTest do
       view |> element(~s(button[phx-click="delete_account"])) |> render_click()
 
       assert Accounts.deleted?(Repo.get!(User, worker.id))
-      # Both post-delete calls fired (deleting either would leave one of these unmet):
+
+      # The cross-context cleanup now runs in a durable Oban job enqueued in the deletion
+      # transaction (#357/R048), not inline — drain it, then assert both effects landed.
+      Oban.drain_queue(queue: :default)
       assert Repo.get(Eden.Chat.Folder, folder.id) == nil
       refute is_nil(Repo.get!(Eden.Channels.Invite, invite.id).revoked_at)
     end

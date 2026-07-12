@@ -229,6 +229,11 @@ defmodule Eden.Accounts.User do
 
   defp validate_display_name(changeset) do
     changeset
+    # Normalize FIRST (like bio/managed fields): strip NUL bytes — Postgres rejects them, so a
+    # crafted `display_name` would crash update_profile / invite POST with a Postgrex.Error
+    # instead of a validation error (#357/R019, same class as the #267 title fix) — and collapse
+    # a whitespace-only name to nil so validate_required fails it honestly on both paths.
+    |> update_change(:display_name, &normalize_text/1)
     |> validate_required([:display_name])
     |> validate_length(:display_name, min: 1, max: 50)
   end
