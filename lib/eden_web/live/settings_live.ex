@@ -1625,7 +1625,17 @@ defmodule EdenWeb.SettingsLive do
 
   defp avatar_src(_user), do: nil
 
-  defp initials(name), do: name |> String.first() |> String.upcase()
+  # Guarded like AdminLive / ChatLive (#355 R201): display_name is required today, but don't let a
+  # blank / nil / whitespace-only name (#386 review) crash the profile render or show a blank
+  # letter — fall back to "?" instead of String.upcase(nil) / a space.
+  defp initials(name) when is_binary(name) do
+    case String.trim(name) do
+      "" -> "?"
+      trimmed -> trimmed |> String.first() |> String.upcase()
+    end
+  end
+
+  defp initials(_), do: "?"
 
   defp avatar_error(:too_large), do: gettext("Up to 5 MB")
   defp avatar_error(:not_accepted), do: gettext("Images only")
