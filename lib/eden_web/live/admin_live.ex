@@ -161,8 +161,9 @@ defmodule EdenWeb.AdminLive do
         # reach into each other): kill the person's live channel/room invite links (#305 —
         # a private-room token keeps granting access regardless of its creator's state), and
         # reassign any channel they solely own to a live successor so a deactivated owner never
-        # leaves a team stuck without one (#358). Deletion routes the same two through the
-        # durable erasure worker; deactivation is reversible, so best-effort inline is fine.
+        # leaves a team stuck without one (#358). No delete_orphans: this path is REVERSIBLE, so
+        # a solo-owned channel is left intact for reactivation (only the erasure worker deletes).
+        # Deletion routes both through the durable worker; deactivation is reversible, so inline.
         Channels.revoke_invites_by(updated.id)
         Channels.reassign_orphaned_ownerships(updated.id)
 

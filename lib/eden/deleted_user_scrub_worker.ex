@@ -27,7 +27,9 @@ defmodule Eden.DeletedUserScrubWorker do
   def perform(%Oban.Job{args: %{"user_id" => user_id}}) when is_integer(user_id) do
     Chat.scrub_deleted_user_content(user_id)
     Channels.revoke_invites_by(user_id)
-    Channels.reassign_orphaned_ownerships(user_id)
+    # delete_orphans: true — deletion is irreversible, so a channel left with no usable member
+    # is permanently ownerless and should go (the deactivate path keeps it, #358 review).
+    Channels.reassign_orphaned_ownerships(user_id, delete_orphans: true)
     :ok
   end
 end

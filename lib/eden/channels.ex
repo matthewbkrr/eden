@@ -820,31 +820,41 @@ defmodule Eden.Channels do
   end
 
   @doc """
-  Reassigns every channel solely owned by `user_id` to a live successor — or deletes the
-  channel if they're the only member — so an account's deactivation (#251) / permanent
-  deletion (#303) never leaves a channel with a dead, unremovable owner (#358).
+  Reassigns every channel solely owned by `user_id` to a live successor so an account's
+  deactivation (#251) / permanent deletion (#303) never leaves a channel with a dead,
+  unremovable owner (#358).
 
   A **system offboarding operation**, so — unlike `transfer_ownership/3` — it takes no
   `%Scope{}` and deliberately bypasses the owner-only guards: the caller (the erasure worker
   for deletion, the AdminLive deactivate path for deactivation) has already authorized the
   account action. The successor is picked deterministically: the most senior **usable**
-  (active, not deleted) member — admins before plain members, then oldest join, then id.
+  (active, not deleted) member — admins before plain members, then oldest join, then id —
+  and re-verified UNDER LOCK at promote time so a successor deactivated mid-flight is skipped.
+
+  With **no usable successor** (the owner is the last usable member), the fallback depends on
+  `delete_orphans:` (default `false`): the **irreversible deletion** path passes `true` to
+  delete the now-permanently-ownerless channel (blobs reclaimed); the **reversible
+  deactivation** path leaves it untouched (`false`) — reactivation must restore a working
+  channel, and a solo channel strands no one else in the meantime.
+
   Idempotent: once the departing owner holds no `owner` rows, a re-run is a no-op (so the
   durable deletion worker can retry safely). Returns `:ok`.
   """
-  def reassign_orphaned_ownerships(user_id) when is_integer(user_id) do
+  def reassign_orphaned_ownerships(user_id, opts \\ []) when is_integer(user_id) do
+    delete_orphans? = Keyword.get(opts, :delete_orphans, false)
+
     from(m in Membership,
       where: m.user_id == ^user_id and m.role == "owner",
       select: m.channel_id
     )
     |> Repo.all()
-    |> Enum.each(&reassign_one(&1, user_id))
+    |> Enum.each(&reassign_one(&1, user_id, delete_orphans?))
   end
 
-  defp reassign_one(channel_id, owner_id) do
+  defp reassign_one(channel_id, owner_id, delete_orphans?) do
     case pick_successor(channel_id, owner_id) do
-      nil -> delete_orphaned_channel(channel_id)
-      successor_id -> promote_or_retry(channel_id, owner_id, successor_id)
+      nil -> if delete_orphans?, do: delete_orphaned_channel(channel_id), else: :ok
+      successor_id -> promote_or_retry(channel_id, owner_id, successor_id, delete_orphans?)
     end
   end
 
@@ -869,38 +879,56 @@ defmodule Eden.Channels do
     )
   end
 
-  defp promote_or_retry(channel_id, owner_id, successor_id) do
+  defp promote_or_retry(channel_id, owner_id, successor_id, delete_orphans?) do
     case promote_tx(channel_id, owner_id, successor_id) do
       :ok ->
         broadcast_channel(channel_id, {:members_changed, channel_id})
         broadcast_user(successor_id, :channels_changed)
         :ok
 
-      # The chosen successor left between the pick and the write — re-pick from scratch
-      # (finds another usable member or deletes the channel). Terminates: members only leave.
+      # The chosen successor left OR was deactivated between the pick and the write — re-pick
+      # from scratch (finds another usable member, or falls to the no-successor path).
+      # Terminates: each retry either promotes someone or shrinks the usable-candidate set.
       :retry ->
-        reassign_one(channel_id, owner_id)
+        reassign_one(channel_id, owner_id, delete_orphans?)
     end
   end
 
   # Promote the successor, then demote the departing owner to plain member (no privilege kept
-  # on the dead account — mirrors #303) in one transaction; count-checked so a successor that
-  # vanished rolls back rather than leaving the channel ownerless.
+  # on the dead account — mirrors #303) in one transaction.
   defp promote_tx(channel_id, owner_id, successor_id) do
-    Repo.transact(fn ->
-      case update_role(channel_id, successor_id, "owner") do
-        {1, _} ->
-          update_role(channel_id, owner_id, "member")
-          {:ok, :ok}
-
-        _ ->
-          {:error, :retry}
-      end
-    end)
+    Repo.transact(fn -> promote_locked(channel_id, owner_id, successor_id) end)
     |> case do
       {:ok, :ok} -> :ok
       {:error, :retry} -> :retry
     end
+  end
+
+  # Re-verify the successor is STILL usable under a `FOR UPDATE` lock (#358 review): a
+  # deactivation racing this promote would otherwise hand ownership to a now-blocked account
+  # and re-orphan the channel. Also count-checked, so a successor whose membership vanished
+  # rolls back rather than leaving the channel ownerless. Both cases → :retry (re-pick).
+  defp promote_locked(channel_id, owner_id, successor_id) do
+    cond do
+      not usable?(successor_id) ->
+        {:error, :retry}
+
+      match?({0, _}, update_role(channel_id, successor_id, "owner")) ->
+        {:error, :retry}
+
+      true ->
+        update_role(channel_id, owner_id, "member")
+        {:ok, :ok}
+    end
+  end
+
+  defp usable?(user_id) do
+    Repo.one(
+      from u in User,
+        where: u.id == ^user_id and u.active == true and is_nil(u.deleted_at),
+        lock: "FOR UPDATE",
+        select: u.id
+    ) != nil
   end
 
   defp delete_orphaned_channel(channel_id) do

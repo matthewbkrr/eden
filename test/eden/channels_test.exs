@@ -305,18 +305,30 @@ defmodule Eden.ChannelsTest do
       assert Channels.member_role(scope(bob), channel.id) == "admin"
     end
 
-    test "deletes the channel when the owner is its only (usable) member",
+    test "deletes an orphaned channel on the deletion path (delete_orphans: true)",
          %{alice: alice, bob: bob} do
       {:ok, solo} = Channels.create_channel(scope(alice), %{"name" => "Solo"})
       {:ok, ghost} = Channels.create_channel(scope(alice), %{"name" => "Ghost"})
       {:ok, _} = insert_member(ghost.id, bob.id, "member")
       bob |> Ecto.Changeset.change(active: false) |> Repo.update!()
 
-      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id, delete_orphans: true)
 
       # Solo: no other members. Ghost: only other member is deactivated → no usable successor.
       assert Repo.get(Channel, solo.id) == nil
       assert Repo.get(Channel, ghost.id) == nil
+    end
+
+    test "keeps a solo-owned channel on the deactivation path (delete_orphans off)",
+         %{alice: alice} do
+      {:ok, solo} = Channels.create_channel(scope(alice), %{"name" => "Solo"})
+
+      # Reversible flow default: no usable successor → leave the channel (reactivation restores
+      # it; a solo channel strands no one else). Deletion is only for the irreversible path.
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      assert Repo.get(Channel, solo.id)
+      assert Channels.member_role(scope(alice), solo.id) == "owner"
     end
 
     test "is idempotent — a second run is a no-op", %{alice: alice, bob: bob} do
