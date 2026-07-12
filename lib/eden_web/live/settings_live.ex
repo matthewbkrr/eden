@@ -1626,9 +1626,14 @@ defmodule EdenWeb.SettingsLive do
   defp avatar_src(_user), do: nil
 
   # Guarded like AdminLive / ChatLive (#355 R201): display_name is required today, but don't let a
-  # blank/nil name crash the profile render — fall back to "?" instead of String.upcase(nil).
-  defp initials(name) when is_binary(name) and name != "",
-    do: name |> String.first() |> String.upcase()
+  # blank / nil / whitespace-only name (#386 review) crash the profile render or show a blank
+  # letter — fall back to "?" instead of String.upcase(nil) / a space.
+  defp initials(name) when is_binary(name) do
+    case String.trim(name) do
+      "" -> "?"
+      trimmed -> trimmed |> String.first() |> String.upcase()
+    end
+  end
 
   defp initials(_), do: "?"
 

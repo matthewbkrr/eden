@@ -13146,9 +13146,14 @@ defmodule EdenWeb.ChatLive do
 
   # Guarded (#355 R001): a solo auto-named group renders title == "" → String.first("") is nil →
   # String.upcase(nil) crashed the WHOLE sidebar render (every conversation streams there, so one
-  # bad group blocked opening the messenger). Fall back to "?" for "" / nil, like AdminLive.
-  defp initials(name) when is_binary(name) and name != "",
-    do: name |> String.first() |> String.upcase()
+  # bad group blocked opening the messenger). Fall back to "?" for "" / nil — and for a
+  # whitespace-only name (#386 review), which trim catches before it would show a blank letter.
+  defp initials(name) when is_binary(name) do
+    case String.trim(name) do
+      "" -> "?"
+      trimmed -> trimmed |> String.first() |> String.upcase()
+    end
+  end
 
   defp initials(_), do: "?"
 
