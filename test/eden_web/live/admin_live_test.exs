@@ -4,7 +4,8 @@ defmodule EdenWeb.AdminLiveTest do
   import Phoenix.LiveViewTest
 
   alias Eden.Accounts
-  alias Eden.Accounts.User
+  alias Eden.Accounts.{Scope, User}
+  alias Eden.Channels
   alias Eden.Repo
 
   # role isn't cast by registration (it's admin-managed, #174); set it directly.
@@ -159,6 +160,22 @@ defmodule EdenWeb.AdminLiveTest do
       assert html =~ "Deactivate account"
     end
 
+    test "deactivating a channel owner reassigns ownership to a live member (#358)", %{conn: conn} do
+      owner = user_fixture(%{username: "teamlead"})
+      oscope = Scope.for_user(owner)
+      {:ok, channel} = Channels.create_channel(oscope, %{"name" => "Squad"})
+      heir = user_fixture(%{username: "heir358"})
+      {:ok, [_]} = Channels.add_members(oscope, channel.id, [heir.id])
+
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, owner)
+      view |> element(~s(button[phx-click="deactivate"])) |> render_click()
+
+      # Reassignment runs inline on the deactivate path (the reversible flow has no worker),
+      # so the channel is never left with a deactivated, unremovable owner.
+      assert Channels.member_role(Scope.for_user(heir), channel.id) == "owner"
+    end
+
     test "hides the deactivate control for your own account (#251)", %{conn: conn, boss: boss} do
       {:ok, view, _} = live(conn, ~p"/admin")
       html = select(view, boss)
@@ -196,11 +213,15 @@ defmodule EdenWeb.AdminLiveTest do
 
     test "permanent deletion enqueues the durable cross-context scrub: purges folders + revokes invites (#305 review, #357/R048)",
          %{conn: conn} do
-      wscope = Eden.Accounts.Scope.for_user(user_fixture(%{username: "offboard"}))
+      wscope = Scope.for_user(user_fixture(%{username: "offboard"}))
       worker = wscope.user
       {:ok, folder} = Eden.Chat.create_folder(wscope, %{"name" => "Personal"})
-      {:ok, channel} = Eden.Channels.create_channel(wscope, %{"name" => "Wk"})
-      {:ok, invite, _raw} = Eden.Channels.create_invite(wscope, channel.id)
+      {:ok, channel} = Channels.create_channel(wscope, %{"name" => "Wk"})
+      # A co-member so the channel is REASSIGNED (not deleted) on offboarding (#358) — keeps
+      # the invite around to prove revocation rather than having it cascade away with the channel.
+      teammate = user_fixture(%{username: "teammate358"})
+      {:ok, [_]} = Channels.add_members(wscope, channel.id, [teammate.id])
+      {:ok, invite, _raw} = Channels.create_invite(wscope, channel.id)
 
       {:ok, view, _} = live(conn, ~p"/admin")
       select(view, worker)
@@ -213,7 +234,27 @@ defmodule EdenWeb.AdminLiveTest do
       # transaction (#357/R048), not inline — drain it, then assert both effects landed.
       Oban.drain_queue(queue: :default)
       assert Repo.get(Eden.Chat.Folder, folder.id) == nil
-      refute is_nil(Repo.get!(Eden.Channels.Invite, invite.id).revoked_at)
+      refute is_nil(Repo.get!(Channels.Invite, invite.id).revoked_at)
+    end
+
+    test "permanent deletion reassigns orphaned channel ownership via the durable worker (#358)",
+         %{conn: conn} do
+      owner = user_fixture(%{username: "founder358"})
+      oscope = Scope.for_user(owner)
+      {:ok, channel} = Channels.create_channel(oscope, %{"name" => "Co"})
+      heir = user_fixture(%{username: "successor358"})
+      {:ok, [_]} = Channels.add_members(oscope, channel.id, [heir.id])
+
+      {:ok, view, _} = live(conn, ~p"/admin")
+      select(view, owner)
+      view |> element(~s(button[phx-click="arm_delete"])) |> render_click()
+      view |> element(~s(button[phx-click="delete_account"])) |> render_click()
+
+      assert Accounts.deleted?(Repo.get!(User, owner.id))
+
+      # Ownership reassignment rides the same durable erasure worker as the scrub — drain it.
+      Oban.drain_queue(queue: :default)
+      assert Channels.member_role(Scope.for_user(heir), channel.id) == "owner"
     end
 
     test "cancel disarms the delete without touching the account (#303)", %{conn: conn} do

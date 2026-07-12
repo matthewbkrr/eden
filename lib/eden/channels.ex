@@ -25,8 +25,11 @@ defmodule Eden.Channels do
 
   @pubsub Eden.PubSub
 
-  # Sanity cap on channels a single user can create (like folders): keeps a
-  # runaway client from flooding everyone's rail.
+  # Sanity cap on channels a single user can CREATE (counted by `creator_id`, which never
+  # changes — like folders): an anti-flood guard on creation, deliberately NOT a cap on
+  # channels currently owned. `transfer_ownership/3` moves the `owner` role but not
+  # `creator_id`, so the two can diverge; that's intended (#358/R117 — the guard is about
+  # who spammed the rail into existence, not who holds it now).
   @max_channels 20
 
   @doc "Most channels one user can create (`create_channel/2` returns `{:error, :limit}` beyond it)."
@@ -305,26 +308,32 @@ defmodule Eden.Channels do
   def delete_channel(%Scope{} = scope, channel_id) do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner)) do
-      member_ids = member_ids(channel.id)
-      # Collected BEFORE the delete — the FK cascade wipes the rows we'd query.
-      blob_keys = Chat.channel_room_blob_keys(channel.id)
+      delete_channel_record(channel)
+    end
+  end
 
-      # stale_error_field: an already-deleted channel (e.g. a concurrent owner
-      # session) is :not_found, not a StaleEntryError crash.
-      case Repo.delete(channel, stale_error_field: :id) do
-        {:ok, _} ->
-          # Rooms cascaded with the channel; reclaim their attachment blobs
-          # (forward-safely) only after the delete committed.
-          Chat.delete_unreferenced_blobs(blob_keys)
-          # The channel's own avatar blob (#70) — best-effort cleanup.
-          if channel.avatar_key, do: Storage.delete(channel.avatar_key)
-          broadcast_channel(channel.id, {:channel_deleted, channel.id})
-          Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
-          :ok
+  # The blob-reclaiming, broadcast-emitting delete, factored out of delete_channel/2 so the
+  # orphaned-owner offboarding path (#358) can reuse it without the owner-only guard.
+  defp delete_channel_record(%Channel{} = channel) do
+    member_ids = member_ids(channel.id)
+    # Collected BEFORE the delete — the FK cascade wipes the rows we'd query.
+    blob_keys = Chat.channel_room_blob_keys(channel.id)
 
-        {:error, _stale} ->
-          {:error, :not_found}
-      end
+    # stale_error_field: an already-deleted channel (e.g. a concurrent owner
+    # session) is :not_found, not a StaleEntryError crash.
+    case Repo.delete(channel, stale_error_field: :id) do
+      {:ok, _} ->
+        # Rooms cascaded with the channel; reclaim their attachment blobs
+        # (forward-safely) only after the delete committed.
+        Chat.delete_unreferenced_blobs(blob_keys)
+        # The channel's own avatar blob (#70) — best-effort cleanup.
+        if channel.avatar_key, do: Storage.delete(channel.avatar_key)
+        broadcast_channel(channel.id, {:channel_deleted, channel.id})
+        Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
+        :ok
+
+      {:error, _stale} ->
+        {:error, :not_found}
     end
   end
 
@@ -595,7 +604,10 @@ defmodule Eden.Channels do
           from m in Membership,
             join: u in User,
             on: u.id == m.user_id,
-            where: m.channel_id == ^channel.id,
+            # Anonymized (#303) accounts never show in the member panel — a dead "Удалённый
+            # аккаунт" owner/member would just be noise (#358/R004). Message authorship in rooms
+            # takes the name from a different path, so this is panel-only.
+            where: m.channel_id == ^channel.id and is_nil(u.deleted_at),
             order_by: [
               asc:
                 fragment(
@@ -805,6 +817,97 @@ defmodule Eden.Channels do
       from(m in Membership, where: m.channel_id == ^channel_id and m.user_id == ^user_id),
       set: [role: role]
     )
+  end
+
+  @doc """
+  Reassigns every channel solely owned by `user_id` to a live successor — or deletes the
+  channel if they're the only member — so an account's deactivation (#251) / permanent
+  deletion (#303) never leaves a channel with a dead, unremovable owner (#358).
+
+  A **system offboarding operation**, so — unlike `transfer_ownership/3` — it takes no
+  `%Scope{}` and deliberately bypasses the owner-only guards: the caller (the erasure worker
+  for deletion, the AdminLive deactivate path for deactivation) has already authorized the
+  account action. The successor is picked deterministically: the most senior **usable**
+  (active, not deleted) member — admins before plain members, then oldest join, then id.
+  Idempotent: once the departing owner holds no `owner` rows, a re-run is a no-op (so the
+  durable deletion worker can retry safely). Returns `:ok`.
+  """
+  def reassign_orphaned_ownerships(user_id) when is_integer(user_id) do
+    from(m in Membership,
+      where: m.user_id == ^user_id and m.role == "owner",
+      select: m.channel_id
+    )
+    |> Repo.all()
+    |> Enum.each(&reassign_one(&1, user_id))
+  end
+
+  defp reassign_one(channel_id, owner_id) do
+    case pick_successor(channel_id, owner_id) do
+      nil -> delete_orphaned_channel(channel_id)
+      successor_id -> promote_or_retry(channel_id, owner_id, successor_id)
+    end
+  end
+
+  # The most senior USABLE member other than the departing owner: admins before members, then
+  # oldest join, then id — deterministic. Excludes deleted AND deactivated users so we never
+  # hand ownership to another dead/blocked account (which would re-orphan the channel).
+  defp pick_successor(channel_id, owner_id) do
+    Repo.one(
+      from m in Membership,
+        join: u in User,
+        on: u.id == m.user_id,
+        where:
+          m.channel_id == ^channel_id and m.user_id != ^owner_id and
+            is_nil(u.deleted_at) and u.active == true,
+        order_by: [
+          asc: fragment("case ? when 'admin' then 0 else 1 end", m.role),
+          asc: m.inserted_at,
+          asc: m.user_id
+        ],
+        limit: 1,
+        select: m.user_id
+    )
+  end
+
+  defp promote_or_retry(channel_id, owner_id, successor_id) do
+    case promote_tx(channel_id, owner_id, successor_id) do
+      :ok ->
+        broadcast_channel(channel_id, {:members_changed, channel_id})
+        broadcast_user(successor_id, :channels_changed)
+        :ok
+
+      # The chosen successor left between the pick and the write — re-pick from scratch
+      # (finds another usable member or deletes the channel). Terminates: members only leave.
+      :retry ->
+        reassign_one(channel_id, owner_id)
+    end
+  end
+
+  # Promote the successor, then demote the departing owner to plain member (no privilege kept
+  # on the dead account — mirrors #303) in one transaction; count-checked so a successor that
+  # vanished rolls back rather than leaving the channel ownerless.
+  defp promote_tx(channel_id, owner_id, successor_id) do
+    Repo.transact(fn ->
+      case update_role(channel_id, successor_id, "owner") do
+        {1, _} ->
+          update_role(channel_id, owner_id, "member")
+          {:ok, :ok}
+
+        _ ->
+          {:error, :retry}
+      end
+    end)
+    |> case do
+      {:ok, :ok} -> :ok
+      {:error, :retry} -> :retry
+    end
+  end
+
+  defp delete_orphaned_channel(channel_id) do
+    case Repo.get(Channel, channel_id) do
+      nil -> :ok
+      channel -> delete_channel_record(channel)
+    end
   end
 
   ## Invite links

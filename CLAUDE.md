@@ -84,12 +84,12 @@ design — built incrementally as features land.)
   refuses them, and a pending knock from a since-deleted requester is auto-declined (never
   re-added). The cross-context scrub of the **denormalized** name from system-message `meta`
   (knock requester, member add/remove — the latter carry `user_id` for this) + purge of the
-  person's private folders + channel/room-invite revocation runs in a **durable Oban job**
-  (`Eden.DeletedUserScrubWorker`, `:default` queue) enqueued **inside the anonymization
-  transaction** (#357/R048, transactional outbox) — so a crash after commit can't lose the
-  erasure the way the old best-effort post-commit call in AdminLive could. The worker
-  orchestrates Chat + Channels (contexts still don't reach into each other — an app-level job
-  does, like the web layer) and is idempotent. The last-super-admin invariant counts only
+  person's private folders + channel/room-invite revocation + **orphaned-channel-ownership
+  reassignment** (#358) runs in a **durable Oban job** (`Eden.DeletedUserScrubWorker`,
+  `:default` queue) enqueued **inside the anonymization transaction** (#357/R048, transactional
+  outbox) — so a crash after commit can't lose the erasure the way the old best-effort
+  post-commit call in AdminLive could. The worker orchestrates Chat + Channels (contexts still
+  don't reach into each other — an app-level job does, like the web layer) and is idempotent. The last-super-admin invariant counts only
   **usable** (active + not-deleted) super_admins (#357/R002): a deactivated/anonymized super
   still carries the role but can't reach `/admin`, so it no longer props up the guard — closing
   a two-legitimate-actions lockout — and `set_user_role`/`deactivate_user`/`apply_managed_fields`
@@ -291,7 +291,13 @@ design — built incrementally as features land.)
   `/channels/join/:token`; the login flow preserves the link via
   `user_return_to`). Removal matrix: owner > admin > member; the owner leaves
   only after `transfer_ownership/3` (or deletes the channel); removed users'
-  sessions get `{:removed_from_channel, id}` and navigate away. **Threads** are a
+  sessions get `{:removed_from_channel, id}` and navigate away. **Owner offboarding**
+  (#358): deactivating/deleting a channel's sole owner never strands it — a system
+  `reassign_orphaned_ownerships/1` (no `%Scope{}`; deliberately bypasses the owner-only
+  guards) hands the channel to the most senior **usable** member (admins first, then oldest
+  join), or deletes it if the owner was the only member; it rides the durable erasure worker
+  for deletion and runs inline on the deactivate path. `list_members/2` hides anonymized
+  accounts, and the create cap counts **created** (`creator_id`, immutable), not owned. **Threads** are a
   **rooms-only** feature (flat, Mattermost-style) — the personal messenger
   (DMs/groups) has no thread UI, and `Chat.create_reply/3` / `list_thread/2`
   reject a non-room root (`ensure_threaded/1`). A reply's `root_id` points at a

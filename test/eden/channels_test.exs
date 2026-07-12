@@ -263,6 +263,100 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "owner offboarding / reassign_orphaned_ownerships/1 (#358)" do
+    test "hands a solely-owned channel to the senior admin", %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "admin")
+      carol = user_fixture(%{username: "carol358a"})
+      {:ok, _} = insert_member(channel.id, carol.id, "member")
+
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      assert Channels.member_role(scope(bob), channel.id) == "owner"
+      assert Channels.member_role(scope(alice), channel.id) == "member"
+      assert Channels.member_role(scope(carol), channel.id) == "member"
+    end
+
+    test "falls back to the oldest member when there's no admin", %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      carol = user_fixture(%{username: "carol358b"})
+      {:ok, _} = insert_member(channel.id, carol.id, "member")
+
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      # Oldest join wins (bob joined before carol); user-id tiebreak keeps it deterministic.
+      assert Channels.member_role(scope(bob), channel.id) == "owner"
+      assert Channels.member_role(scope(carol), channel.id) == "member"
+    end
+
+    test "picks only a usable successor — skips deactivated/deleted members",
+         %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      # bob outranks carol (admin vs member) but is deactivated → not a valid owner.
+      {:ok, _} = insert_member(channel.id, bob.id, "admin")
+      bob |> Ecto.Changeset.change(active: false) |> Repo.update!()
+      carol = user_fixture(%{username: "carol358d"})
+      {:ok, _} = insert_member(channel.id, carol.id, "member")
+
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      assert Channels.member_role(scope(carol), channel.id) == "owner"
+      assert Channels.member_role(scope(bob), channel.id) == "admin"
+    end
+
+    test "deletes the channel when the owner is its only (usable) member",
+         %{alice: alice, bob: bob} do
+      {:ok, solo} = Channels.create_channel(scope(alice), %{"name" => "Solo"})
+      {:ok, ghost} = Channels.create_channel(scope(alice), %{"name" => "Ghost"})
+      {:ok, _} = insert_member(ghost.id, bob.id, "member")
+      bob |> Ecto.Changeset.change(active: false) |> Repo.update!()
+
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      # Solo: no other members. Ghost: only other member is deactivated → no usable successor.
+      assert Repo.get(Channel, solo.id) == nil
+      assert Repo.get(Channel, ghost.id) == nil
+    end
+
+    test "is idempotent — a second run is a no-op", %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "admin")
+
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      assert Channels.member_role(scope(bob), channel.id) == "owner"
+      assert Channels.member_role(scope(alice), channel.id) == "member"
+    end
+
+    test "the new owner regains full owner rights (delete was blocked before)",
+         %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "admin")
+
+      assert :ok = Channels.reassign_orphaned_ownerships(alice.id)
+
+      assert :ok = Channels.delete_channel(scope(bob), channel.id)
+      assert Repo.get(Channel, channel.id) == nil
+    end
+
+    test "list_members omits anonymized (deleted) members (#358/R004)",
+         %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+
+      bob
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now() |> DateTime.truncate(:second))
+      |> Repo.update!()
+
+      {:ok, members} = Channels.list_members(scope(alice), channel.id)
+      ids = Enum.map(members, & &1.user.id)
+      assert alice.id in ids
+      refute bob.id in ids
+    end
+  end
+
   describe "rooms" do
     setup %{alice: alice, bob: bob} do
       {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
