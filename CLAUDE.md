@@ -82,10 +82,19 @@ design — built incrementally as features land.)
   (shared history isn't holed — the anonymize-not-cascade choice); deleted rows are filtered
   from `list_users`/`list_other_users`/`create_conversation`/room+channel adds, `reactivate_user/2`
   refuses them, and a pending knock from a since-deleted requester is auto-declined (never
-  re-added). After the Accounts scrub, the web layer calls `Chat.scrub_deleted_user_content/1`
-  (contexts don't reach into each other) to scrub the **denormalized** name from system-message
-  `meta` (knock requester, member add/remove — the latter carry `user_id` for this) and purge
-  the person's private folders. Reuses the #251 login/session gates via `active=false`.
+  re-added). The cross-context scrub of the **denormalized** name from system-message `meta`
+  (knock requester, member add/remove — the latter carry `user_id` for this) + purge of the
+  person's private folders + channel/room-invite revocation runs in a **durable Oban job**
+  (`Eden.DeletedUserScrubWorker`, `:default` queue) enqueued **inside the anonymization
+  transaction** (#357/R048, transactional outbox) — so a crash after commit can't lose the
+  erasure the way the old best-effort post-commit call in AdminLive could. The worker
+  orchestrates Chat + Channels (contexts still don't reach into each other — an app-level job
+  does, like the web layer) and is idempotent. The last-super-admin invariant counts only
+  **usable** (active + not-deleted) super_admins (#357/R002): a deactivated/anonymized super
+  still carries the role but can't reach `/admin`, so it no longer props up the guard — closing
+  a two-legitimate-actions lockout — and `set_user_role`/`deactivate_user`/`apply_managed_fields`
+  re-read the target `FOR UPDATE` and refuse a deleted row. Reuses the #251 login/session gates
+  via `active=false`.
   **TOTP two-factor** (#250, ADR-0002 Decision 7): a user enrolls in Settings
   (`setup_totp/1` → scan QR / manual key → `activate_totp/3` confirms a code, reveals
   one-time **backup codes**); at sign-in an enrolled user's password step stashes a
@@ -394,9 +403,10 @@ maps the task to the right one:
 (`oban-thinking` is referenced by the router but not vendored — see
 `.claude/skills/ATTRIBUTION.md`. Note **Oban IS a dependency**: it runs in the
 supervision tree (`lib/eden/application.ex`) with a `:media` queue
-(`Eden.Chat.ThumbnailWorker`) and a daily `Oban.Plugins.Cron` job
-(`Eden.Accounts.TokenPruner`, #238). Prefer an Oban worker + Cron for periodic /
-background work over a hand-rolled GenServer sweep.)
+(`Eden.Chat.ThumbnailWorker`), a `:default` queue (`Eden.DeletedUserScrubWorker`,
+the #303 right-to-erasure scrub enqueued transactionally, #357) and a daily
+`Oban.Plugins.Cron` job (`Eden.Accounts.TokenPruner`, #238). Prefer an Oban worker +
+Cron for periodic / background work over a hand-rolled GenServer sweep.)
 
 ### UI / frontend work — use the design skills
 

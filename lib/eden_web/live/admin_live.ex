@@ -20,7 +20,6 @@ defmodule EdenWeb.AdminLive do
   alias Eden.Accounts
   alias Eden.Accounts.{Scope, User}
   alias Eden.Channels
-  alias Eden.Chat
 
   # Re-query the invites list each minute so the countdown labels advance and expired rows
   # drop, without a per-second timer.
@@ -166,6 +165,12 @@ defmodule EdenWeb.AdminLive do
         {:noreply,
          socket |> refresh_user(updated) |> put_flash(:info, gettext("Account deactivated."))}
 
+      {:error, :last_super_admin} ->
+        {:noreply, put_flash(socket, :error, gettext("Can't deactivate the last super-admin."))}
+
+      {:error, :already_deleted} ->
+        {:noreply, put_flash(socket, :error, gettext("That account is already deleted."))}
+
       {:error, :forbidden} ->
         {:noreply, put_flash(socket, :error, gettext("You can't deactivate that person."))}
     end
@@ -196,13 +201,12 @@ defmodule EdenWeb.AdminLive do
   def handle_event("delete_account", _params, %{assigns: %{delete_armed: true}} = socket) do
     case Accounts.delete_user_permanently(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, updated} ->
-        # The web layer orchestrates the cross-context cleanup (contexts don't reach into
-        # each other): scrub the person's name from Chat's denormalized system-message meta
-        # and drop their private folders now that the account is anonymized (#305 review), and
-        # revoke every channel/room invite they minted (#305 review P2 — else a private-room
-        # token from the erased account keeps granting access).
-        Chat.scrub_deleted_user_content(updated.id)
-        Channels.revoke_invites_by(updated.id)
+        # The cross-context cleanup (scrub the person's name from Chat's denormalized
+        # system-message meta, drop their private folders, revoke every channel/room invite
+        # they minted) now runs in a DURABLE Oban job enqueued INSIDE the deletion transaction
+        # (#357/R048) — a crash after commit can't lose the erasure the way this best-effort
+        # post-commit call could. Contexts still don't reach into each other; the worker is the
+        # app-level orchestrator.
 
         # The person is now filtered out of the list; drop them + the open panel.
         {:noreply,

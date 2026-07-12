@@ -2243,6 +2243,16 @@ msgstr ""
 msgid "Can't remove the last super-admin."
 msgstr ""
 
+#: lib/eden_web/live/admin_live.ex:170
+#, elixir-autogen, elixir-format
+msgid "Can't deactivate the last super-admin."
+msgstr ""
+
+#: lib/eden_web/live/admin_live.ex:173
+#, elixir-autogen, elixir-format
+msgid "That account is already deleted."
+msgstr ""
+
 #: lib/eden_web/live/admin_live.ex:100
 #, elixir-autogen, elixir-format, fuzzy
 msgid "Couldn't change the role."

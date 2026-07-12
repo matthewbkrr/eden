@@ -2259,6 +2259,16 @@ msgstr "Админ-панель"
 msgid "Can't remove the last super-admin."
 msgstr "Нельзя снять последнего супер-админа."
 
+#: lib/eden_web/live/admin_live.ex:170
+#, elixir-autogen, elixir-format
+msgid "Can't deactivate the last super-admin."
+msgstr "Нельзя деактивировать последнего супер-админа."
+
+#: lib/eden_web/live/admin_live.ex:173
+#, elixir-autogen, elixir-format
+msgid "That account is already deleted."
+msgstr "Этот аккаунт уже удалён."
+
 #: lib/eden_web/live/admin_live.ex:100
 #, elixir-autogen, elixir-format
 msgid "Couldn't change the role."

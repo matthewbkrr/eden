@@ -10,6 +10,7 @@ defmodule Eden.Accounts do
   import Ecto.Query, warn: false
 
   alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
+  alias Eden.DeletedUserScrubWorker
   alias Eden.Repo
   alias Eden.Storage
 
@@ -73,10 +74,13 @@ defmodule Eden.Accounts do
   def deleted?(%User{} = user), do: User.deleted?(user)
 
   @doc """
-  Sets a user's platform role (#174). **Super-admin only** — enforced here, not
-  just in the UI. An actor can't change their own role (no self-lockout / no
-  accidental last-super-admin demotion of self). Returns `{:ok, user}` |
-  `{:error, :forbidden}` | `{:error, changeset}`; broadcasts `{:user_updated}`.
+  Sets a user's platform role (#174). **Super-admin only** — enforced here, not just in
+  the UI. An actor **may** change their own role (a super_admin can step down); the one
+  refused move is taking the role off the **last usable** super_admin — whether that's the
+  actor themselves or a peer — so the platform can never reach zero active super_admins and
+  lock everyone out of `/admin`. A permanently-deleted target is refused too. Returns
+  `{:ok, user}` | `{:error, :forbidden | :last_super_admin | :already_deleted}` |
+  `{:error, changeset}`; broadcasts `{:user_updated}`.
   """
   def set_user_role(%Scope{user: %User{} = actor}, %User{} = target, role) do
     if User.super_admin?(actor) do
@@ -86,23 +90,33 @@ defmodule Eden.Accounts do
     end
   end
 
-  # The one invariant that matters: the platform must never reach ZERO super_admins
-  # (that would lock everyone out of admin). So the only refused move is taking the
-  # LAST super_admin off the role — whether that's the actor themselves (a lone
-  # super_admin can't step down) or someone else. A super_admin CAN step down or
-  # demote a peer as long as another super_admin remains. `FOR UPDATE` locks the
-  # super_admin set so two concurrent demotions can't both pass the check and reach
-  # zero. Returns {:error, :last_super_admin} when it would.
+  # The one invariant that matters: the platform must never reach ZERO USABLE super_admins
+  # (that would lock everyone out of admin). So the only refused move is taking the LAST
+  # usable super_admin off the role — whether that's the actor themselves (a lone super_admin
+  # can't step down) or someone else. A super_admin CAN step down or demote a peer as long as
+  # another usable super_admin remains. `usable_super_admins/0` (active + not deleted) is the
+  # set that counts — a deactivated/anonymized super still carries the role but can't reach
+  # /admin, so it must NOT prop up the guard (#357/R002). Locks that set + re-reads the target
+  # `FOR UPDATE` (same order as anonymize_locked/3 → no deadlock) so a concurrent demotion /
+  # deactivation / deletion can't race past the check on a stale struct. Returns
+  # {:error, :last_super_admin} / {:error, :already_deleted} when it would.
   defp set_role_guarded(%User{} = target, role) do
     Repo.transact(fn ->
-      super_ids =
-        from(u in User, where: u.role == "super_admin", lock: "FOR UPDATE", select: u.id)
-        |> Repo.all()
+      super_ids = usable_super_admins() |> lock("FOR UPDATE") |> select([u], u.id) |> Repo.all()
+      fresh = Repo.one(from(u in User, where: u.id == ^target.id, lock: "FOR UPDATE"))
 
-      if role != "super_admin" and target.id in super_ids and length(super_ids) <= 1 do
-        {:error, :last_super_admin}
-      else
-        target |> User.role_changeset(%{role: role}) |> Repo.update()
+      cond do
+        is_nil(fresh) ->
+          {:error, :forbidden}
+
+        User.deleted?(fresh) ->
+          {:error, :already_deleted}
+
+        role != "super_admin" and fresh.id in super_ids and length(super_ids) <= 1 ->
+          {:error, :last_super_admin}
+
+        true ->
+          fresh |> User.role_changeset(%{role: role}) |> Repo.update()
       end
     end)
     |> case do
@@ -111,16 +125,30 @@ defmodule Eden.Accounts do
     end
   end
 
+  # The super_admins that count toward the "never zero super_admins" invariant: active AND
+  # not permanently deleted. A deactivated (#251) or anonymized (#303) account still carries
+  # role="super_admin" but can't log in or reach /admin, so counting it would let two
+  # legitimate actions (deactivate a peer, then step down) drive the ACTIVE super_admin count
+  # to zero and lock everyone out (#357/R002). One source of truth, composed with lock/select
+  # at each guard site (set_role_guarded/2, deactivate_locked/2, anonymize_locked/3) and used
+  # bare for the bootstrap exists-check.
+  defp usable_super_admins do
+    from(u in User, where: u.role == "super_admin" and u.active == true and is_nil(u.deleted_at))
+  end
+
   @doc """
   Creates the FIRST platform super_admin for go-live bootstrap on a fresh DB (#353).
 
   Prod has no Mix, and `set_user_role/3` needs an EXISTING super_admin to authorize the
   role change — a chicken-and-egg for the very first account — so this bypasses that gate.
-  It is itself guarded: it **refuses if any super_admin already exists**, so it can neither
-  mint a second one nor run twice by accident. Called only from `Eden.Release` (via
-  `bin/eden eval`), never from the web layer. The password comes from the caller (an env var
-  at run time) — never stored in code or logs. Returns `{:ok, user}` |
-  `{:error, :already_bootstrapped}` | `{:error, changeset}`.
+  It is itself guarded: it **refuses if a USABLE (active, not deleted) super_admin already
+  exists**, so it can neither mint a second one nor run twice by accident. Counting only
+  usable super_admins doubles as the emergency-recovery path (#357/R002): if the sole
+  super_admin has been deactivated/anonymized — locking everyone out of `/admin` — a fresh
+  bootstrap can restore access. Called only from `Eden.Release` (via `bin/eden eval`), never
+  from the web layer. The password comes from the caller (an env var at run time) — never
+  stored in code or logs. Returns `{:ok, user}` | `{:error, :already_bootstrapped}` |
+  `{:error, changeset}`.
   """
   def bootstrap_super_admin(username, password, opts \\ [])
       when is_binary(username) and is_binary(password) do
@@ -133,7 +161,7 @@ defmodule Eden.Accounts do
       # for a one-shot operator command, but this mints an admin, so make the guard atomic.
       Repo.query!("SELECT pg_advisory_xact_lock(hashtext('eden.bootstrap_super_admin'))")
 
-      if Repo.exists?(from(u in User, where: u.role == "super_admin")) do
+      if Repo.exists?(usable_super_admins()) do
         {:error, :already_bootstrapped}
       else
         %User{}
@@ -155,18 +183,41 @@ defmodule Eden.Accounts do
   (via the #256 `:sessions_revoked` signal) and they can't log back in.
 
   Admin-scoped, same authority as reset links (`can_reset_password?/2` — a plain admin
-  can't touch a super_admin); an actor **can't deactivate themselves** (no self-lockout).
-  Any outstanding reset link is dropped too, so a disabled account has no live way back
-  in. Broadcasts `{:user_updated}`. Returns `{:ok, user}` | `{:error, :forbidden}`.
+  can't touch a super_admin); an actor **can't deactivate themselves** (no self-lockout),
+  the **last usable super_admin can't be deactivated** (symmetry with deletion — the count
+  never reaches zero, #357/R002), and a permanently-deleted account is refused. Any
+  outstanding reset link is dropped too, so a disabled account has no live way back in.
+  Broadcasts `{:user_updated}`. Returns `{:ok, user}` |
+  `{:error, :forbidden | :last_super_admin | :already_deleted}`.
   """
   def deactivate_user(%Scope{user: %User{} = actor}, %User{} = target) do
+    # Cheap pre-check on the in-memory struct for a nice early error; authority, the terminal-
+    # deletion guard, and the last-usable-super count are RE-checked on the locked fresh row.
     with :ok <- authorize_activation(actor, target),
-         {:ok, updated} <- Repo.transact(fn -> deactivate_writes(target) end) do
+         {:ok, updated} <- Repo.transact(fn -> deactivate_locked(actor, target.id) end) do
       # Side effects only after the row + token deletions commit: booting live
       # sessions and refreshing open views must never fire on a rolled-back write.
       broadcast_sessions_revoked(updated.id)
       broadcast_invites_changed()
       {:ok, broadcast_user_update(updated)}
+    end
+  end
+
+  # Re-read the target `FOR UPDATE` (#357 review — mirrors reactivate_locked/anonymize_locked)
+  # so authority, the terminal-deletion guard, and the last-usable-super count all run against
+  # the FRESH row, not AdminLive's in-memory struct. Locks the usable-super set FIRST (same
+  # order as anonymize_locked/3 → no deadlock) so a concurrent role change / deletion can't
+  # race us past the "never zero usable super_admins" invariant.
+  defp deactivate_locked(%User{} = actor, target_id) do
+    super_ids = usable_super_admins() |> lock("FOR UPDATE") |> select([u], u.id) |> Repo.all()
+    target = Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE"))
+
+    cond do
+      is_nil(target) -> {:error, :forbidden}
+      authorize_activation(actor, target) != :ok -> {:error, :forbidden}
+      User.deleted?(target) -> {:error, :already_deleted}
+      target.id in super_ids and length(super_ids) <= 1 -> {:error, :last_super_admin}
+      true -> deactivate_writes(target)
     end
   end
 
@@ -294,10 +345,7 @@ defmodule Eden.Accounts do
   # race us to zero super_admins or to a stale authority. Re-checks everything on the FRESH
   # row (#263 TOCTOU idiom). Returns {:ok, {updated, old_avatar_key}} for post-commit cleanup.
   defp anonymize_locked(%User{} = actor, target_id, dead_hash) do
-    super_ids =
-      from(u in User, where: u.role == "super_admin", lock: "FOR UPDATE", select: u.id)
-      |> Repo.all()
-
+    super_ids = usable_super_admins() |> lock("FOR UPDATE") |> select([u], u.id) |> Repo.all()
     target = Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE"))
 
     cond do
@@ -319,6 +367,14 @@ defmodule Eden.Accounts do
       delete_all_session_tokens(updated.id)
       delete_reset_tokens(updated.id)
       revoke_user_invites(updated.id)
+      # Enqueue the cross-context scrub (denormalized name in Chat's system-message meta,
+      # private folders, channel/room invites) as a DURABLE job in THIS transaction — the
+      # job row commits atomically with the anonymization (transactional outbox), so a crash
+      # after commit can't lose the erasure the way the old best-effort post-commit call in
+      # AdminLive could (#357/R048). The worker orchestrates Chat + Channels (Accounts never
+      # reaches into them) and is idempotent. `insert!` → a failed enqueue rolls the whole
+      # anonymization back, so we never half-erase.
+      Oban.insert!(DeletedUserScrubWorker.new(%{"user_id" => updated.id}))
       {:ok, {updated, old_avatar_key}}
     end
   end
@@ -438,15 +494,32 @@ defmodule Eden.Accounts do
   **Admin-only, enforced here** (#262): a write to the eden system-of-record must not
   rely on a web-layer gate alone, so a future second caller is safe by default (like
   `set_user_role/3`, `create_password_reset/2`). Broadcasts `{:user_updated, user}` so
-  open profile cards refresh. Returns `{:ok, user}` | `{:error, :forbidden | changeset}`.
+  open profile cards refresh. Returns `{:ok, user}` |
+  `{:error, :forbidden | :already_deleted | changeset}`.
   """
   def apply_managed_fields(%Scope{user: %User{} = actor}, %User{} = target, attrs) do
-    if User.admin?(actor) do
-      with {:ok, updated} <- target |> User.managed_changeset(attrs) |> Repo.update() do
-        {:ok, broadcast_user_update(updated)}
+    if User.admin?(actor),
+      do: apply_managed_guarded(target.id, attrs),
+      else: {:error, :forbidden}
+  end
+
+  # Re-read the target `FOR UPDATE` (#357/R018 — mirrors mint_reset_locked/anonymize_locked)
+  # so a managed-field write can't land on a row a concurrent permanent-delete just
+  # anonymized — which would rewrite scrubbed PII (corp_email/position/…) back onto a deleted
+  # account and break the #303 erasure guarantee. Returns {:error, :already_deleted} then.
+  defp apply_managed_guarded(target_id, attrs) do
+    Repo.transact(fn ->
+      target = Repo.one(from(u in User, where: u.id == ^target_id, lock: "FOR UPDATE"))
+
+      cond do
+        is_nil(target) -> {:error, :forbidden}
+        User.deleted?(target) -> {:error, :already_deleted}
+        true -> target |> User.managed_changeset(attrs) |> Repo.update()
       end
-    else
-      {:error, :forbidden}
+    end)
+    |> case do
+      {:ok, updated} -> {:ok, broadcast_user_update(updated)}
+      other -> other
     end
   end
 
@@ -1034,7 +1107,7 @@ defmodule Eden.Accounts do
     case Repo.transact(fn -> accept_locked_invite(hashed, attrs) end) do
       {:ok, user} ->
         # A redemption bumps used_count and may exhaust the invite — refresh open admin panels.
-        broadcast_invites_changed(nil)
+        broadcast_invites_changed()
         {:ok, user}
 
       other ->

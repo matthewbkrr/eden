@@ -1,5 +1,6 @@
 defmodule Eden.AccountsTest do
   use Eden.DataCase, async: true
+  use Oban.Testing, repo: Eden.Repo
 
   alias Eden.Accounts
   alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
@@ -82,6 +83,21 @@ defmodule Eden.AccountsTest do
 
     test "rejects an unknown token" do
       assert {:error, :invalid} = Accounts.register_user_with_invite("nope", valid_attrs())
+    end
+
+    test "strips a NUL byte from display_name at registration (#357/R019)", ctx do
+      assert {:ok, user} =
+               Accounts.register_user_with_invite(
+                 ctx.token,
+                 valid_attrs(%{display_name: "Ne" <> <<0>> <> "o"})
+               )
+
+      assert user.display_name == "Neo"
+    end
+
+    test "rejects a whitespace-only display_name at registration (#357/R019)", ctx do
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.register_user_with_invite(ctx.token, valid_attrs(%{display_name: "   "}))
     end
 
     test "rejects a username that differs only in case (citext)", %{inviter: inviter} do
@@ -312,6 +328,20 @@ defmodule Eden.AccountsTest do
                Accounts.update_profile(user, %{"bio" => String.duplicate("x", 501)})
     end
 
+    test "strips a NUL byte from display_name instead of crashing (#357/R019)" do
+      # A crafted NUL would otherwise reach Postgres and raise Postgrex.Error (a 500), not a
+      # validation error — normalize_text cleans it now, like bio/managed fields do.
+      assert {:ok, u} =
+               Accounts.update_profile(user_fixture(), %{"display_name" => "Ne" <> <<0>> <> "o"})
+
+      assert u.display_name == "Neo"
+    end
+
+    test "rejects a whitespace-only display_name (#357/R019)" do
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.update_profile(user_fixture(), %{"display_name" => "   "})
+    end
+
     test "an empty bio clears it to nil" do
       {:ok, user} = Accounts.update_profile(user_fixture(), %{"bio" => "something"})
       assert {:ok, cleared} = Accounts.update_profile(user, %{"bio" => "   "})
@@ -449,6 +479,19 @@ defmodule Eden.AccountsTest do
       assert {:ok, _} =
                Accounts.apply_managed_fields(super_admin, user_fixture(), %{"position" => "Ok"})
     end
+
+    test "refuses a permanently-deleted target and leaves the scrubbed row untouched (#357/R018)",
+         %{admin: admin} do
+      super_scope = Scope.for_user(promote(user_fixture(), "super_admin"))
+      target = user_fixture()
+      {:ok, deleted} = Accounts.delete_user_permanently(super_scope, target)
+
+      assert {:error, :already_deleted} =
+               Accounts.apply_managed_fields(admin, deleted, %{"corp_email" => "back@corp.ru"})
+
+      # The anonymized row keeps its scrubbed (nil) PII — no write landed on the deleted account.
+      assert Repo.get!(User, target.id).corp_email == nil
+    end
   end
 
   describe "platform roles / set_user_role/3 (#174)" do
@@ -505,6 +548,34 @@ defmodule Eden.AccountsTest do
 
       assert {:error, :last_super_admin} =
                Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+    end
+
+    test "cannot step down while the only other super_admin is deactivated (#357/R002)" do
+      actor = promote(user_fixture(), "super_admin")
+      peer = promote(user_fixture(), "super_admin")
+
+      # Deactivating the peer leaves `actor` as the only USABLE super_admin — a deactivated
+      # super still carries the role but can't reach /admin, so it no longer props up the guard.
+      assert {:ok, _} = Accounts.deactivate_user(Scope.for_user(actor), peer)
+
+      # So actor can no longer step down: the two-legitimate-actions lockout is now refused
+      # (before #357 this passed and drove the active super_admin count to zero).
+      assert {:error, :last_super_admin} =
+               Accounts.set_user_role(Scope.for_user(actor), actor, "member")
+
+      assert Repo.get!(User, actor.id).role == "super_admin"
+    end
+
+    test "refuses a role change on a permanently-deleted target (#357/R018)" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+      {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      assert {:error, :already_deleted} =
+               Accounts.set_user_role(Scope.for_user(actor), deleted, "admin")
+
+      # No privilege re-attached to the anonymized row.
+      assert Repo.get!(User, target.id).role == "member"
     end
 
     test "rejects an unknown role" do
@@ -589,6 +660,25 @@ defmodule Eden.AccountsTest do
 
       assert {:error, :forbidden} =
                Accounts.create_password_reset(Scope.for_user(actor), Repo.get!(User, target.id))
+    end
+
+    test "refuses to deactivate a permanently-deleted account (#357/R018)" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+      {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      assert {:error, :already_deleted} = Accounts.deactivate_user(Scope.for_user(actor), deleted)
+    end
+
+    test "a deactivated user still appears in the new-conversation picker (#357/R104)" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+      assert {:ok, _} = Accounts.deactivate_user(Scope.for_user(actor), target)
+
+      # Pinned behavior: deactivation (reversible) does NOT hide someone from list_other_users.
+      # Excluding deactivated accounts from pickers is deferred to #384, not silently changed here.
+      other_ids = Accounts.list_other_users(Scope.for_user(actor)) |> Enum.map(& &1.id)
+      assert target.id in other_ids
     end
   end
 
@@ -725,6 +815,23 @@ defmodule Eden.AccountsTest do
       refute target.id in (Accounts.list_users() |> Enum.map(& &1.id))
       other_ids = Accounts.list_other_users(Scope.for_user(actor)) |> Enum.map(& &1.id)
       refute target.id in other_ids
+    end
+
+    test "enqueues the durable cross-context scrub worker in the deletion transaction (#357/R048)" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+
+      assert {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+      assert_enqueued(worker: Eden.DeletedUserScrubWorker, args: %{user_id: deleted.id})
+    end
+
+    test "the scrub worker is idempotent — safe to run more than once (#357/R048)" do
+      actor = promote(user_fixture(), "super_admin")
+      target = user_fixture()
+      {:ok, deleted} = Accounts.delete_user_permanently(Scope.for_user(actor), target)
+
+      assert :ok = perform_job(Eden.DeletedUserScrubWorker, %{"user_id" => deleted.id})
+      assert :ok = perform_job(Eden.DeletedUserScrubWorker, %{"user_id" => deleted.id})
     end
   end
 
@@ -1021,6 +1128,19 @@ defmodule Eden.AccountsTest do
     test "returns a changeset error on invalid input (short password)" do
       assert {:error, %Ecto.Changeset{} = cs} = Accounts.bootstrap_super_admin("okname", "short")
       refute cs.valid?
+    end
+
+    test "a deactivated sole super_admin doesn't block bootstrap — the recovery path (#357/R002)" do
+      # The lockout state: the only super_admin has been deactivated (active=false), so nobody
+      # can reach /admin. bootstrap counts only USABLE supers, so it can restore access.
+      user_fixture()
+      |> promote("super_admin")
+      |> Ecto.Changeset.change(active: false)
+      |> Repo.update!()
+
+      assert {:ok, restored} = Accounts.bootstrap_super_admin("rescue", "password123")
+      assert restored.role == "super_admin"
+      assert restored.active
     end
   end
 end
