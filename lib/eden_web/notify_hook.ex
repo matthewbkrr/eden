@@ -17,6 +17,9 @@ defmodule EdenWeb.NotifyHook do
   Only **one** gate is left here, because it's the only per-session one: **focus** —
   suppress if you're actively viewing THIS chat right now (needs `selected` +
   `tab_visible`, ChatLive-only assigns; absent elsewhere ⇒ never focused ⇒ deliver).
+  For a **thread reply** (`root_id` set) focus means the open **thread panel** of *that* thread
+  (`thread_root`), not the open room (#362) — a reply never appears in the main stream, so a room
+  being open isn't "seeing it"; an open room with the panel closed still delivers the chime/banner.
   Every other gate — self / direct-mute / folder-mute / DND / non-followers, and (since
   #271) **channel-mute** — is applied server-side in `Chat.notify_recipient_ids`, so the
   payload only reaches sessions that should hear it. That's why room notifications now
@@ -72,8 +75,18 @@ defmodule EdenWeb.NotifyHook do
 
   defp deliver?(payload, assigns), do: not focused?(payload, assigns)
 
-  # "Am I reading THIS chat right now" → full suppression. selected/tab_visible are
-  # ChatLive-only, so this is always false on /settings, /admin.
+  # "Am I reading THIS chat right now" → full suppression. selected/tab_visible/thread_root are
+  # ChatLive-only, so this is always false on /settings, /admin (⇒ deliver).
+  #
+  # A thread reply (#57) never lands in the main stream, so a room merely being open does NOT
+  # mean the user sees it — focus for a reply is the OPEN THREAD PANEL of exactly that thread
+  # (#362/R011), not the room. thread_root is the open thread's %Message{} (nil when the panel is
+  # closed / on /settings), so a different-thread or closed panel isn't focused ⇒ deliver.
+  defp focused?(%{root_id: root_id}, assigns) when not is_nil(root_id) do
+    !!(assigns[:tab_visible] && match?(%{id: ^root_id}, assigns[:thread_root]))
+  end
+
+  # A normal message keeps the room-open focus: it DOES appear in the open room's main stream.
   defp focused?(payload, assigns) do
     !!(assigns[:tab_visible] && assigns[:selected] &&
          assigns[:selected].id == payload.conversation_id)

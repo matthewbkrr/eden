@@ -10,6 +10,11 @@ defmodule EdenWeb.NotifyHookTest do
 
   defp scope(user), do: Scope.for_user(user)
 
+  # Force the async room selection (finish_open_room) to complete before we send: a bare live/2
+  # can return before `selected` is assigned, and a notify racing that window would deliver only
+  # because `selected` is momentarily nil (a test artifact, not the gate under test).
+  defp await_room_open(view), do: assert(render(view) =~ "the-root-post")
+
   setup %{conn: conn} do
     alice = user_fixture(%{username: "notify_alice"})
     bob = user_fixture(%{username: "notify_bob"})
@@ -79,5 +84,71 @@ defmodule EdenWeb.NotifyHookTest do
 
     refute log =~ "Unhandled message"
     refute_push_event(view, "notify", %{}, 0)
+  end
+
+  describe "followed-thread reply focus (#362/R011)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(bob), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(bob), channel.id, %{"name" => "talk"})
+      {:ok, _} = Channels.ensure_member(scope(alice), channel.id)
+      :ok = Chat.join_room(room.id, alice.id)
+      # alice authors the root, so bob's first reply pulls her in as a thread follower.
+      {:ok, root} = Chat.create_message(scope(alice), room.id, %{"body" => "the-root-post"})
+      %{channel: channel, room: room, root: root}
+    end
+
+    test "delivers when the room is open but this thread's panel is closed", %{
+      conn: conn,
+      bob: bob,
+      channel: channel,
+      room: room,
+      root: root
+    } do
+      # Room selected, thread panel closed (thread_root == nil), tab visible (mount default). The
+      # room being open must NOT suppress a reply that never lands in the main stream (#362).
+      {:ok, view, _} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      await_room_open(view)
+
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "a reply"})
+
+      assert_push_event(view, "notify", %{root_id: root_id})
+      assert root_id == root.id
+    end
+
+    test "suppresses when this thread's panel is open (focused)", %{
+      conn: conn,
+      alice: alice,
+      bob: bob,
+      channel: channel,
+      room: room,
+      root: root
+    } do
+      # A reply exists so its permalink opens the thread panel (a root's own permalink doesn't).
+      # alice replying also makes her a follower. Opening it sets thread_root == root, so alice
+      # sees a new reply live → it must NOT also chime. The #thread-<reply> row confirms the panel.
+      {:ok, reply} = Chat.create_reply(scope(alice), root.id, %{"body" => "first"})
+
+      {:ok, view, _} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}/m/#{reply.id}")
+      await_room_open(view)
+      assert has_element?(view, "#thread-#{reply.id}")
+
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "seen live"})
+
+      refute_push_event(view, "notify", %{}, 100)
+    end
+
+    test "a normal room message is still suppressed when the room is open (no regression)", %{
+      conn: conn,
+      bob: bob,
+      channel: channel,
+      room: room
+    } do
+      {:ok, view, _} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      await_room_open(view)
+
+      {:ok, _} = Chat.create_message(scope(bob), room.id, %{"body" => "in the room"})
+
+      refute_push_event(view, "notify", %{}, 100)
+    end
   end
 end
