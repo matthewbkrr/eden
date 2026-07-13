@@ -12,8 +12,17 @@ defmodule EdenWeb.NotifyHookTest do
 
   # Force the async room selection (finish_open_room) to complete before we send: a bare live/2
   # can return before `selected` is assigned, and a notify racing that window would deliver only
-  # because `selected` is momentarily nil (a test artifact, not the gate under test).
-  defp await_room_open(view), do: assert(render(view) =~ "the-root-post")
+  # because `selected` is momentarily nil (a test artifact, not the gate under test). render/1
+  # drains the mailbox, so this is deterministic (the first pass matches); the retry is
+  # belt-and-suspenders against a slow CI box, not a bare one-shot assert (#395 review).
+  defp await_room_open(view) do
+    matched? =
+      Enum.any?(1..50, fn _ ->
+        render(view) =~ "the-root-post" or (Process.sleep(10) && false)
+      end)
+
+    assert matched?, "the room's async selection never rendered (the-root-post absent)"
+  end
 
   setup %{conn: conn} do
     alice = user_fixture(%{username: "notify_alice"})
