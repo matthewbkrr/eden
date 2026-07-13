@@ -281,7 +281,14 @@ design — built incrementally as features land.)
   **system message** — `messages.kind="system"` + `meta` jsonb, no sender —
   that admins approve with `approve_room_join`, or an admin adds directly with
   `add_room_members`, or shares a **room invite token** that grants
-  `general` + the room in one redemption). Channels themselves are never
+  `general` + the room in one redemption). The `meta` shape of every system message
+  (knock, group member add/remove #165) has **one owner**, `Eden.Chat.SystemMessage`
+  (#360): it is the only place the jsonb is **built** (`join_request/1` · `member_added/1`
+  · `member_removed/2` · `resolve_status/2`) and **decoded** (`describe/1` → a tagged
+  tuple), so no context or the web layer reads a raw string key; ChatLive renders both the
+  group-bubble and flat-room paths through **one** `<.system_message>` component matching
+  `describe/1` (an unknown/future action renders blank, never a mis-labeled knock). Channels
+  themselves are never
   closed: any authenticated user auto-joins by visiting a channel link
   (`Channels.ensure_member`). The web layer is ChatLive's channel mode (`/channels/...`
   routes) — one message pane for DMs and rooms. **Access**: members are added internally (admin+ picks

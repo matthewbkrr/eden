@@ -24,6 +24,7 @@ defmodule Eden.Chat do
     Message,
     MessageDeletion,
     MessageReaction,
+    SystemMessage,
     ThreadMembership,
     ThumbnailWorker
   }
@@ -484,11 +485,7 @@ defmodule Eden.Chat do
       # The remover always stays a member, so the conversation isn't GC'd here — the
       # "removed" notice always lands. Store user_id so a later account deletion can scrub
       # the denormalized name (#305 review).
-      create_system_message(id, %{
-        "action" => "member_removed",
-        "name" => name,
-        "user_id" => target_id
-      })
+      create_system_message(id, SystemMessage.member_removed(target_id, name))
 
       Phoenix.PubSub.broadcast(@pubsub, user_topic(target_id), {:removed_from_conversation, id})
       notify_members(id)
@@ -583,11 +580,7 @@ defmodule Eden.Chat do
           add_group_membership(id, u.id)
           # Store user_id alongside the denormalized name so a future account deletion can
           # scrub the name from this system message (#305 review).
-          create_system_message(id, %{
-            "action" => "member_added",
-            "name" => u.display_name,
-            "user_id" => u.id
-          })
+          create_system_message(id, SystemMessage.member_added(u))
 
           u
         end)
@@ -620,8 +613,10 @@ defmodule Eden.Chat do
   def scrub_deleted_user_content(user_id) when is_integer(user_id) do
     sentinel = Accounts.deleted_display_name()
 
-    scrub_meta_name(user_id, "requester_id", ["requester_name"], sentinel)
-    scrub_meta_name(user_id, "user_id", ["name"], sentinel)
+    # The (id_key, name_path) pairs come from the meta owner (#360) — no bare jsonb literals here.
+    Enum.each(SystemMessage.scrub_targets(), fn {id_key, path} ->
+      scrub_meta_name(user_id, id_key, path, sentinel)
+    end)
 
     Repo.delete_all(from(f in Folder, where: f.user_id == ^user_id))
     Repo.delete_all(from(p in FolderPrefs, where: p.user_id == ^user_id))
@@ -1102,16 +1097,19 @@ defmodule Eden.Chat do
       from m in Message,
         where:
           m.conversation_id == ^room_id and m.kind == "system" and
-            fragment("? ->> 'action'", m.meta) == "join_request" and
-            fragment("? ->> 'status'", m.meta) == "pending" and
-            fragment("(? ->> 'requester_id')::bigint", m.meta) == ^requester_id,
+            fragment("? ->> ?", m.meta, ^SystemMessage.action_key()) ==
+              ^SystemMessage.join_request_action() and
+            fragment("? ->> ?", m.meta, ^SystemMessage.status_key()) ==
+              ^SystemMessage.pending_status() and
+            fragment("(? ->> ?)::bigint", m.meta, ^SystemMessage.requester_id_key()) ==
+              ^requester_id,
         limit: 1
     )
   end
 
   @doc "Marks a join-request system message resolved (e.g. \"accepted\") and rebroadcasts it."
   def resolve_join_request(%Message{} = message, status) do
-    meta = Map.put(message.meta, "status", status)
+    meta = SystemMessage.resolve_status(message.meta, status)
 
     message
     |> Ecto.Changeset.change(meta: meta)
@@ -3432,7 +3430,7 @@ defmodule Eden.Chat do
     end
   end
 
-  def forward_message(%Scope{user: user} = scope, message_id, _target_conversation_id, root_id) do
+  def forward_message(%Scope{user: user} = scope, message_id, target_conversation_id, root_id) do
     with {:ok, source} <- fetch_message(scope, message_id),
          :ok <- ensure_source_access(scope, source),
          :ok <- ensure_not_deleted(source),
@@ -3441,10 +3439,15 @@ defmodule Eden.Chat do
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
          :ok <- ensure_user_kind(root),
+         # The copy lands in the root's room — assert the caller's target agrees rather than
+         # silently ignore it, so a stale thread panel (a room switch outlived it) fails loudly
+         # instead of misrouting the forward into the wrong room (#360/R147).
+         true <- root.conversation_id == safe_id(target_conversation_id),
          :ok <- ensure_threaded(root.conversation_id) do
       do_forward_reply(user, root, Repo.preload(source, :attachments))
     else
-      # Every step returns a tagged {:error, _} (no safe_id guard here, unlike the /3 head).
+      # A mismatched target (or any step) is a clean tagged error, never a raw struct.
+      false -> {:error, :not_found}
       error -> error
     end
   end
