@@ -1581,6 +1581,65 @@ defmodule EdenWeb.ChatLiveTest do
       assert is_nil(album.group_id)
     end
 
+    test "a seq album the server rejects fires media_failed and keeps the caption (#361/R080/R081/R082)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # A photo over @max_image_bytes (8 MiB) passes the :attachment_seq upload (its cap is the
+      # larger @max_video_bytes) but create_attachments' per-kind check rejects it as :too_large;
+      # a trailing file carries the send's caption.
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qf",
+        "caption" => "trip",
+        "caption_id" => "cap1",
+        "as_file" => false,
+        "albums" => [%{"cid" => "big", "count" => 1}],
+        "file_cids" => ["f1"]
+      })
+
+      oversized_png =
+        <<137, 80, 78, 71, 13, 10, 26, 10>> <> :binary.copy("x", 8 * 1024 * 1024 + 1)
+
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qf",
+        "client_id" => "big",
+        "kind" => "media",
+        "album_cid" => "big"
+      })
+
+      f =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "huge.png", content: oversized_png, type: "image/png"}
+        ])
+
+      render_upload(f, "huge.png", 100)
+
+      # R080/R082: the rejected album pushes media_failed for its acid (so the client keeps the
+      # optimistic node retriable) instead of silently succeeding / vanishing.
+      assert_push_event(view, "media_failed", %{id: "big"})
+
+      # Feed the trailing file — it succeeds.
+      render_hook(view, "seq_item", %{
+        "queue_id" => "qf",
+        "client_id" => "f1",
+        "kind" => "file",
+        "album_cid" => nil
+      })
+
+      ff =
+        file_input(view, "#composer", :attachment_seq, [
+          %{name: "doc.txt", content: "hi", type: "text/plain"}
+        ])
+
+      render_upload(ff, "doc.txt", 100)
+
+      # R081: the failed album did NOT consume the caption, so it survives as the trailing text.
+      # Before the fix, caption_used was set even on {:error} and "trip" vanished silently.
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      assert Enum.any?(msgs, &(&1.body == "trip")), "the caption survived the failed album"
+    end
+
     test "sequential video: the client's width/height reserve the box (#231)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
