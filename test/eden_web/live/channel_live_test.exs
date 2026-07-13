@@ -196,6 +196,22 @@ defmodule EdenWeb.ChannelModeTest do
       refute render(bob_view) =~ "This room is private"
     end
 
+    test "an unknown system action in a room never renders as a knock (#360/R189)", ctx do
+      # A future/unknown system message must render safely blank via the unified component —
+      # never "X requested to join" with an empty name (the flat path no longer assumes a knock).
+      Eden.Repo.insert!(%Eden.Chat.Message{
+        conversation_id: ctx.general.id,
+        kind: "system",
+        body: "",
+        meta: %{"action" => "reminder"}
+      })
+
+      conn = log_in_user(build_conn(), ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+
+      refute html =~ "requested to join"
+    end
+
     test "a member can't approve a join request", ctx do
       {:ok, priv} =
         Channels.create_room(scope(ctx.alice), ctx.channel.id, %{

@@ -1131,6 +1131,20 @@ defmodule Eden.ChatTest do
       assert Repo.get!(Message, system.id).reply_count == 0
     end
 
+    test "forward into a thread refuses a target that doesn't match the root's room (#360/R147)",
+         %{alice: alice, bob: bob, conv: conv, root: root} do
+      {:ok, source} = Chat.create_message(scope(alice), conv.id, %{"body" => "src"})
+      {:ok, dm} = Chat.create_conversation(scope(alice), [bob.id])
+
+      # A mismatched target (a stale thread panel after a room switch) is refused, not silently
+      # misrouted into the wrong room.
+      assert {:error, :not_found} = Chat.forward_message(scope(alice), source.id, dm.id, root.id)
+
+      # The matching target still forwards into the thread (happy path unchanged).
+      assert {:ok, reply} = Chat.forward_message(scope(alice), source.id, conv.id, root.id)
+      assert reply.root_id == root.id
+    end
+
     test "create_reply bumps counters, broadcasts, and stays out of the main stream", %{
       alice: alice,
       bob: bob,

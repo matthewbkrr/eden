@@ -9468,14 +9468,59 @@ defmodule EdenWeb.ChatLive do
 
   defp my_group_role(_conversation, _user), do: "member"
 
-  # Centered group system-notice text (#165), from the message's meta.
-  defp system_notice(%{"action" => "member_added", "name" => name}),
+  # Unified render for a system message (#360): ONE component for both the group bubble path and
+  # the flat room path, matching on Chat.SystemMessage.describe/1 (a tagged tuple) — never a raw
+  # jsonb key. A join-request (rooms) carries the admin Add/Decline actions + resolved status;
+  # group member notices render just the centered text; an unknown/future action renders blank
+  # (so a new system type in a room never masquerades as "requested to join", #360/R189).
+  attr :id, :string, required: true
+  attr :message, :map, required: true
+  attr :admin, :boolean, default: false
+
+  defp system_message(assigns) do
+    assigns = assign(assigns, :info, Chat.SystemMessage.describe(assigns.message.meta))
+
+    ~H"""
+    <div id={@id} class="ed-sysmsg">
+      <span>{system_message_text(@info)}</span>
+      <%= case @info do %>
+        <% {:join_request, %{status: status}} -> %>
+          <button
+            :if={@admin and status == "pending"}
+            type="button"
+            class="ed-btn ed-btn--primary ed-btn--sm"
+            phx-click="approve_join"
+            phx-value-id={@message.id}
+          >
+            {gettext("Add")}
+          </button>
+          <button
+            :if={@admin and status == "pending"}
+            type="button"
+            class="ed-btn ed-btn--ghost ed-btn--sm"
+            phx-click="decline_join"
+            phx-value-id={@message.id}
+          >
+            {gettext("Decline")}
+          </button>
+          <span :if={status == "accepted"} class="ed-sysmsg__done">{gettext("Added")}</span>
+          <span :if={status == "declined"} class="ed-sysmsg__muted">{gettext("Declined")}</span>
+        <% _ -> %>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp system_message_text({:member_added, %{name: name}}),
     do: gettext("%{name} was added to the group", name: name)
 
-  defp system_notice(%{"action" => "member_removed", "name" => name}),
+  defp system_message_text({:member_removed, %{name: name}}),
     do: gettext("%{name} was removed from the group", name: name)
 
-  defp system_notice(_meta), do: ""
+  defp system_message_text({:join_request, %{requester_name: name}}),
+    do: gettext("%{name} requested to join", name: name)
+
+  defp system_message_text(:unknown), do: ""
 
   attr :m, :map, required: true
   attr :me, :any, required: true
@@ -10392,35 +10437,7 @@ defmodule EdenWeb.ChatLive do
   # The join-request carries an inline «Add» for channel admins while pending.
   defp flat_message(%{message: %{kind: "system"}} = assigns) do
     ~H"""
-    <div id={@id} class="ed-sysmsg">
-      <span>
-        {gettext("%{name} requested to join", name: @message.meta["requester_name"])}
-      </span>
-      <button
-        :if={@admin and @message.meta["status"] == "pending"}
-        type="button"
-        class="ed-btn ed-btn--primary ed-btn--sm"
-        phx-click="approve_join"
-        phx-value-id={@message.id}
-      >
-        {gettext("Add")}
-      </button>
-      <button
-        :if={@admin and @message.meta["status"] == "pending"}
-        type="button"
-        class="ed-btn ed-btn--ghost ed-btn--sm"
-        phx-click="decline_join"
-        phx-value-id={@message.id}
-      >
-        {gettext("Decline")}
-      </button>
-      <span :if={@message.meta["status"] == "accepted"} class="ed-sysmsg__done">
-        {gettext("Added")}
-      </span>
-      <span :if={@message.meta["status"] == "declined"} class="ed-sysmsg__muted">
-        {gettext("Declined")}
-      </span>
-    </div>
+    <.system_message id={@id} message={@message} admin={@admin} />
     """
   end
 
@@ -10584,8 +10601,10 @@ defmodule EdenWeb.ChatLive do
 
   # A group system notice (member added/removed) — a centered plashka, no sender (#165).
   defp message_bubble(%{message: %{kind: "system"}} = assigns) do
+    # Groups only ever carry member add/remove notices (join-requests are a rooms feature), so
+    # admin defaults false — the join-request actions never render here (#360).
     ~H"""
-    <div id={@id} class="ed-sysmsg"><span>{system_notice(@message.meta)}</span></div>
+    <.system_message id={@id} message={@message} />
     """
   end
 

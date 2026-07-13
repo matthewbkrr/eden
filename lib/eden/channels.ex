@@ -428,12 +428,8 @@ defmodule Eden.Channels do
   # conversation_id FK — i.e. the room was deleted concurrently (#258). Mapping that error to
   # `:not_found` is exact, not lossy; there's no validation failure it could mask.
   defp post_join_request(room_id, user) do
-    Chat.create_system_message(room_id, %{
-      "action" => "join_request",
-      "requester_id" => user.id,
-      "requester_name" => user.display_name,
-      "status" => "pending"
-    })
+    room_id
+    |> Chat.create_system_message(Chat.SystemMessage.join_request(user))
     |> case do
       {:ok, _} -> {:ok, :requested}
       {:error, _} -> {:error, :not_found}
@@ -446,13 +442,16 @@ defmodule Eden.Channels do
   already-accepted request. `{:error, :not_found | :forbidden}`.
   """
   def approve_room_join(%Scope{} = scope, message_id) do
-    with %{meta: %{"action" => "join_request", "requester_id" => req_id} = meta} = msg <-
-           Chat.get_system_message(message_id),
+    with %{} = msg <- Chat.get_system_message(message_id),
+         # Read the shape through its owner (#360) — a non-join_request system message falls to
+         # the else clause as :not_found, never a raw-key match in the web/context boundary.
+         {:join_request, %{requester_id: req_id, status: status}} <-
+           Chat.SystemMessage.describe(msg.meta),
          %{} = room <- Chat.get_room(msg.conversation_id),
          {:ok, channel} <- get_channel(scope, room.channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)) do
       cond do
-        meta["status"] != "pending" ->
+        status != "pending" ->
           :ok
 
         # The requester was permanently deleted (#303) after knocking — don't resurrect an
