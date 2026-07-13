@@ -157,10 +157,15 @@ defmodule EdenWeb.AdminLive do
   def handle_event("deactivate", _params, socket) do
     case Accounts.deactivate_user(socket.assigns.current_scope, socket.assigns.selected) do
       {:ok, updated} ->
-        # Also kill the person's live channel/room invite links (#305 review): a private-room
-        # token keeps granting access regardless of its creator's state. Cross-context, so the
-        # web layer orchestrates it — same seam as the deletion scrub below.
+        # Cross-context offboarding cleanup — the web layer orchestrates it (contexts don't
+        # reach into each other): kill the person's live channel/room invite links (#305 —
+        # a private-room token keeps granting access regardless of its creator's state), and
+        # reassign any channel they solely own to a live successor so a deactivated owner never
+        # leaves a team stuck without one (#358). No delete_orphans: this path is REVERSIBLE, so
+        # a solo-owned channel is left intact for reactivation (only the erasure worker deletes).
+        # Deletion routes both through the durable worker; deactivation is reversible, so inline.
         Channels.revoke_invites_by(updated.id)
+        Channels.reassign_orphaned_ownerships(updated.id)
 
         {:noreply,
          socket |> refresh_user(updated) |> put_flash(:info, gettext("Account deactivated."))}
