@@ -5853,11 +5853,14 @@ defmodule EdenWeb.ChatLive do
             }
             this.el.addEventListener("input", this.onPick, true)
             this.el.addEventListener("change", this.onPick, true)
-            // A media send that errored (or consumed no entry) has no real row to
-            // swap its optimistic twin, so the server names the exact client_id to
-            // drop — else it spins forever and pins its preview data-URLs (#95).
+            // A media send the server REJECTED (validation / decompression-bomb / storage): leave
+            // the optimistic node in the retriable FAILED state (red !, Resend from the stashed
+            // Files + Delete) — the same affordance as the stall watchdog — instead of silently
+            // removing it, which read as a lost send (#361/R082, matching commit_album's comment).
+            // If the node is already gone (swapped/removed), there's nothing to fail.
             this.handleEvent("media_failed", ({ id }) => {
-              this.dropPending(id)
+              const node = this.findNode(id)
+              if (node) this.markUploadFailed(node)
             })
             // Settle a failed-card Resend (#…): the server sends it, then names the card's
             // client_id here — ok (the client_id swap already removed the card) vs failed.
@@ -13542,10 +13545,8 @@ defmodule EdenWeb.ChatLive do
   # path (when a cancel makes the remaining photos already-complete).
   # sobelow_skip ["Traversal.FileModule"]
   defp commit_album(socket, queue, acid, spec) do
-    {caption, caption_used} =
-      if not queue.caption_used and queue.caption != "",
-        do: {queue.caption, true},
-        else: {"", queue.caption_used}
+    # Take this send's caption for the FIRST album only (it rides that album inline).
+    caption = if not queue.caption_used and queue.caption != "", do: queue.caption, else: ""
 
     opts = %{body: caption, client_id: [acid], as_file: queue.as_file, root_id: queue.root_id}
 
@@ -13562,6 +13563,11 @@ defmodule EdenWeb.ChatLive do
         {:error, reason} ->
           socket |> put_flash(:error, attachment_error(reason)) |> push_media_failed(acid)
       end
+
+    # The caption counts as USED only if it actually rode a COMMITTED album (#361/R081): if this
+    # album failed, leave `caption_used` untouched so the text is still available for the next
+    # album or the trailing-caption fallback — otherwise the user's caption silently vanishes.
+    caption_used = queue.caption_used or (caption != "" and match?({:ok, _}, result))
 
     {socket, %{queue | albums: Map.delete(queue.albums, acid), caption_used: caption_used}}
   end
@@ -14167,7 +14173,11 @@ defmodule EdenWeb.ChatLive do
     root = socket.assigns.thread_root
     reply_to_id = reply["reply_to_id"]
     client_id = reply["client_id"]
-    entries = socket.assigns.uploads.thread_attachment.entries
+    # live_entries (not raw .entries), mirroring send_dispatch (#158/#361/R061): a photo X'd
+    # mid-batch lingers as a cancelled? ghost that is never done?, which would make `entries != []`
+    # true but `all done?` false — dropping the reply into the TEXT branch and silently NOT sending
+    # the attachments that ARE staged. Filtering ghosts keeps the album branch honest.
+    entries = live_entries(socket.assigns.uploads.thread_attachment)
 
     cond do
       # #164 text→media: editing a thread reply + attached media converts it to media (parity
@@ -14188,7 +14198,7 @@ defmodule EdenWeb.ChatLive do
       # always true in normal use — but it stops a crafted "send_reply" sent while an
       # attachment is still uploading from reaching consume_uploaded_entries, which
       # raises on an in-progress entry and crashes the LiveView.
-      entries != [] and Enum.all?(entries, & &1.done?) ->
+      all_uploads_done?(entries) ->
         send_thread_album(socket, root, body, reply_to_id)
 
       String.trim(body) == "" ->
