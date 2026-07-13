@@ -351,7 +351,11 @@ defmodule Eden.Chat do
   def create_conversation(%Scope{user: creator}, other_ids, opts \\ []) do
     other_ids =
       other_ids
-      |> Enum.map(&normalize_id/1)
+      # safe_id (Eden.Ids.normalize → :error), not the raising String.to_integer: a crafted
+      # non-numeric member_id from the "start" event drops out instead of an ArgumentError /
+      # FunctionClauseError crashing the LiveView (#359/R027).
+      |> Enum.map(&safe_id/1)
+      |> Enum.filter(&is_integer/1)
       |> Enum.uniq()
       |> List.delete(creator.id)
       |> reachable_user_ids()
@@ -400,6 +404,12 @@ defmodule Eden.Chat do
   # Returns the blob keys to delete after the transaction commits.
   defp leave_and_maybe_gc(user_id, conversation_id) do
     Repo.transact(fn ->
+      # Lock the conversation row FIRST so two last members leaving concurrently serialize:
+      # without it, READ COMMITTED lets each read the other's uncommitted left_at as nil, both
+      # decide "someone's still here", and the conversation never GCs — leaking its rows + blobs
+      # forever (#359/R028). Whoever commits last then sees all left_at set and runs the GC once.
+      Repo.one(from(c in Conversation, where: c.id == ^conversation_id, lock: "FOR UPDATE"))
+
       Repo.update_all(
         from(m in Membership,
           where: m.conversation_id == ^conversation_id and m.user_id == ^user_id
@@ -1332,7 +1342,7 @@ defmodule Eden.Chat do
   @doc "Renames one of the scoped user's folders. `{:error, :not_found}` if not theirs."
   def rename_folder(%Scope{user: user} = scope, folder_id, name) do
     with %Folder{} = folder <- get_folder(scope, folder_id),
-         {:ok, folder} <- folder |> Folder.changeset(%{"name" => name}) |> Repo.update() do
+         {:ok, folder} <- update_folder_name(folder, name) do
       broadcast_folders(user.id)
       {:ok, folder}
     else
@@ -1341,11 +1351,29 @@ defmodule Eden.Chat do
     end
   end
 
+  # Rename with a stale-row guard: a concurrent delete in another Settings tab makes Repo.update
+  # return {:error, :not_found} instead of raising Ecto.StaleEntryError (#359/R030); mirrors
+  # update_room/2.
+  defp update_folder_name(folder, name) do
+    folder
+    |> Folder.changeset(%{"name" => name})
+    |> Repo.update(stale_error_field: :id)
+    |> case do
+      {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+        if Keyword.has_key?(errors, :id), do: {:error, :not_found}, else: {:error, changeset}
+
+      result ->
+        result
+    end
+  end
+
   @doc "Deletes one of the scoped user's folders (its memberships cascade; the chats stay)."
   def delete_folder(%Scope{user: user} = scope, folder_id) do
     case get_folder(scope, folder_id) do
       %Folder{} = folder ->
-        Repo.delete(folder)
+        # delete_all (not Repo.delete): a concurrent delete in another Settings tab already
+        # removed it → 0 rows is a clean no-op, not an Ecto.StaleEntryError (#359/R030).
+        Repo.delete_all(from(f in Folder, where: f.id == ^folder.id))
         broadcast_folders(user.id)
         :ok
 
@@ -2036,7 +2064,7 @@ defmodule Eden.Chat do
       |> Repo.insert()
       |> case do
         {:ok, message} -> {:ok, deliver(conversation_id, message)}
-        {:error, changeset} -> resolve_duplicate(changeset, user.id)
+        {:error, changeset} -> resolve_insert_error(changeset, user.id)
       end
     else
       {:error, :not_found}
@@ -2483,10 +2511,10 @@ defmodule Eden.Chat do
         {:ok, message}
 
       {:error, changeset} ->
-        # The blobs we just stored are unneeded whether this is a hard error or a
-        # duplicate resend (the original already owns its own attachments).
+        # The blobs we just stored are unneeded whether this is a hard error, a concurrent
+        # target-delete, or a duplicate resend (the original already owns its own attachments).
         Enum.each(prepared, &Storage.delete(&1.storage_key))
-        resolve_duplicate(changeset, user.id)
+        resolve_insert_error(changeset, user.id)
     end
   end
 
@@ -2563,13 +2591,26 @@ defmodule Eden.Chat do
           {:ok, Repo.preload(message, @message_preloads)}
 
         true ->
-          {:ok, edited} =
-            changeset |> Ecto.Changeset.put_change(:edited_at, now()) |> Repo.update()
-
-          edited = Repo.preload(edited, @message_preloads)
-          broadcast(message.conversation_id, {:message_edited, edited})
-          {:ok, edited}
+          apply_text_edit(message, changeset)
       end
+    end
+  end
+
+  # Stamp + persist a text edit. stale_error_field: a room-GC hard-delete racing the edit makes
+  # Repo.update return a tagged {:error, changeset} → {:error, :not_found}, instead of raising
+  # Ecto.StaleEntryError and crashing the LiveView (#359/R130).
+  defp apply_text_edit(message, changeset) do
+    changeset
+    |> Ecto.Changeset.put_change(:edited_at, now())
+    |> Repo.update(stale_error_field: :id)
+    |> case do
+      {:ok, edited} ->
+        edited = Repo.preload(edited, @message_preloads)
+        broadcast(message.conversation_id, {:message_edited, edited})
+        {:ok, edited}
+
+      {:error, _stale} ->
+        {:error, :not_found}
     end
   end
 
@@ -2636,7 +2677,11 @@ defmodule Eden.Chat do
 
     result =
       Repo.transact(fn ->
-        Enum.each(removed, &Repo.delete/1)
+        # delete_all (not Enum.each &Repo.delete/1): a concurrent second edit/delete on the same
+        # message (two of the author's devices) already removed these rows → 0 rows is a clean
+        # no-op, not an Ecto.StaleEntryError crashing the LiveView (#359/R007). orphan_keys were
+        # computed pre-transaction and delete_unreferenced_blobs re-checks post-commit.
+        Repo.delete_all(from(a in Attachment, where: a.id in ^Enum.map(removed, & &1.id)))
 
         kept
         |> Enum.with_index()
@@ -2687,6 +2732,9 @@ defmodule Eden.Chat do
   def delete_message_for_both(%Scope{user: user} = scope, message_id) do
     with {:ok, message} <- fetch_message(scope, message_id),
          :ok <- ensure_sender(message, user.id),
+         # A concurrent second delete-for-both (two of the sender's devices) already tombstoned
+         # it — bail with {:error, :deleted} instead of re-tombstoning + re-broadcasting (#359/R036).
+         :ok <- ensure_not_deleted(message),
          # A root with replies can't be deleted for everyone in v1 (no
          # tombstone rendering for thread roots yet) — clear error instead.
          :ok <- ensure_no_replies(message),
@@ -2816,7 +2864,7 @@ defmodule Eden.Chat do
       |> Repo.insert()
       |> case do
         {:ok, reply} -> {:ok, deliver_reply(root, reply)}
-        {:error, changeset} -> resolve_duplicate(changeset, user.id)
+        {:error, changeset} -> resolve_insert_error(changeset, user.id)
       end
     end
   end
@@ -3058,8 +3106,11 @@ defmodule Eden.Chat do
   # broadcast (track_reply's FK insert would otherwise raise) and don't crash the
   # sender.
   defp deliver_reply(root, reply) do
+    # `and is_nil(m.deleted_at)`: never bump a root that a concurrent delete-for-both already
+    # tombstoned (#359/R035) — bumped == 0 then gates track_reply/broadcast/notify below, so a
+    # reply racing the root's deletion leaves no phantom count or notification.
     {bumped, _} =
-      Repo.update_all(from(m in Message, where: m.id == ^root.id),
+      Repo.update_all(from(m in Message, where: m.id == ^root.id and is_nil(m.deleted_at)),
         inc: [reply_count: 1],
         set: [last_reply_at: reply.inserted_at]
       )
@@ -3397,6 +3448,9 @@ defmodule Eden.Chat do
   defp do_forward(user, target_conversation_id, source) do
     case insert_forward_tx(user, target_conversation_id, source) do
       {:ok, message} -> {:ok, deliver(target_conversation_id, message)}
+      # A concurrent target-conversation delete surfaces the FK constraint as a changeset
+      # error (#359) — a clean :not_found, not an Ecto.ConstraintError.
+      {:error, %Ecto.Changeset{} = cs} -> resolve_insert_error(cs, user.id)
       error -> error
     end
   end
@@ -3423,6 +3477,8 @@ defmodule Eden.Chat do
 
     case result do
       {:ok, reply} -> {:ok, deliver_reply(root, reply)}
+      # Concurrent room/root delete → FK changeset error mapped to :not_found (#359).
+      {:error, %Ecto.Changeset{} = cs} -> resolve_insert_error(cs, user.id)
       error -> error
     end
   end
@@ -3478,16 +3534,31 @@ defmodule Eden.Chat do
     Repo.transact(fn ->
       message = Repo.preload(message, :attachments)
       orphan_keys = unshared_blob_keys(message.attachments)
-      Enum.each(message.attachments, &Repo.delete/1)
-      # A tombstone has no reactions — drop them (the row survives, so the FK
-      # cascade doesn't fire on a soft delete).
-      Repo.delete_all(from(r in MessageReaction, where: r.message_id == ^message.id))
 
-      with {:ok, tombstone} <-
-             message
-             |> Ecto.Changeset.change(deleted_at: now(), body: "")
-             |> Repo.update() do
-        {:ok, {Repo.preload(tombstone, [:sender, :attachments], force: true), orphan_keys}}
+      # Tombstone only a still-reply-less message, re-checked INSIDE the transaction: a
+      # create_reply that bumped reply_count after ensure_no_replies read the (stale) struct
+      # makes this match 0 rows → {:error, :has_replies}, so a root that just gained a
+      # live-but-unreachable reply is never tombstoned (#359/R035). The counter-race the other
+      # way is closed by deliver_reply's bump skipping an already-tombstoned root.
+      case Repo.update_all(
+             from(m in Message, where: m.id == ^message.id and m.reply_count == 0),
+             set: [deleted_at: now(), body: ""]
+           ) do
+        {1, _} ->
+          # delete_all (not Enum.each &Repo.delete/1): a concurrent second delete already
+          # removed these attachment rows → 0 rows is a clean no-op, not a StaleEntryError
+          # (#359/R036). A tombstone keeps no reactions (the row survives, no FK cascade).
+          att_ids = Enum.map(message.attachments, & &1.id)
+          Repo.delete_all(from(a in Attachment, where: a.id in ^att_ids))
+          Repo.delete_all(from(r in MessageReaction, where: r.message_id == ^message.id))
+
+          tombstone =
+            Repo.preload(Repo.get!(Message, message.id), [:sender, :attachments], force: true)
+
+          {:ok, {tombstone, orphan_keys}}
+
+        {0, _} ->
+          {:error, :has_replies}
       end
     end)
   end
@@ -3962,10 +4033,23 @@ defmodule Eden.Chat do
   end
 
   defp find_or_create_direct(creator, other_id) do
-    case existing_direct(creator.id, other_id) do
-      nil -> insert_conversation(creator, [other_id], %{is_group: false})
-      conversation -> {:ok, Repo.preload(conversation, memberships: :user)}
-    end
+    # Serialize find-or-create per unordered pair with a transaction-scoped advisory lock (keyed
+    # on the sorted id pair, like Accounts.bootstrap_super_admin's hashtext lock): without it two
+    # concurrent "message X" both miss existing_direct and insert two 1:1s for the same pair,
+    # splitting the history (#359/R037). The loser now sees the winner's committed row.
+    Repo.transact(fn ->
+      lock_direct_pair(creator.id, other_id)
+
+      case existing_direct(creator.id, other_id) do
+        nil -> insert_conversation(creator, [other_id], %{is_group: false})
+        conversation -> {:ok, Repo.preload(conversation, memberships: :user)}
+      end
+    end)
+  end
+
+  defp lock_direct_pair(id1, id2) do
+    {lo, hi} = if id1 <= id2, do: {id1, id2}, else: {id2, id1}
+    Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", ["direct:#{lo}:#{hi}"])
   end
 
   defp existing_direct(uid1, uid2) do
@@ -4018,11 +4102,8 @@ defmodule Eden.Chat do
   defp before_cursor(query, nil), do: query
   defp before_cursor(query, before_id), do: where(query, [m], m.id < ^before_id)
 
-  defp normalize_id(id) when is_integer(id), do: id
-  defp normalize_id(id) when is_binary(id), do: String.to_integer(id)
-
-  # Like normalize_id/1 but never raises — for ids that arrive straight from a
-  # client event, where a non-numeric value should mean "not found", not a crash.
+  # Never raises — for ids that arrive straight from a client event, where a non-numeric
+  # value should mean "not found", not a crash. The one id-normalizer in this context (#359).
   defp safe_id(id), do: Eden.Ids.normalize(id)
 
   defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
@@ -4099,6 +4180,26 @@ defmodule Eden.Chat do
   # A failed insert whose only problem is the (sender, client_id) unique index is
   # a safe resend after a reconnect: return the already-stored message instead of
   # erroring, and don't re-broadcast (the original send already did).
+  # Map a failed message insert to a tagged result instead of letting the exception escape:
+  # a foreign-key violation means the target conversation / thread root / quoted message was
+  # concurrently hard-deleted (#359) → `{:error, :not_found}`; otherwise fall through to the
+  # dedup resolver (a unique-index hit is an idempotent resend → the stored message).
+  defp resolve_insert_error(%Ecto.Changeset{} = changeset, sender_id) do
+    if fk_violation?(changeset),
+      do: {:error, :not_found},
+      else: resolve_duplicate(changeset, sender_id)
+  end
+
+  defp fk_violation?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {field, {_msg, opts}} when field in [:conversation_id, :root_id, :reply_to_id] ->
+        opts[:constraint] == :foreign
+
+      _ ->
+        false
+    end)
+  end
+
   defp resolve_duplicate(changeset, sender_id) do
     with true <- duplicate_client_id?(changeset),
          client_id when is_binary(client_id) <- Ecto.Changeset.get_field(changeset, :client_id),
@@ -4185,9 +4286,13 @@ defmodule Eden.Chat do
   end
 
   defp update_thumbnail(attachment, thumb_key) do
+    # stale_error_field: if the message was deleted-for-both while the worker generated the
+    # preview (its attachment rows are gone), return {:error, changeset} so store_thumbnail's
+    # else-branch reclaims the just-written blob — not a StaleEntryError that skips it and
+    # leaks the preview blob forever (#359/R038). The retry then sees nil and no-ops.
     attachment
     |> Attachment.changeset(%{thumbnail_key: thumb_key})
-    |> Repo.update()
+    |> Repo.update(stale_error_field: :id)
   end
 
   # Best-effort original dimensions from the header (lazy — no full decode). Never
@@ -4555,6 +4660,8 @@ defmodule Eden.Chat do
   end
 
   defp update_attachment(attachment, attrs) do
-    attachment |> Attachment.changeset(attrs) |> Repo.update()
+    # stale_error_field (#359/R038): a message deleted-for-both mid-probe makes this a tagged
+    # {:error, changeset} so store_video_preview reclaims the poster blob, not a StaleEntryError.
+    attachment |> Attachment.changeset(attrs) |> Repo.update(stale_error_field: :id)
   end
 end

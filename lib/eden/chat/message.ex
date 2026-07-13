@@ -93,6 +93,7 @@ defmodule Eden.Chat.Message do
     |> validate_length(:body, max: @max_body, count: :codepoints)
     |> validate_length(:client_id, max: @max_client_id)
     |> dedup_constraint()
+    |> fk_constraints()
   end
 
   @doc """
@@ -107,6 +108,7 @@ defmodule Eden.Chat.Message do
     |> validate_length(:body, max: @max_body, count: :codepoints)
     |> validate_length(:client_id, max: @max_client_id)
     |> dedup_constraint()
+    |> fk_constraints()
   end
 
   @doc """
@@ -142,6 +144,17 @@ defmodule Eden.Chat.Message do
   # context can recognise as a duplicate resend.
   defp dedup_constraint(changeset) do
     unique_constraint(changeset, :client_id, name: :messages_sender_id_client_id_index)
+  end
+
+  # Turn a concurrent hard-delete of the target conversation / thread root / quoted message
+  # (all FK'd here) into a changeset error the context maps to `{:error, :not_found}`, instead of
+  # a raw `Ecto.ConstraintError` crashing the LiveView in the TOCTOU window between the
+  # has_access?/fetch_message guard and this insert (#359). Mirrors create_system_message.
+  defp fk_constraints(changeset) do
+    changeset
+    |> foreign_key_constraint(:conversation_id)
+    |> foreign_key_constraint(:root_id)
+    |> foreign_key_constraint(:reply_to_id)
   end
 
   defp ensure_body(changeset) do

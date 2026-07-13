@@ -1735,6 +1735,104 @@ defmodule Eden.ChatTest do
       # error, not a raised Ecto.ConstraintError from a bare struct insert.
       assert {:error, %Ecto.Changeset{}} = Chat.create_system_message(-1, %{"action" => "x"})
     end
+
+    test "create_conversation with a non-numeric member id errors instead of raising (#359/R027)" do
+      alice = user_fixture()
+
+      for bad <- ["abc", nil, [], %{}] do
+        assert {:error, :no_members} = Chat.create_conversation(scope(alice), [bad])
+      end
+    end
+
+    test "a message insert with a dangling conversation_id errors, not a ConstraintError (#359/R008)" do
+      alice = user_fixture()
+      # The TOCTOU race: the conversation is hard-deleted after the access gate passed, so the FK
+      # fires on insert — now a tagged changeset error the context maps to :not_found.
+      cs = Message.changeset(%Message{conversation_id: -1, sender_id: alice.id}, %{"body" => "x"})
+      assert {:error, %Ecto.Changeset{} = errored} = Repo.insert(cs)
+      assert Keyword.has_key?(errored.errors, :conversation_id)
+    end
+
+    test "a reply insert with a dangling root_id errors, not a crash (#359/R033)" do
+      alice = user_fixture()
+      bob = user_fixture()
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      cs =
+        Message.changeset(
+          %Message{conversation_id: conv.id, sender_id: alice.id, root_id: -1},
+          %{"body" => "x"}
+        )
+
+      assert {:error, %Ecto.Changeset{} = errored} = Repo.insert(cs)
+      assert Keyword.has_key?(errored.errors, :root_id)
+    end
+
+    test "send/forward into a concurrently-deleted conversation returns :not_found (#359/R008/R042)" do
+      alice = user_fixture()
+      bob = user_fixture()
+      carol = user_fixture()
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, other} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, msg} = Chat.create_message(scope(alice), other.id, %{"body" => "source"})
+
+      Repo.delete_all(from(c in Conversation, where: c.id == ^conv.id))
+
+      assert {:error, :not_found} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      assert {:error, :not_found} = Chat.forward_message(scope(alice), msg.id, conv.id)
+    end
+
+    test "a second delete_message_for_both is a clean :deleted, not a StaleEntryError (#359/R036)" do
+      alice = user_fixture()
+      bob = user_fixture()
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+
+      assert :ok = Chat.delete_message_for_both(scope(alice), msg.id)
+      assert {:error, :deleted} = Chat.delete_message_for_both(scope(alice), msg.id)
+    end
+
+    test "edit_message on a hard-deleted message returns :not_found, not a crash (#359/R130)" do
+      alice = user_fixture()
+      bob = user_fixture()
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, msg} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      Repo.delete_all(from(m in Message, where: m.id == ^msg.id))
+
+      assert {:error, :not_found} = Chat.edit_message(scope(alice), msg.id, "edited")
+    end
+
+    test "rename/delete_folder on a hard-deleted folder don't crash (#359/R030)" do
+      alice = user_fixture()
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      Repo.delete_all(from(f in Eden.Chat.Folder, where: f.id == ^folder.id))
+
+      assert {:error, :not_found} = Chat.rename_folder(scope(alice), folder.id, "Renamed")
+      assert {:error, :not_found} = Chat.delete_folder(scope(alice), folder.id)
+    end
+
+    test "find-or-create for the same 1:1 pair returns one conversation (#359/R037)" do
+      alice = user_fixture()
+      bob = user_fixture()
+      {:ok, c1} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, c2} = Chat.create_conversation(scope(bob), [alice.id])
+      assert c1.id == c2.id
+    end
+
+    test "the last two members leaving GC the conversation exactly once (#359/R028)" do
+      alice = user_fixture()
+      bob = user_fixture()
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+
+      :ok = Chat.delete_conversation(scope(alice), conv.id)
+      # Still there — bob hasn't left.
+      assert Repo.get(Conversation, conv.id)
+
+      :ok = Chat.delete_conversation(scope(bob), conv.id)
+      # Both gone → GC'd exactly once (the FOR UPDATE lock didn't break the normal path).
+      refute Repo.get(Conversation, conv.id)
+    end
   end
 
   describe "notification prefs (#214)" do
