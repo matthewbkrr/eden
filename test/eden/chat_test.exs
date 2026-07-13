@@ -1101,6 +1101,36 @@ defmodule Eden.ChatTest do
       %{conv: room, root: root}
     end
 
+    test "thread routes reject a system-message root/source (#356/R136/R137/R146)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      system =
+        Repo.insert!(%Message{
+          conversation_id: conv.id,
+          sender_id: alice.id,
+          kind: "system",
+          body: "",
+          meta: %{"action" => "member_added"}
+        })
+
+      sources = [%{path: image_path(@png_signature <> "r"), filename: "r.png"}]
+
+      assert {:error, :not_found} = Chat.create_reply(scope(bob), system.id, %{"body" => "x"})
+      assert {:error, :not_found} = Chat.create_album_reply(scope(bob), system.id, sources)
+      assert {:error, :not_found} = Chat.follow_thread(scope(bob), system.id)
+      assert {:error, :not_found} = Chat.mark_thread_read(scope(bob), system.id)
+
+      # Forward-into-thread refuses a system SOURCE and a system ROOT.
+      {:ok, real} = Chat.create_message(scope(alice), conv.id, %{"body" => "real"})
+      assert {:error, :not_found} = Chat.forward_message(scope(bob), system.id, conv.id, real.id)
+      assert {:error, :not_found} = Chat.forward_message(scope(bob), real.id, conv.id, system.id)
+
+      # Nothing latched onto the system row.
+      assert Repo.get!(Message, system.id).reply_count == 0
+    end
+
     test "create_reply bumps counters, broadcasts, and stays out of the main stream", %{
       alice: alice,
       bob: bob,
@@ -2541,12 +2571,28 @@ defmodule Eden.ChatTest do
 
       [att] = before.attachments
 
+      # Bob's OWN messages (text + media) while still a member — the edit-injection vector (#356).
+      {:ok, bob_text} = Chat.create_message(scope(bob), group.id, %{"body" => "bob was here"})
+
+      bob_sources = [%{path: image_path(@png_signature <> "bobpic"), filename: "bob.png"}]
+
+      {:ok, bob_media} =
+        Chat.create_album_message(scope(bob), group.id, bob_sources, %{body: "bob pic"})
+
       :ok = Chat.remove_group_member(scope(alice), group.id, bob.id)
 
       {:ok, after_msg} =
         Chat.create_message(scope(alice), group.id, %{"body" => "after bob left"})
 
-      %{group: group, carol: carol, att: att, after_msg: after_msg}
+      %{
+        group: group,
+        carol: carol,
+        att: att,
+        before: before,
+        bob_text: bob_text,
+        bob_media: bob_media,
+        after_msg: after_msg
+      }
     end
 
     test "can't read the conversation, history, media, or attachments", %{
@@ -2586,6 +2632,39 @@ defmodule Eden.ChatTest do
       assert {:error, :not_found} = Chat.forward_message(scope(bob), after_msg.id, escape.id)
     end
 
+    test "get_messages returns nothing — no history snippet via the forward/select carry (#356/R005)",
+         %{bob: bob, carol: carol, before: before, after_msg: after_msg} do
+      assert Chat.get_messages(scope(bob), [after_msg.id, before.id]) == []
+      # Control: a live member still resolves them (the carry works for real members).
+      assert Chat.get_messages(scope(carol), [after_msg.id]) != []
+    end
+
+    test "can't edit their own old message back into the group (#356/R006)", %{
+      bob: bob,
+      group: group,
+      bob_text: bob_text
+    } do
+      Chat.subscribe(group.id)
+      assert {:error, :not_found} = Chat.edit_message(scope(bob), bob_text.id, "hacked in")
+      refute_receive {:message_edited, _}
+      # The original text is untouched for the remaining members.
+      assert Repo.get!(Message, bob_text.id).body == "bob was here"
+    end
+
+    test "can't edit their own old media message back into the group (#356/R006)", %{
+      bob: bob,
+      group: group,
+      bob_media: bob_media
+    } do
+      Chat.subscribe(group.id)
+      sources = [%{path: image_path(@png_signature <> "inject"), filename: "inject.png"}]
+
+      assert {:error, :not_found} =
+               Chat.edit_message_media(scope(bob), bob_media.id, [], sources, %{})
+
+      refute_receive {:message_edited, _}
+    end
+
     test "the remaining members keep full access", %{alice: alice, carol: carol, group: group} do
       assert {:ok, _} = Chat.get_conversation(scope(carol), group.id)
       assert {:ok, _} = Chat.create_message(scope(carol), group.id, %{"body" => "carol here"})
@@ -2604,6 +2683,51 @@ defmodule Eden.ChatTest do
       # 1:1 is intentionally permissive: messaging back re-opens it (#255 must not regress).
       assert {:ok, _} = Chat.create_message(scope(bob), dm.id, %{"body" => "back"})
       assert {:ok, _} = Chat.get_conversation(scope(bob), dm.id)
+
+      # And the #356 edit/get_messages gates stay permissive for a 1:1 — bob edits his own
+      # DM message and reads it back (the gate only bites a left personal-group member).
+      {:ok, mine} = Chat.create_message(scope(bob), dm.id, %{"body" => "mine"})
+      assert {:ok, edited} = Chat.edit_message(scope(bob), mine.id, "mine edited")
+      assert edited.body == "mine edited"
+      assert Chat.get_messages(scope(bob), [mine.id]) != []
+    end
+  end
+
+  describe "system-message kind guards (#356)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      system =
+        Repo.insert!(%Message{
+          conversation_id: conv.id,
+          sender_id: alice.id,
+          kind: "system",
+          body: "",
+          meta: %{"action" => "member_added"}
+        })
+
+      %{conv: conv, system: system}
+    end
+
+    test "toggle_reaction refuses a system message (#356/R143)", %{alice: alice, system: system} do
+      Chat.subscribe(system.conversation_id)
+      assert {:error, :not_found} = Chat.toggle_reaction(scope(alice), system.id, "👍")
+      refute_receive {:reaction_changed, _}
+      assert Repo.aggregate(MessageReaction, :count) == 0
+    end
+
+    test "forward_message refuses a system message — no empty bubble created (#356/R146)", %{
+      alice: alice,
+      system: system
+    } do
+      {:ok, target} =
+        Chat.create_conversation(scope(alice), [user_fixture(%{username: "ft356"}).id],
+          title: "T"
+        )
+
+      before = Repo.aggregate(Message, :count)
+      assert {:error, :not_found} = Chat.forward_message(scope(alice), system.id, target.id)
+      assert Repo.aggregate(Message, :count) == before
     end
   end
 
@@ -3802,6 +3926,25 @@ defmodule Eden.ChatTest do
       assert found.conversation.id == conv.id
 
       assert %{messages: [], conversations: []} = Chat.search(scope(dave), "rendezvous")
+    end
+
+    test "a DM system row carrying a body is never returned (#356/R127)", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+
+      # A crafted/legacy system row with a searchable body must not surface — the DM list can't
+      # open it (room-search already filters kind; this brings the DM path to parity).
+      Repo.insert!(%Message{
+        conversation_id: conv.id,
+        sender_id: alice.id,
+        kind: "system",
+        body: "findable needle",
+        meta: %{"action" => "member_added"}
+      })
+
+      assert %{messages: []} = Chat.search(scope(alice), "needle")
     end
 
     test "finds conversations by participant name, username, and group title", %{

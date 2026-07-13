@@ -1634,6 +1634,10 @@ defmodule Eden.Chat do
       on: c.id == m.conversation_id,
       # Room messages join search with #32 (need channel-aware presentation).
       where: is_nil(c.channel_id),
+      # Symmetry with room_search_base (#356/R127): only real main-stream messages — never a
+      # system row (empty body, wouldn't match anyway) or a legacy reply the DM list can't open.
+      where: m.kind == "user",
+      where: is_nil(m.root_id),
       limit: @search_limit,
       preload: [:sender, conversation: [memberships: :user]]
     )
@@ -2058,9 +2062,13 @@ defmodule Eden.Chat do
       from m in Message,
         left_join: d in MessageDeletion,
         on: d.message_id == m.id and d.user_id == ^user_id,
+        # A quote may target only a real user message, never a system row (which would render an
+        # empty quote, #356/R136). NOT gated on `is_nil(root_id)`: quoting a thread reply from
+        # WITHIN its thread is a real feature (#71), and a thread reply is still valid content —
+        # the quote snippet renders fine either way.
         where:
           m.id == ^id and m.conversation_id == ^conversation_id and is_nil(m.deleted_at) and
-            is_nil(d.id)
+            is_nil(d.id) and m.kind == "user"
     )
   end
 
@@ -2090,9 +2098,16 @@ defmodule Eden.Chat do
     from(m in Message,
       join: mem in Membership,
       on: mem.conversation_id == m.conversation_id and mem.user_id == ^user.id,
+      join: c in Conversation,
+      on: c.id == m.conversation_id,
       left_join: d in MessageDeletion,
       on: d.message_id == m.id and d.user_id == ^user.id,
-      where: m.id in ^ids and is_nil(m.deleted_at) and is_nil(d.id),
+      # Apply the #255 active-participation gate (a left group member must not read history,
+      # incl. via the forward-plaque/multi-select carry that calls this, #356/R005) and drop
+      # system rows (never a user's to carry, #356/R146) — mirrors access_query/2.
+      where:
+        m.id in ^ids and is_nil(m.deleted_at) and is_nil(d.id) and m.kind == "user" and
+          (is_nil(mem.left_at) or not (c.is_group and is_nil(c.channel_id))),
       order_by: [asc: m.id],
       preload: [:sender, :attachments]
     )
@@ -2294,6 +2309,7 @@ defmodule Eden.Chat do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id),
          :ok <- ensure_album_size(sources),
          {:ok, prepared} <- prepare_album(sources) do
@@ -2529,6 +2545,10 @@ defmodule Eden.Chat do
   """
   def edit_message(%Scope{user: user} = scope, message_id, body) do
     with {:ok, message} <- fetch_message(scope, message_id),
+         # #255: editing broadcasts {:message_edited} to the remaining members, so a left group
+         # member editing their own old message = posting new content into a group they left
+         # (#356/R006). fetch_message stays permissive; the gate lives here (1:1 stays open).
+         :ok <- ensure_member(scope, message.conversation_id),
          :ok <- ensure_sender(message, user.id),
          :ok <- ensure_editable(message) do
       message = Repo.preload(message, :attachments)
@@ -2581,6 +2601,8 @@ defmodule Eden.Chat do
     kept_ids = kept_ids |> Enum.map(&safe_id/1) |> Enum.filter(&is_integer/1)
 
     with {:ok, message} <- fetch_message(scope, message_id),
+         # #255 gate — same as edit_message/3: a left group member can't re-post via an edit.
+         :ok <- ensure_member(scope, message.conversation_id),
          :ok <- ensure_sender(message, user.id),
          :ok <- ensure_editable(message),
          message = Repo.preload(message, :attachments),
@@ -2774,6 +2796,7 @@ defmodule Eden.Chat do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
       # A thread reply may quote another message in the same conversation (#71).
       reply_to_id =
@@ -2806,6 +2829,7 @@ defmodule Eden.Chat do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
       replies =
         Message
@@ -2896,6 +2920,7 @@ defmodule Eden.Chat do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
       upsert_thread_membership(user.id, root.id, following: true)
       {:ok, :following}
@@ -2910,6 +2935,7 @@ defmodule Eden.Chat do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
       upsert_thread_membership(user.id, root.id, following: false, unread_replies: 0)
       {:ok, :unfollowed}
@@ -2925,6 +2951,7 @@ defmodule Eden.Chat do
     with {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
       from(tm in ThreadMembership, where: tm.user_id == ^user.id and tm.root_id == ^root.id)
       |> Repo.update_all(set: [last_viewed_at: now(), unread_replies: 0])
@@ -3009,6 +3036,13 @@ defmodule Eden.Chat do
 
   defp ensure_root(%Message{root_id: nil}), do: :ok
   defp ensure_root(_reply), do: {:error, :not_a_root}
+
+  # Only a real user message may take part in user operations — a system row (kind "system":
+  # join-request/member add-remove, nil sender, empty body, meta payload) must never be a
+  # reply/thread root, a reaction target, or a forward source (#356/R136/R137/R143/R146).
+  # Mirrors ensure_editable's kind guard; :not_found (not :forbidden) since it's forge-only.
+  defp ensure_user_kind(%Message{kind: "user"}), do: :ok
+  defp ensure_user_kind(%Message{}), do: {:error, :not_found}
 
   # Threads live only in channel rooms (#26), never in DMs/groups — the personal
   # messenger has no thread UI. A DM root is reported as not-found so a crafted
@@ -3268,6 +3302,7 @@ defmodule Eden.Chat do
     with {:ok, message} <- fetch_message(scope, message_id),
          :ok <- ensure_active_member(scope, message.conversation_id),
          :ok <- ensure_not_deleted(message),
+         :ok <- ensure_user_kind(message),
          {:ok, _} <- do_toggle_reaction(message.id, user.id, emoji),
          # Re-read after the write; a concurrent delete-for-both may have
          # tombstoned it — don't broadcast (and thereby re-insert) a dead message.
@@ -3332,6 +3367,7 @@ defmodule Eden.Chat do
     with {:ok, source} <- fetch_message(scope, message_id),
          :ok <- ensure_source_access(scope, source),
          :ok <- ensure_not_deleted(source),
+         :ok <- ensure_user_kind(source),
          target_id when is_integer(target_id) <- safe_id(target_conversation_id),
          :ok <- ensure_member(scope, target_id) do
       do_forward(user, target_id, Repo.preload(source, :attachments))
@@ -3345,9 +3381,11 @@ defmodule Eden.Chat do
     with {:ok, source} <- fetch_message(scope, message_id),
          :ok <- ensure_source_access(scope, source),
          :ok <- ensure_not_deleted(source),
+         :ok <- ensure_user_kind(source),
          {:ok, root} <- fetch_message(scope, root_id),
          :ok <- ensure_not_deleted(root),
          :ok <- ensure_root(root),
+         :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
       do_forward_reply(user, root, Repo.preload(source, :attachments))
     else
