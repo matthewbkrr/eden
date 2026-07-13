@@ -2609,8 +2609,12 @@ defmodule Eden.Chat do
         broadcast(message.conversation_id, {:message_edited, edited})
         {:ok, edited}
 
-      {:error, _stale} ->
-        {:error, :not_found}
+      # Only the stale-row race (its error lands on :id) maps to :not_found; surface any other
+      # changeset error verbatim rather than swallowing it. The caller already gated on
+      # changeset.valid?, but this stays honest if a constraint is ever added to edit_changeset —
+      # mirrors update_room/2 and update_folder_name/2.
+      {:error, %Ecto.Changeset{errors: errors} = errored} ->
+        if Keyword.has_key?(errors, :id), do: {:error, :not_found}, else: {:error, errored}
     end
   end
 
@@ -4177,9 +4181,6 @@ defmodule Eden.Chat do
     end)
   end
 
-  # A failed insert whose only problem is the (sender, client_id) unique index is
-  # a safe resend after a reconnect: return the already-stored message instead of
-  # erroring, and don't re-broadcast (the original send already did).
   # Map a failed message insert to a tagged result instead of letting the exception escape:
   # a foreign-key violation means the target conversation / thread root / quoted message was
   # concurrently hard-deleted (#359) → `{:error, :not_found}`; otherwise fall through to the
@@ -4200,6 +4201,9 @@ defmodule Eden.Chat do
     end)
   end
 
+  # A failed insert whose only problem is the (sender, client_id) unique index is a safe resend
+  # after a reconnect: return the already-stored message instead of erroring, and don't
+  # re-broadcast (the original send already did).
   defp resolve_duplicate(changeset, sender_id) do
     with true <- duplicate_client_id?(changeset),
          client_id when is_binary(client_id) <- Ecto.Changeset.get_field(changeset, :client_id),
