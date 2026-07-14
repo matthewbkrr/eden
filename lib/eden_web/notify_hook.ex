@@ -120,9 +120,12 @@ defmodule EdenWeb.NotifyHook do
   # media-only keeps the bare marker, and a plain text message shows its (stripped, fitted) body.
   defp notify_body(%{kind: "knock"}), do: gettext("Requested to join")
 
+  # `display_preview/1` already fits the caption to the 140-char banner budget, so prepending the
+  # marker would push the combined body a few chars over (#363 review); trim the WHOLE thing once
+  # more — the marker leads, so only a max-length caption's tail is lost, never "Photo,".
   defp notify_body(%{media_kind: kind, preview: preview})
        when kind != nil and preview not in [nil, ""],
-       do: media_label(kind) <> ", " <> display_preview(preview)
+       do: String.slice(media_label(kind) <> ", " <> display_preview(preview), 0, 140)
 
   defp notify_body(%{preview: preview}) when preview not in [nil, ""],
     do: display_preview(preview)
