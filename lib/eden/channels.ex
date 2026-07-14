@@ -20,6 +20,7 @@ defmodule Eden.Channels do
   alias Eden.Chat
   alias Eden.Ids
   alias Eden.Images
+  alias Eden.Notifications
   alias Eden.Repo
   alias Eden.Storage
 
@@ -412,7 +413,7 @@ defmodule Eden.Channels do
          {:ok, _channel} <- get_channel(scope, room.channel_id),
          false <- Chat.room_member?(room.id, user.id) do
       case Chat.pending_join_request(room.id, user.id) do
-        nil -> post_join_request(room.id, user)
+        nil -> post_join_request(room, user)
         _existing -> {:ok, :already}
       end
     else
@@ -427,13 +428,70 @@ defmodule Eden.Channels do
   # (meta is server-built, body is ""), so create_system_message's ONLY error path is the
   # conversation_id FK — i.e. the room was deleted concurrently (#258). Mapping that error to
   # `:not_found` is exact, not lossy; there's no validation failure it could mask.
-  defp post_join_request(room_id, user) do
-    room_id
+  defp post_join_request(room, user) do
+    room.id
     |> Chat.create_system_message(Chat.SystemMessage.join_request(user))
     |> case do
-      {:ok, _} -> {:ok, :requested}
-      {:error, _} -> {:error, :not_found}
+      {:ok, message} ->
+        notify_knock(room, user, message)
+        {:ok, :requested}
+
+      {:error, _} ->
+        {:error, :not_found}
     end
+  end
+
+  # #363/R029: a knock is actionable but silent otherwise — the admin/owner only learns of it
+  # by opening the room. Ring them. This is done HERE (not in the generic `create_system_message`,
+  # which stays a dumb utility) so only the join-request system message notifies — member
+  # add/remove notices don't. A knock has no `%User{}` sender, so `Chat.notify_payload/1` can't
+  # build it (that match is a hard contract); we build a dedicated `kind: "knock"` payload with
+  # the requester as sender_* and the room as the title, and fan it out through the same
+  # `Notifications.deliver/2` seam every message uses. The unread/badge side (R120) is left as-is
+  # on purpose — bumping the shared unread on a NULL-sender system message would noise every
+  # member's badge; the knock's signal is the notification + the visible in-room request row.
+  defp notify_knock(room, requester, message) do
+    case knock_recipient_ids(room.channel_id, requester.id) do
+      [] -> :ok
+      ids -> Notifications.deliver(ids, knock_payload(room, requester, message))
+    end
+  end
+
+  # The channel's owner + admins, minus the requester, minus anyone who muted the channel or
+  # is in Do-Not-Disturb or is deactivated/anonymized — the same delivery gates a message gets
+  # (#363), read off `channel_memberships`. All-SQL; a no-op empty list when no eligible admin.
+  defp knock_recipient_ids(channel_id, requester_id) do
+    Repo.all(
+      from(m in Membership,
+        join: u in User,
+        on: u.id == m.user_id,
+        where:
+          m.channel_id == ^channel_id and m.role in ["owner", "admin"] and
+            m.user_id != ^requester_id and is_nil(m.muted_at) and
+            u.presence_status != "dnd" and u.active == true and is_nil(u.deleted_at),
+        select: m.user_id
+      )
+    )
+  end
+
+  # A knock's locale-neutral notification payload (contract in `Eden.Notifications` moduledoc).
+  # `kind: "knock"` tells the renderer to head the banner with the room and word it as a join
+  # request; the requester rides in the sender_* fields (avatar + name), so the recipient's
+  # session formats it without a `%User{}` message sender.
+  defp knock_payload(room, requester, message) do
+    %{
+      conversation_id: room.id,
+      message_id: message.id,
+      root_id: nil,
+      channel_id: room.channel_id,
+      kind: "knock",
+      conv_title: room.name,
+      sender_id: requester.id,
+      sender_name: requester.display_name,
+      avatar_key: requester.avatar_key,
+      preview: "",
+      media_kind: nil
+    }
   end
 
   @doc """

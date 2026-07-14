@@ -1990,9 +1990,14 @@ msgstr ""
 msgid "Messages, %{count} unread"
 msgstr ""
 
-#: lib/eden_web/notify_hook.ex:89
+#: lib/eden_web/notify_hook.ex:131
 #, elixir-autogen, elixir-format
 msgid "New message"
+msgstr ""
+
+#: lib/eden_web/notify_hook.ex:121
+#, elixir-autogen, elixir-format
+msgid "Requested to join"
 msgstr ""
 
 #: lib/eden_web/controllers/error_html.ex:58

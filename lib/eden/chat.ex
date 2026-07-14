@@ -3303,19 +3303,19 @@ defmodule Eden.Chat do
   against the closed set (it's client-supplied), so an unknown value is a no-op
   `{:error, :invalid}` rather than a stored dead preset. Returns `{:ok, name}`.
   """
-  def set_notify_sound_name(%Scope{user: user}, name) when is_binary(name) do
+  def set_notify_sound_name(%Scope{user: user} = scope, name) when is_binary(name) do
     if name in @notify_sound_names,
-      do: upsert_notify(user.id, :notify_sound_name, name),
+      do: upsert_notify(user.id, :notify_sound_name, name) |> broadcast_prefs(scope),
       else: {:error, :invalid}
   end
 
   @doc "Sets the scoped user's sound-notification toggle (#214). Returns `{:ok, on}`."
-  def set_notify_sound(%Scope{user: user}, on) when is_boolean(on),
-    do: upsert_notify(user.id, :notify_sound, on)
+  def set_notify_sound(%Scope{user: user} = scope, on) when is_boolean(on),
+    do: upsert_notify(user.id, :notify_sound, on) |> broadcast_prefs(scope)
 
   @doc "Sets the scoped user's desktop-notification toggle (#214). Returns `{:ok, on}`."
-  def set_notify_desktop(%Scope{user: user}, on) when is_boolean(on),
-    do: upsert_notify(user.id, :notify_desktop, on)
+  def set_notify_desktop(%Scope{user: user} = scope, on) when is_boolean(on),
+    do: upsert_notify(user.id, :notify_desktop, on) |> broadcast_prefs(scope)
 
   # One-field upsert: the other notify column keeps its schema default on insert,
   # and on conflict only this field (+ updated_at) is touched — never clobbering
@@ -3327,6 +3327,21 @@ defmodule Eden.Chat do
     )
 
     {:ok, on}
+  end
+
+  # #363/R096: push the fresh, full prefs onto the user's notify topic so the `<.notifier>`
+  # host re-renders its `data-*` LIVE — in THIS tab (the chime/banner honor the change with no
+  # reload) and every parallel tab (`EdenWeb.NotifyHook` handles `{:notify_prefs_changed}` and
+  # reassigns `:notify_prefs`). Centralized here, at the write, so any caller benefits; passes
+  # the result through untouched. A read-back keeps the payload the full map the renderer wants.
+  defp broadcast_prefs({:ok, _} = result, %Scope{user: user} = scope) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      Notifications.topic(user.id),
+      {:notify_prefs_changed, notification_prefs(scope)}
+    )
+
+    result
   end
 
   # Keep only currently-allowed emoji (deduped, order preserved, capped). nil-safe:
@@ -3942,14 +3957,19 @@ defmodule Eden.Chat do
   end
 
   # The gates every recipient path shares — not the sender, hasn't left, hasn't directly
-  # muted the conversation, isn't in Do-Not-Disturb. Runs on the `:membership`/`:user`
-  # named bindings both base queries declare. `presence_status` is NOT NULL (default
-  # "auto"), so the bare `!= "dnd"` keeps everyone else (no NULL-comparison surprise).
+  # muted the conversation, isn't in Do-Not-Disturb, and is an ACTIVE (not deactivated /
+  # anonymized) account. Runs on the `:membership`/`:user` named bindings both base queries
+  # declare. `presence_status` is NOT NULL (default "auto"), so the bare `!= "dnd"` keeps
+  # everyone else (no NULL-comparison surprise). `active` is the single flag needed for the
+  # #251/#303 gate: `deleted_at` is always set together with `active=false`
+  # (`delete_user_permanently/2`), so `u.active == true` also excludes anonymized rows —
+  # recipient gating is the one place ADR-0001 filters delivery, so every future push
+  # transport inherits the deactivation for free (#363/R150).
   defp common_gates(query, message) do
     from([membership: m, user: u] in query,
       where:
         m.user_id != ^message.sender_id and is_nil(m.left_at) and
-          is_nil(m.muted_at) and u.presence_status != "dnd"
+          is_nil(m.muted_at) and u.presence_status != "dnd" and u.active == true
     )
   end
 

@@ -17,23 +17,38 @@ defmodule Eden.Notifications do
   ## The contract (documented here, in one place)
 
   A notification is a plain map, delivered by the Web adapter as `{:notify, payload}`.
-  `Eden.Chat` is the sole producer (`notify_payload/1`); adapters are consumers that
-  render it. The payload is **locale-neutral** — the recipient's session formats titles
-  and localizes media labels. Shape:
+  `Eden.Chat` builds it for messages (`notify_payload/1`); `Eden.Channels` builds the
+  `kind: "knock"` variant for a private-room join request (#363/R029) — a knock has no
+  `%User{}` message sender, so it can't go through `notify_payload/1`. Adapters are
+  consumers that render whichever variant they receive. The payload is **locale-neutral** —
+  the recipient's session formats titles and localizes media labels. Shape:
 
       %{
         conversation_id: integer,
         message_id: integer,
-        root_id: integer | nil,        # non-nil ⇒ a thread reply
-        channel_id: integer | nil,     # non-nil ⇒ a room (corporate layer)
-        kind: "dm" | "group" | "room",
-        conv_title: String.t() | nil,  # group title / room name; nil for a DM
-        sender_id: integer,
+        root_id: integer | nil,           # non-nil ⇒ a thread reply
+        channel_id: integer | nil,        # non-nil ⇒ a room (corporate layer)
+        kind: "dm" | "group" | "room" | "knock",
+        conv_title: String.t() | nil,     # group title / room name; nil for a DM
+        sender_id: integer,               # for "knock", the requester
         sender_name: String.t(),
         avatar_key: String.t() | nil,
-        preview: String.t(),           # message body; "" when the message is media-only
+        preview: String.t(),              # message body; "" for media-only OR a knock
         media_kind: "image" | "video" | "audio" | "file" | nil
       }
+
+  For `kind: "knock"` the room is the `conv_title`, the requester rides the `sender_*`
+  fields, `preview` is `""` and the recipient's session words it as a join request.
+
+  The web layer DROPS the internal `:preview` (size-guard body) and `:avatar_key`
+  (storage key) when localizing the map into the client `notify` event (#363/R203) — the
+  client uses only the fitted `:body` and a ready `:avatar_url`.
+
+  **Reactions do not notify.** Toggling an emoji reaction (`Chat.toggle_reaction/3`)
+  broadcasts `{:reaction_changed, message}` on the conversation topic for live chip
+  updates, but deliberately does NOT deliver a `{:notify}` to the message's author
+  (#363/R144). Adding a `kind: "reaction"` here is a future product decision (it would
+  need its own per-user opt-out); until then reactions stay a passive, in-view signal.
 
   The in-tab stream is always the Web transport: a LiveView subscribes via `subscribe/1`
   (topic `Eden.Notifications.Web.topic/1`, `"user:<id>:notify"`) regardless of which push

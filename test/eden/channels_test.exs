@@ -10,6 +10,9 @@ defmodule Eden.ChannelsTest do
 
   defp scope(user), do: Scope.for_user(user)
 
+  # Subscribe the caller to a user's in-tab notification stream (the {:notify} topic).
+  defp sub(user), do: Phoenix.PubSub.subscribe(Eden.PubSub, Eden.Notifications.Web.topic(user.id))
+
   # The rail's entry room for a channel (#81), via the public list_channels path.
   defp entry_room(scope, channel_id) do
     scope
@@ -882,6 +885,35 @@ defmodule Eden.ChannelsTest do
     test "an open room can't be knocked", %{alice: alice, bob: bob, channel: channel} do
       {:ok, open} = Channels.create_room(scope(alice), channel.id, %{"name" => "lounge"})
       assert {:error, :not_private} = Channels.request_room_join(scope(bob), open.id)
+    end
+
+    test "a knock notifies the room's channel owner/admins (#363/R029)", ctx do
+      %{alice: alice, bob: bob, priv: priv} = ctx
+      # alice is the channel owner → she should hear the knock.
+      sub(alice)
+
+      assert {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+
+      rid = priv.id
+      bid = bob.id
+
+      assert_receive {:notify,
+                      %{conversation_id: ^rid, kind: "knock", sender_id: ^bid, preview: ""}}
+    end
+
+    test "the requester isn't self-notified and a plain system message rings no one (#363)",
+         ctx do
+      %{alice: alice, bob: bob, priv: priv} = ctx
+      # bob is a plain member (and the requester) → not in the owner/admin recipient set.
+      sub(bob)
+      assert {:ok, :requested} = Channels.request_room_join(scope(bob), priv.id)
+      refute_receive {:notify, _}
+
+      # A non-knock system message (only create_system_message, no knock path) notifies nobody —
+      # the regression barrier for the %User{}-sender payload contract (#363/R108).
+      sub(alice)
+      {:ok, _} = Eden.Chat.create_system_message(priv.id, %{"action" => "noticeboard"})
+      refute_receive {:notify, _}
     end
 
     test "a non-channel-member can't request; an existing room member can't either", ctx do

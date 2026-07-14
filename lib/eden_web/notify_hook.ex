@@ -26,7 +26,7 @@ defmodule EdenWeb.NotifyHook do
   deliver on `/settings` and `/admin` too: a muted channel is already filtered out
   upstream, with no rail data needed here.
   """
-  import Phoenix.Component, only: [assign_new: 3]
+  import Phoenix.Component, only: [assign: 3, assign_new: 3]
   import Phoenix.LiveView
 
   use EdenWeb, :verified_routes
@@ -71,6 +71,14 @@ defmodule EdenWeb.NotifyHook do
     end
   end
 
+  # #363/R096: the viewer changed a notification pref (another tab, or this one). Re-render the
+  # `<.notifier>` host with the fresh `data-*` so the chime/banner honor it with no reload. The
+  # broadcast fans to every one of the user's sessions (dedicated notify topic), so all tabs stay
+  # in sync — including the tab that made the change (its own broadcast comes back to it here).
+  defp on_notify({:notify_prefs_changed, prefs}, socket) do
+    {:halt, assign(socket, :notify_prefs, prefs)}
+  end
+
   defp on_notify(_message, socket), do: {:cont, socket}
 
   defp deliver?(payload, assigns), do: not focused?(payload, assigns)
@@ -93,20 +101,34 @@ defmodule EdenWeb.NotifyHook do
   end
 
   # Localize (recipient's session) the once-built broadcast payload into a client event:
-  # a body line + a ready avatar URL for the OS-notification icon.
+  # a body line + a ready avatar URL for the OS-notification icon. The internal `:preview`
+  # (up to 500 chars) and `:avatar_key` (a storage key) are DROPPED here — the client uses
+  # only `:body` (already fitted to 140) and `:avatar_url`, so shipping the raw fields would
+  # near-double each event over a slow link and leak a storage detail (#363/R203).
   defp notify_event(payload) do
-    body =
-      cond do
-        payload.preview not in [nil, ""] -> display_preview(payload.preview)
-        payload.media_kind -> media_label(payload.media_kind)
-        true -> gettext("New message")
-      end
-
-    Map.merge(payload, %{
-      body: body,
+    payload
+    |> Map.merge(%{
+      body: notify_body(payload),
       avatar_url: avatar_src(payload.avatar_key, payload.sender_id)
     })
+    |> Map.drop([:preview, :avatar_key])
   end
+
+  # A knock (#363/R029) is worded as a join request, not a message body. A media message with
+  # a caption leads with the media marker THEN the caption (#363/R202) — "Photo, nice shot" —
+  # so the recipient can tell a photo rode along even when there's text (as in Telegram/Mattermost);
+  # media-only keeps the bare marker, and a plain text message shows its (stripped, fitted) body.
+  defp notify_body(%{kind: "knock"}), do: gettext("Requested to join")
+
+  defp notify_body(%{media_kind: kind, preview: preview})
+       when kind != nil and preview not in [nil, ""],
+       do: media_label(kind) <> ", " <> display_preview(preview)
+
+  defp notify_body(%{preview: preview}) when preview not in [nil, ""],
+    do: display_preview(preview)
+
+  defp notify_body(%{media_kind: kind}) when kind != nil, do: media_label(kind)
+  defp notify_body(_), do: gettext("New message")
 
   # Strip markdown markers (Markup is a web module) THEN fit to the banner (#273). Doing
   # it in this order means the (server-size-bounded) body is cleaned before the final cut,

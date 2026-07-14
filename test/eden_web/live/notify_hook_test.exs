@@ -44,6 +44,20 @@ defmodule EdenWeb.NotifyHookTest do
     assert conv_id == dm.id
   end
 
+  test "a notification pref change re-renders the notifier host live, no reload (#363/R096)", %{
+    conn: conn
+  } do
+    {:ok, view, html} = live(conn, ~p"/settings")
+    assert html =~ ~s(data-sound="true")
+
+    render_click(view, "set_notify_sound", %{})
+
+    # Chat broadcasts {:notify_prefs_changed} on the notify topic; this same session (NotifyHook)
+    # receives it and reassigns :notify_prefs, so the <.notifier> data-* update without a reload —
+    # the R096 bug was that the toggle wrote the DB but never refreshed this host.
+    assert render(view) =~ ~s(data-sound="false")
+  end
+
   test "still delivers in ChatLive when not viewing that conversation (no regression)", %{
     conn: conn,
     bob: bob,

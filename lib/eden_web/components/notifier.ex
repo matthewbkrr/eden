@@ -11,6 +11,13 @@ defmodule EdenWeb.Notifier do
 
   attr :prefs, :map, required: true
 
+  attr :focused_conv, :any,
+    default: nil,
+    doc:
+      "The conversation this session is actively viewing (ChatLive only), so a background tab " <>
+        "can suppress an OS banner for a chat another tab is already reading (#363/R165). nil " <>
+        "everywhere else (Settings/Admin) — those tabs never claim focus."
+
   def notifier(assigns) do
     ~H"""
     <div
@@ -19,6 +26,7 @@ defmodule EdenWeb.Notifier do
       data-sound={to_string(@prefs.sound)}
       data-sound-name={@prefs.sound_name}
       data-desktop={to_string(@prefs.desktop)}
+      data-focused-conv={@focused_conv}
       hidden
     >
     </div>
@@ -47,10 +55,60 @@ defmodule EdenWeb.Notifier do
           window.addEventListener("pointerdown", this.unlock)
           window.addEventListener("keydown", this.unlock)
           this.handleEvent("notify", (payload) => this.onNotify(payload))
+          // #363/R165: publish which conversation this tab is actively reading so a background
+          // tab can stay silent for a chat this one is already showing (server-side focus
+          // suppression is per-session and can't see across tabs). Heartbeat on focus/visibility
+          // changes and a slow interval; the reader in `otherTabViewing` treats it as fresh
+          // for a few seconds.
+          this.beatFocus()
+          this.beat = () => this.beatFocus()
+          window.addEventListener("focus", this.beat)
+          window.addEventListener("blur", this.beat)
+          document.addEventListener("visibilitychange", this.beat)
+          this.focusTimer = setInterval(this.beat, 2000)
+        },
+        updated() {
+          // The active conversation (data-focused-conv) can change without a remount (switching
+          // chats is a patch), so re-publish on every render.
+          this.beatFocus()
         },
         destroyed() {
           window.removeEventListener("pointerdown", this.unlock)
           window.removeEventListener("keydown", this.unlock)
+          window.removeEventListener("focus", this.beat)
+          window.removeEventListener("blur", this.beat)
+          document.removeEventListener("visibilitychange", this.beat)
+          if (this.focusTimer) clearInterval(this.focusTimer)
+        },
+        beatFocus() {
+          // Only a tab that is BOTH focused and visible on a real conversation claims it. Stamped
+          // with a timestamp so a stale claim (tab switched away, closed) ages out on its own.
+          const conv = this.el.dataset.focusedConv
+          if (!conv || document.hidden || !document.hasFocus()) return
+          try {
+            localStorage.setItem("ed:activeConv", JSON.stringify({ id: conv, ts: Date.now() }))
+          } catch (_e) {}
+        },
+        otherTabViewing(convId) {
+          // Is another (focused) tab currently reading this conversation? Fresh within 5s of the
+          // last heartbeat (2s interval) — comfortably longer than the beat, short enough that a
+          // closed/blurred tab stops suppressing quickly. localStorage throws in private mode →
+          // treat as "no other tab" (show the banner, never go silent on an error).
+          try {
+            const raw = localStorage.getItem("ed:activeConv")
+            if (!raw) return false
+            const { id, ts } = JSON.parse(raw)
+            return String(id) === String(convId) && Date.now() - ts < 5000
+          } catch (_e) {
+            return false
+          }
+        },
+        supportsRenotify() {
+          try {
+            return "Notification" in window && "renotify" in Notification.prototype
+          } catch (_e) {
+            return false
+          }
         },
         onNotify(payload) {
           // #217: split the output by where your attention is. The #213 server gate already
@@ -61,21 +119,30 @@ defmodule EdenWeb.Notifier do
           //     notification (it carries its own system sound), so we suppress the chime to
           //     avoid a double-ding. Falls back to the chime when desktop is off or not
           //     permitted on this device (a per-user pref can outrun a per-device permission).
-          // With several eden tabs open the OS de-dups banners by `tag` (one per conversation),
-          // but a focused tab may chime while a background tab banners the same message — an
-          // accepted minor; cross-tab election would be out of proportion to the annoyance.
           const here = !document.hidden && document.hasFocus()
           if (here) {
             if (this.el.dataset.sound === "true") this.chime()
           } else {
+            // #363/R165: if another tab is focused on this exact conversation, it's already being
+            // read — don't banner or chime it from this background tab.
+            if (this.otherTabViewing(payload.conversation_id)) return
             const desktopShown = this.el.dataset.desktop === "true" && this.notify(payload)
-            if (this.el.dataset.sound === "true" && !desktopShown) this.chime()
+            // Suppress the chime only when the OS banner will actually RE-alert on each message —
+            // i.e. the browser honors `renotify` (Chrome/Edge). Firefox/Safari ignore renotify, so
+            // a repeat banner for the same conversation swaps silently; keeping the chime there
+            // (#363/R166) means a burst of messages isn't reduced to one audible alert. A rare
+            // double-signal beats going deaf on the team's main browser (Firefox).
+            const suppressChime = desktopShown && this.supportsRenotify()
+            if (this.el.dataset.sound === "true" && !suppressChime) this.chime()
           }
         },
         notify(payload) {
           if (!("Notification" in window) || Notification.permission !== "granted") return false
-          const head =
-            payload.kind === "room" && payload.conv_title ? "#" + payload.conv_title : payload.conv_title
+          // A room and a knock (#363/R029 — a join request into a room) both head with "#room";
+          // a DM heads with the sender, a group with its title. The knock/room/group forms then
+          // append the person ("#talk · Alice"), the DM shows the sender alone.
+          const roomish = payload.kind === "room" || payload.kind === "knock"
+          const head = roomish && payload.conv_title ? "#" + payload.conv_title : payload.conv_title
           const title =
             payload.kind === "dm"
               ? payload.sender_name || ""
@@ -122,8 +189,10 @@ defmodule EdenWeb.Notifier do
         },
         play(ctx) {
           // #289: the chime is the user's chosen preset (window.edSound owns the
-          // synth + preset table, shared with the Settings preview). data-sound-name
-          // is kept fresh by the server render; unknown/absent falls back to default.
+          // synth + preset table, shared with the Settings preview). data-sound-name is
+          // re-rendered live when the user changes the preset (#363/R096 — NotifyHook reassigns
+          // notify_prefs on {:notify_prefs_changed}), so a fresh read here is current; an
+          // unknown/absent name falls back to the default.
           window.edSound && window.edSound.play(ctx, this.el.dataset.soundName)
         },
       }

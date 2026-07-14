@@ -344,19 +344,35 @@ design — built incrementally as features land.)
 - **Notifications** — notification delivery behind an **adapter behaviour**
   (`Eden.Notifications.Adapter`), mirroring Storage (ADR-0001, #235). `Eden.Chat`
   decides **who** hears (the #213 gating — sender/left/mute/DND, thread-followers
-  for a reply, and **channel-mute** via `Eden.Channels.muted_user_ids/1`, #271; one
-  `notify_recipient_ids` with a shared `common_gates`) and builds a locale-neutral
+  for a reply, **channel-mute** via `Eden.Channels.muted_user_ids/1`, #271, and — since
+  #363/R150 — **deactivated/anonymized** users, since `common_gates` is the one place
+  ADR-0001 filters delivery so every future push transport inherits the deactivation;
+  one `notify_recipient_ids` with a shared `common_gates`) and builds a locale-neutral
   **payload**; `Eden.Notifications.deliver/2` fans that already-gated set out over the
-  configured adapters. Today the only transport is the in-tab
+  configured adapters. A private-room **knock** (join request, #41) now rings the
+  channel's **owner/admins** too (#363/R029): a knock has no `%User{}` sender, so
+  `Eden.Channels.post_join_request` builds a dedicated `kind: "knock"` payload (requester
+  in the `sender_*` fields, room as title) and calls `deliver/2` directly — the unread
+  side is left alone on purpose (a NULL-sender system message must not bump everyone's
+  badge). Today the only transport is the in-tab
   **`Eden.Notifications.Web`** adapter — broadcasts `{:notify, payload}` on
   `user:<id>:notify` (separate from the `:chat` sidebar-sync topic, #272), which open
   LiveViews subscribe to via `EdenWeb.NotifyHook` on **every** authed page (the only
   gate left there is per-session **focus** — "am I looking at this chat now"; #271
   moved channel-mute server-side, so room notifications now deliver everywhere). The
-  payload shape (the delivery **contract**) is documented once in the
-  `Eden.Notifications` moduledoc. Planned push transports (native desktop app / APNs
-  / FCM / RuStore-VK) and the `notification_targets` device table are deferred to
-  later ADR-0001 tickets — new adapter modules on this same seam, no caller change.
+  web layer localizes the payload into the client `notify` event: it **drops** the
+  internal `:preview`/`:avatar_key`, leads a media+caption banner with the media marker
+  (#363/R202/R203), and a background tab **suppresses** a banner for a chat another tab is
+  actively reading via a localStorage focus heartbeat (`ed:activeConv`, #363/R165).
+  **Notification prefs apply live** (#363/R096): a `set_notify_*` write broadcasts
+  `{:notify_prefs_changed}` on the notify topic, and `NotifyHook` re-renders the shared
+  `<.notifier>` host in **every** tab (no reload). **Reactions deliberately do NOT
+  notify** (#363/R144 — a passive in-view `{:reaction_changed}` signal only; a
+  `kind: "reaction"` opt-out is a future product call). The payload shape (the delivery
+  **contract**) is documented once in the `Eden.Notifications` moduledoc. Planned push
+  transports (native desktop app / APNs / FCM / RuStore-VK) and the
+  `notification_targets` device table are deferred to later ADR-0001 tickets — new
+  adapter modules on this same seam, no caller change.
 
 ## Commands
 
