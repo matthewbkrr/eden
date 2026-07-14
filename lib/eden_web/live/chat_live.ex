@@ -2798,8 +2798,9 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
       <%!-- Notification renderer host (#215 sound / #217 desktop), shared with every
-            authed page via EdenWeb.Notifier + NotifyHook (#272). --%>
-      <.notifier prefs={@notify_prefs} />
+            authed page via EdenWeb.Notifier + NotifyHook (#272). `focused_conv` lets a
+            background tab stay silent for the chat this tab is reading (#363/R165). --%>
+      <.notifier prefs={@notify_prefs} focused_conv={@selected && @selected.id} />
       <%!-- Tab unread badge (#216): reflects total unread (DMs/groups + unmuted channels)
             in the browser tab as a "(N)" title prefix, so a backgrounded tab shows there's
             something waiting. data-count is recomputed on every rail refresh. --%>

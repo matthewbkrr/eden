@@ -1895,6 +1895,20 @@ defmodule Eden.ChatTest do
       {:ok, _} = Chat.set_notify_sound(scope(alice), false)
       assert Chat.notification_prefs(scope(alice)).sound_name == "glass"
     end
+
+    test "changing a toggle broadcasts fresh prefs for a live apply (#363/R096)", %{alice: alice} do
+      Phoenix.PubSub.subscribe(Eden.PubSub, Eden.Notifications.Web.topic(alice.id))
+
+      {:ok, false} = Chat.set_notify_sound(scope(alice), false)
+      assert_receive {:notify_prefs_changed, %{sound: false, desktop: false, sound_name: "chime"}}
+
+      {:ok, "glass"} = Chat.set_notify_sound_name(scope(alice), "glass")
+      assert_receive {:notify_prefs_changed, %{sound_name: "glass"}}
+
+      # A rejected preset writes nothing → broadcasts nothing (the tab keeps its old prefs).
+      assert {:error, :invalid} = Chat.set_notify_sound_name(scope(alice), "airhorn")
+      refute_receive {:notify_prefs_changed, _}
+    end
   end
 
   describe "notification gating (#213)" do
@@ -2038,6 +2052,61 @@ defmodule Eden.ChatTest do
       # A generous size guard (the banner display is fitted client-side after stripping).
       assert_receive {:notify, %{preview: preview}}
       assert String.length(preview) == 500
+    end
+
+    test "a member who left the chat is not notified (#363/R108)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      # Leaving a group is permanent (sets left_at); a later message must not reach the leaver.
+      :ok = Chat.delete_conversation(scope(bob), conv.id)
+      sub(bob)
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      refute_receive {:notify, _}
+    end
+
+    test "a deactivated member is not notified — the ADR-0001 gate (#363/R150)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      # Deactivate bob directly (the delivery gate is what's under test, not the admin flow).
+      bob |> Ecto.Changeset.change(active: false) |> Repo.update!()
+      sub(bob)
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "hi"})
+      # Web topic aside, the recipient set must exclude a deactivated user — so the first push
+      # transport doesn't ring a disabled account.
+      refute_receive {:notify, _}
+    end
+
+    test "forwarding into a chat notifies that chat's other members (#363/R108)", %{
+      alice: alice,
+      conv: conv
+    } do
+      {:ok, src} = Chat.create_message(scope(alice), conv.id, %{"body" => "forward me"})
+      dave = user_fixture(%{username: "dave_n"})
+      {:ok, dm} = Chat.create_conversation(scope(alice), [dave.id])
+
+      sub(dave)
+      {:ok, _} = Chat.forward_message(scope(alice), src.id, dm.id)
+
+      did = dm.id
+      aid = alice.id
+      assert_receive {:notify, %{conversation_id: ^did, sender_id: ^aid}}
+    end
+
+    test "a media-only message carries media_kind with an empty preview (#363/R108)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv
+    } do
+      sub(bob)
+      sources = [%{path: image_path(@png_signature <> "n"), filename: "shot.png"}]
+      {:ok, _} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+
+      cid = conv.id
+      assert_receive {:notify, %{conversation_id: ^cid, media_kind: "image", preview: ""}}
     end
   end
 

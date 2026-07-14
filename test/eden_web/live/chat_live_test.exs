@@ -3163,6 +3163,92 @@ defmodule EdenWeb.ChatLiveTest do
       refute_push_event(view, "notify", %{})
     end
 
+    test "delivers to the OPEN chat once the tab is hidden — the other half of the focus gate (#363/R108)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Focused (tab visible + this chat open) → suppressed.
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: ctx.conversation.id, preview: "a"})}
+      )
+
+      render(view)
+      refute_push_event(view, "notify", %{})
+
+      # Tab hidden → not focused any more, though the chat is still open → delivered. This is the
+      # tab_visible half of focused? that no prior test exercised.
+      render_hook(view, "tab_hidden", %{})
+
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: ctx.conversation.id, preview: "b"})}
+      )
+
+      assert_push_event(view, "notify", %{conversation_id: cid})
+      assert cid == ctx.conversation.id
+    end
+
+    test "the client event drops the internal :preview and :avatar_key, keeps :body/:avatar_url (#363/R203)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      send(
+        view.pid,
+        {:notify,
+         notify_payload(%{
+           conversation_id: 7,
+           sender_id: ctx.alice.id,
+           preview: "hello there",
+           avatar_key: "avatars/secret.jpg"
+         })}
+      )
+
+      assert_push_event(view, "notify", payload)
+      assert payload.body == "hello there"
+      assert payload.avatar_url =~ "/users/#{ctx.alice.id}/avatar"
+      # The raw size-guard body + the internal storage key never reach the client.
+      refute Map.has_key?(payload, :preview)
+      refute Map.has_key?(payload, :avatar_key)
+    end
+
+    test "a media message with a caption leads the banner body with the media marker (#363/R202)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # Caption present → "Photo, <caption>" (the marker isn't swallowed by the text).
+      send(
+        view.pid,
+        {:notify,
+         notify_payload(%{conversation_id: 7, media_kind: "image", preview: "nice shot"})}
+      )
+
+      assert_push_event(view, "notify", %{body: "Photo, nice shot"})
+
+      # Media-only (empty preview) → the bare marker, as before.
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: 8, media_kind: "video", preview: ""})}
+      )
+
+      assert_push_event(view, "notify", %{body: "Video"})
+    end
+
+    test "a knock event words the body as a join request (#363/R029)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      send(
+        view.pid,
+        {:notify, notify_payload(%{conversation_id: 9, kind: "knock", conv_title: "secret"})}
+      )
+
+      assert_push_event(view, "notify", %{body: "Requested to join", kind: "knock"})
+    end
+
     test "delivers a room notification — channel-mute is filtered server-side now (#271)", ctx do
       {:ok, ch} = Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Team"})
       {:ok, [room]} = Channels.list_rooms(Scope.for_user(ctx.alice), ch.id)

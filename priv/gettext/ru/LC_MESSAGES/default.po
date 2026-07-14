@@ -2002,10 +2002,15 @@ msgstr "Ваш браузер не поддерживает уведомлени
 msgid "Messages, %{count} unread"
 msgstr "Сообщения, непрочитанных: %{count}"
 
-#: lib/eden_web/notify_hook.ex:89
+#: lib/eden_web/notify_hook.ex:131
 #, elixir-autogen, elixir-format
 msgid "New message"
 msgstr "Новое сообщение"
+
+#: lib/eden_web/notify_hook.ex:121
+#, elixir-autogen, elixir-format
+msgid "Requested to join"
+msgstr "Запрос на вступление"
 
 #: lib/eden_web/controllers/error_html.ex:58
 #, elixir-autogen, elixir-format
