@@ -45,6 +45,33 @@ defmodule EdenWeb.ChatLiveTest do
     bytes
   end
 
+  # Send ONE photo through the sequential engine (#392: the only media-send path now):
+  # queue_start → seq_item → upload. The album's client_id == its cid, so the stored message
+  # carries `cid`. `as_file` rides queue_start (the "Send as file" choice, #122).
+  defp seq_send_one(view, cid, content, name, as_file \\ false) do
+    render_hook(view, "queue_start", %{
+      "queue_id" => cid,
+      "caption" => "",
+      "caption_id" => nil,
+      "as_file" => as_file,
+      "albums" => [%{"cid" => cid, "count" => 1}],
+      "file_cids" => []
+    })
+
+    render_hook(view, "seq_item", %{
+      "queue_id" => cid,
+      "client_id" => cid,
+      "kind" => "media",
+      "album_cid" => cid
+    })
+
+    view
+    |> file_input("#composer", :attachment_seq, [
+      %{name: name, content: content, type: "image/jpeg"}
+    ])
+    |> render_upload(name)
+  end
+
   test "shows the empty state when nothing is selected", %{conn: conn} do
     conn = log_in_user(conn, user_fixture())
     {:ok, _view, html} = live(conn, ~p"/app")
@@ -782,55 +809,6 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-react")
     end
 
-    test "a stale-client (or malformed) media_client_id payload never crashes (#95)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      # A client on cached pre-redesign JS still pushes the id on this event; the
-      # server stashes a binary id (deploy-window compat) and ignores any other
-      # shape — never a FunctionClauseError that kills the LiveView.
-      render_hook(view, "media_client_id", %{"id" => "abc"})
-      render_hook(view, "media_client_id", %{"id" => 123})
-      render_hook(view, "media_client_id", %{})
-      assert has_element?(view, "#composer")
-    end
-
-    test "a media send closes the overlay, stamps the album with the pushed client_id, clears (#95)",
-         ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
-        ])
-
-      render_upload(file, "a.png")
-      assert has_element?(view, "[data-upload-preview]")
-
-      # The hook captures the caption at submit and pushes it WITH media_sending{id}: both ride the
-      # socket, so neither depends on @composer surviving the upload. The overlay now tracks STAGED
-      # entries, not @sending_media (so attaching another file DURING an upload opens it — TG-style);
-      # media_sending only flags the send, the entry stays staged, so the overlay stays open here and
-      # closes on the real submit below (674, entries consumed). The chat input is live underneath.
-      render_hook(view, "media_sending", %{"id" => "cid-7", "caption" => "look"})
-      assert has_element?(view, "[data-upload-preview]")
-      assert has_element?(view, "#composer-body")
-
-      # The attach affordance is NO LONGER gated during a send: picking the next file stages normally
-      # and opens the overlay (the sequential engine queues it), no button-blocking (#95 invariant holds).
-      refute has_element?(view, "#composer label.pointer-events-none")
-
-      # Submit: the stashed {id, caption} stamps the album so its optimistic twin swaps
-      # out by data-client-id and the caption becomes the album's body.
-      render_submit(element(view, "#composer"))
-
-      assert {:ok, [%{body: "look", client_id: "cid-7", attachments: [%{kind: "image"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      refute has_element?(view, "[data-upload-preview]")
-    end
-
     test "attaching a file DURING an upload opens the overlay (not gated on @sending_media)",
          ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
@@ -872,23 +850,13 @@ defmodule EdenWeb.ChatLiveTest do
     test "Send as file (#122) stores the photo uncompressed and renders a document card", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       scope = Scope.for_user(ctx.alice)
-
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "p.jpg", content: big_jpeg(2400, 1600), type: "image/jpeg"}
-        ])
-
-      render_upload(file, "p.jpg")
-      # The "Send as file" button rides as_file:true on media_sending (the hook reads
-      # e.submitter); the server stores the photo as-is and flags it.
-      render_hook(view, "media_sending", %{"id" => "cid-asfile", "as_file" => true})
-      render_submit(element(view, "#composer"))
+      # "Send as file" rides as_file:true on the sequential engine; the server stores as-is + flags it.
+      seq_send_one(view, "cid-asfile", big_jpeg(2400, 1600), "p.jpg", true)
 
       {:ok, msgs} = Chat.list_messages(scope, ctx.conversation.id)
-      msg = Enum.find(msgs, &(&1.client_id == "cid-asfile"))
-      assert %{attachments: [att]} = msg
+      assert %{attachments: [att]} = Enum.find(msgs, &(&1.client_id == "cid-asfile"))
       assert att.as_file and att.kind == "image"
       assert att.width == 2400 and att.height == 1600
 
@@ -902,22 +870,13 @@ defmodule EdenWeb.ChatLiveTest do
     test "an extreme-aspect photo (>5:1) auto-renders as a file card, not inline", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       scope = Scope.for_user(ctx.alice)
-
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      # A 1600×150 strip (aspect ~10.6:1, past the 5:1 cap) — sent NORMALLY, no "as file".
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "strip.jpg", content: big_jpeg(1600, 150), type: "image/jpeg"}
-        ])
-
-      render_upload(file, "strip.jpg")
-      render_hook(view, "media_sending", %{"id" => "cid-strip"})
-      render_submit(element(view, "#composer"))
+      # A 1600×150 strip (aspect ~10.6:1, past the 5:1 cap) — sent NORMALLY (not "as file").
+      seq_send_one(view, "cid-strip", big_jpeg(1600, 150), "strip.jpg")
 
       {:ok, msgs} = Chat.list_messages(scope, ctx.conversation.id)
-      msg = Enum.find(msgs, &(&1.client_id == "cid-strip"))
-      assert %{attachments: [att]} = msg
+      assert %{attachments: [att]} = Enum.find(msgs, &(&1.client_id == "cid-strip"))
       assert att.kind == "image" and att.width == 1600 and att.height == 150
       # The DB row is untouched (as_file stays false) — the strip→file decision is a render
       # concern (a future threshold change reflows old messages, no migration).
@@ -929,72 +888,16 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ "ed-album__tile"
 
       # Control: a normal-aspect photo (4:3) stays inline — no file card.
-      file2 =
-        file_input(view, "#composer", :attachment, [
-          %{name: "wide.jpg", content: big_jpeg(800, 600), type: "image/jpeg"}
-        ])
-
-      render_upload(file2, "wide.jpg")
-      render_hook(view, "media_sending", %{"id" => "cid-normal"})
-      render_submit(element(view, "#composer"))
+      seq_send_one(view, "cid-normal", big_jpeg(800, 600), "wide.jpg")
 
       {:ok, _v3, html2} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
       {:ok, msgs2} = Chat.list_messages(scope, ctx.conversation.id)
-      normal = Enum.find(msgs2, &(&1.client_id == "cid-normal"))
-      assert [%{width: 800, height: 600}] = normal.attachments
+
+      assert [%{width: 800, height: 600}] =
+               Enum.find(msgs2, &(&1.client_id == "cid-normal")).attachments
+
       # Both image messages render, but only the strip became a file card (exactly one).
       assert length(String.split(html2, "ed-file--photo")) - 1 == 1
-    end
-
-    test "a file send stamps the file message with its own per-ref client_id (#149)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "one.txt", content: "first", type: "text/plain"}
-        ])
-
-      html = render_upload(file, "one.txt")
-
-      # The staged file carries its upload ref in the tray; the hook mints a client_id
-      # per file keyed by that ref and pushes them on media_sending (#149) — distinct
-      # from media's single album id, so each file message swaps its own card. Here the
-      # upload finished before media_sending, so the form-submit path sends it (fallback).
-      assert [[_, ref]] = Regex.scan(~r/phx-value-ref="([^"]+)"/, html)
-
-      render_hook(view, "media_sending", %{"caption" => "", "files" => %{ref => "file-cid-1"}})
-      render_submit(element(view, "#composer"))
-
-      assert {:ok, [%{client_id: "file-cid-1", attachments: [%{kind: "file"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-    end
-
-    test "a file is sent the moment ITS upload finishes, not on the form submit (#149)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "one.txt", content: "first", type: "text/plain"}
-        ])
-
-      # Real-usage order: media_sending (the stash) lands BEFORE the upload finishes (the ref
-      # is known at stage time), so the progress callback consumes + sends the file the instant
-      # it's done — independently of any batch, with NO form submit. A fast doc swaps to its
-      # real card without waiting for the slowest.
-      [%{"ref" => ref}] = file.entries
-      render_hook(view, "media_sending", %{"caption" => "", "files" => %{ref => "file-cid-1"}})
-
-      render_upload(file, "one.txt")
-
-      assert {:ok, [%{client_id: "file-cid-1", attachments: [%{kind: "file"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      # Regression (#149): the progress path — not send_attachment — finished this files-only
-      # send, so it must clear sending_media; otherwise the attach button (gated on
-      # @sending_media) stays disabled forever. The composer mirrors the flag in data-*.
-      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
     end
 
     test "the tray cancel (before send) keeps an active reply (#137 review)", ctx do
@@ -1020,230 +923,6 @@ defmodule EdenWeb.ChatLiveTest do
       # The reply must survive a tray cancel (only an in-flight cancel clears it); nothing sent.
       assert has_element?(view, "[data-reply-active]")
       assert has_element?(view, ~s(#composer[data-sending-media="false"]))
-    end
-
-    test "a partial-batch cancel leaves the paperclip live once the rest upload (#158)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      keep =
-        file_input(view, "#composer", :attachment, [
-          %{name: "keep.txt", content: "a", type: "text/plain"}
-        ])
-
-      # The cancelled file rides a SEPARATE file_input so aborting it mid-flight tears down
-      # only its own client process, not the keeper's — big enough to actually hold at 40%
-      # (a tiny file jumps to 100%, gets consumed+sent, and can't be cancelled).
-      drop =
-        file_input(view, "#composer", :attachment, [
-          %{name: "drop.txt", content: String.duplicate("b", 100_000), type: "text/plain"}
-        ])
-
-      [keep_ref] = Enum.map(keep.entries, & &1["ref"])
-      [drop_ref] = Enum.map(drop.entries, & &1["ref"])
-
-      render_hook(view, "media_sending", %{
-        "caption" => "",
-        "files" => %{keep_ref => "fcid-1", drop_ref => "fcid-2"}
-      })
-
-      # Cancel one file mid-upload. Phoenix keeps it in `entries` as a `cancelled?` ghost
-      # (it only drops when the upload channel dies, which for a mid-batch cancel can be
-      # never). That ghost used to wedge the composer bar `inert` and swap the file input
-      # out after the rest landed — leaving the paperclip dead (#158).
-      render_upload(drop, "drop.txt", 40)
-      render_hook(view, "cancel_upload", %{"ref" => drop_ref})
-
-      # The keeper finishes via the per-file progress path.
-      render_upload(keep, "keep.txt")
-
-      # Only the kept file was sent; the cancelled one was not.
-      assert {:ok, [%{attachments: [%{kind: "file"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      # Paperclip is live again: sending_media cleared AND the file input re-renders (the
-      # lingering cancelled ghost must not keep it swapped out / the bar inert).
-      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
-      assert has_element?(view, ~s(#composer input[type="file"]))
-    end
-
-    test "a mixed batch with a cancelled file still sends the rest, never wedges (#158)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      keep =
-        file_input(view, "#composer", :attachment, [
-          %{name: "keep.txt", content: "a", type: "text/plain"}
-        ])
-
-      # Separate file_input so the in-flight cancel tears down only its own process.
-      drop =
-        file_input(view, "#composer", :attachment, [
-          %{name: "drop.txt", content: String.duplicate("b", 100_000), type: "text/plain"}
-        ])
-
-      [keep_ref] = Enum.map(keep.entries, & &1["ref"])
-      [drop_ref] = Enum.map(drop.entries, & &1["ref"])
-
-      # An album id present makes this a BATCH: the files defer to the form submit
-      # (send_attachment), not the per-file progress path.
-      render_hook(view, "media_sending", %{
-        "id" => "album-x",
-        "caption" => "",
-        "files" => %{keep_ref => "fcid-1", drop_ref => "fcid-2"}
-      })
-
-      render_upload(drop, "drop.txt", 40)
-      render_hook(view, "cancel_upload", %{"ref" => drop_ref})
-      render_upload(keep, "keep.txt")
-
-      # The batch submits with a `cancelled?` ghost still in `entries`: send_attachment must
-      # consume only the DONE entry (not consume_uploaded_entries/3, which would raise) and
-      # send it — instead of crashing or silently dropping the whole send (data loss) (#158).
-      render_submit(element(view, "#composer"))
-
-      assert {:ok, [%{attachments: [%{kind: "file"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      assert has_element?(view, ~s(#composer[data-sending-media="false"]))
-      assert has_element?(view, ~s(#composer input[type="file"]))
-    end
-
-    test "a files-only caption rides as its own trailing message below the pile (#149)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "one.txt", content: "first", type: "text/plain"}
-        ])
-
-      [%{"ref" => ref}] = file.entries
-
-      render_hook(view, "media_sending", %{
-        "caption" => "below the pile",
-        "files" => %{ref => "file-cid-1"},
-        "caption_id" => "cap-cid-1"
-      })
-
-      render_upload(file, "one.txt")
-
-      # The last file lands → the caption follows as its OWN message (its own client_id, no
-      # attachment), ordered AFTER the file — not attached under the first file.
-      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      assert [
-               %{client_id: "file-cid-1", body: "", attachments: [%{kind: "file"}]},
-               %{client_id: "cap-cid-1", body: "below the pile", attachments: []}
-             ] = msgs
-    end
-
-    test "a file in a mixed (media+files) send waits for the batch, not progress (#149 review A)",
-         ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "one.txt", content: "first", type: "text/plain"}
-        ])
-
-      [%{"ref" => ref}] = file.entries
-
-      # A media album rides the same send (album id present). The file must NOT be sent the
-      # moment it finishes — that would land it ABOVE the album (consumed only on the form
-      # submit). So on completion nothing is sent yet; it waits for the batch.
-      render_hook(view, "media_sending", %{"id" => "album-x", "files" => %{ref => "file-cid-1"}})
-      render_upload(file, "one.txt")
-
-      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-    end
-
-    test "the files-only fallback sends the caption trailing, not on the first file (#149 review C)",
-         ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "one.txt", content: "first", type: "text/plain"}
-        ])
-
-      # Upload finishes BEFORE media_sending → the progress path can't claim it, so the
-      # form-submit fallback sends it. The fallback must still place the caption as its own
-      # trailing message (not on the file) so the optimistic caption node swaps, not orphans.
-      render_upload(file, "one.txt")
-      [%{"ref" => ref}] = file.entries
-
-      render_hook(view, "media_sending", %{
-        "caption" => "below the pile",
-        "files" => %{ref => "file-cid-1"},
-        "caption_id" => "cap-cid-1"
-      })
-
-      render_submit(element(view, "#composer"))
-
-      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      assert [
-               %{client_id: "file-cid-1", body: "", attachments: [%{kind: "file"}]},
-               %{client_id: "cap-cid-1", body: "below the pile", attachments: []}
-             ] = msgs
-    end
-
-    test "a media caption survives a chat-input change during the upload (#bug)", ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
-        ])
-
-      render_upload(file, "a.png")
-
-      # The caption is captured at submit and stashed via media_sending (overlay closes).
-      render_hook(view, "media_sending", %{"id" => "cidc", "caption" => "the caption"})
-
-      # While the (slow) upload runs, the user types another message — a composer_changed
-      # with no caption key. This must NOT drop the stashed caption (the bug: it used to
-      # read @composer[:caption], which this change clobbered, losing the caption).
-      view |> form("#composer", %{message: %{body: "typed during upload"}}) |> render_change()
-
-      render_submit(element(view, "#composer"))
-
-      assert {:ok, [%{body: "the caption", attachments: [%{kind: "image"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-    end
-
-    test "an in-flight media send survives a conversation switch, landing in its original chat (#bug)",
-         ctx do
-      carol = user_fixture(%{username: "carol_pin", display_name: "Carol"})
-      {:ok, conv_b} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
-
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
-        ])
-
-      render_upload(file, "a.png")
-      # Send pressed: the upload is in flight, pinned to conversation A.
-      render_hook(view, "media_sending", %{"id" => "cid-pin", "caption" => "pinned"})
-
-      # The user switches to conversation B mid-upload (a live patch — the LiveView,
-      # and thus the upload, survives). The in-flight send must NOT be cancelled.
-      render_patch(view, ~p"/app/c/#{conv_b.id}")
-
-      # The upload completes; its send lands in the ORIGINAL conversation (A), not B.
-      render_submit(element(view, "#composer"))
-
-      assert {:ok, [%{body: "pinned", attachments: [%{kind: "image"}]}]} =
-               Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-
-      assert {:ok, []} = Chat.list_messages(Scope.for_user(ctx.alice), conv_b.id)
     end
 
     test "staged (not-yet-sent) media is dropped on a conversation switch — no leak (#89)", ctx do
@@ -1290,41 +969,6 @@ defmodule EdenWeb.ChatLiveTest do
       refute view |> element("#composer-body") |> render() =~ "a caption"
     end
 
-    test "the stall reset cancels the wedged entries + clears sending_media (no overlay re-show)",
-         ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "a.png", content: File.read!(real_png_path()), type: "image/png"}
-        ])
-
-      render_upload(file, "a.png", 20)
-      render_hook(view, "media_sending", %{"id" => "cid-stall"})
-
-      # Overlay tracks staged entries now (not @sending_media): the wedged entry is still staged, so
-      # the overlay stays open until the reset cancels those entries below.
-      assert has_element?(view, "[data-upload-preview]")
-
-      # On a stall the client marks the node as a failed card (red !, resend/delete) and asks
-      # the server to reset: cancel the wedged staged entries + clear the send flags, so nothing
-      # lingers to be nuked on a switch and new picks aren't blocked. No overlay re-show, no
-      # flash (the inline ! is the visible failure).
-      render_hook(view, "media_send_reset", %{})
-      refute has_element?(view, "[data-upload-preview]")
-
-      # sending_media must be cleared (not just the entries), else the send state wedges: a
-      # fresh stage would stay hidden. Prove it by staging again — the overlay returns.
-      file2 =
-        file_input(view, "#composer", :attachment, [
-          %{name: "b.png", content: File.read!(real_png_path()), type: "image/png"}
-        ])
-
-      render_upload(file2, "b.png", 20)
-      assert has_element?(view, "[data-upload-preview]")
-    end
-
     test "cancel_upload on an already-cancelled ref is a no-op, not a crash (P0)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
@@ -1335,7 +979,6 @@ defmodule EdenWeb.ChatLiveTest do
         ])
 
       render_upload(file, "a.png", 20)
-      render_hook(view, "media_sending", %{"id" => "cid-stall"})
 
       # The stall path cancels every wedged entry (media_send_reset). The failed card's own
       # Resend/Delete then re-drive off that stale ref — a redundant cancel_upload used to
@@ -1461,34 +1104,6 @@ defmodule EdenWeb.ChatLiveTest do
       assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
       assert Enum.any?(msgs, &(&1.client_id == "cid-first"))
       refute Enum.any?(msgs, &(&1.client_id == "cid-second"))
-    end
-
-    test "mixed batch: the album sends when its photo is done, even while a file still lags",
-         ctx do
-      conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
-
-      file =
-        file_input(view, "#composer", :attachment, [
-          %{name: "pic.png", content: File.read!(real_png_path()), type: "image/png"},
-          %{name: "doc.bin", content: :binary.copy(<<7>>, 4000), type: "application/octet-stream"}
-        ])
-
-      # A media album + a file ride one batch; the album carries its optimistic id, the file its own.
-      render_hook(view, "media_sending", %{
-        "album_ids" => ["cid-album"],
-        "files" => %{"1" => "cid-doc"}
-      })
-
-      # The photo finishes while the doc is still uploading. The album must NOT wait for (or be
-      # discarded by) the lagging doc — it sends the moment its own media entries are done.
-      render_upload(file, "doc.bin", 30)
-      render_upload(file, "pic.png", 100)
-
-      assert {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
-      album = Enum.find(msgs, &(&1.client_id == "cid-album"))
-      assert album, "the album should have been sent despite the lagging file"
-      assert album.attachments != []
     end
 
     # ── Sequential send engine (TG-attachments) ──────────────────────────────────────────────
@@ -2143,7 +1758,6 @@ defmodule EdenWeb.ChatLiveTest do
       # Upload only partway: the entry stays in progress (done? == false), as a slow
       # video does while the user keeps typing.
       render_upload(file, "clip.mp4", 30)
-      render_hook(view, "media_sending", %{"id" => "cid-vid"})
 
       # A text message typed while the video still uploads rides the SendQueue hook's
       # "send" with its own client_id. It must NOT reach consume_uploaded_entries,
