@@ -1195,6 +1195,20 @@ defmodule Eden.Chat do
           where: c.channel_id == ^channel_id and m.user_id == ^user_id
       )
 
+    # #370/R124: drop the user's thread follows in those rooms too. `track_reply` fans out to every
+    # follower without a membership join, so a stale follow would keep accumulating dead unread and
+    # resurface as a surprise badge on re-join. No data leak (thread_unread_counts / notifications
+    # already gate on membership), but the rows are dead — clean them with the membership.
+    {_count, _} =
+      Repo.delete_all(
+        from tm in ThreadMembership,
+          join: r in Message,
+          on: r.id == tm.root_id,
+          join: c in Conversation,
+          on: c.id == r.conversation_id,
+          where: c.channel_id == ^channel_id and tm.user_id == ^user_id
+      )
+
     :ok
   end
 
@@ -2550,11 +2564,23 @@ defmodule Eden.Chat do
            %MessageDeletion{}
            |> Ecto.Changeset.change(message_id: message.id, user_id: user.id)
            |> Repo.insert(on_conflict: :nothing, conflict_target: [:message_id, :user_id]) do
+      # Hiding a still-unread thread reply drops it from `list_thread` (join-filtered), so the
+      # hider's own thread unread must drop with it (#370/R129) — else the badge counts a reply
+      # they can no longer see. Only the hider's row; other followers still see it. Same gate as
+      # delete-for-both, so a pre-subscription reply isn't wrongly decremented.
+      if message.root_id do
+        from(tm in ThreadMembership,
+          where: tm.user_id == ^user.id and tm.root_id == ^message.root_id
+        )
+        |> decrement_thread_unread(message.inserted_at)
+      end
+
       Phoenix.PubSub.broadcast(
         @pubsub,
         user_topic(user.id),
-        # group_id rides along so the web layer can re-fuse a merged file bubble (TG-attachments).
-        {:message_hidden, message.conversation_id, message.id, message.group_id}
+        # group_id rides along so the web layer can re-fuse a merged file bubble (TG-attachments);
+        # root_id lets it refresh the thread badge after the reply's unread was decremented (#370/R129).
+        {:message_hidden, message.conversation_id, message.id, message.group_id, message.root_id}
       )
 
       :ok
@@ -2768,10 +2794,16 @@ defmodule Eden.Chat do
     )
 
     Enum.each(messages, fn m ->
+      # Decrement the hider's thread unread for any hidden reply, like single delete-for-me (#370/R129).
+      if m.root_id do
+        from(tm in ThreadMembership, where: tm.user_id == ^user.id and tm.root_id == ^m.root_id)
+        |> decrement_thread_unread(m.inserted_at)
+      end
+
       Phoenix.PubSub.broadcast(
         @pubsub,
         user_topic(user.id),
-        {:message_hidden, m.conversation_id, m.id, m.group_id}
+        {:message_hidden, m.conversation_id, m.id, m.group_id, m.root_id}
       )
     end)
 
@@ -2808,21 +2840,32 @@ defmodule Eden.Chat do
     )
     |> Repo.update_all([])
 
-    # The deleted reply was still unread for any follower who hadn't viewed past
-    # it (#57): decrement their count so a removed reply can't leave a phantom
-    # unread. `unread_replies > 0` floors it; `last_viewed_at` gates who it counted
-    # against (a viewer who read past it already had it cleared to zero on view).
-    from(tm in ThreadMembership,
-      where:
-        tm.root_id == ^root_id and tm.unread_replies > 0 and
-          (is_nil(tm.last_viewed_at) or tm.last_viewed_at < ^reply_at)
-    )
-    |> Repo.update_all(inc: [unread_replies: -1])
+    # The deleted reply was still unread for any follower who hadn't viewed past it (#57):
+    # decrement their count so a removed reply can't leave a phantom unread.
+    from(tm in ThreadMembership, where: tm.root_id == ^root_id)
+    |> decrement_thread_unread(reply_at)
 
     case preloaded_message(root_id) do
       nil -> :ok
       root -> broadcast(conversation_id, {:thread_updated, root})
     end
+  end
+
+  # Decrement `unread_replies` for the memberships in `query` for whom a reply sent at `reply_at`
+  # actually counted as unread — shared by delete-for-both (all followers) and delete-for-me (just
+  # the hider). `unread_replies > 0` floors it. The gate: a member counts the reply only if it
+  # arrived AFTER they last viewed the thread, OR (never viewed) after they started following —
+  # `inserted_at <= reply_at`. The extra `inserted_at` check fixes the undercount where a manual
+  # follow taken AFTER an existing reply (last_viewed_at nil) would otherwise be wrongly
+  # decremented for that pre-subscription reply (#370/R032, R135, R129).
+  defp decrement_thread_unread(query, reply_at) do
+    from(tm in query,
+      where:
+        tm.unread_replies > 0 and
+          ((is_nil(tm.last_viewed_at) and tm.inserted_at <= ^reply_at) or
+             tm.last_viewed_at < ^reply_at)
+    )
+    |> Repo.update_all(inc: [unread_replies: -1])
   end
 
   ## Threads (flat, Mattermost-style)
@@ -2881,6 +2924,10 @@ defmodule Eden.Chat do
          :ok <- ensure_root(root),
          :ok <- ensure_user_kind(root),
          :ok <- ensure_threaded(root.conversation_id) do
+      # Show the NEWEST @thread_cap replies (the live tail), not the oldest (#370/R034): a long
+      # active thread must open on its recent messages, matching the growing footer count, not
+      # trail off on ancient ones. Pull them newest-first, then reverse to the chronological order
+      # the panel renders. ("Load older" pagination for >cap threads is a separate follow-up.)
       replies =
         Message
         |> where([m], m.root_id == ^root.id and is_nil(m.deleted_at))
@@ -2888,7 +2935,7 @@ defmodule Eden.Chat do
           on: d.message_id == m.id and d.user_id == ^user.id
         )
         |> where([_m, d], is_nil(d.id))
-        |> order_by([m], asc: m.id)
+        |> order_by([m], desc: m.id)
         |> limit(@thread_cap)
         |> preload([
           :sender,
@@ -2898,6 +2945,7 @@ defmodule Eden.Chat do
           forwarded_from: :sender
         ])
         |> Repo.all()
+        |> Enum.reverse()
 
       {:ok,
        Repo.preload(root, [
@@ -3022,13 +3070,19 @@ defmodule Eden.Chat do
   `%{following: boolean, unread: integer}` (defaults when there is no row).
   """
   def thread_follow_state(%Scope{user: user}, root_id) do
-    case Repo.one(
-           from tm in ThreadMembership,
-             where: tm.user_id == ^user.id and tm.root_id == ^root_id,
-             select: {tm.following, tm.unread_replies}
-         ) do
-      {following, unread} -> %{following: following, unread: unread}
-      nil -> %{following: false, unread: 0}
+    # Normalize the id like every other thread function (#370/R140): a non-integer (e.g. a future
+    # caller passing `params["root_id"]`) resolves to the not-following default instead of an
+    # `Ecto.Query.CastError` that would crash the LiveView. Reading only the caller's own row.
+    with id when is_integer(id) <- safe_id(root_id),
+         {following, unread} <-
+           Repo.one(
+             from tm in ThreadMembership,
+               where: tm.user_id == ^user.id and tm.root_id == ^id,
+               select: {tm.following, tm.unread_replies}
+           ) do
+      %{following: following, unread: unread}
+    else
+      _ -> %{following: false, unread: 0}
     end
   end
 

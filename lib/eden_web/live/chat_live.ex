@@ -1023,12 +1023,19 @@ defmodule EdenWeb.ChatLive do
     do: {:noreply, assign(socket, tab_visible: false)}
 
   # Tab visible again (#206): resume, and read whatever arrived in the open chat while away
-  # (mark_read broadcasts {:read} → the badges refresh via #204).
+  # (mark_read broadcasts {:read} → the badges refresh via #204). Also read the open thread panel
+  # (#370/R055): while backgrounded its incoming replies were held unread, so catch them up now.
   def handle_event("tab_visible", _params, socket) do
     socket = assign(socket, tab_visible: true)
+    scope = socket.assigns.current_scope
 
     case socket.assigns.selected do
-      %{id: id} -> Chat.mark_read(socket.assigns.current_scope, id)
+      %{id: id} -> Chat.mark_read(scope, id)
+      _ -> :ok
+    end
+
+    case socket.assigns[:thread_root] do
+      %{id: root_id} -> Chat.mark_thread_read(scope, root_id)
       _ -> :ok
     end
 
@@ -2306,8 +2313,13 @@ defmodule EdenWeb.ChatLive do
   # footer (count/time/facepile), the viewer's unread, and the panel if open.
   def handle_info({:thread_reply, root, reply}, socket) do
     viewing? = ThreadPanel.thread_open_for?(socket, root.id)
-    # Reading the thread keeps it read on the server (the DB just incremented it).
-    if viewing?, do: Chat.mark_thread_read(socket.assigns.current_scope, root.id)
+
+    # Reading the thread keeps it read on the server (the DB just incremented it) — but only in a
+    # FOCUSED tab (#370/R055). A backgrounded tab with the panel open must NOT auto-read incoming
+    # replies (they'd be marked read across every device before the user ever saw them); the
+    # tab_visible handler reads the open thread on return, mirroring the main stream (#206).
+    if viewing? and socket.assigns.tab_visible,
+      do: Chat.mark_thread_read(socket.assigns.current_scope, root.id)
 
     socket =
       if open?(socket, root.conversation_id) do
@@ -2345,9 +2357,16 @@ defmodule EdenWeb.ChatLive do
 
         socket
         |> ThreadPanel.restream_root_if_loaded(root)
+        # Set the facepile for THIS root explicitly (#370/R177): when the last reply was deleted,
+        # thread_participants returns no key for it, so a Map.merge would leave the stale avatars
+        # in place — a facepile of participants for a thread that now has zero replies.
         |> assign(
           :thread_participants,
-          Map.merge(socket.assigns.thread_participants, participants)
+          Map.put(
+            socket.assigns.thread_participants,
+            root.id,
+            Map.get(participants, root.id, [])
+          )
         )
         |> ThreadPanel.sync_thread_unread(root.id)
         |> ThreadPanel.refresh_thread_list()
@@ -2400,7 +2419,7 @@ defmodule EdenWeb.ChatLive do
 
   # Delete-for-me (on the user's own topic): drop the message from this session
   # and refresh the sidebar preview (the hidden message may have been the last one).
-  def handle_info({:message_hidden, conversation_id, message_id, group_id}, socket) do
+  def handle_info({:message_hidden, conversation_id, message_id, group_id, root_id}, socket) do
     socket =
       if open?(socket, conversation_id),
         do:
@@ -2413,7 +2432,10 @@ defmodule EdenWeb.ChatLive do
           |> forget_row(message_id)
           # Same reconciliation as delete-for-both (#379/R056): a hidden row must leave the
           # selection set + forward carry too.
-          |> prune_removed_message(message_id),
+          |> prune_removed_message(message_id)
+          # Hiding an unread thread reply decremented its badge server-side (#370/R129) — refresh
+          # this session's thread unread + list so the badge drops live, not on the next open.
+          |> refresh_hidden_thread(root_id),
         else: socket
 
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
@@ -12798,6 +12820,16 @@ defmodule EdenWeb.ChatLive do
     socket
     |> prune_selection(message_id)
     |> prune_forward(message_id)
+  end
+
+  # A hidden message that was a thread reply (root_id set) → re-read its thread's unread badge +
+  # list so the count drops live after the server-side decrement (#370/R129); a nil root is a no-op.
+  defp refresh_hidden_thread(socket, nil), do: socket
+
+  defp refresh_hidden_thread(socket, root_id) do
+    socket
+    |> ThreadPanel.sync_thread_unread(root_id)
+    |> ThreadPanel.refresh_thread_list()
   end
 
   # Deselecting the last row exits select mode (Telegram-style, mirroring `toggle_select`) — no

@@ -16,6 +16,7 @@ defmodule Eden.ChatTest do
     Message,
     MessageDeletion,
     MessageReaction,
+    ThreadMembership,
     ThumbnailWorker
   }
 
@@ -925,7 +926,7 @@ defmodule Eden.ChatTest do
     test "broadcasts to the user's own sessions", %{bob: bob, conv: conv, msg: msg} do
       Chat.subscribe_user(scope(bob))
       :ok = Chat.delete_message_for_me(scope(bob), msg.id)
-      assert_receive {:message_hidden, conversation_id, message_id, _group_id}
+      assert_receive {:message_hidden, conversation_id, message_id, _group_id, _root_id}
       assert conversation_id == conv.id
       assert message_id == msg.id
     end
@@ -1521,6 +1522,123 @@ defmodule Eden.ChatTest do
       # bob deletes one reply for everyone → it stops counting against alice.
       :ok = Chat.delete_message_for_both(scope(bob), r1.id)
       assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "deleting a PRE-subscription reply doesn't undercount a manual follower (#370/R032)", %{
+      bob: bob,
+      carol: carol,
+      root: root
+    } do
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, _r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+      {:ok, _r3} = Chat.create_reply(scope(bob), root.id, %{"body" => "three"})
+
+      # A distinct second so Carol's follow post-dates r1-r3 (utc_datetime is second-precision, so
+      # a same-second follow would tie the inserted_at gate). Carol follows only NOW — she never saw
+      # r1-r3, so her unread starts at 0.
+      Process.sleep(1100)
+      {:ok, :following} = Chat.follow_thread(scope(carol), root.id)
+      assert %{unread: 0} = Chat.thread_follow_state(scope(carol), root.id)
+
+      # A reply after she followed → her one honest unread.
+      {:ok, r4} = Chat.create_reply(scope(bob), root.id, %{"body" => "four"})
+      assert %{unread: 1} = Chat.thread_follow_state(scope(carol), root.id)
+
+      # Deleting a PRE-subscription reply must NOT touch her count — she never counted it (the old
+      # is_nil(last_viewed_at)-only gate wrongly decremented her to 0).
+      :ok = Chat.delete_message_for_both(scope(bob), r1.id)
+      assert %{unread: 1} = Chat.thread_follow_state(scope(carol), root.id)
+
+      # Regression guard: deleting the POST-subscription reply correctly decrements her to 0.
+      :ok = Chat.delete_message_for_both(scope(bob), r4.id)
+      assert %{unread: 0} = Chat.thread_follow_state(scope(carol), root.id)
+    end
+
+    test "delete-for-me of an unread reply drops the hider's own count, not others' (#370/R129)",
+         %{
+           alice: alice,
+           bob: bob,
+           root: root
+         } do
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "ping"})
+      # alice (root author) owes 1 for bob's reply.
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+
+      # alice hides it for herself → her own unread drops AND it leaves her thread view.
+      :ok = Chat.delete_message_for_me(scope(alice), reply.id)
+      assert %{unread: 0} = Chat.thread_follow_state(scope(alice), root.id)
+      assert {:ok, _root, []} = Chat.list_thread(scope(alice), root.id)
+
+      # bob (the replier / another follower) is untouched — still sees it, count unchanged.
+      assert %{unread: 0} = Chat.thread_follow_state(scope(bob), root.id)
+      assert {:ok, _root, [_one]} = Chat.list_thread(scope(bob), root.id)
+    end
+
+    test "list_thread returns the NEWEST cap replies — the tail, oldest dropped (#370/R034)", %{
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      cap = 500
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      rows =
+        for i <- 1..(cap + 5) do
+          at = DateTime.add(now, i, :second)
+
+          %{
+            conversation_id: conv.id,
+            sender_id: bob.id,
+            root_id: root.id,
+            kind: "user",
+            body: "r#{i}",
+            inserted_at: at,
+            updated_at: at
+          }
+        end
+
+      {_, _} = Repo.insert_all(Message, rows)
+
+      {:ok, _root, replies} = Chat.list_thread(scope(bob), root.id)
+      bodies = Enum.map(replies, & &1.body)
+
+      assert length(replies) == cap
+      # Chronological (asc by id); the 5 oldest are dropped, the newest is present.
+      assert List.first(bodies) == "r6"
+      assert List.last(bodies) == "r#{cap + 5}"
+    end
+
+    test "thread_follow_state normalizes a garbage / nil id to the default (#370/R140)", %{
+      alice: alice,
+      root: root
+    } do
+      assert %{following: false, unread: 0} =
+               Chat.thread_follow_state(scope(alice), "not-a-number")
+
+      assert %{following: false, unread: 0} = Chat.thread_follow_state(scope(alice), nil)
+
+      # A valid id still resolves the real row.
+      {:ok, _} = Chat.create_reply(scope(alice), root.id, %{"body" => "x"})
+      assert %{following: true} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "leaving a channel's rooms clears the user's thread follows there (#370/R124)", %{
+      bob: bob,
+      conv: room,
+      root: root
+    } do
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "ping"})
+      assert %{following: true} = Chat.thread_follow_state(scope(bob), root.id)
+
+      channel_id = Repo.get!(Conversation, room.id).channel_id
+      :ok = Chat.leave_rooms(channel_id, bob.id)
+
+      # The row is DELETED (not just following=false), so no dead unread resurfaces on re-join.
+      refute Repo.exists?(
+               from(tm in ThreadMembership,
+                 where: tm.user_id == ^bob.id and tm.root_id == ^root.id
+               )
+             )
     end
 
     test "a root the viewer deleted-for-me drops from their list and counts", %{
