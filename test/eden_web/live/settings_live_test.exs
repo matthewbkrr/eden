@@ -207,6 +207,32 @@ defmodule EdenWeb.SettingsLiveTest do
       assert Accounts.get_user(user.id).avatar_key
     end
 
+    test "a failed profile validation doesn't consume the staged avatar (#379/R095)", %{
+      conn: conn
+    } do
+      user = user_fixture(%{display_name: "Ada"})
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings")
+
+      avatar =
+        file_input(view, "#profile-form", :avatar, [
+          %{name: "me.png", content: png_bytes(), type: "image/png"}
+        ])
+
+      assert render_upload(avatar, "me.png")
+
+      # Submit with a blank display_name → the profile changeset is invalid. The avatar must NOT be
+      # persisted: the old order consumed (and deleted the old blob) before validating, so a form
+      # error left a silently-changed avatar. Now validation gates the consume.
+      html =
+        view
+        |> form("#profile-form", user: %{display_name: "", bio: ""})
+        |> render_submit()
+
+      refute html =~ "Profile saved."
+      assert is_nil(Accounts.get_user(user.id).avatar_key)
+    end
+
     test "removes an existing avatar", %{conn: conn} do
       user = user_fixture(%{display_name: "Ada"})
       {:ok, user} = Accounts.set_avatar(user, png_path())

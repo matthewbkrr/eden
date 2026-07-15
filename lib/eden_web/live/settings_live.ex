@@ -1279,17 +1279,32 @@ defmodule EdenWeb.SettingsLive do
   end
 
   def handle_event("save_profile", %{"user" => params}, socket) do
-    {user, avatar_error} = consume_avatar(socket)
+    user = socket.assigns.profile_user
+    changeset = Accounts.change_profile(user, params)
 
-    case Accounts.update_profile(user, params) do
-      {:ok, updated} ->
-        {:noreply,
-         socket
-         |> assign(profile_user: updated, profile_form: to_form(Accounts.change_profile(updated)))
-         |> profile_flash(avatar_error)}
+    # Validate BEFORE consuming the avatar (#379/R095). consume_avatar persists the new avatar_key
+    # and deletes the old blob; running it ahead of a failed profile validation (e.g. a blank
+    # display_name) would silently swap the avatar while the form shows "couldn't save". Same
+    # profile_changeset update_profile applies, so this is a faithful pre-check — on the invalid
+    # branch nothing is consumed and the staged avatar stays in the tray for a corrected retry.
+    if changeset.valid? do
+      {user, avatar_error} = consume_avatar(socket)
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, profile_form: to_form(changeset))}
+      case Accounts.update_profile(user, params) do
+        {:ok, updated} ->
+          {:noreply,
+           socket
+           |> assign(
+             profile_user: updated,
+             profile_form: to_form(Accounts.change_profile(updated))
+           )
+           |> profile_flash(avatar_error)}
+
+        {:error, changeset} ->
+          {:noreply, assign(socket, profile_form: to_form(changeset))}
+      end
+    else
+      {:noreply, assign(socket, profile_form: to_form(%{changeset | action: :validate}))}
     end
   end
 

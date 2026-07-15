@@ -2983,6 +2983,25 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ ~s(<mark class="ed-mark">озе</mark>ре)
     end
 
+    test "a fuzzy (typo) result's snippet anchors at the body's start, not the tail (#379/R070)",
+         ctx do
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" =>
+            "Quarterly planning notes for the whole distributed team across regions, " <>
+              "covering logistics and budgets, and finally our rendezvous point downtown"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      # "rendezous" (dropped v) isn't a literal substring, but trigram word-similarity finds it
+      # (#56). The snippet must then anchor at the body's start — the old code split on the absent
+      # term, got the whole body back, and ran the window off to a meaningless tail.
+      html = render_change(view, "search", %{"q" => "rendezous"})
+      assert html =~ "Quarterly planning notes"
+    end
+
     test "group message results show the sender", ctx do
       carol = user_fixture(%{username: "carolgrp", display_name: "Carol"})
 
@@ -2997,6 +3016,142 @@ defmodule EdenWeb.ChatLiveTest do
 
       html = render_change(view, "search", %{"q" => "bonfire"})
       assert html =~ "Bob"
+    end
+  end
+
+  describe "#379 stream / selection desync" do
+    setup [:setup_conversation]
+
+    defp sel(view), do: :sys.get_state(view.pid).socket.assigns.selection
+
+    test "deleting a selected message drops it from the selection (#379/R056)", ctx do
+      {:ok, m1} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "one"})
+
+      {:ok, m2} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "two"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "enter_select", %{"id" => to_string(m1.id)})
+      render_hook(view, "toggle_select", %{"id" => to_string(m2.id)})
+      assert MapSet.size(sel(view)) == 2
+
+      # m1 is deleted-for-everyone → {:message_deleted} on the open conversation topic.
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), m1.id)
+      render(view)
+
+      assert MapSet.equal?(sel(view), MapSet.new([m2.id]))
+    end
+
+    test "deleting the last selected message exits select mode (#379/R056)", ctx do
+      {:ok, m1} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "solo"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "enter_select", %{"id" => to_string(m1.id)})
+      assert MapSet.size(sel(view)) == 1
+
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), m1.id)
+      render(view)
+
+      assert is_nil(sel(view))
+    end
+
+    test "deleting a carried message drops it from the forward plaque (#379/R056)", ctx do
+      {:ok, m1} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "carry 1"})
+
+      {:ok, m2} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "carry 2"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_hook(view, "forward_rehydrate", %{"ids" => [m1.id, m2.id]})
+      pending = :sys.get_state(view.pid).socket.assigns.pending_forward
+      assert Enum.map(pending, & &1.id) == [m1.id, m2.id]
+
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), m1.id)
+      render(view)
+
+      carried = :sys.get_state(view.pid).socket.assigns.pending_forward
+      assert Enum.map(carried, & &1.id) == [m2.id]
+    end
+
+    test "a merged file bubble survives the peer reading the DM (#379/R058)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Three files in one send → a merged (grouped) file bubble carrying group_pos.
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qr",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["r1", "r2", "r3"]
+      })
+
+      for {cid, name} <- [{"r1", "r1.txt"}, {"r2", "r2.txt"}, {"r3", "r3.txt"}] do
+        render_hook(view, "seq_item", %{
+          "queue_id" => "qr",
+          "client_id" => cid,
+          "kind" => "file",
+          "album_cid" => nil
+        })
+
+        view
+        |> file_input("#composer", :attachment_seq, [
+          %{name: name, content: "x", type: "text/plain"}
+        ])
+        |> render_upload(name, 100)
+      end
+
+      html = render(view)
+      assert html =~ "ed-bubble--grp-first"
+      assert html =~ "ed-bubble--grp-last"
+
+      # Bob reads the DM → {:read} re-streams the raw list; group_pos must be restored, not lost.
+      send(view.pid, {:read, ctx.bob.id, DateTime.utc_now() |> DateTime.truncate(:second)})
+      html = render(view)
+      assert html =~ "ed-bubble--grp-first"
+      assert html =~ "ed-bubble--grp-last"
+    end
+
+    test "renaming a room member refreshes the name in already-rendered flat rows (#379/R077)",
+         ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Team"})
+
+      {:ok, room} =
+        Eden.Channels.create_room(Scope.for_user(ctx.alice), channel.id, %{"name" => "talk"})
+
+      {:ok, _} = Eden.Channels.ensure_member(Scope.for_user(ctx.bob), channel.id)
+      :ok = Chat.join_room(room.id, ctx.bob.id)
+      {:ok, _} = Chat.create_message(Scope.for_user(ctx.bob), room.id, %{"body" => "hi from bob"})
+      # A second consecutive message → compact (collapsed under the first, no repeated header).
+      {:ok, m2} = Chat.create_message(Scope.for_user(ctx.bob), room.id, %{"body" => "and again"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      # Room selection (finish_open_room) is async — barrier on the message being rendered.
+      wait_until(fn -> render(view) =~ "hi from bob" end)
+      assert render(view) =~ "Bob"
+      assert :sys.get_state(view.pid).socket.assigns.compacts[m2.id] == true
+
+      # Bob renames himself → {:user_updated} → reload_selected re-streams the room. The old room
+      # branch skipped the re-stream, so the flat rows kept the stale name.
+      {:ok, _} = Eden.Accounts.update_profile(ctx.bob, %{display_name: "Bobby Renamed"})
+      html = render(view)
+      assert html =~ "Bobby Renamed"
+
+      # #155 regression shield: the re-stream ran through mark_compact, so m2 stays compact — a
+      # raw re-stream (the group branch's old bug) would drop the flag and spring the header back.
+      assert :sys.get_state(view.pid).socket.assigns.compacts[m2.id] == true
     end
   end
 
