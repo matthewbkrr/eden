@@ -7318,6 +7318,14 @@ defmodule EdenWeb.ChatLive do
               const capNode = this.addOptimistic(captionId, caption)
               if (capNode) capNode.dataset.convId = this.convId
             }
+            // Tag every node this build just appended with its owning thread root (#380/R066): the
+            // pane (#thread-pending) is shared across a room's threads, so .ThreadSendQueue.updated()
+            // keys hide/show on data-thread-root instead of wiping the pane on a thread switch —
+            // otherwise an in-flight attachment send to thread A loses its rings when B opens. Only
+            // the just-created nodes are untagged; earlier threads' nodes already carry their root.
+            for (const node of this._sendTarget.pending.children) {
+              if (!node.dataset.threadRoot) node.dataset.threadRoot = String(root_id)
+            }
             this._sendTarget = null
             if (!seqItems.length) return
             const queueId = this.uuid()
@@ -7719,6 +7727,12 @@ defmodule EdenWeb.ChatLive do
               node = this.pending.querySelector(`[data-client-id="${clientId}"]`)
             }
             if (!node) return
+            // Tag the failed node with its conversation (#380/R064) so a chat switch HIDES it (like
+            // a #144 media node) instead of the blind-remove that untagged text nodes get in
+            // updated() — otherwise the ●!/Resend affordance for an undelivered message silently
+            // vanishes on switch-away-and-back. Resend/flush are bound to this.convId, so re-sending
+            // only fires in its own chat.
+            node.dataset.convId = this.convId
             node.style.opacity = "1"
             node.classList.add("ed-msg-failed")
             if (body != null) node.dataset.body = body
@@ -7882,7 +7896,7 @@ defmodule EdenWeb.ChatLive do
           updated() {
             // A different thread opened in the same room (open_thread on another root):
             // the room id is unchanged, so key the reset on the thread ROOT — otherwise
-            // thread A's failed ●! nodes linger in thread B's panel (#thread-pending is
+            // thread A's ●! / in-flight nodes bleed into thread B's panel (#thread-pending is
             // phx-update="ignore", so the server never clears it).
             if (this.el.dataset.threadRoot !== this.threadRoot) {
               this.threadRoot = this.el.dataset.threadRoot
@@ -7893,7 +7907,19 @@ defmodule EdenWeb.ChatLive do
               this.sendTimers.forEach((t) => clearTimeout(t))
               this.sendTimers.clear()
               this.closeMenu()
-              if (this.pending) this.pending.replaceChildren()
+              this.showForThread()
+            }
+          },
+          // Don't WIPE #thread-pending on a thread switch (#380/R066): an attachment send to the
+          // thread we're leaving is still uploading (fed by the main .SendQueue), and its optimistic
+          // rings live here. Hide the other threads' nodes and show this thread's — every node is
+          // tagged data-thread-root — so an in-flight send survives the switch and its progress
+          // restores on return, instead of the pane being blanked. Real replies still remove their
+          // node via the .ScrollBottom riser (data-pending-id="thread-pending") when they stream in.
+          showForThread() {
+            if (!this.pending) return
+            for (const node of this.pending.children) {
+              node.style.display = node.dataset.threadRoot === this.threadRoot ? "" : "none"
             }
           },
           destroyed() {
@@ -7984,6 +8010,9 @@ defmodule EdenWeb.ChatLive do
               this.pending.appendChild(node)
             }
             node.dataset.body = body
+            // Tag with the owning thread root (#380/R066) so updated()'s hide/show keeps it in its
+            // own thread and out of another's, mirroring the media nodes' data-thread-root.
+            node.dataset.threadRoot = this.threadRoot
             node.querySelectorAll(".ed-msg-failed__bang").forEach((b) => b.remove())
             const bang = document.createElement("button")
             bang.type = "button"
@@ -8231,8 +8260,24 @@ defmodule EdenWeb.ChatLive do
         // OUTSIDE a message row (the profile gallery) keep opening instantly — nothing reacts
         // there, so there's nothing to disambiguate.
         const DBL_MS = 250
+        // One global guard (window-flagged, since colocated hooks re-mount): on any server-driven
+        // navigation, dismiss an open Lightbox/VideoExpand so a torn-down owning hook can't leave the
+        // overlay visible with body.overflow:hidden (scroll locked) on the next page (#380/R187). Both
+        // overlays are singletons on <body>, outside the LiveView root, so their Esc/backdrop close()
+        // never fires on navigation. No-op unless an overlay is actually open.
+        function armOverlayNavClose() {
+          if (window.__edOverlayNavGuard) return
+          window.__edOverlayNavGuard = true
+          window.addEventListener("phx:page-loading-start", () => {
+            const lb = document.getElementById("ed-lightbox")
+            if (lb && lb.classList.contains("ed-lightbox--open")) lb.__close && lb.__close()
+            const vm = document.getElementById("ed-video-modal")
+            if (vm && vm.classList.contains("ed-video-modal--open")) vm.__close && vm.__close()
+          })
+        }
         export default {
           mounted() {
+            armOverlayNavClose()
             const inMsg = !!this.el.closest(".ed-msg, .ed-flat")
             this.el.addEventListener("click", (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
@@ -8306,6 +8351,9 @@ defmodule EdenWeb.ChatLive do
               document.body.style.overflow = ""
               document.removeEventListener("keydown", box.__onKey)
             }
+            // Expose close so the global nav guard (#380/R187) can dismiss the overlay when a
+            // server-driven navigation tears down the owning hook without firing Esc/backdrop close.
+            box.__close = close
             box.__onKey = (e) => {
               if (e.key === "Escape") close()
               else if (e.key === "ArrowLeft") box.__step(-1)
@@ -8391,8 +8439,21 @@ defmodule EdenWeb.ChatLive do
         // with real controls, and plays immediately — the click is a user gesture, so
         // autoplay with sound is allowed. Cmd/Ctrl/Shift/middle click fall through to the
         // <a>'s "open original in a new tab" (the box has no href, so they just no-op there).
+        // Global nav guard (#380/R187), mirroring the Lightbox script (colocated hooks can't share a
+        // module scope): dismiss an open overlay on navigation so body.overflow can't stay locked.
+        function armOverlayNavClose() {
+          if (window.__edOverlayNavGuard) return
+          window.__edOverlayNavGuard = true
+          window.addEventListener("phx:page-loading-start", () => {
+            const lb = document.getElementById("ed-lightbox")
+            if (lb && lb.classList.contains("ed-lightbox--open")) lb.__close && lb.__close()
+            const vm = document.getElementById("ed-video-modal")
+            if (vm && vm.classList.contains("ed-video-modal--open")) vm.__close && vm.__close()
+          })
+        }
         export default {
           mounted() {
+            armOverlayNavClose()
             this._open = (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
               e.preventDefault()
@@ -8454,6 +8515,8 @@ defmodule EdenWeb.ChatLive do
               v.removeAttribute("src")
               v.load()
             }
+            // Expose close for the global nav guard (#380/R187), like the Lightbox overlay.
+            box.__close = close
             box.__onKey = (e) => {
               if (e.key === "Escape") close()
             }

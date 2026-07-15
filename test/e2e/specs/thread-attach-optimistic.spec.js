@@ -116,3 +116,61 @@ test("sending a file in a thread shows an optimistic sending card (#348)", async
   await expect(alice.locator("#thread-pending [data-client-id]")).toHaveCount(0, { timeout: 12_000 })
   expect(alice.__diag.pageErrors).toEqual([])
 })
+
+// #380/R066: switching to another thread in the SAME room must not WIPE #thread-pending — an
+// attachment send to the thread we're leaving is still uploading, and its optimistic node lives
+// there. Every thread node is tagged data-thread-root, so updated() hides the other threads' nodes
+// and shows this one's (mirroring the main pane's #144), instead of the old replaceChildren() blank.
+test("switching threads hides an in-flight node instead of wiping it (#380/R066)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(room(seed))
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  const stamp = Date.now()
+  const rootAText = `r066-A ${stamp}`
+  const rootBText = `r066-B ${stamp}`
+  for (const t of [rootAText, rootBText]) {
+    await alice.locator("#composer-body").fill(t)
+    await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+    await expect(alice.locator("#messages .ed-flat", { hasText: t }).first()).toBeVisible()
+  }
+
+  // Open a thread and return its root id. #reply-composer is already visible when a thread is open,
+  // so a plain visibility wait wouldn't catch a switch — poll data-thread-root until it CHANGES.
+  const currentRoot = () =>
+    alice.evaluate(() => document.getElementById("reply-composer")?.dataset.threadRoot || "")
+  const openThreadOn = async (text, prevRoot) => {
+    const row = alice.locator("#messages .ed-flat", { hasText: text }).first()
+    const menu = await openMenu(alice, row)
+    await menu.getByText("Reply in thread", { exact: true }).click()
+    await expect(alice.locator("#reply-composer")).toBeVisible()
+    await expect.poll(currentRoot, { timeout: 12_000 }).not.toBe(String(prevRoot ?? ""))
+    return currentRoot()
+  }
+
+  // Open thread A, then plant an in-flight optimistic node in #thread-pending tagged for it.
+  const rootA = await openThreadOn(rootAText)
+  await alice.evaluate((root) => {
+    const n = document.createElement("div")
+    n.className = "ed-flat"
+    n.dataset.clientId = "fake-r066-inflight"
+    n.dataset.threadRoot = String(root)
+    n.textContent = "uploading in thread A…"
+    document.getElementById("thread-pending").appendChild(n)
+  }, rootA)
+  const node = alice.locator('#thread-pending [data-client-id="fake-r066-inflight"]')
+  await expect(node).toBeVisible()
+
+  // Switch to thread B → the node is HIDDEN, not removed (the old replaceChildren() wiped it).
+  const rootB = await openThreadOn(rootBText, rootA)
+  expect(rootB).not.toBe(rootA)
+  await expect(node).toHaveCount(1)
+  await expect(node).toBeHidden()
+
+  // Return to thread A → its in-flight node is shown again.
+  await openThreadOn(rootAText, rootB)
+  await expect(node).toBeVisible()
+  expect(alice.__diag.pageErrors).toEqual([])
+})
