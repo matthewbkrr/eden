@@ -1304,7 +1304,7 @@ defmodule EdenWeb.SettingsLive do
           {:noreply, assign(socket, profile_form: to_form(changeset))}
       end
     else
-      {:noreply, assign(socket, profile_form: to_form(Map.put(changeset, :action, :validate)))}
+      {:noreply, assign(socket, profile_form: to_form(%{changeset | action: :validate}))}
     end
   end
 
