@@ -8260,13 +8260,16 @@ defmodule EdenWeb.ChatLive do
         // OUTSIDE a message row (the profile gallery) keep opening instantly — nothing reacts
         // there, so there's nothing to disambiguate.
         const DBL_MS = 250
-        // One global guard (window-flagged, since colocated hooks re-mount): on any server-driven
-        // navigation, dismiss an open Lightbox/VideoExpand so a torn-down owning hook can't leave the
-        // overlay visible with body.overflow:hidden (scroll locked) on the next page (#380/R187). Both
-        // overlays are singletons on <body>, outside the LiveView root, so their Esc/backdrop close()
-        // never fires on navigation. No-op unless an overlay is actually open.
-        function armOverlayNavClose() {
-          if (window.__edOverlayNavGuard) return
+        // One global overlay nav-close guard, registered ONCE at bundle load: this colocated module's
+        // top-level runs when app.js imports it, regardless of whether a photo is on the page, so the
+        // listener is wired without a per-hook mounted() call (and without duplicating it in the
+        // VideoExpand script — #399 review). On any server-driven navigation, dismiss an open
+        // Lightbox/VideoExpand so a torn-down owning hook can't leave the overlay visible with
+        // body.overflow:hidden (scroll locked) on the next page (#380/R187). Both overlays are
+        // singletons on <body>, outside the LiveView root, so their Esc/backdrop close() never fires on
+        // navigation. The window flag makes a re-import (dev HMR) idempotent; the handler queries both
+        // overlays by id, so wiring it here once covers video too. No-op unless an overlay is open.
+        if (!window.__edOverlayNavGuard) {
           window.__edOverlayNavGuard = true
           window.addEventListener("phx:page-loading-start", () => {
             const lb = document.getElementById("ed-lightbox")
@@ -8277,7 +8280,6 @@ defmodule EdenWeb.ChatLive do
         }
         export default {
           mounted() {
-            armOverlayNavClose()
             const inMsg = !!this.el.closest(".ed-msg, .ed-flat")
             this.el.addEventListener("click", (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
@@ -8439,21 +8441,11 @@ defmodule EdenWeb.ChatLive do
         // with real controls, and plays immediately — the click is a user gesture, so
         // autoplay with sound is allowed. Cmd/Ctrl/Shift/middle click fall through to the
         // <a>'s "open original in a new tab" (the box has no href, so they just no-op there).
-        // Global nav guard (#380/R187), mirroring the Lightbox script (colocated hooks can't share a
-        // module scope): dismiss an open overlay on navigation so body.overflow can't stay locked.
-        function armOverlayNavClose() {
-          if (window.__edOverlayNavGuard) return
-          window.__edOverlayNavGuard = true
-          window.addEventListener("phx:page-loading-start", () => {
-            const lb = document.getElementById("ed-lightbox")
-            if (lb && lb.classList.contains("ed-lightbox--open")) lb.__close && lb.__close()
-            const vm = document.getElementById("ed-video-modal")
-            if (vm && vm.classList.contains("ed-video-modal--open")) vm.__close && vm.__close()
-          })
-        }
+        // The overlay nav-close guard (#380/R187) is registered once at bundle load from the .Lightbox
+        // script's module top-level; it closes THIS overlay too (queries #ed-video-modal by id), so
+        // there's nothing to wire here.
         export default {
           mounted() {
-            armOverlayNavClose()
             this._open = (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
               e.preventDefault()
