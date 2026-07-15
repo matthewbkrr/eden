@@ -2560,15 +2560,17 @@ defmodule Eden.Chat do
   """
   def delete_message_for_me(%Scope{user: user} = scope, message_id) do
     with {:ok, message} <- fetch_message(scope, message_id),
-         {:ok, _deletion} <-
+         {:ok, deletion} <-
            %MessageDeletion{}
            |> Ecto.Changeset.change(message_id: message.id, user_id: user.id)
            |> Repo.insert(on_conflict: :nothing, conflict_target: [:message_id, :user_id]) do
       # Hiding a still-unread thread reply drops it from `list_thread` (join-filtered), so the
       # hider's own thread unread must drop with it (#370/R129) — else the badge counts a reply
       # they can no longer see. Only the hider's row; other followers still see it. Same gate as
-      # delete-for-both, so a pre-subscription reply isn't wrongly decremented.
-      if message.root_id do
+      # delete-for-both, so a pre-subscription reply isn't wrongly decremented. Gate on `deletion.id`:
+      # a repeat delete-for-me is an `on_conflict: :nothing` no-op (id nil), and decrementing again
+      # would double-count the badge down (#400 review).
+      if deletion.id && message.root_id do
         from(tm in ThreadMembership,
           where: tm.user_id == ^user.id and tm.root_id == ^message.root_id
         )
@@ -2788,14 +2790,20 @@ defmodule Eden.Chat do
     messages = get_messages(scope, ids)
     rows = Enum.map(messages, &%{message_id: &1.id, user_id: user.id, inserted_at: now()})
 
-    Repo.insert_all(MessageDeletion, rows,
-      on_conflict: :nothing,
-      conflict_target: [:message_id, :user_id]
-    )
+    # `returning` gives back ONLY the rows actually inserted (conflicts excluded), so a repeat
+    # bulk delete-for-me doesn't re-decrement an already-hidden reply's badge (#400 review).
+    {_count, inserted} =
+      Repo.insert_all(MessageDeletion, rows,
+        on_conflict: :nothing,
+        conflict_target: [:message_id, :user_id],
+        returning: [:message_id]
+      )
+
+    newly_hidden = MapSet.new(inserted, & &1.message_id)
 
     Enum.each(messages, fn m ->
-      # Decrement the hider's thread unread for any hidden reply, like single delete-for-me (#370/R129).
-      if m.root_id do
+      # Decrement the hider's thread unread only for a reply hidden JUST NOW (#370/R129).
+      if m.root_id && MapSet.member?(newly_hidden, m.id) do
         from(tm in ThreadMembership, where: tm.user_id == ^user.id and tm.root_id == ^m.root_id)
         |> decrement_thread_unread(m.inserted_at)
       end

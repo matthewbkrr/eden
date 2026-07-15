@@ -1574,6 +1574,41 @@ defmodule Eden.ChatTest do
       assert {:ok, _root, [_one]} = Chat.list_thread(scope(bob), root.id)
     end
 
+    test "a repeat delete-for-me doesn't double-decrement the thread badge (#400 review)", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, _r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+      assert %{unread: 2} = Chat.thread_follow_state(scope(alice), root.id)
+
+      :ok = Chat.delete_message_for_me(scope(alice), r1.id)
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+
+      # Re-hiding r1 is an `on_conflict: :nothing` no-op → it must NOT decrement r2's still-unread
+      # count. The `deletion.id` gate stops the double-count that would otherwise land at 0.
+      :ok = Chat.delete_message_for_me(scope(alice), r1.id)
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "a repeat BULK delete-for-me doesn't double-decrement the thread badge (#400 review)", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, _r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+      assert %{unread: 2} = Chat.thread_follow_state(scope(alice), root.id)
+
+      assert 1 = Chat.delete_messages_for_me(scope(alice), [r1.id])
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+
+      # A re-hide returns no newly-inserted rows → no decrement; r2's unread survives.
+      Chat.delete_messages_for_me(scope(alice), [r1.id])
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
     test "list_thread returns the NEWEST cap replies — the tail, oldest dropped (#370/R034)", %{
       bob: bob,
       conv: conv,
