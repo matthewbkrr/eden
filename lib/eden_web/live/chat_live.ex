@@ -2377,6 +2377,9 @@ defmodule EdenWeb.ChatLive do
        # Re-fuse the merged file bubble if a group member was the one deleted.
        |> reshape_group(message.conversation_id, message.group_id)
        |> forget_row(message.id)
+       # Drop the vanished row from the selection MapSet + forward carry so the bar count
+       # and forward plaque don't tally a message that's no longer in the stream (#379/R056).
+       |> prune_removed_message(message.id)
        |> ThreadPanel.refresh_thread_list()}
     else
       {:noreply, socket}
@@ -2407,7 +2410,10 @@ defmodule EdenWeb.ChatLive do
           |> ThreadPanel.close_thread_if_root_gone(message_id)
           # Re-fuse the merged file bubble if a group member was hidden.
           |> reshape_group(conversation_id, group_id)
-          |> forget_row(message_id),
+          |> forget_row(message_id)
+          # Same reconciliation as delete-for-both (#379/R056): a hidden row must leave the
+          # selection set + forward carry too.
+          |> prune_removed_message(message_id),
         else: socket
 
     {:noreply, put_sidebar_conversation(socket, conversation_id)}
@@ -2460,6 +2466,11 @@ defmodule EdenWeb.ChatLive do
           {:noreply, socket}
         else
           {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+          # list_messages returns raw rows (group_pos defaults to nil), so restore each row's
+          # virtual position from @group_pos before re-streaming — else a merged file-album bubble
+          # decomposes into separate bubbles the moment the peer reads the DM (#379/R058). Same
+          # restore the {:message_edited} path already applies.
+          messages = Enum.map(messages, &restore_group_pos(socket, &1))
           {:noreply, stream(socket, :messages, messages)}
         end
 
@@ -8962,9 +8973,22 @@ defmodule EdenWeb.ChatLive do
     # `**`/`#`; the highlight then matches against the displayed text.
     body = Markup.strip(body)
     q = String.downcase(String.trim(query))
-    before = body |> String.downcase() |> String.split(q, parts: 2) |> hd()
+    down = String.downcase(body)
 
-    start = max(String.length(before) - 24, 0)
+    # Trigram search (#56) also returns typo-tolerant hits where `q` is NOT a literal substring
+    # of the body. There `String.split(down, q)` yields the whole body, and the window would run
+    # off to a meaningless tail (#379/R070) — so anchor at the START of the body instead. Without
+    # a fuzzy match offset there's no correct anchor, and `highlight_parts/2` likewise won't mark
+    # (the literal term isn't present); a DB-side match anchor (ts_headline / similarity offset)
+    # is the fuller fix and a separate follow-up.
+    start =
+      if q != "" and String.contains?(down, q) do
+        before = down |> String.split(q, parts: 2) |> hd()
+        max(String.length(before) - 24, 0)
+      else
+        0
+      end
+
     prefix = if start > 0, do: "…", else: ""
     prefix <> String.slice(body, start, 110)
   end
@@ -10170,11 +10194,27 @@ defmodule EdenWeb.ChatLive do
               this.anchor = id
             }
             document.addEventListener("click", this.onClick, true)
+            // A selected row can be re-streamed by an INDEPENDENT event (a reaction, a read tick,
+            // a thumbnail swap, an edit): morphdom then rebuilds it from the server markup, which
+            // always renders aria-pressed="false" and no --selected wash, dropping the highlight.
+            // #selbar only re-renders on a @selection/@confirming change, so its own updated()
+            // sync() won't fire. Watch the stream container (like .DateRail) and re-apply the
+            // highlight on any row mutation; rAF-coalesced so a burst of patches is one sync.
+            const container = document.querySelector(this.c)
+            if (container) {
+              this.mo = new MutationObserver(() => {
+                if (this._raf) return
+                this._raf = requestAnimationFrame(() => { this._raf = null; this.sync() })
+              })
+              this.mo.observe(container, { childList: true, subtree: true })
+            }
             this.sync()
           },
           updated() { this.sync() },
           destroyed() {
             document.removeEventListener("click", this.onClick, true)
+            this.mo && this.mo.disconnect()
+            if (this._raf) cancelAnimationFrame(this._raf)
             this.clear()
           },
           range(a, b) {
@@ -12694,6 +12734,54 @@ defmodule EdenWeb.ChatLive do
     )
   end
 
+  # A row just left the stream (deleted-for-both by another member, or hidden by another tab):
+  # reconcile the two server-owned id sets that live ALONGSIDE the stream so neither counts a
+  # gone row (#379/R056). The selection bar reads its count from `@selection`, and the forward
+  # plaque from `@pending_forward` — a stale id would over-count both. The stream row itself is
+  # removed by the caller; this only touches the sets.
+  defp prune_removed_message(socket, message_id) do
+    socket
+    |> prune_selection(message_id)
+    |> prune_forward(message_id)
+  end
+
+  # Deselecting the last row exits select mode (Telegram-style, mirroring `toggle_select`) — no
+  # dead bar of disabled actions over an empty selection.
+  defp prune_selection(%{assigns: %{selection: %MapSet{} = sel}} = socket, message_id) do
+    cond do
+      not MapSet.member?(sel, message_id) ->
+        socket
+
+      MapSet.size(sel) == 1 ->
+        assign(socket, selection: nil, sel_delete: nil, select_surface: nil)
+
+      true ->
+        assign(socket, selection: MapSet.delete(sel, message_id))
+    end
+  end
+
+  defp prune_selection(socket, _message_id), do: socket
+
+  # Filter the carried message out; an emptied carry clears the plaque + the client mirror, a
+  # non-empty one re-mirrors the remaining ids to sessionStorage. `^messages` short-circuits when
+  # the removed id wasn't carried (no needless client push).
+  defp prune_forward(%{assigns: %{pending_forward: [_ | _] = messages}} = socket, message_id) do
+    case Enum.reject(messages, &(&1.id == message_id)) do
+      ^messages ->
+        socket
+
+      [] ->
+        socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})
+
+      kept ->
+        socket
+        |> assign(pending_forward: kept)
+        |> push_event("carry_set", %{ids: Enum.map(kept, & &1.id)})
+    end
+  end
+
+  defp prune_forward(socket, _message_id), do: socket
+
   # Re-streaming a row (reaction/thumbnail) loses the virtual compact flag (the
   # broadcast struct doesn't carry it); restore it from what we recorded when the
   # row was first streamed so the flat layout stays put.
@@ -12868,16 +12956,42 @@ defmodule EdenWeb.ChatLive do
     scope = socket.assigns.current_scope
 
     case Chat.get_conversation(scope, conv.id) do
-      {:ok, %{is_group: true} = fresh} ->
-        {:ok, messages} = Chat.list_messages(scope, conv.id, limit: @page)
-        socket |> assign(selected: fresh) |> stream(:messages, messages, reset: true)
-
       {:ok, fresh} ->
-        assign(socket, selected: fresh)
+        socket = assign(socket, selected: fresh)
+
+        # A 1:1 DM shows the renamed member only in the header (assign above) — its bubbles carry
+        # no sender label, so no re-stream. Groups (bubbles) AND rooms (flat rows) DO render the
+        # name in the message rows, so re-stream them so it refreshes — but through
+        # mark_compact + mark_group_pos so the virtual `compact` (#155) and `group_pos` (merged
+        # file album, #379/R058) flags survive. A raw re-stream drops both — that's the #155
+        # regression, and it's why the room branch used to skip the re-stream entirely (#379/R077).
+        if fresh.is_group or fresh.channel_id do
+          restream_marked(socket, scope, fresh)
+        else
+          socket
+        end
 
       {:error, _} ->
         socket
     end
+  end
+
+  # Re-stream a conversation's message window with the virtual render flags recomputed and their
+  # tracking assigns refreshed — the shared tail of select_conversation, reused wherever a live
+  # rename/edit forces a full re-stream without losing compact/group_pos.
+  defp restream_marked(socket, scope, conversation) do
+    {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
+    {messages, last_flat} = mark_compact(messages, conversation)
+    {messages, last_group} = mark_group_pos(messages)
+
+    socket
+    |> assign(
+      last_flat: last_flat,
+      last_group: last_group,
+      compacts: Map.new(messages, &{&1.id, &1.compact}),
+      group_pos: Map.new(messages, &{&1.id, &1.group_pos})
+    )
+    |> stream(:messages, messages, reset: true)
   end
 
   defp unsubscribe(socket) do
