@@ -120,6 +120,11 @@ defmodule Eden.Chat do
   def max_attachment_bytes("image"), do: @max_image_bytes
   def max_attachment_bytes("video"), do: @max_video_bytes
   def max_attachment_bytes("file"), do: @max_file_bytes
+  # Defensive default for any unexpected kind (a public fn, #402 review). `sniff/2` only ever
+  # yields image/video/file, so this is unreachable in practice — but a total function beats a
+  # FunctionClauseError, and the FILE cap is the conservative choice (a real number, so
+  # `check_size`'s `size <= max` stays valid — nil would make every such upload "too_large").
+  def max_attachment_bytes(_other), do: @max_file_bytes
 
   ## Conversations
 

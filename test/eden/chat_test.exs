@@ -3243,6 +3243,11 @@ defmodule Eden.ChatTest do
       assert [%{kind: "file", content_type: "audio/mp4"}] = message.attachments
     end
 
+    test "max_attachment_bytes stays total — an unexpected kind gets the file cap (#402 review)" do
+      assert Chat.max_attachment_bytes("audio") == Chat.max_attachment_bytes("file")
+      assert is_integer(Chat.max_attachment_bytes("anything"))
+    end
+
     test "enqueues media processing per image/video, not for files", %{alice: alice, conv: conv} do
       sources = [
         %{path: image_path(@png_signature <> "a"), filename: "1.png"},
