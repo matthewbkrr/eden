@@ -55,7 +55,8 @@ defmodule Eden.Chat do
   @max_image_bytes 8 * 1024 * 1024
   @max_video_bytes 50 * 1024 * 1024
   @max_file_bytes 25 * 1024 * 1024
-  @max_audio_bytes 25 * 1024 * 1024
+  # No @max_audio_bytes: `sniff/2` never classifies a file as "audio" (#373, Variant B — audio
+  # deferred), so an audio cap would be dead. Audio-in-ISO (m4a) is stored as a "file".
 
   # Albums (#58): most attachments a single message may carry (Telegram caps at
   # 10 per media group; we mirror it). Each still obeys its own per-kind cap.
@@ -118,7 +119,6 @@ defmodule Eden.Chat do
   @doc "Accepted upload size in bytes for a given attachment kind."
   def max_attachment_bytes("image"), do: @max_image_bytes
   def max_attachment_bytes("video"), do: @max_video_bytes
-  def max_attachment_bytes("audio"), do: @max_audio_bytes
   def max_attachment_bytes("file"), do: @max_file_bytes
 
   ## Conversations
@@ -4448,12 +4448,22 @@ defmodule Eden.Chat do
   # ISO base media: the "ftyp" box sits at offset 4, the major brand at offset 8.
   # HEIC/HEIF images share this container with mp4/m4v/mov video — disambiguate by
   # the major brand so an iPhone .heic isn't stored as a (broken) video (#123).
-  # Anything not a known HEIC brand stays video (the prior default), so video can
+  # Anything not a known HEIC/audio brand stays video (the prior default), so video can
   # never be misread as an image.
   defp sniff(<<_::binary-size(4), "ftyp", brand::binary-size(4), _::binary>>, _f) do
-    if brand in ~w(heic heix heim heis hevc hevx hevm hevs mif1 msf1 heif),
-      do: {"image", "image/heic", "heic"},
-      else: {"video", "video/mp4", "mp4"}
+    cond do
+      brand in ~w(heic heix heim heis hevc hevx hevm hevs mif1 msf1 heif) ->
+        {"image", "image/heic", "heic"}
+
+      # ISO-container AUDIO (m4a/m4b — the 4-byte brand carries a trailing space): audio isn't a
+      # first-class kind yet (#373/R039, Variant B), so store it as a downloadable file rather than
+      # a black, unplayable <video>. The content_type still informs the client.
+      brand in ["M4A ", "M4B ", "M4P "] ->
+        {"file", "audio/mp4", "m4a"}
+
+      true ->
+        {"video", "video/mp4", "mp4"}
+    end
   end
 
   # Matroska / WebM: the EBML header.

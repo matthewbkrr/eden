@@ -3,16 +3,21 @@ defmodule Eden.Chat.Attachment do
   A file attached to a `Message`. Stores only the storage key + metadata (never
   the bytes or a storage implementation).
 
-  `kind` classifies the attachment (`image | video | file | audio`) and decides
-  how it renders and is served. Per-kind metadata: `width`/`height` (image,
-  video), `duration` in milliseconds (video, audio), `filename` (the sanitized
-  original name, shown and used for file downloads). `thumbnail_key` holds the
-  image thumbnail or video poster, filled in asynchronously by the media worker.
+  `kind` classifies the attachment (`image | video | file`) and decides how it
+  renders and is served. Per-kind metadata: `width`/`height` (image, video),
+  `duration` in milliseconds (video), `filename` (the sanitized original name,
+  shown and used for file downloads). `thumbnail_key` holds the image thumbnail
+  or video poster, filled in asynchronously by the media worker.
+
+  Audio is deliberately NOT a first-class kind yet (#373): `Eden.Chat.sniff/2`
+  never classifies a file as "audio", so an audio-in-ISO file (m4a) is stored and
+  served as a downloadable "file". Reviving audio means adding sniff signatures +
+  an inline player.
   """
   use Ecto.Schema
   import Ecto.Changeset
 
-  @kinds ~w(image video file audio)
+  @kinds ~w(image video file)
 
   schema "attachments" do
     field :kind, :string
@@ -74,7 +79,36 @@ defmodule Eden.Chat.Attachment do
     |> String.trim()
     |> case do
       "" -> nil
-      cleaned -> cleaned
+      cleaned -> truncate_to_bytes(cleaned, 255)
     end
+  end
+
+  # Truncate to `max` BYTES without splitting a UTF-8 grapheme, preserving the extension. A long
+  # meaningful name (Cyrillic is 2 bytes/char, so ~127 chars already hit the 255-byte column) is
+  # TRUNCATED, not rejected — the name isn't content, so cutting it beats failing the whole send
+  # with a generic error (#373/R040), matching Telegram / mail clients. The `validate_length`
+  # safety net in the changeset then always passes.
+  defp truncate_to_bytes(name, max) when byte_size(name) <= max, do: name
+
+  defp truncate_to_bytes(name, max) do
+    ext = Path.extname(name)
+
+    # A pathological extension that alone blows the budget → truncate the whole name.
+    if byte_size(ext) >= max do
+      take_bytes(name, max)
+    else
+      take_bytes(Path.rootname(name), max - byte_size(ext)) <> ext
+    end
+  end
+
+  # The longest leading run of whole graphemes whose byte size stays within `max`.
+  defp take_bytes(str, max) do
+    str
+    |> String.graphemes()
+    |> Enum.reduce_while({"", 0}, fn g, {acc, size} ->
+      next = size + byte_size(g)
+      if next <= max, do: {:cont, {acc <> g, next}}, else: {:halt, {acc, size}}
+    end)
+    |> elem(0)
   end
 end

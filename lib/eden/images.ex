@@ -40,8 +40,17 @@ defmodule Eden.Images do
              height: @avatar_size,
              crop: :VIPS_INTERESTING_CENTRE,
              size: :VIPS_SIZE_BOTH
-           ) do
-      Image.write(square, :memory, suffix: ".jpg", quality: 82, strip_metadata: true)
+           ),
+         # A `<-` (not the bare do-body) so a RETURNED `{:error, "vips string"}` — a truncated JPEG
+         # that header-parses but fails a full decode/encode — is normalized by `else`, not leaked
+         # past the documented `:too_large | :unprocessable` contract (#373/R158). Mirrors
+         # `heic_to_jpeg` (#123 B1).
+         {:ok, jpeg} <-
+           Image.write(square, :memory, suffix: ".jpg", quality: 82, strip_metadata: true) do
+      {:ok, jpeg}
+    else
+      {:error, :too_large} -> {:error, :too_large}
+      _ -> {:error, :unprocessable}
     end
   rescue
     _ -> {:error, :unprocessable}

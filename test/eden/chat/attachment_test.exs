@@ -57,5 +57,25 @@ defmodule Eden.Chat.AttachmentTest do
       cs = Attachment.changeset(%Attachment{}, base(%{filename: "  /  "}))
       assert get_change(cs, :filename) == nil
     end
+
+    test "truncates an over-255-byte filename, preserving the extension (#373/R040)" do
+      # Cyrillic is 2 bytes/char → 200 chars = 400 bytes, over the 255-byte column.
+      long = String.duplicate("я", 200) <> ".docx"
+      cs = Attachment.changeset(%Attachment{}, base(%{filename: long}))
+      name = get_change(cs, :filename)
+
+      assert cs.valid?
+      assert byte_size(name) <= 255
+      assert String.ends_with?(name, ".docx")
+      # Truncated on WHOLE graphemes — never a split UTF-8 byte.
+      assert String.valid?(name)
+      # And it actually kept as much of the name as fit (not just the extension).
+      assert String.length(name) > 100
+    end
+
+    test "leaves a short filename unchanged (#373/R040)" do
+      cs = Attachment.changeset(%Attachment{}, base(%{filename: "notes.pdf"}))
+      assert get_change(cs, :filename) == "notes.pdf"
+    end
   end
 end
