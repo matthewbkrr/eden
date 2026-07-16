@@ -2433,6 +2433,20 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ "Pick at least two people"
     end
 
+    test "start with an EMPTY member_ids list warns, never a memberless conversation (#369 review)",
+         ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      before = length(Chat.list_conversations(Scope.for_user(ctx.alice)))
+      # member_ids: [] reaches the first clause but Chat.create_conversation([]) returns
+      # {:error, :no_members} → the flash, not a memberless conversation (#401 review false positive).
+      html = render_submit(view, "start", %{"title" => "", "member_ids" => []})
+
+      assert html =~ "Pick at least one person"
+      assert length(Chat.list_conversations(Scope.for_user(ctx.alice))) == before
+    end
+
     test "a group offers 'Leave group' (irreversible); a DM offers 'Delete chat' (#369/R069)",
          ctx do
       carol = user_fixture(%{username: "carol_lg"})
