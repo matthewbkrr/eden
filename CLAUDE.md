@@ -199,7 +199,9 @@ design — built incrementally as features land.)
     soft-delete tombstone clears a message's reactions.
   - `Attachment` — **a message has many** (`#58`; ordered by `position`, lone
     sends are just an album of one), each classified by **magic bytes** into a
-    `kind` (`image | video | file | audio`), never the client content-type.
+    `kind` (`image | video | file`), never the client content-type. (Audio is
+    deferred, #373 — `sniff/2` never emits `"audio"`; an m4a is stored as a `file`,
+    not a black `<video>`.)
     `create_album_message/4` stores up to 10 sources atomically (rolling back every
     blob if any fails) and enqueues media processing per image/video. Images and
     video render inline (image lightbox — paging across the album's photos; in-app

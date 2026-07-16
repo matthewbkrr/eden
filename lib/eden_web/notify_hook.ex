@@ -146,6 +146,5 @@ defmodule EdenWeb.NotifyHook do
 
   defp media_label("image"), do: gettext("Photo")
   defp media_label("video"), do: gettext("Video")
-  defp media_label("audio"), do: gettext("Audio")
   defp media_label(_file), do: gettext("File")
 end

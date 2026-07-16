@@ -3231,6 +3231,23 @@ defmodule Eden.ChatTest do
       assert Enum.all?(message.attachments, &Eden.Storage.exists?(&1.storage_key))
     end
 
+    test "an m4a (ISO-container audio) is stored as a file, not a black video (#373/R039)", %{
+      alice: alice,
+      conv: conv
+    } do
+      # ftyp box at offset 4, major brand "M4A " (trailing space) at offset 8.
+      m4a = <<0, 0, 0, 32>> <> "ftyp" <> "M4A " <> <<0, 0, 0, 0>>
+      sources = [%{path: image_path(m4a), filename: "voice.m4a"}]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      assert [%{kind: "file", content_type: "audio/mp4"}] = message.attachments
+    end
+
+    test "max_attachment_bytes stays total — an unexpected kind gets the file cap (#402 review)" do
+      assert Chat.max_attachment_bytes("audio") == Chat.max_attachment_bytes("file")
+      assert is_integer(Chat.max_attachment_bytes("anything"))
+    end
+
     test "enqueues media processing per image/video, not for files", %{alice: alice, conv: conv} do
       sources = [
         %{path: image_path(@png_signature <> "a"), filename: "1.png"},

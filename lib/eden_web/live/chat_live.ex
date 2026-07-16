@@ -9392,7 +9392,6 @@ defmodule EdenWeb.ChatLive do
     do: Enum.filter(atts, &MapSet.member?(kept, &1.id))
 
   defp kind_icon("video"), do: "hero-film"
-  defp kind_icon("audio"), do: "hero-musical-note"
   defp kind_icon(_), do: "hero-document"
 
   attr :members, :list, required: true
@@ -10097,7 +10096,6 @@ defmodule EdenWeb.ChatLive do
 
   defp media_label("image"), do: gettext("Photo")
   defp media_label("video"), do: gettext("Video")
-  defp media_label("audio"), do: gettext("Audio")
   defp media_label(_file), do: gettext("File")
 
   defp attachment_label("image"), do: {"📷", gettext("Photo")}
@@ -12284,24 +12282,22 @@ defmodule EdenWeb.ChatLive do
   # nothing rather than crashing the whole stream/gallery render.
   defp media_tile(assigns), do: ~H""
 
+  # No "audio" tab: audio isn't a classified kind (#373, Variant B), so the tab was always empty.
   defp gallery_tabs do
     [
       {"image", gettext("Photo")},
       {"video", gettext("Video")},
-      {"file", gettext("Files")},
-      {"audio", gettext("Audio")}
+      {"file", gettext("Files")}
     ]
   end
 
   defp gallery_empty_text("image"), do: gettext("No photos in this chat yet")
   defp gallery_empty_text("video"), do: gettext("No videos in this chat yet")
   defp gallery_empty_text("file"), do: gettext("No files in this chat yet")
-  defp gallery_empty_text("audio"), do: gettext("No audio in this chat yet")
 
   defp gallery_empty_icon("image"), do: "hero-photo"
   defp gallery_empty_icon("video"), do: "hero-film"
   defp gallery_empty_icon("file"), do: "hero-document"
-  defp gallery_empty_icon("audio"), do: "hero-musical-note"
 
   attr :typers, :map, required: true
 
