@@ -498,10 +498,7 @@ defmodule EdenWeb.ChatLive do
     # channel home rather than crashing on a hard match.
     case Chat.get_conversation(socket.assigns.current_scope, room.id) do
       {:ok, loaded} ->
-        # Remember this as the channel's last room (#81) before select_conversation —
-        # its refresh_rail re-reads list_channels, so the rail's entry link updates.
-        Channels.record_last_room(socket.assigns.current_scope, loaded.channel_id, loaded.id)
-        socket = socket |> refresh_rooms() |> select_conversation(loaded)
+        socket = enter_room(socket, loaded)
         socket = if message_id, do: focus_message_target(socket, message_id), else: socket
         {:noreply, socket}
 
@@ -511,6 +508,14 @@ defmodule EdenWeb.ChatLive do
          |> put_flash(:error, gettext("Conversation not found."))
          |> push_navigate(to: ~p"/channels/#{room.channel_id}")}
     end
+  end
+
+  # Select a room the user is now a member of (socket → socket, so knock-approval and the normal
+  # open path share it). Remembers it as the channel's last room (#81) BEFORE select_conversation —
+  # its refresh_rail re-reads list_channels, so the rail's entry link updates.
+  defp enter_room(socket, loaded) do
+    Channels.record_last_room(socket.assigns.current_scope, loaded.channel_id, loaded.id)
+    socket |> refresh_rooms() |> select_conversation(loaded)
   end
 
   defp enter_channel(socket, channel) do
@@ -2240,10 +2245,28 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("start", %{"member_ids" => ids} = params, socket) do
-    scope = socket.assigns.current_scope
-    opts = if length(List.wrap(ids)) > 1, do: [group: true, title: params["title"]], else: []
+    ids = List.wrap(ids)
+    named? = String.trim(params["title"] || "") != ""
 
-    case Chat.create_conversation(scope, List.wrap(ids), opts) do
+    # A name was typed but only one person is picked — a group needs ≥2, so warn instead of
+    # silently dropping the name into an unnamed 1:1 DM (#369/R176).
+    if named? and length(ids) == 1 do
+      {:noreply,
+       put_flash(socket, :error, gettext("Pick at least two people for a named group."))}
+    else
+      start_conversation(socket, ids, params)
+    end
+  end
+
+  def handle_event("start", _params, socket) do
+    {:noreply, put_flash(socket, :error, gettext("Pick at least one person."))}
+  end
+
+  defp start_conversation(socket, ids, params) do
+    scope = socket.assigns.current_scope
+    opts = if length(ids) > 1, do: [group: true, title: params["title"]], else: []
+
+    case Chat.create_conversation(scope, ids, opts) do
       {:ok, conversation} ->
         {:noreply,
          socket
@@ -2257,10 +2280,6 @@ defmodule EdenWeb.ChatLive do
       {:error, _} ->
         {:noreply, put_flash(socket, :error, gettext("Couldn't start the conversation."))}
     end
-  end
-
-  def handle_event("start", _params, socket) do
-    {:noreply, put_flash(socket, :error, gettext("Pick at least one person."))}
   end
 
   @impl true
@@ -3678,9 +3697,14 @@ defmodule EdenWeb.ChatLive do
                     stages into the compose overlay and opens it as a new send — the sequential engine
                     (:attachment_seq) queues it behind the in-flight one, so no waiting, no "in queue"
                     gating. The overlay owns "Add more" once something is staged (below). --%>
+              <%!-- While carrying a forward, Send = drop the forward — so gate attach + the text
+                    input + emoji (they'd be silently dropped, #369/R053), keeping only Send live.
+                    `readonly`/`inert` (not `disabled`) so message[body] still submits and routes
+                    through drop_forward. --%>
               <label
                 class="ed-btn--icon cursor-pointer"
                 aria-label={gettext("Attach a file")}
+                inert={@pending_forward != nil}
               >
                 <.icon name="hero-paper-clip-micro" class="size-5" />
                 <%!-- sr-only (not hidden) keeps the input focusable / keyboard-reachable.
@@ -3698,10 +3722,13 @@ defmodule EdenWeb.ChatLive do
                 id="composer-body"
                 name="message[body]"
                 value={@composer[:body].value}
-                class="ed-input"
-                placeholder={gettext("Message")}
+                class={["ed-input", @pending_forward && "opacity-60"]}
+                placeholder={
+                  if @pending_forward, do: gettext("Press Send to forward"), else: gettext("Message")
+                }
                 autocomplete="off"
                 phx-hook=".PasteUpload"
+                readonly={@pending_forward != nil}
               />
               <%!-- phx-update="ignore": the picker is fully client-managed (its
                     open/closed `hidden` is toggled by the hook, contents are a
@@ -3713,6 +3740,7 @@ defmodule EdenWeb.ChatLive do
                 id="emoji-picker"
                 phx-hook=".EmojiPicker"
                 phx-update="ignore"
+                inert={@pending_forward != nil}
               >
                 <button
                   type="button"
@@ -8831,7 +8859,24 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-folder-micro" class="size-4" /> {gettext("Move to folder…")}
         </button>
         <div class="ed-menu__sep"></div>
+        <%!-- Leaving a group is IRREVERSIBLE (unlike a DM's re-surfaceable hide), so it gets its
+              own label + a "can't undo" confirm (#369/R069). The owner is caught after confirm with
+              a "transfer ownership first" flash (delete_chat handler); the group profile panel also
+              carries this Leave affordance next to the transfer-ownership actions. --%>
         <button
+          :if={@conversation.is_group}
+          type="button"
+          class="ed-menu__item ed-menu__item--danger"
+          role="menuitem"
+          phx-click="delete_chat"
+          phx-value-id={@conversation.id}
+          data-confirm={gettext("Leave this group? You can't undo this.")}
+        >
+          <.icon name="hero-arrow-right-start-on-rectangle-micro" class="size-4" />
+          {gettext("Leave group")}
+        </button>
+        <button
+          :if={!@conversation.is_group}
           type="button"
           class="ed-menu__item ed-menu__item--danger"
           role="menuitem"
@@ -11514,7 +11559,7 @@ defmodule EdenWeb.ChatLive do
               {gettext("No one else has joined yet.")}
             </p>
           <% else %>
-            <form phx-submit="start" class="space-y-3">
+            <form phx-submit="start" class="space-y-3" phx-hook=".NewConvGate" id="new-conv-form">
               <input
                 type="text"
                 name="title"
@@ -11544,8 +11589,29 @@ defmodule EdenWeb.ChatLive do
                   </span>
                 </label>
               </div>
-              <button class="ed-btn ed-btn--primary w-full" type="submit">{gettext("Start")}</button>
+              <button class="ed-btn ed-btn--primary w-full" type="submit" disabled>
+                {gettext("Start")}
+              </button>
             </form>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".NewConvGate">
+              // #369/R190: the member checkboxes are native (no server-tracked @selected), so gate
+              // the Start submit here — disabled until at least one person is checked, matching the
+              // other modals (room_add / folders). The server still re-validates the empty case.
+              export default {
+                mounted() {
+                  this.btn = this.el.querySelector('button[type="submit"]')
+                  this.sync = () => {
+                    const any = !!this.el.querySelector('input[name="member_ids[]"]:checked')
+                    if (this.btn) this.btn.disabled = !any
+                  }
+                  this.el.addEventListener("change", this.sync)
+                  this.sync()
+                },
+                destroyed() {
+                  this.el.removeEventListener("change", this.sync)
+                },
+              }
+            </script>
           <% end %>
         </div>
       </div>
@@ -12037,6 +12103,19 @@ defmodule EdenWeb.ChatLive do
               <% end %>
             <% end %>
           </div>
+          <%!-- Leave the group (#369/R069): the affordance also lives here, next to the
+                transfer-ownership actions, since an owner must transfer first — the delete_chat
+                handler flashes that on {:error, :owner}. Irreversible, so a "can't undo" confirm. --%>
+          <button
+            type="button"
+            class="ed-btn ed-btn--danger w-full mt-3"
+            phx-click="delete_chat"
+            phx-value-id={@conversation.id}
+            data-confirm={gettext("Leave this group? You can't undo this.")}
+          >
+            <.icon name="hero-arrow-right-start-on-rectangle-micro" class="size-4" />
+            {gettext("Leave group")}
+          </button>
         </div>
 
         <div
@@ -12572,13 +12651,23 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # A pending knock was approved while its window is open: the room now appears
-  # in the sidebar — clear the knock window so the user can open it.
+  # A pending knock was approved while its window is open: walk the requester straight INTO the
+  # room with a positive flash (#369/R076), instead of just clearing the window and dropping them
+  # on the channel's room-list to hunt for the newly-visible room themselves.
   defp maybe_clear_knock(%{assigns: %{knock_room: %{id: id}}} = socket) do
-    if Chat.room_member?(id, socket.assigns.current_scope.user.id) do
-      assign(socket, knock_room: nil, knock_pending: false)
-    else
+    scope = socket.assigns.current_scope
+
+    with true <- Chat.room_member?(id, scope.user.id),
+         {:ok, loaded} <- Chat.get_conversation(scope, id) do
       socket
+      |> assign(knock_room: nil, knock_pending: false)
+      |> enter_room(loaded)
+      |> put_flash(:info, gettext("You've been given access to #%{room}.", room: loaded.name))
+    else
+      # Not approved yet — leave the knock window up. (A get_conversation failure right after the
+      # membership check is a room deleted in the gap; drop the window without entering.)
+      false -> socket
+      {:error, _} -> assign(socket, knock_room: nil, knock_pending: false)
     end
   end
 
@@ -14324,19 +14413,45 @@ defmodule EdenWeb.ChatLive do
     results =
       Enum.map(messages, fn m -> Chat.forward_message(scope, m.id, conversation_id, root_id) end)
 
-    socket =
-      socket
-      |> assign(pending_forward: nil)
-      |> push_event("carry_clear", %{})
+    ok = Enum.count(results, &match?({:ok, _}, &1))
+    fail = length(results) - ok
 
-    # No success flash: the copy lands visibly at the bottom of the open stream, so a
-    # confirmation toast is just noise. Only a failure warrants interrupting.
+    # An honest, per-count flash (#369/R083/R084), mirroring `delete_selection`. A full success
+    # needs no toast — the copies land visibly at the stream bottom. A PARTIAL success must say
+    # which failed, else the user thinks nothing forwarded and re-clicks into duplicates; the
+    # carry is cleared (the successes already landed). A TOTAL failure keeps the carry so a retry
+    # (e.g. in another chat) is one click.
     socket =
-      if Enum.all?(results, &match?({:ok, _}, &1)),
-        do: socket,
-        else: put_flash(socket, :error, gettext("Couldn't forward that message."))
+      cond do
+        fail == 0 ->
+          clear_forward_carry(socket)
+
+        ok == 0 ->
+          put_flash(
+            socket,
+            :error,
+            ngettext("Couldn't forward the message.", "Couldn't forward the messages.", fail)
+          )
+
+        true ->
+          socket
+          |> clear_forward_carry()
+          |> put_flash(
+            :error,
+            ngettext(
+              "Couldn't forward %{count} message.",
+              "Couldn't forward %{count} messages.",
+              fail,
+              count: fail
+            )
+          )
+      end
 
     {:noreply, socket}
+  end
+
+  defp clear_forward_carry(socket) do
+    socket |> assign(pending_forward: nil) |> push_event("carry_clear", %{})
   end
 
   defp send_text(socket, scope, conversation_id, body, client_id, reply_to_id) do

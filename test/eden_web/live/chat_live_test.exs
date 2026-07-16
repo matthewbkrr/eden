@@ -2356,6 +2356,136 @@ defmodule EdenWeb.ChatLiveTest do
     end
   end
 
+  describe "#369 groups / forward / knock UX" do
+    setup [:setup_conversation]
+
+    test "a partial forward failure names the count and keeps the successful copy (#369/R083)",
+         ctx do
+      carol = user_fixture(%{username: "carol_pf"})
+      {:ok, target} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      {:ok, m1} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "keep me"})
+
+      {:ok, m2} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "gone"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{target.id}")
+
+      render_hook(view, "forward_rehydrate", %{"ids" => [m1.id, m2.id]})
+      # m2 is tombstoned after carry → its forward fails while m1's succeeds (a partial drop).
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), m2.id)
+
+      html = render_submit(view, "send", %{"message" => %{"body" => ""}})
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), target.id)
+      assert Enum.any?(msgs, &(&1.body == "keep me"))
+      assert html =~ "1 message"
+    end
+
+    test "a total forward failure keeps the carry so it can be retried (#369/R084)", ctx do
+      carol = user_fixture(%{username: "carol_ff"})
+      {:ok, target} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      {:ok, m1} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "gone"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{target.id}")
+
+      render_hook(view, "forward_rehydrate", %{"ids" => [m1.id]})
+      :ok = Chat.delete_message_for_both(Scope.for_user(ctx.alice), m1.id)
+      render_submit(view, "send", %{"message" => %{"body" => ""}})
+
+      # Nothing forwarded → the carry survives for a retry (not cleared like a partial/full success).
+      assert :sys.get_state(view.pid).socket.assigns.pending_forward != nil
+    end
+
+    test "carrying a forward makes the composer read-only so Send only forwards (#369/R053)",
+         ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "fwd"})
+
+      carol = user_fixture(%{username: "carol_r53"})
+      {:ok, target} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{target.id}")
+
+      render_click(view, "forward_prompt", %{"id" => to_string(msg.id)})
+      html = render(view)
+      assert has_element?(view, "#composer-body[readonly]")
+      assert html =~ "Press Send to forward"
+    end
+
+    test "a named group with only one member picked warns instead of a silent DM (#369/R176)",
+         ctx do
+      carol = user_fixture(%{username: "carol_gn"})
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      html =
+        render_submit(view, "start", %{
+          "title" => "My Group",
+          "member_ids" => [to_string(carol.id)]
+        })
+
+      assert html =~ "Pick at least two people"
+    end
+
+    test "a group offers 'Leave group' (irreversible); a DM offers 'Delete chat' (#369/R069)",
+         ctx do
+      carol = user_fixture(%{username: "carol_lg"})
+
+      {:ok, _group} =
+        Chat.create_conversation(Scope.for_user(ctx.alice), [ctx.bob.id, carol.id],
+          group: true,
+          title: "Trip"
+        )
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app")
+
+      assert html =~ "Leave group"
+      assert html =~ "Leave this group?"
+      # The DM (bob) still uses the reversible delete copy.
+      assert html =~ "Delete chat"
+    end
+
+    test "the new-conversation Start submit is disabled by default (#369/R190)", ctx do
+      _carol = user_fixture(%{username: "carol_190"})
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      render_click(view, "toggle_new", %{})
+      assert has_element?(view, ~s(#new-conv-form button[type="submit"][disabled]))
+    end
+
+    test "approving a knock walks the requester into the room with a flash (#369/R076)", ctx do
+      {:ok, channel} = Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "K76"})
+
+      {:ok, room} =
+        Eden.Channels.create_room(Scope.for_user(ctx.alice), channel.id, %{
+          "name" => "secret",
+          "visibility" => "private"
+        })
+
+      {:ok, _} = Eden.Channels.ensure_member(Scope.for_user(ctx.bob), channel.id)
+
+      conn = log_in_user(ctx.conn, ctx.bob)
+      # bob reaches the private room by link → the knock window (no room selected).
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      refute :sys.get_state(view.pid).socket.assigns.selected
+
+      # alice (admin) grants access → {:members_changed} → bob's session auto-enters the room.
+      {:ok, _} = Eden.Channels.add_room_members(Scope.for_user(ctx.alice), room.id, [ctx.bob.id])
+      html = render(view)
+
+      assert :sys.get_state(view.pid).socket.assigns.selected.id == room.id
+      assert html =~ "given access"
+    end
+  end
+
   describe "threads" do
     setup [:setup_conversation]
 
