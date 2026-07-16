@@ -86,6 +86,11 @@ defmodule EdenWeb.FileControllerTest do
       conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}")
       assert response(conn, 404)
       assert get_resp_header(conn, "cache-control") == []
+      # The 404 body is text/plain and carries no attachment disposition inherited from the
+      # success path — a browser must show the error, not download it under the original name
+      # (#374/R170).
+      assert get_resp_header(conn, "content-disposition") == []
+      assert ["text/plain" <> _] = get_resp_header(conn, "content-type")
     end
   end
 
@@ -139,6 +144,47 @@ defmodule EdenWeb.FileControllerTest do
 
       assert conn.status == 416
       assert get_resp_header(conn, "content-range") == ["bytes */#{byte_size(png)}"]
+      # A 416 is an error — never cached immutable for a year (#374/R167).
+      assert get_resp_header(conn, "cache-control") == []
+    end
+
+    test "a range unit is case-insensitive per RFC 9110 (#374/R169)", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment,
+      png: png
+    } do
+      conn =
+        conn
+        |> log_in_user(alice)
+        |> put_req_header("range", "Bytes=0-3")
+        |> get(~p"/files/#{attachment.id}")
+
+      assert conn.status == 206
+      assert response(conn, 206) == binary_part(png, 0, 4)
+      assert get_resp_header(conn, "content-range") == ["bytes 0-3/#{byte_size(png)}"]
+    end
+
+    test "inline media carries its filename so Save-as isn't the URL id (#374/R171)", %{
+      conn: conn,
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      path = image_path(@png_signature <> "img")
+
+      {:ok, message} =
+        Chat.create_attachment_message(scope(alice), conv.id, %{
+          path: path,
+          filename: "sunset.png"
+        })
+
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{hd(message.attachments).id}")
+      [disposition] = get_resp_header(conn, "content-disposition")
+
+      assert disposition =~ "inline"
+      assert disposition =~ ~s(filename="sunset.png")
+      assert disposition =~ "filename*=UTF-8''sunset.png"
     end
 
     test "serves a generic file as a download with its sanitized name", %{

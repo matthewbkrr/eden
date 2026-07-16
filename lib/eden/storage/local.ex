@@ -15,7 +15,7 @@ defmodule Eden.Storage.Local do
     dest = path(key)
 
     with :ok <- File.mkdir_p(Path.dirname(dest)) do
-      File.cp(source_path, dest)
+      atomic_write(dest, &File.cp(source_path, &1))
     end
   end
 
@@ -25,7 +25,32 @@ defmodule Eden.Storage.Local do
     dest = path(key)
 
     with :ok <- File.mkdir_p(Path.dirname(dest)) do
-      File.write(dest, binary)
+      atomic_write(dest, &File.write(&1, binary))
+    end
+  end
+
+  # Write to a sibling temp file, then atomically rename it into place (`File.rename` is atomic on
+  # one filesystem), so a crash mid-write can't leave a truncated blob under the FINAL key that
+  # `exists?` would report present and serving would hand out (#374/R160). Clean the temp on failure.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp atomic_write(dest, write_fun) do
+    tmp =
+      dest <> ".tmp-" <> (12 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false))
+
+    case write_fun.(tmp) do
+      :ok ->
+        case File.rename(tmp, dest) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            _ = File.rm(tmp)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, reason}
     end
   end
 

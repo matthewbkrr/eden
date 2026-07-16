@@ -58,6 +58,31 @@ defmodule Eden.Storage.S3 do
   end
 
   @impl true
+  def read_range(key, {first, last}) do
+    # `Range` is NOT part of the SignedHeaders (SigV4 signs only host/x-amz-date/
+    # x-amz-content-sha256), so S3/R2/MinIO accept it UNSIGNED on a GET and reply 206 with just
+    # that window — no full object in BEAM memory per seek (#374/R045). A 200 means the server
+    # ignored Range (returned the whole object); slice locally so callers always get the range.
+    case request(:get, key, "", [{"range", "bytes=#{first}-#{last}"}]) do
+      {:ok, %{status: 206, body: body}} ->
+        {:ok, body}
+
+      {:ok, %{status: 200, body: body}} ->
+        total = byte_size(body)
+
+        if first < total,
+          do: {:ok, binary_part(body, first, min(last, total - 1) - first + 1)},
+          else: {:ok, ""}
+
+      {:ok, %{status: status}} ->
+        {:error, {:http, status}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @impl true
   def delete(key) do
     # Idempotent: a missing object (404) is success, like the local adapter.
     case request(:delete, key, "") do
@@ -73,7 +98,7 @@ defmodule Eden.Storage.S3 do
   # Build the path-style URL, sign it (SigV4), and send via Req. The signed
   # `host` matches the URL's host (Req sets the Host header from the URL), and
   # x-amz-date / x-amz-content-sha256 are sent explicitly because they're signed.
-  defp request(method, key, body) do
+  defp request(method, key, body, extra_headers \\ []) do
     cfg = config()
     url = "#{cfg.endpoint}/#{cfg.bucket}/#{key}"
     uri = URI.parse(url)
@@ -101,11 +126,12 @@ defmodule Eden.Storage.S3 do
       [
         method: method,
         url: url,
-        headers: [
-          {"authorization", auth},
-          {"x-amz-date", amz_date},
-          {"x-amz-content-sha256", payload}
-        ],
+        headers:
+          [
+            {"authorization", auth},
+            {"x-amz-date", amz_date},
+            {"x-amz-content-sha256", payload}
+          ] ++ extra_headers,
         body: body,
         # raw: pin the response to the exact stored bytes (no decode/decompress).
         raw: true

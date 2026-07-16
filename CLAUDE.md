@@ -503,7 +503,13 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   against AWS S3 / R2 / MinIO / B2. It omits `local_path/1`, so the facade returns
   `:error` and file serving streams the bytes. Swap is one config line, env-driven
   in `config/runtime.exs` (`EDEN_S3_BUCKET` present → adapter becomes S3); the
-  default stays `Eden.Storage.Local` against `EDEN_UPLOADS_ROOT`.
+  default stays `Eden.Storage.Local` against `EDEN_UPLOADS_ROOT`. **S3/R2 serving is
+  range-aware** (#374): the behaviour has an optional `read_range/2` (S3 sends an
+  UNSIGNED `Range` on the GET — it's outside SigV4's SignedHeaders — so a `<video>`
+  seek pulls only that window, not the whole ≤50 MB object; the facade falls back to
+  read+slice), `FileController` resolves the range against the DB `byte_size` (no HEAD,
+  no full read) and error responses (404/416) shed the success-path headers. `Local`
+  writes atomically (temp + `rename`) so a crash can't leave a truncated blob.
 - ~~**Attachment blob cleanup on delete**~~ — **resolved** by message "delete for
   both": `delete_message_for_both/2` deletes the `storage_key` + `thumbnail_key`
   blobs (after the tombstone commits, and only if no forwarded copy still

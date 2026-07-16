@@ -72,4 +72,34 @@ defmodule Eden.Storage.S3Test do
   test "local_path is not implemented — the facade streams instead" do
     refute function_exported?(S3, :local_path, 1)
   end
+
+  test "read_range sends an UNSIGNED Range header and returns the 206 window (#374/R045)" do
+    test_pid = self()
+
+    Req.Test.stub(S3, fn conn ->
+      send(test_pid, {:range, Map.new(conn.req_headers)})
+
+      conn
+      |> Plug.Conn.put_resp_header("content-range", "bytes 0-3/100")
+      |> Plug.Conn.resp(206, "ABCD")
+    end)
+
+    assert {:ok, "ABCD"} = S3.read_range("videos/x.mp4", {0, 3})
+
+    assert_received {:range, headers}
+    assert headers["range"] == "bytes=0-3"
+    # Range must NOT be signed — SignedHeaders stays host;x-amz-content-sha256;x-amz-date, so
+    # S3/R2 accept the range on an otherwise-signed GET (that's what makes ranged reads possible).
+    assert headers["authorization"] =~ "SignedHeaders=host;x-amz-content-sha256;x-amz-date"
+  end
+
+  test "read_range slices locally when the server ignores Range and sends 200" do
+    Req.Test.stub(S3, fn conn -> Plug.Conn.resp(conn, 200, "0123456789") end)
+    assert {:ok, "234"} = S3.read_range("videos/x.mp4", {2, 4})
+  end
+
+  test "read_range surfaces a non-200/206 as an error" do
+    Req.Test.stub(S3, fn conn -> Plug.Conn.resp(conn, 404, "") end)
+    assert {:error, {:http, 404}} = S3.read_range("videos/missing.mp4", {0, 3})
+  end
 end
