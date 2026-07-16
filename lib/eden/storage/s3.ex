@@ -70,9 +70,12 @@ defmodule Eden.Storage.S3 do
       {:ok, %{status: 200, body: body}} ->
         total = byte_size(body)
 
+        # `first` past the real end (the object is smaller than the caller's DB byte_size expected) →
+        # the range is unsatisfiable; report it as such so the controller sends a 416, not a bogus
+        # 206 with an empty body (#403 review).
         if first < total,
           do: {:ok, binary_part(body, first, min(last, total - 1) - first + 1)},
-          else: {:ok, ""}
+          else: {:error, {:http, 416}}
 
       {:ok, %{status: status}} ->
         {:error, {:http, status}}

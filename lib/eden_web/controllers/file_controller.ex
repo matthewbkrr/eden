@@ -89,11 +89,12 @@ defmodule EdenWeb.FileController do
     end
   end
 
-  # A thumbnail (no stored size, and never seeked) → read it whole.
+  # A thumbnail has no stored size — read it whole (small, and its size is unknown up front), then
+  # honor Range from those bytes so the advertised `accept-ranges` isn't a lie (#403 review).
   # sobelow_skip ["XSS.SendResp"]
   defp send_remote(conn, key, nil) do
     case Storage.read(key) do
-      {:ok, bytes} -> send_resp(conn, 200, bytes)
+      {:ok, bytes} -> serve_bytes(conn, bytes)
       {:error, _} -> not_found(conn)
     end
   end
@@ -110,6 +111,11 @@ defmodule EdenWeb.FileController do
             |> put_resp_header("content-range", "bytes #{first}-#{last}/#{total}")
             |> send_resp(206, bytes)
 
+          # The stored object is smaller than the DB byte_size (it shrank after save) — the range is
+          # unsatisfiable against the real bytes; surface a proper 416, not a 404 (#403 review).
+          {:error, {:http, 416}} ->
+            conn |> put_resp_header("content-range", "bytes */#{total}") |> error_resp(416)
+
           {:error, _} ->
             not_found(conn)
         end
@@ -122,6 +128,25 @@ defmodule EdenWeb.FileController do
           {:ok, bytes} -> send_resp(conn, 200, bytes)
           {:error, _} -> not_found(conn)
         end
+    end
+  end
+
+  # Honor a Range against in-memory bytes (the remote whole-read path: thumbnails / unknown size).
+  # sobelow_skip ["XSS.SendResp"]
+  defp serve_bytes(conn, bytes) do
+    total = byte_size(bytes)
+
+    case parse_range(get_req_header(conn, "range"), total) do
+      {:ok, first, last} ->
+        conn
+        |> put_resp_header("content-range", "bytes #{first}-#{last}/#{total}")
+        |> send_resp(206, binary_part(bytes, first, last - first + 1))
+
+      :unsatisfiable ->
+        conn |> put_resp_header("content-range", "bytes */#{total}") |> error_resp(416)
+
+      :none ->
+        send_resp(conn, 200, bytes)
     end
   end
 

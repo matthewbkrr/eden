@@ -32,16 +32,32 @@ defmodule EdenWeb.FileControllerRemoteTest do
     @impl true
     def read_range(key, {first, last}) do
       with {:ok, bytes} <- read(key) do
-        {:ok, binary_part(bytes, first, min(last, byte_size(bytes) - 1) - first + 1)}
+        total = byte_size(bytes)
+
+        # Mirror S3: a range past the real end (object smaller than the DB byte_size) is 416.
+        if first < total,
+          do: {:ok, binary_part(bytes, first, min(last, total - 1) - first + 1)},
+          else: {:error, {:http, 416}}
       end
     end
 
     @impl true
     def exists?(key), do: Map.has_key?(map(), key)
+    # put/put_binary actually store, so create_attachment_message + generate_thumbnail seed Mem.
     @impl true
-    def put(_key, _path), do: :ok
+    def put(key, path) do
+      with {:ok, bytes} <- File.read(path) do
+        store(key, bytes)
+        :ok
+      end
+    end
+
     @impl true
-    def put_binary(_key, _bin), do: :ok
+    def put_binary(key, bin) do
+      store(key, bin)
+      :ok
+    end
+
     @impl true
     def delete(_key), do: :ok
   end
@@ -65,7 +81,8 @@ defmodule EdenWeb.FileControllerRemoteTest do
 
     {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
     att = hd(message.attachments)
-    # create_attachment_message's put is a Mem no-op — seed the bytes for serving.
+    # put already stored the original during create; pin the exact bytes so the range assertions
+    # aren't at the mercy of any create-time transform.
     Mem.store(att.storage_key, body)
 
     %{alice: alice, att: att, body: body}
@@ -118,5 +135,46 @@ defmodule EdenWeb.FileControllerRemoteTest do
     assert response(conn, 404)
     assert get_resp_header(conn, "cache-control") == []
     assert get_resp_header(conn, "content-disposition") == []
+  end
+
+  test "a remote THUMBNAIL (unknown size) still honors Range → 206, not a 200 (#403 review)",
+       ctx do
+    # A real image so the worker produces a thumbnail; its bytes land in Mem via put_binary.
+    {:ok, img} = Image.new(800, 600, color: [30, 140, 90])
+    {:ok, png} = Image.write(img, :memory, suffix: ".png")
+    path = Path.join(System.tmp_dir!(), "thumbsrc-#{System.unique_integer([:positive])}")
+    File.write!(path, png)
+    on_exit(fn -> File.rm(path) end)
+
+    peer = user_fixture(%{username: "thumb_peer"})
+    {:ok, conv} = Chat.create_conversation(scope(ctx.alice), [peer.id])
+    {:ok, message} = Chat.create_attachment_message(scope(ctx.alice), conv.id, %{path: path})
+    att = hd(message.attachments)
+    :ok = Chat.generate_thumbnail(att)
+
+    conn =
+      ctx.conn
+      |> log_in_user(ctx.alice)
+      |> put_req_header("range", "bytes=0-9")
+      |> get(~p"/files/#{att.id}/thumb")
+
+    assert conn.status == 206
+    assert byte_size(response(conn, 206)) == 10
+  end
+
+  test "an object that shrank below its DB byte_size yields a 416, not a 404 (#403 review)",
+       ctx do
+    # Overwrite the stored blob with FEWER bytes than the recorded byte_size, then request a range
+    # that's satisfiable against the DB size but not the real object.
+    Mem.store(ctx.att.storage_key, "short")
+
+    conn =
+      ctx.conn
+      |> log_in_user(ctx.alice)
+      |> put_req_header("range", "bytes=100-200")
+      |> get(~p"/files/#{ctx.att.id}")
+
+    assert conn.status == 416
+    assert get_resp_header(conn, "cache-control") == []
   end
 end
