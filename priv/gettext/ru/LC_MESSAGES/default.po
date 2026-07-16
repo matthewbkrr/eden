@@ -566,10 +566,46 @@ msgstr "Скопировать текст"
 msgid "Couldn't delete that message."
 msgstr "Не удалось удалить сообщение."
 
-#: lib/eden_web/live/chat_live.ex:12377
+#: lib/eden_web/live/chat_live.ex
 #, elixir-autogen, elixir-format
-msgid "Couldn't forward that message."
-msgstr "Не удалось переслать сообщение."
+msgid "Couldn't forward the message."
+msgid_plural "Couldn't forward the messages."
+msgstr[0] "Не удалось переслать сообщение."
+msgstr[1] "Не удалось переслать сообщения."
+msgstr[2] "Не удалось переслать сообщений."
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Couldn't forward %{count} message."
+msgid_plural "Couldn't forward %{count} messages."
+msgstr[0] "Не удалось переслать %{count} сообщение."
+msgstr[1] "Не удалось переслать %{count} сообщения."
+msgstr[2] "Не удалось переслать %{count} сообщений."
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Leave group"
+msgstr "Выйти из группы"
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Leave this group? You can't undo this."
+msgstr "Выйти из группы? Это действие необратимо."
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pick at least two people for a named group."
+msgstr "Для группы с названием выберите хотя бы двоих."
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Press Send to forward"
+msgstr "Нажмите «Отправить», чтобы переслать"
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "You've been given access to #%{room}."
+msgstr "Вам открыли доступ к #%{room}."
 
 #: lib/eden_web/live/chat_live.ex:9094
 #: lib/eden_web/live/chat_live.ex:9630

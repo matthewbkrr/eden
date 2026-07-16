@@ -565,9 +565,43 @@ msgstr ""
 msgid "Couldn't delete that message."
 msgstr ""
 
-#: lib/eden_web/live/chat_live.ex:12377
+#: lib/eden_web/live/chat_live.ex
 #, elixir-autogen, elixir-format
-msgid "Couldn't forward that message."
+msgid "Couldn't forward the message."
+msgid_plural "Couldn't forward the messages."
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Couldn't forward %{count} message."
+msgid_plural "Couldn't forward %{count} messages."
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Leave group"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Leave this group? You can't undo this."
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Pick at least two people for a named group."
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "Press Send to forward"
+msgstr ""
+
+#: lib/eden_web/live/chat_live.ex
+#, elixir-autogen, elixir-format
+msgid "You've been given access to #%{room}."
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:9094
