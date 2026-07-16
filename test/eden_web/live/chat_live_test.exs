@@ -2408,6 +2408,59 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#composer[data-layout="flat"]))
     end
 
+    test "a reply to a backgrounded tab's open thread isn't auto-read (#370/R055)", ctx do
+      {:ok, channel} = Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "T55"})
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      {:ok, _} = Eden.Channels.ensure_member(Scope.for_user(ctx.bob), channel.id)
+      :ok = Chat.join_room(room.id, ctx.bob.id)
+
+      scope_a = Scope.for_user(ctx.alice)
+      {:ok, root} = Chat.create_message(scope_a, room.id, %{"body" => "the root"})
+      # bob replies → alice (root author) follows with unread 1.
+      {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), root.id, %{"body" => "first"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+      # Open the thread panel → alice reads it (unread 0).
+      view |> element(".ed-thread-footer") |> render_click()
+      assert has_element?(view, ".ed-thread")
+      assert %{unread: 0} = Chat.thread_follow_state(scope_a, root.id)
+
+      # Background the tab, then a new reply arrives.
+      render_hook(view, "tab_hidden", %{})
+      {:ok, _} = Chat.create_reply(Scope.for_user(ctx.bob), root.id, %{"body" => "second"})
+      render(view)
+
+      # It must NOT be auto-read on the server while the tab is hidden (mirrors #206).
+      assert %{unread: 1} = Chat.thread_follow_state(scope_a, root.id)
+
+      # Returning to the tab catches the open thread up.
+      render_hook(view, "tab_visible", %{})
+      assert %{unread: 0} = Chat.thread_follow_state(scope_a, root.id)
+    end
+
+    test "deleting the last reply clears the thread facepile (#370/R177)", ctx do
+      {:ok, channel} =
+        Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "F177"})
+
+      {:ok, [room]} = Eden.Channels.list_rooms(Scope.for_user(ctx.alice), channel.id)
+      scope_a = Scope.for_user(ctx.alice)
+      {:ok, root} = Chat.create_message(scope_a, room.id, %{"body" => "root"})
+      {:ok, reply} = Chat.create_reply(scope_a, root.id, %{"body" => "only reply"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{room.id}")
+
+      facepile = fn -> :sys.get_state(view.pid).socket.assigns.thread_participants[root.id] end
+      refute facepile.() in [nil, []]
+
+      # Delete the only reply → {:thread_updated} → the facepile for this root clears (the old
+      # Map.merge left stale avatars behind for a thread that now has zero replies).
+      :ok = Chat.delete_message_for_both(scope_a, reply.id)
+      render(view)
+      assert facepile.() == []
+    end
+
     test "a room with no messages renders an empty-state (#154)", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Fresh"})

@@ -65,6 +65,14 @@ them, not speculatively. Use these words exactly; don't drift to synonyms.
   soft-delete tombstone with forward-safe blob cleanup.
 - **Forward (carry-and-drop)** — pick a message up onto the composer, drop it
   by sending; multi-select carries an ordered list.
+- **Thread unread** (`thread_memberships.unread_replies`, #57) — per-user,
+  incrementally maintained (`+1` on a reply to each follower, `-1` on delete);
+  the decrement is gated by the follower's subscription time (`inserted_at` +
+  `last_viewed_at`) so a pre-subscription reply is never mis-counted (#370). On
+  the open room, `{:thread_reply}` re-reads the authoritative count via
+  `thread_follow_state` (`sync_thread_unread`) — a single indexed SELECT per
+  reply, kept **by design**: the auto-followed root author has no local key, so a
+  purely client-side check can't cover them (#370/R054, accepted).
 
 ## Notifications (ADR-0001)
 
