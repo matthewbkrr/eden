@@ -12375,7 +12375,10 @@ defmodule EdenWeb.ChatLive do
     # Room flat layout: collapse consecutive same-author runs + facepiles.
     {messages, last_flat} = mark_compact(messages, conversation)
     # Merged file bubbles (TG-attachments): mark each row's position in its group run.
-    {messages, last_group} = mark_group_pos(messages)
+    {messages, _lg} = mark_group_pos(messages)
+
+    # Keep a still-uploading group's tail open so the reload doesn't split it from its #pending tail.
+    {messages, last_group} = reopen_inflight_tail(socket, messages)
 
     socket
     # Drop chat A's STAGED attachments before opening B — they belong to the
@@ -12467,7 +12470,8 @@ defmodule EdenWeb.ChatLive do
     case Chat.list_messages_around(scope, conversation.id, anchor_id) do
       {:ok, messages, has_more} ->
         {messages, last_flat} = mark_compact(messages, conversation)
-        {messages, last_group} = mark_group_pos(messages)
+        {messages, _lg} = mark_group_pos(messages)
+        {messages, last_group} = reopen_inflight_tail(socket, messages)
 
         socket
         |> assign(
@@ -12782,6 +12786,32 @@ defmodule EdenWeb.ChatLive do
   defp group_tail(messages) do
     m = List.last(messages)
     {m.sender_id, m.group_id, m, m.group_pos}
+  end
+
+  # On a full re-stream (chat switch / permalink jump), the static mark_group_pos CLOSES the last
+  # delivered member of a file group with :last (time + rounded-off bottom) — but if THIS session is
+  # still uploading that group, it actually continues into the optimistic #pending rows below.
+  # Closing it there splits the bubble ([delivered group · time][still-uploading group]) until the
+  # next live landing heals the seam; navigating away and back forces exactly this reload, so the
+  # split is what the user sees. Re-open the in-flight tail so it fuses across the reload, mirroring
+  # mark_group_new's in-flight handling. Returns {messages, last_group}.
+  defp reopen_inflight_tail(socket, messages) do
+    case List.last(messages) do
+      %{group_id: gid, group_pos: pos} = tail
+      when not is_nil(gid) and pos in [nil, :last] ->
+        if group_in_flight?(socket, gid) do
+          # A lone delivered member (nil) opens the group as :first; a closed run (:last, ≥2
+          # delivered) drops to :middle so it shows no time and keeps its squared bottom.
+          reopened = %{tail | group_pos: if(is_nil(pos), do: :first, else: :middle)}
+          messages = List.replace_at(messages, -1, reopened)
+          {messages, group_tail(messages)}
+        else
+          {messages, group_tail(messages)}
+        end
+
+      _ ->
+        {messages, group_tail(messages)}
+    end
   end
 
   # Live insert (DMs): continue or break the grouped-file run. While the group is STILL uploading on
@@ -13154,7 +13184,8 @@ defmodule EdenWeb.ChatLive do
   defp restream_marked(socket, scope, conversation) do
     {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
     {messages, last_flat} = mark_compact(messages, conversation)
-    {messages, last_group} = mark_group_pos(messages)
+    {messages, _lg} = mark_group_pos(messages)
+    {messages, last_group} = reopen_inflight_tail(socket, messages)
 
     socket
     |> assign(

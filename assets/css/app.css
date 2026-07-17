@@ -1271,6 +1271,24 @@ html {
     animation: ed-msg-in 0.2s var(--ed-ease);
     transform-origin: center bottom;
   }
+  /* Rows inside a merged file group (#144) rise in WITHOUT the scale: scale(0.96) shrinks each
+     bubble around its origin, so the flush seams briefly gap into white stripes before the group
+     "glues" on settle. translateY stays (the whole group is class-tagged in ONE observer tick, so
+     it rises synchronized and the seams never shift). Overrides only the name — duration/easing
+     ride the shorthand above. (:has — Firefox 121+ / all evergreen.) */
+  .ed-msg--enter:has(.ed-bubble--grp) {
+    animation-name: ed-msg-in-grp;
+  }
+  @keyframes ed-msg-in-grp {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
   /* Own-send optimistic (#351): appears in its FINAL box with only an opacity fade — NO
      translate/scale. The rise-in (ed-msg--enter) grows from the bottom, so on a slow link the
      real row swapping in MID-animation popped the layout up ~2px; a transform-free fade can't

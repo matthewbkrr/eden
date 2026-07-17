@@ -1158,6 +1158,59 @@ defmodule EdenWeb.ChatLiveTest do
       assert m1.group_id && m1.group_id == m2.group_id
     end
 
+    test "re-streaming during an in-flight send keeps the delivered file group OPEN (nav split)",
+         ctx do
+      # Switching chats mid-send (and back) re-runs select_conversation, whose static mark_group_pos
+      # would CLOSE the last delivered file with :last (time + rounded bottom) — splitting it from
+      # the still-uploading #pending tail below. reopen_inflight_tail must keep the tail open.
+      carol = user_fixture(%{username: "carol", display_name: "Carol"})
+      {:ok, other} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Start a 3-file send but deliver only 2 — f3 stays in-flight (send_queue.files_left > 0).
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qnav",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["f1", "f2", "f3"]
+      })
+
+      for {cid, name, body} <- [{"f1", "a.txt", "hi"}, {"f2", "b.txt", "yo"}] do
+        render_hook(view, "seq_item", %{
+          "queue_id" => "qnav",
+          "client_id" => cid,
+          "kind" => "file",
+          "album_cid" => nil
+        })
+
+        view
+        |> file_input("#composer", :attachment_seq, [
+          %{name: name, content: body, type: "text/plain"}
+        ])
+        |> render_upload(name, 100)
+      end
+
+      # Precondition: the send is genuinely still in flight.
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert Enum.any?(assigns.send_queues, &(&1.files_left > 0)),
+             "f3 undelivered → the group's queue must still be in flight"
+
+      # Navigate away and back — the round-trip forces the full re-stream.
+      render_patch(view, ~p"/app/c/#{other.id}")
+      html = render_patch(view, ~p"/app/c/#{ctx.conversation.id}")
+
+      # The two delivered files stay ONE open group [:first, :middle]: no closed :last tail (which
+      # would show its own time and round its bottom off from the #pending continuation).
+      assert html =~ "ed-bubble--grp-first"
+      assert html =~ "ed-bubble--grp-mid"
+      refute html =~ "ed-bubble--grp-last"
+    end
+
     test "sequential album: photos accumulate into ONE album message", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
