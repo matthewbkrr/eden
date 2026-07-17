@@ -1291,6 +1291,15 @@ html {
   #pending-messages > .ed-msg {
     margin-top: 0.5rem;
   }
+  /* ...but a grouped continuation row (a batch of files sent as one bubble, #144) must pull FLUSH
+     against the row above, exactly like the real stream does. In #messages that's `.ed-msg--grp-cont
+     { margin-top: -0.5rem }` cancelling the flex `gap`; here the id-scoped rule above (higher
+     specificity) was overriding it, so optimistic file bubbles rendered SEPARATED until the real rows
+     swapped in and fused. Zero the top margin (there's no gap to cancel) so grouped optimistic rows
+     load already-fused, matching Telegram. */
+  #pending-messages > .ed-msg--grp-cont {
+    margin-top: 0;
+  }
 
   /* "Not delivered" marker (#142): a tappable red ●! in the message's status slot
      that opens a resend/delete menu (replaced the #68 border + ✕ retry node). */
