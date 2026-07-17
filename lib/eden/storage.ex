@@ -19,7 +19,15 @@ defmodule Eden.Storage do
   object into memory. Remote adapters (e.g. S3) return `:error`.
   """
   @callback local_path(key) :: {:ok, Path.t()} | :error
-  @optional_callbacks local_path: 1
+
+  @doc """
+  Optional: read just the inclusive byte range `first..last` of `key`, so a remote
+  adapter can pull only the requested window (a `<video>` seek) instead of the whole
+  object. The facade falls back to `read/1` + slice for adapters that don't implement it.
+  """
+  @callback read_range(key, {first :: non_neg_integer, last :: non_neg_integer}) ::
+              {:ok, binary} | {:error, term}
+  @optional_callbacks local_path: 1, read_range: 2
 
   @doc "Store the file at `source_path` under `key`."
   def put(key, source_path), do: adapter().put(key, source_path)
@@ -31,7 +39,37 @@ defmodule Eden.Storage do
   def local_path(key) do
     adapter = adapter()
 
-    if function_exported?(adapter, :local_path, 1), do: adapter.local_path(key), else: :error
+    if loaded_exported?(adapter, :local_path, 1), do: adapter.local_path(key), else: :error
+  end
+
+  @doc """
+  Read the inclusive byte range `first..last` of `key`. Uses the adapter's `read_range/2`
+  when implemented (a single ranged GET for S3); otherwise reads the whole object and slices
+  (correctness over efficiency — the disk-backed adapter serves ranges via sendfile anyway).
+  """
+  def read_range(key, {first, last}) do
+    adapter = adapter()
+
+    if loaded_exported?(adapter, :read_range, 2) do
+      adapter.read_range(key, {first, last})
+    else
+      with {:ok, bytes} <- adapter.read(key), do: slice(bytes, first, last)
+    end
+  end
+
+  defp slice(bytes, first, last) do
+    total = byte_size(bytes)
+
+    if first < total,
+      do: {:ok, binary_part(bytes, first, min(last, total - 1) - first + 1)},
+      else: {:error, :range}
+  end
+
+  # `function_exported?/3` returns false for a not-yet-loaded module, so a first call after a
+  # restart (before any `put`) could wrongly see `false` and skip the disk fast-path (#374/R159).
+  # `Code.ensure_loaded?/1` forces the BEAM file in first (a no-op in an embedded release).
+  defp loaded_exported?(module, fun, arity) do
+    Code.ensure_loaded?(module) and function_exported?(module, fun, arity)
   end
 
   @doc "Read the object's bytes."
