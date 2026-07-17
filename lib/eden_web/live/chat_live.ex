@@ -12796,22 +12796,25 @@ defmodule EdenWeb.ChatLive do
   # split is what the user sees. Re-open the in-flight tail so it fuses across the reload, mirroring
   # mark_group_new's in-flight handling. Returns {messages, last_group}.
   defp reopen_inflight_tail(socket, messages) do
-    case List.last(messages) do
-      %{group_id: gid, group_pos: pos} = tail
-      when not is_nil(gid) and pos in [nil, :last] ->
-        if group_in_flight?(socket, gid) do
-          # A lone delivered member (nil) opens the group as :first; a closed run (:last, ≥2
-          # delivered) drops to :middle so it shows no time and keeps its squared bottom.
-          reopened = %{tail | group_pos: if(is_nil(pos), do: :first, else: :middle)}
-          messages = List.replace_at(messages, -1, reopened)
-          {messages, group_tail(messages)}
-        else
-          {messages, group_tail(messages)}
-        end
+    messages =
+      case List.last(messages) do
+        %{group_id: gid, group_pos: pos} = tail
+        when not is_nil(gid) and pos in [nil, :last] ->
+          if group_in_flight?(socket, gid) do
+            # A lone delivered member (nil) opens the group as :first; a closed run (:last, ≥2
+            # delivered) drops to :middle so it shows no time and keeps its squared bottom — either
+            # way the tail stays open to fuse with the still-uploading #pending rows.
+            reopened = %{tail | group_pos: if(is_nil(pos), do: :first, else: :middle)}
+            List.replace_at(messages, -1, reopened)
+          else
+            messages
+          end
 
-      _ ->
-        {messages, group_tail(messages)}
-    end
+        _ ->
+          messages
+      end
+
+    {messages, group_tail(messages)}
   end
 
   # Live insert (DMs): continue or break the grouped-file run. While the group is STILL uploading on

@@ -1194,11 +1194,11 @@ defmodule EdenWeb.ChatLiveTest do
         |> render_upload(name, 100)
       end
 
-      # Precondition: the send is genuinely still in flight.
-      assigns = :sys.get_state(view.pid).socket.assigns
-
-      assert Enum.any?(assigns.send_queues, &(&1.files_left > 0)),
-             "f3 undelivered → the group's queue must still be in flight"
+      # Precondition (via the public context, not process internals): exactly f1+f2 landed — f3 is
+      # still to come, so the group's send queue is genuinely in flight.
+      {:ok, delivered} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      landed = for m <- delivered, m.client_id in ["f1", "f2", "f3"], do: m.client_id
+      assert Enum.sort(landed) == ["f1", "f2"], "only f1+f2 delivered; f3 stays in flight"
 
       # Navigate away and back — the round-trip forces the full re-stream.
       render_patch(view, ~p"/app/c/#{other.id}")
