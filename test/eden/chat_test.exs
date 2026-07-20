@@ -1190,6 +1190,25 @@ defmodule Eden.ChatTest do
       refute Enum.any?(messages, &(&1.id == fwd.id))
     end
 
+    test "forwarding INTO a thread runs follow-tracking, like create_reply (#371/R209)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      {:ok, source} = Chat.create_message(scope(alice), conv.id, %{"body" => "carry"})
+
+      # bob (NOT the root author) forwards a message into the thread. The forward path
+      # (insert_forward_reply) is distinct from create_reply but converges in deliver_reply →
+      # track_reply, so the same follow effects must fire.
+      assert {:ok, _fwd} = Chat.forward_message(scope(bob), source.id, conv.id, root.id)
+
+      # The forwarder auto-follows and has, by definition, seen their own reply.
+      assert %{following: true, unread: 0} = Chat.thread_follow_state(scope(bob), root.id)
+      # The root author is pulled in on the first reply and owes one unread.
+      assert %{following: true, unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
     test "forwarding INTO a room (no root) lands top-level in that room", %{
       alice: alice,
       bob: bob,
@@ -1522,6 +1541,62 @@ defmodule Eden.ChatTest do
       # bob deletes one reply for everyone → it stops counting against alice.
       :ok = Chat.delete_message_for_both(scope(bob), r1.id)
       assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "deleting an ALREADY-READ reply doesn't decrement a viewer who read past it (#371/R106)",
+         %{alice: alice, bob: bob, root: root} do
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+
+      # alice opens the thread AFTER r1 → last_viewed_at post-dates r1, unread → 0. A distinct
+      # second so the gate comparison (last_viewed_at < r1.inserted_at) is unambiguous
+      # (utc_datetime is second-precision).
+      Process.sleep(1100)
+      assert :ok = Chat.mark_thread_read(scope(alice), root.id)
+
+      # A later reply she hasn't seen → unread → 1.
+      {:ok, _r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+
+      # Deleting the OLD, already-read r1 must NOT touch her count — she zeroed it out when she read
+      # past it (the `last_viewed_at < reply_at` half of the decrement gate). Mirror of the nil-branch
+      # test above.
+      :ok = Chat.delete_message_for_both(scope(bob), r1.id)
+      assert %{unread: 1} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
+    test "mark_thread_read broadcasts {:thread_read} for multi-tab sync (#371/R105)", %{
+      alice: alice,
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      # The web layer zeroes a thread's badge across the user's other tabs off this exact tuple on
+      # the user topic (the same topic subscribe_user/1 joins).
+      Chat.subscribe_user(scope(alice))
+      {:ok, _} = Chat.create_reply(scope(bob), root.id, %{"body" => "ping"})
+
+      assert :ok = Chat.mark_thread_read(scope(alice), root.id)
+
+      conv_id = conv.id
+      root_id = root.id
+      assert_receive {:thread_read, ^conv_id, ^root_id}
+    end
+
+    test "deleting a reply broadcasts {:thread_updated} with the recomputed root (#371/R105)", %{
+      bob: bob,
+      conv: conv,
+      root: root
+    } do
+      # The web layer re-settles the footer count / Threads list off this tuple on the conversation
+      # topic after a reply is removed.
+      Chat.subscribe(conv.id)
+      {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+      {:ok, _r2} = Chat.create_reply(scope(bob), root.id, %{"body" => "two"})
+
+      :ok = Chat.delete_message_for_both(scope(bob), r1.id)
+
+      root_id = root.id
+      assert_receive {:thread_updated, %{id: ^root_id, reply_count: 1}}
     end
 
     test "deleting a PRE-subscription reply doesn't undercount a manual follower (#370/R032)", %{
