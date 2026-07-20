@@ -217,6 +217,10 @@ defmodule EdenWeb.ChatLive do
         last_group: nil,
         # Per-id group position, restored on a re-streamed row so the merged bubble keeps shape.
         group_pos: %{},
+        # Group ids whose tail is held OPEN because a failed upload card is parked in #pending for
+        # them — so the failed card fuses flush below the delivered rows instead of dangling under a
+        # closed (timed) bubble. Set by "group_hold", cleared by "group_release".
+        held_groups: MapSet.new(),
         # The newest run tracker for the THREAD panel, mirroring last_flat for the
         # main stream — lets a live thread reply continue/break the compact run (#105).
         thread_last_flat: nil,
@@ -777,6 +781,24 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("seq_drop", _params, socket), do: {:noreply, socket}
+
+  # A grouped file's upload FAILED — its optimistic card is now a visible failed node parked in
+  # #pending. Hold the group's tail OPEN so the failed card fuses flush below the delivered rows,
+  # instead of dangling under a closed (timed, rounded-off) bubble. Idempotent (a MapSet); released
+  # by "group_release" once the last failed sibling is resent or deleted.
+  def handle_event("group_hold", %{"group_id" => gid}, socket) do
+    {:noreply, hold_group(socket, sanitize_group_id(gid), &MapSet.put/2)}
+  end
+
+  def handle_event("group_hold", _params, socket), do: {:noreply, socket}
+
+  # The last failed sibling of a group was resent or deleted — stop holding, so the group's tail
+  # closes again (its last delivered row regains its time + rounded bottom).
+  def handle_event("group_release", %{"group_id" => gid}, socket) do
+    {:noreply, hold_group(socket, sanitize_group_id(gid), &MapSet.delete/2)}
+  end
+
+  def handle_event("group_release", _params, socket), do: {:noreply, socket}
 
   # The watchdog hook fires this when an upload stalled (30s no progress): the link died
   # after the optimistic node + media_sending, so "send" never fired and the entries are
@@ -5793,6 +5815,9 @@ defmodule EdenWeb.ChatLive do
             this.input = this.el.querySelector('input[name="message[body]"]')
             this.pending = document.getElementById("pending-messages")
             this.scroller = document.getElementById("message-scroll")
+            // Group ids we've asked the server to hold open (a failed card is parked in #pending for
+            // them) — so maybeReleaseGroup only releases a group we actually held, not every send.
+            this.heldGroups = new Set()
             // Expose this instance so the thread composer (.ThreadSendQueue, a separate colocated
             // hook that can't share these methods) can route a thread album/file send through the
             // SAME sequential feeder (phase F trim): one item at a time (no batch stall), each
@@ -5803,7 +5828,13 @@ defmodule EdenWeb.ChatLive do
             this.resumeSends()
             // Re-fuse a merged file group's optimistic rows when a twin swaps out (fired by the
             // riser after it removes a completed twin), so the in-flight bubble stays one bubble.
-            this._onRegroup = (e) => this.reGroupOptimistic(e.detail && e.detail.groupId)
+            this._onRegroup = (e) => {
+              const gid = e.detail && e.detail.groupId
+              this.reGroupOptimistic(gid)
+              // A twin swapped out — if that emptied a HELD group's #pending nodes (its failed card
+              // was resent and just landed), let the server close the tail again.
+              this.maybeReleaseGroup(gid)
+            }
             window.addEventListener("ed:regroup", this._onRegroup)
             this.el.addEventListener("submit", (e) => this.onSubmit(e))
             // "Send as file" (#122): a type="button" so it's never the implicit Enter
@@ -7120,10 +7151,33 @@ defmodule EdenWeb.ChatLive do
               e.preventDefault(); e.stopPropagation()
               // The entry was already cancelled when the stall fired (media_send_reset), so
               // just drop the failed card — no cancel_upload (it would raise on the gone ref).
-              card.closest(".ed-msg, .ed-flat")?.remove()
+              const node = card.closest(".ed-msg, .ed-flat")
+              const gid = node?.dataset.groupId
+              node?.remove()
+              // Deleting the last failed sibling re-fuses (nothing left) + releases the server hold
+              // so the delivered group's tail closes again.
+              if (gid) { this.reGroupOptimistic(gid); this.maybeReleaseGroup(gid) }
             })
             actions.appendChild(del)
             card.querySelector(".ed-file__meta")?.appendChild(actions)
+            // The failed card is a merged-group member: it's now the group's parked tail. Re-fuse the
+            // remaining #pending nodes and hold the delivered group's tail OPEN on the server so it
+            // doesn't close (with a time) above this dangling card.
+            const gid = card.closest(".ed-msg, .ed-flat")?.dataset.groupId
+            if (gid && !this.heldGroups.has(gid)) {
+              this.heldGroups.add(gid)
+              this.reGroupOptimistic(gid)
+              this.pushEvent("group_hold", { group_id: gid })
+            }
+          },
+          // Release the server-side seam hold once a held group has no more #pending nodes (its
+          // failed card was resent — and just landed — or deleted): its real tail can close again.
+          maybeReleaseGroup(gid) {
+            if (!gid || !this.heldGroups.has(gid)) return
+            if (!this.pending?.querySelector(`.ed-msg[data-group-id="${gid}"]`)) {
+              this.heldGroups.delete(gid)
+              this.pushEvent("group_release", { group_id: gid })
+            }
           },
           // Re-send a failed file: keep the card in place as the in-flight indicator (restore its
           // sending look via markRetrying), give it a FRESH client_id so the real retry message
@@ -12800,7 +12854,7 @@ defmodule EdenWeb.ChatLive do
       case List.last(messages) do
         %{group_id: gid, group_pos: pos} = tail
         when not is_nil(gid) and pos in [nil, :last] ->
-          if group_in_flight?(socket, gid) do
+          if group_open?(socket, gid) do
             # A lone delivered member (nil) opens the group as :first; a closed run (:last, ≥2
             # delivered) drops to :middle so it shows no time and keeps its squared bottom — either
             # way the tail stays open to fuse with the still-uploading #pending rows.
@@ -12824,21 +12878,38 @@ defmodule EdenWeb.ChatLive do
   # bubble. A recipient (no send queue) sees the ordinary progressive merge. Mirrors the flat
   # compact seam. Returns {message_with_pos, socket} and records the new tail + group_pos map.
   defp mark_group_new(socket, message) do
-    in_flight? = not is_nil(message.group_id) and group_in_flight?(socket, message.group_id)
+    open? = group_open?(socket, message.group_id)
 
     case socket.assigns.last_group do
       {sid, gid, prev, prev_pos}
       when sid == message.sender_id and not is_nil(message.group_id) and gid == message.group_id ->
         # Continuation: this row is :middle while more are coming, else :last (the tail).
-        message = %{message | group_pos: if(in_flight?, do: :middle, else: :last)}
+        message = %{message | group_pos: if(open?, do: :middle, else: :last)}
         {message, socket |> demote_prev(prev, prev_pos) |> track_group(message)}
 
       _ ->
-        # First row of a group. In-flight → :first (opens the bubble the #pending tail continues);
+        # First row of a group. Open → :first (opens the bubble the #pending tail continues);
         # else a solo/ungrouped row (nil).
-        message = %{message | group_pos: if(in_flight?, do: :first, else: nil)}
+        message = %{message | group_pos: if(open?, do: :first, else: nil)}
         {message, track_group(socket, message)}
     end
+  end
+
+  # A file group's tail stays OPEN (fuses with the #pending rows below) while it's still uploading
+  # on this session OR while a failed upload card is held in #pending for it — both sender-only
+  # signals a recipient never has (they see the ordinary progressive merge).
+  defp group_open?(socket, gid) do
+    not is_nil(gid) and
+      (group_in_flight?(socket, gid) or MapSet.member?(socket.assigns.held_groups, gid))
+  end
+
+  # Add/remove a group id to/from the held-open set (op is MapSet.put/2 or MapSet.delete/2), then
+  # reshape it so its delivered tail opens/closes to match. Shared by the group_hold/release events.
+  defp hold_group(socket, nil, _op), do: socket
+
+  defp hold_group(socket, gid, op) do
+    socket = update(socket, :held_groups, &op.(&1, gid))
+    if conv = socket.assigns.selected, do: reshape_group(socket, conv.id, gid), else: socket
   end
 
   # Is this file group still uploading on this session — does a live send queue for it have more
@@ -12891,7 +12962,10 @@ defmodule EdenWeb.ChatLive do
 
   defp reshape_group(socket, conversation_id, group_id) do
     rows = Chat.list_group_messages(socket.assigns.current_scope, conversation_id, group_id)
-    {marked, tail} = mark_group_pos(rows)
+    {marked, _tail} = mark_group_pos(rows)
+    # Keep the tail open while the group is in flight or holds a failed card (else the delivered
+    # rows would close with a time above the still-parked #pending failed card).
+    {marked, tail} = reopen_inflight_tail(socket, marked)
 
     socket =
       Enum.reduce(marked, socket, fn m, s ->
