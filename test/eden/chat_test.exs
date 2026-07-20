@@ -1547,10 +1547,10 @@ defmodule Eden.ChatTest do
          %{alice: alice, bob: bob, root: root} do
       {:ok, r1} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
 
-      # alice opens the thread AFTER r1 → last_viewed_at post-dates r1, unread → 0. A distinct
-      # second so the gate comparison (last_viewed_at < r1.inserted_at) is unambiguous
-      # (utc_datetime is second-precision).
-      Process.sleep(1100)
+      # alice opens the thread AFTER r1 → last_viewed_at = now() >= r1.inserted_at, unread → 0. No
+      # sleep needed despite second-precision utc_datetime: the decrement gate is a STRICT
+      # `last_viewed_at < r1.inserted_at`, so even an equal (same-second) last_viewed_at correctly
+      # does NOT re-count the already-read r1.
       assert :ok = Chat.mark_thread_read(scope(alice), root.id)
 
       # A later reply she hasn't seen → unread → 1.
