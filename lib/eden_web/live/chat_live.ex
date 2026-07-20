@@ -5976,6 +5976,20 @@ defmodule EdenWeb.ChatLive do
                 const node = this.pending.querySelector(`[data-client-id="${it.albumCid || it.clientId}"]`)
                 this.armSeqStall(node && node.closest(".ed-msg, .ed-flat"))
               }
+              // The server re-mounted on reconnect (fresh process → held_groups reset), but a failed
+              // card may still be parked in #pending. Re-establish each group's seam hold so the
+              // fused bubble doesn't spring open (its tail closing above the dangling card) after a
+              // reconnect. Re-derived from the DOM, so heldGroups can't drift out of sync either.
+              const reheld = new Set()
+              for (const row of this.pending.children) {
+                const gid = row.dataset.groupId
+                if (gid && row.querySelector(".ed-file--failed, .ed-msg-failed")) reheld.add(gid)
+              }
+              reheld.forEach((gid) => {
+                this.heldGroups.add(gid)
+                this.reGroupOptimistic(gid)
+                this.pushEvent("group_hold", { group_id: gid })
+              })
             }
           },
           updated() {
@@ -7174,7 +7188,10 @@ defmodule EdenWeb.ChatLive do
           // failed card was resent — and just landed — or deleted): its real tail can close again.
           maybeReleaseGroup(gid) {
             if (!gid || !this.heldGroups.has(gid)) return
-            if (!this.pending?.querySelector(`.ed-msg[data-group-id="${gid}"]`)) {
+            // Match how the hold/delete paths resolve a node — .ed-msg (bubbles) OR .ed-flat (rooms)
+            // — so a still-parked card is never missed and the group released early.
+            const parked = `.ed-msg[data-group-id="${gid}"], .ed-flat[data-group-id="${gid}"]`
+            if (!this.pending?.querySelector(parked)) {
               this.heldGroups.delete(gid)
               this.pushEvent("group_release", { group_id: gid })
             }
