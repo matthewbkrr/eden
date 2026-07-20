@@ -1211,6 +1211,52 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ "ed-bubble--grp-last"
     end
 
+    test "a held group (failed card parked) keeps its tail open; release closes it", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # Deliver a full 2-file group → it closes ([:first, :last], time on the last).
+      render_hook(view, "queue_start", %{
+        "queue_id" => "qh",
+        "caption" => "",
+        "caption_id" => nil,
+        "as_file" => false,
+        "albums" => [],
+        "file_cids" => ["h1", "h2"]
+      })
+
+      for {cid, name} <- [{"h1", "a.txt"}, {"h2", "b.txt"}] do
+        render_hook(view, "seq_item", %{
+          "queue_id" => "qh",
+          "client_id" => cid,
+          "kind" => "file",
+          "album_cid" => nil
+        })
+
+        view
+        |> file_input("#composer", :attachment_seq, [
+          %{name: name, content: "x", type: "text/plain"}
+        ])
+        |> render_upload(name, 100)
+      end
+
+      {:ok, msgs} = Chat.list_messages(Scope.for_user(ctx.alice), ctx.conversation.id)
+      gid = Enum.find_value(msgs, & &1.group_id)
+      assert gid, "a 2-file send shares a group id"
+      assert render(view) =~ "ed-bubble--grp-last", "the completed group closes with a :last tail"
+
+      # A failed upload card is parked in #pending for this group → hold: the delivered tail opens
+      # so the card fuses flush below it (no closed :last with a time above a dangling card).
+      render_hook(view, "group_hold", %{"group_id" => gid})
+      held = render(view)
+      refute held =~ "ed-bubble--grp-last", "held group keeps its tail open"
+      assert held =~ "ed-bubble--grp-mid"
+
+      # The card was resent (and landed) or deleted → release closes the tail again.
+      render_hook(view, "group_release", %{"group_id" => gid})
+      assert render(view) =~ "ed-bubble--grp-last", "released group closes its tail"
+    end
+
     test "sequential album: photos accumulate into ONE album message", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
