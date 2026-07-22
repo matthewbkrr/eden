@@ -30,10 +30,16 @@ defmodule EdenWeb.LoginLive do
           phx-update="ignore"
           class="space-y-4"
         >
+          <%!-- autocapitalize/autocorrect off: usernames are lowercase @tags, and mobile
+                keyboards (#417 — iOS WebView) otherwise capitalize/"fix" the first typed
+                character into a failed login. --%>
           <.ed_field
             field={@form[:username]}
             label={gettext("Username")}
             autocomplete="username"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
             required
             autofocus
           />

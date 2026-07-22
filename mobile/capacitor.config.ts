@@ -30,6 +30,15 @@ const config: CapacitorConfig = {
     url: server.url,
     cleartext: server.cleartext,
   },
+  plugins: {
+    Keyboard: {
+      // Shrink the WKWebView frame when the keyboard opens (#417): the page
+      // re-lays out (h-screen tracks the shrunken viewport), so the chat header
+      // stays put and the composer rides above the keyboard — instead of
+      // WebKit panning the whole page up under the status bar.
+      resize: 'native',
+    },
+  },
 };
 
 export default config;

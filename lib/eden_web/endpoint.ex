@@ -4,11 +4,20 @@ defmodule EdenWeb.Endpoint do
   # The session will be stored in the cookie and signed,
   # this means its contents can be read but not tampered with.
   # Set :encryption_salt if you would also like to encrypt it.
+  #
+  # max_age matches the server-side session-token validity (UserToken
+  # @session_validity_in_days, 60 days): without it the cookie is browser-
+  # session-scoped, and the mobile WebViews (#417 — Android CookieManager on
+  # process kill) drop it between app launches, logging the person out on every
+  # restart. A persistent cookie is messenger parity (Telegram/WhatsApp Web);
+  # revocation stays fully server-side — "log out everywhere", password change,
+  # deactivation and admin resets kill the TOKEN, so a lingering cookie is inert.
   @session_options [
     store: :cookie,
     key: "_eden_key",
     signing_salt: "WX07GeEl",
-    same_site: "Lax"
+    same_site: "Lax",
+    max_age: 60 * 24 * 60 * 60
   ]
 
   # max_frame_size must fit a whole upload chunk in ONE WebSocket frame — LiveView pushes each chunk as
