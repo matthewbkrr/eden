@@ -21,7 +21,7 @@ defmodule Eden.DeletedUserScrubWorker do
   """
   use Oban.Worker, queue: :default, max_attempts: 5
 
-  alias Eden.{Channels, Chat}
+  alias Eden.{Channels, Chat, Notifications}
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"user_id" => user_id}}) when is_integer(user_id) do
@@ -30,6 +30,8 @@ defmodule Eden.DeletedUserScrubWorker do
     # delete_orphans: true — deletion is irreversible, so a channel left with no usable member
     # is permanently ownerless and should go (the deactivate path keeps it, #358 review).
     Channels.reassign_orphaned_ownerships(user_id, delete_orphans: true)
+    # Push-device hygiene (#418): a deleted account's tokens must not linger.
+    Notifications.delete_user_targets(user_id)
     :ok
   end
 end

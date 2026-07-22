@@ -161,3 +161,46 @@ if config_env() == :prod do
   # endpoint trusts Caddy's X-Forwarded-Proto so the scheme (→ Secure cookie)
   # stays correct.
 end
+
+# ── Push transports (#418, ADR-0001) ─────────────────────────────────────────
+# Each adapter turns on ONLY when its env keys are present — without them the
+# adapter list stays [Web] and behavior is byte-identical (the EDEN_S3_BUCKET
+# pattern). Unlike storage this lives OUTSIDE the prod-only block: the #419
+# device work needs a dev server that can really deliver FCM to the emulator.
+# :test stays out so a stray env var can't flip adapters under the suite.
+# The present-but-empty guard mirrors #85 (compose passes empty strings).
+if config_env() != :test do
+  apns_adapters =
+    if System.get_env("EDEN_APNS_KEY_P8") not in [nil, ""] do
+      config :eden, Eden.Notifications.APNs,
+        key_p8: System.fetch_env!("EDEN_APNS_KEY_P8") |> Base.decode64!(),
+        key_id: System.fetch_env!("EDEN_APNS_KEY_ID"),
+        team_id: System.fetch_env!("EDEN_APNS_TEAM_ID"),
+        # The app bundle id (ru.ihi.chat) — APNs routes on it via apns-topic.
+        topic: System.fetch_env!("EDEN_APNS_TOPIC"),
+        env: if(System.get_env("EDEN_APNS_ENV") == "sandbox", do: :sandbox, else: :prod)
+
+      [Eden.Notifications.APNs]
+    else
+      []
+    end
+
+  fcm_adapters =
+    if System.get_env("EDEN_FCM_SERVICE_ACCOUNT_JSON") not in [nil, ""] do
+      account =
+        System.fetch_env!("EDEN_FCM_SERVICE_ACCOUNT_JSON")
+        |> Base.decode64!()
+        |> Jason.decode!()
+
+      config :eden, Eden.Notifications.FCM, service_account: account
+
+      [Eden.Notifications.FCM]
+    else
+      []
+    end
+
+  if apns_adapters != [] or fcm_adapters != [] do
+    config :eden, Eden.Notifications,
+      adapters: [Eden.Notifications.Web] ++ apns_adapters ++ fcm_adapters
+  end
+end

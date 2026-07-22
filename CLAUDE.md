@@ -371,9 +371,21 @@ design — built incrementally as features land.)
   `<.notifier>` host in **every** tab (no reload). **Reactions deliberately do NOT
   notify** (#363/R144 — a passive in-view `{:reaction_changed}` signal only; a
   `kind: "reaction"` opt-out is a future product call). The payload shape (the delivery
-  **contract**) is documented once in the `Eden.Notifications` moduledoc. Planned push
-  transports (native desktop app / APNs / FCM / RuStore-VK) and the
-  `notification_targets` device table are deferred to later ADR-0001 tickets — new
+  **contract**) is documented once in the `Eden.Notifications` moduledoc.
+  **Mobile push transports** (#418, epic #415): `Eden.Notifications.APNs` (HTTP/2 via the
+  `Eden.PushFinch` pool — APNs requires h2; provider-token JWT ES256 hand-rolled, no SDK,
+  the SigV4 precedent) and `Eden.Notifications.FCM` (HTTP v1, service-account OAuth RS256)
+  — each enabled ONLY by its env keys in `config/runtime.exs` (the `EDEN_S3_BUCKET`
+  pattern; without them the adapter list stays `[Web]`). Their `deliver/2` only enqueues
+  `Eden.Notifications.PushWorker` (Oban queue `:push`) — `deliver/2` runs inline in the
+  send path, so the HTTP to Apple/Google never happens there. Devices live in
+  `notification_targets` (`kind apns|fcm|rustore|vk` CHECK + unique `(user_id, kind,
+  token)`), registered via `POST /devices` over the **cookie session** (no bearer — the
+  epic's design); dead tokens (APNs 410 / FCM 404) are pruned on the provider's verdict;
+  deactivation and the erasure worker (#303) reap a user's targets. Push text is rendered
+  in `render_push/1` (web-banner parity, **RU-fixed v1** — hardcoded, not Gettext: locale
+  is session-only and the web Gettext backend would cross the web↔context boundary).
+  Remaining ADR-0001 transports (native desktop app, RuStore/VK fallback #421) are new
   adapter modules on this same seam, no caller change.
 
 ## Commands

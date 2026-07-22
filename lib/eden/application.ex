@@ -18,6 +18,15 @@ defmodule Eden.Application do
       # Owns the login/invite throttle ETS table (#236); must be up before the endpoint.
       Eden.RateLimit,
       EdenWeb.Presence,
+      # HTTP/2 pools for the APNs push transport (#418) — APNs requires h2 and
+      # Req's default Finch pool speaks h1. Always in the tree: connections open
+      # lazily, so without push keys this costs nothing.
+      {Finch,
+       name: Eden.PushFinch,
+       pools: %{
+         "https://api.push.apple.com" => [protocols: [:http2]],
+         "https://api.sandbox.push.apple.com" => [protocols: [:http2]]
+       }},
       {Oban, Application.fetch_env!(:eden, Oban)},
       # Start to serve requests, typically the last entry
       EdenWeb.Endpoint

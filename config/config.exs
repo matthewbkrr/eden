@@ -15,7 +15,9 @@ config :eden,
 # add more as features need them (e.g. media processing in Phase 3).
 config :eden, Oban,
   repo: Eden.Repo,
-  queues: [default: 10, media: 5],
+  # :push (#418) carries one job per (recipient, transport) per message — the
+  # APNs/FCM HTTP happens there, never inline in the send path.
+  queues: [default: 10, media: 5, push: 10],
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     # Reclaim expired auth tokens once a day (#238) — off-peak, no urgency.
