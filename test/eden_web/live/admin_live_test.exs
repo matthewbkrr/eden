@@ -44,9 +44,12 @@ defmodule EdenWeb.AdminLiveTest do
       assert html =~ "Admin"
     end
 
-    test "redirects an admin without two-factor to Settings to enroll (#250)", %{conn: conn} do
+    test "redirects an admin without two-factor to the Security section to enroll (#250/#368/R205)",
+         %{conn: conn} do
       conn = log_in_user(conn, promote(user_fixture(), "admin"))
-      assert {:error, {:redirect, %{to: "/settings"}}} = live(conn, ~p"/admin")
+
+      # Land ON the Security section, not the default Profile — that's where 2FA enrollment lives.
+      assert {:error, {:redirect, %{to: "/settings/security"}}} = live(conn, ~p"/admin")
     end
   end
 

@@ -978,6 +978,40 @@ defmodule Eden.AccountsTest do
       user = user_fixture(%{password: "password123"})
       assert {:error, %Ecto.Changeset{}} = Accounts.change_password(user, "password123", "short")
     end
+
+    test "a mismatched repeat is rejected WITHOUT revoking sessions (#368)" do
+      user = user_fixture(%{username: "pwconfirm", password: "password123"})
+      _ = Accounts.generate_user_session_token(user)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.change_password(user, "password123", "newpassword456", "different456")
+
+      # The typo is caught BEFORE the session massacre — the user isn't locked out.
+      assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 1
+      assert User.valid_password?(user, "password123")
+    end
+
+    test "a matching repeat sets the password and revokes sessions (#368)" do
+      user = user_fixture(%{username: "pwconfirm2", password: "password123"})
+      _ = Accounts.generate_user_session_token(user)
+
+      assert {:ok, updated} =
+               Accounts.change_password(user, "password123", "newpassword456", "newpassword456")
+
+      assert User.valid_password?(updated, "newpassword456")
+      assert Repo.aggregate(from(t in UserToken, where: t.user_id == ^user.id), :count) == 0
+    end
+
+    test "a too-long (>72 byte) password errors on length, not a fixed 'too short' (#368/R198)" do
+      user = user_fixture(%{password: "password123"})
+      long = String.duplicate("a", 73)
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Accounts.change_password(user, "password123", long, long)
+
+      assert %{password: msgs} = errors_on(cs)
+      assert Enum.any?(msgs, &(&1 =~ "at most"))
+    end
   end
 
   describe "password reset links (#232)" do
@@ -993,6 +1027,29 @@ defmodule Eden.AccountsTest do
 
       # single-use: the row is gone, a replay fails
       assert {:error, :invalid} = Accounts.reset_password_with_token(raw, "another123456")
+    end
+
+    test "a mismatched repeat is rejected and does NOT consume the token (#368)" do
+      user = user_fixture(%{username: "resetconfirm", password: "password123"})
+      raw = mint_reset(user)
+
+      assert {:error, %Ecto.Changeset{}} =
+               Accounts.reset_password_with_token(raw, "brandnewpass789", "different789")
+
+      # The link survives the typo — the user gets another shot, not a dead link + admin trip.
+      assert Accounts.reset_token_valid?(raw)
+      assert User.valid_password?(user, "password123")
+    end
+
+    test "a matching repeat sets the password and consumes the token (#368)" do
+      user = user_fixture(%{username: "resetconfirm2", password: "password123"})
+      raw = mint_reset(user)
+
+      assert {:ok, updated} =
+               Accounts.reset_password_with_token(raw, "brandnewpass789", "brandnewpass789")
+
+      assert User.valid_password?(updated, "brandnewpass789")
+      refute Accounts.reset_token_valid?(raw)
     end
 
     test "minting a new link supersedes the previous one (one live link per person)" do

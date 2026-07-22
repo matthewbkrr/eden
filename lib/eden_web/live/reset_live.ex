@@ -18,8 +18,12 @@ defmodule EdenWeb.ResetLive do
   end
 
   @impl true
-  def handle_event("submit", %{"reset" => %{"password" => password}}, socket) do
-    case Accounts.reset_password_with_token(socket.assigns.token, password) do
+  def handle_event("submit", %{"reset" => params}, socket) do
+    case Accounts.reset_password_with_token(
+           socket.assigns.token,
+           params["password"],
+           params["password_confirmation"]
+         ) do
       {:ok, _user} ->
         {:noreply,
          socket
@@ -37,43 +41,36 @@ defmodule EdenWeb.ResetLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="ed-root min-h-screen flex items-center justify-center px-5">
+    <div class="ed-root min-h-screen grid place-items-center px-5 py-10">
       <%!-- NotifyHook is mounted on this session; host the notifier so its push_event("notify")
             has a receiver (a logged-in user redeeming a reset). No-op when logged out —
             notify_prefs is nil then (#367/R204). --%>
       <.notifier :if={@notify_prefs} prefs={@notify_prefs} />
-      <div
-        class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-6"
-        style="border-color: var(--ed-border); background: var(--ed-surface);"
-      >
-        <h1 style="font-size:1.25rem; font-weight:650;">{gettext("Reset password")}</h1>
+      <%!-- Cardless, matching login/invite/totp — the five onboarding screens read as one flow
+            (#368/R194). --%>
+      <div class="w-full max-w-sm">
+        <h1 class="mb-1" style="font-size:1.375rem; font-weight:650;">{gettext("Reset password")}</h1>
         <.ed_flash flash={@flash} />
 
         <div :if={@valid?}>
-          <p class="mt-1 mb-5" style="color: var(--ed-muted); font-size:0.875rem;">
+          <p class="mt-1 mb-6" style="color: var(--ed-muted); font-size:0.875rem;">
             {gettext("Choose a new password (at least 8 characters).")}
           </p>
           <.form for={@form} phx-submit="submit" class="space-y-4">
-            <label class="block space-y-1.5">
-              <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                {gettext("New password")}
-              </span>
-              <input
-                type="password"
-                name={@form[:password].name}
-                value=""
-                class="ed-input"
-                autocomplete="new-password"
-                minlength="8"
-                required
-              />
-              <span
-                :for={msg <- Enum.map(@form[:password].errors, &translate_error/1)}
-                style="color: var(--ed-danger-strong); font-size:0.75rem;"
-              >
-                {msg}
-              </span>
-            </label>
+            <%!-- ed_password_field + a repeat so a typo is caught before the token is burned and
+                  every session revoked (#368/R089) — reveal + AA errors come for free. --%>
+            <.ed_password_field
+              field={@form[:password]}
+              label={gettext("New password")}
+              autocomplete="new-password"
+              required
+            />
+            <.ed_password_field
+              field={@form[:password_confirmation]}
+              label={gettext("Repeat new password")}
+              autocomplete="new-password"
+              required
+            />
             <button type="submit" class="ed-btn ed-btn--primary w-full">
               {gettext("Set new password")}
             </button>

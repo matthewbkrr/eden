@@ -88,6 +88,11 @@ defmodule EdenWeb.SettingsLive do
 
   defp section_label(id), do: elem(section_meta(id), 0)
 
+  # First changeset error, translated to the current locale — the honest cause of a failed password
+  # change (repeat mismatch / too short / too long), used for the inline message (#368/R198).
+  defp first_changeset_error(%Ecto.Changeset{errors: [{_field, error} | _]}),
+    do: translate_error(error)
+
   # Per-user notification toggles (#214) + chime preset (#289), account-scoped.
   defp assign_notifications(socket) do
     case socket.assigns[:current_scope] do
@@ -509,33 +514,26 @@ defmodule EdenWeb.SettingsLive do
                     phx-submit="change_password"
                     class="space-y-4"
                   >
-                    <label class="block space-y-1.5">
-                      <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                        {gettext("Current password")}
-                      </span>
-                      <input
-                        type="password"
-                        name="password[current]"
-                        value=""
-                        class="ed-input"
-                        autocomplete="current-password"
-                        required
-                      />
-                    </label>
-                    <label class="block space-y-1.5">
-                      <span style="font-size:0.8125rem; color: var(--ed-muted);">
-                        {gettext("New password")}
-                      </span>
-                      <input
-                        type="password"
-                        name="password[new]"
-                        value=""
-                        class="ed-input"
-                        autocomplete="new-password"
-                        minlength="8"
-                        required
-                      />
-                    </label>
+                    <.ed_password_field
+                      field={@password_form[:current]}
+                      label={gettext("Current password")}
+                      autocomplete="current-password"
+                      required
+                    />
+                    <%!-- New + repeat so a typo can't lock the user out — change_password revokes
+                          every session on success (#368/R091). ed_password_field brings the reveal. --%>
+                    <.ed_password_field
+                      field={@password_form[:new]}
+                      label={gettext("New password")}
+                      autocomplete="new-password"
+                      required
+                    />
+                    <.ed_password_field
+                      field={@password_form[:new_confirmation]}
+                      label={gettext("Repeat new password")}
+                      autocomplete="new-password"
+                      required
+                    />
                     <p
                       :if={@password_error}
                       style="color: var(--ed-danger-strong); font-size:0.75rem;"
@@ -1359,8 +1357,13 @@ defmodule EdenWeb.SettingsLive do
   # kills every session — so we navigate to sign-in afterward (the current cookie
   # is now dead too). A too-short new password comes back as a flash (the input's
   # minlength catches the common case client-side).
-  def handle_event("change_password", %{"password" => %{"current" => cur, "new" => new}}, socket) do
-    case Accounts.change_password(socket.assigns.profile_user, cur, new) do
+  def handle_event("change_password", %{"password" => params}, socket) do
+    case Accounts.change_password(
+           socket.assigns.profile_user,
+           params["current"],
+           params["new"],
+           params["new_confirmation"]
+         ) do
       {:ok, _user} ->
         {:noreply,
          socket
@@ -1372,9 +1375,10 @@ defmodule EdenWeb.SettingsLive do
       {:error, :invalid_current_password} ->
         {:noreply, assign(socket, password_error: gettext("Current password is incorrect."))}
 
-      {:error, %Ecto.Changeset{}} ->
-        {:noreply,
-         assign(socket, password_error: gettext("New password must be at least 8 characters."))}
+      # The REAL reason (repeat mismatch, too short, OR too long >72 bytes) — not a fixed
+      # "at least 8" that would contradict a too-long passphrase (#368/R198).
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, password_error: first_changeset_error(changeset))}
     end
   end
 

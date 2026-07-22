@@ -2834,3 +2834,13 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Your session ended. Please sign in again."
 msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:527
+#, elixir-autogen, elixir-format
+msgid "Repeat new password"
+msgstr ""
+
+#: lib/eden_web/live/login_live.ex:52
+#, elixir-autogen, elixir-format
+msgid "Forgot your password? Ask an admin to send you a reset link."
+msgstr ""

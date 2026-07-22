@@ -130,6 +130,23 @@ defmodule Eden.Accounts.User do
     user
     |> cast(attrs, [:password])
     |> validate_password(opts)
+    |> maybe_confirm_password(opts)
+  end
+
+  # The UI paths (change password in Settings, /reset/:token) pass a repeat field so a typo in the
+  # new password is caught BEFORE it revokes every session / burns the reset link (#368) — the
+  # product has no email self-recovery, so a typo would otherwise lock the user out. Programmatic
+  # callers omit `:confirm` and skip it. `password_confirmation` isn't cast — validate_confirmation
+  # reads it straight from the (string-keyed) params.
+  defp maybe_confirm_password(changeset, opts) do
+    if Keyword.get(opts, :confirm, false) do
+      validate_confirmation(changeset, :password,
+        required: true,
+        message: "does not match the password"
+      )
+    else
+      changeset
+    end
   end
 
   @doc "Changeset for editing the profile (display name + bio; no credentials)."

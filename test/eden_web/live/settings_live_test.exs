@@ -551,7 +551,13 @@ defmodule EdenWeb.SettingsLiveTest do
 
       assert {:error, {:live_redirect, %{to: "/login"}}} =
                view
-               |> form("#password-form", password: %{current: "password123", new: "newpass12345"})
+               |> form("#password-form",
+                 password: %{
+                   current: "password123",
+                   new: "newpass12345",
+                   new_confirmation: "newpass12345"
+                 }
+               )
                |> render_submit()
 
       assert %Eden.Accounts.User{} =
