@@ -1842,17 +1842,32 @@ defmodule Eden.ChatTest do
       assert {:error, :not_found} = Chat.toggle_reaction(scope(carol), msg.id, "👍")
     end
 
-    test "a member who has left the conversation can't react", %{
+    test "reacting in a self-deleted 1:1 reopens it, like sending there (#383/R145)", %{
       alice: alice,
       bob: bob,
       conv: conv,
       msg: msg
     } do
-      # Alice leaves (left_at set); bob stays, so the chat isn't GC'd.
+      # Alice hides the DM (left_at set); bob stays, so the chat isn't GC'd. A 1:1 is
+      # reopenable, so a reaction there behaves like sending: it goes through, not a
+      # silent no-op. The active member reacts too.
       :ok = Chat.delete_conversation(scope(alice), conv.id)
-      assert {:error, :not_found} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
-      # An active member still can.
-      assert {:ok, _} = Chat.toggle_reaction(scope(bob), msg.id, "👍")
+      assert {:ok, _} = Chat.toggle_reaction(scope(alice), msg.id, "👍")
+      assert {:ok, _} = Chat.toggle_reaction(scope(bob), msg.id, "❤️")
+    end
+
+    test "a member who has left a GROUP can't react (#383/R145)", %{alice: alice, bob: bob} do
+      carol = user_fixture(%{username: "carol_grp_react"})
+      # Bob owns the group (the owner can't leave), alice is a plain member who can.
+      {:ok, grp} = Chat.create_conversation(scope(bob), [alice.id, carol.id], title: "Trip")
+      {:ok, gmsg} = Chat.create_message(scope(bob), grp.id, %{"body" => "in the group"})
+
+      # Leaving a group is permanent (never reopened), so alice's reaction must not reach
+      # the people she left.
+      :ok = Chat.delete_conversation(scope(alice), grp.id)
+      assert {:error, :not_found} = Chat.toggle_reaction(scope(alice), gmsg.id, "👍")
+      # A still-present member reacts.
+      assert {:ok, _} = Chat.toggle_reaction(scope(bob), gmsg.id, "👍")
     end
 
     test "rejects an emoji outside the allowed set", %{alice: alice, msg: msg} do
@@ -1916,6 +1931,18 @@ defmodule Eden.ChatTest do
       {:ok, _} = Chat.set_dbl_click_reaction(scope(alice), "❤️")
       {:ok, cleared} = Chat.set_dbl_click_reaction(scope(alice), nil)
       assert cleared == hd(MessageReaction.quick())
+    end
+
+    test "the \"off\" sentinel disables the gesture entirely (#383/R179)", %{alice: alice} do
+      # Distinct from an unset preference (which falls back to the quick row): "off" is an
+      # explicit choice that turns the double-click reaction off — dbl_click_reaction returns nil.
+      {:ok, effective} = Chat.set_dbl_click_reaction(scope(alice), "off")
+      assert is_nil(effective)
+      assert is_nil(Chat.dbl_click_reaction(scope(alice)))
+
+      # Re-picking an emoji turns it back on.
+      {:ok, "🔥"} = Chat.set_dbl_click_reaction(scope(alice), "🔥")
+      assert Chat.dbl_click_reaction(scope(alice)) == "🔥"
     end
 
     test "set_quick_reactions drops non-allowed, dedups, and caps", %{alice: alice} do
@@ -4419,6 +4446,39 @@ defmodule Eden.ChatTest do
     test "your own name never matches a conversation", %{alice: alice, bob: bob} do
       {:ok, _conv} = Chat.create_conversation(scope(alice), [bob.id])
       assert %{conversations: []} = Chat.search(scope(alice), "Alice")
+    end
+
+    test "a self-deleted 1:1 stays findable by contact, but its messages don't (#383/R126)", %{
+      alice: alice
+    } do
+      carol = user_fixture(%{username: "carolgone", display_name: "Carol Vanished"})
+      {:ok, direct} = Chat.create_conversation(scope(alice), [carol.id])
+      {:ok, _} = Chat.create_message(scope(carol), direct.id, %{"body" => "buried needle"})
+
+      # Alice clears the DM (left_at set). Telegram keeps the contact after you clear a chat, and it
+      # reopens on the next message — so the person stays findable by name/username.
+      :ok = Chat.delete_conversation(scope(alice), direct.id)
+      assert %{conversations: [found]} = Chat.search(scope(alice), "Vanished")
+      assert found.id == direct.id
+      assert %{conversations: [by_uname]} = Chat.search(scope(alice), "carolgone")
+      assert by_uname.id == direct.id
+
+      # ...but the hidden thread's message bodies must NOT leak into results.
+      assert %{messages: []} = Chat.search(scope(alice), "needle")
+    end
+
+    test "a group you left stays out of conversation search (#383/R126)", %{
+      alice: alice,
+      bob: bob
+    } do
+      carol = user_fixture(%{username: "carolgrp", display_name: "Carol Grouper"})
+      # Bob owns the group (the owner can't leave), alice is a plain member who can.
+      {:ok, group} = Chat.create_conversation(scope(bob), [alice.id, carol.id], title: "Voyagers")
+
+      # Leaving a group is permanent — it must not resurface in search the way a cleared DM does.
+      :ok = Chat.delete_conversation(scope(alice), group.id)
+      assert %{conversations: []} = Chat.search(scope(alice), "Voyagers")
+      assert %{conversations: []} = Chat.search(scope(alice), "Grouper")
     end
 
     test "blank or single-character queries return nothing", %{alice: alice, bob: bob} do

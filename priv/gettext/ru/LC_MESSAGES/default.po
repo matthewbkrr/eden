@@ -2868,3 +2868,8 @@ msgstr "Забыли пароль? Попросите администратор
 #, elixir-autogen, elixir-format
 msgid "Couldn't change your password."
 msgstr "Не удалось изменить пароль."
+
+#: lib/eden_web/live/settings_live.ex:911
+#, elixir-autogen, elixir-format
+msgid "Off"
+msgstr "Выкл."

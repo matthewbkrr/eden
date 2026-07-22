@@ -903,6 +903,18 @@ defmodule EdenWeb.SettingsLive do
                       >
                         {e}
                       </button>
+                      <%!-- Turn the gesture off entirely (#383/R179) — dbl_click_reaction then
+                            returns nil, which the .ContextMenu hook treats as a no-op. --%>
+                      <button
+                        type="button"
+                        class={["ed-qr ed-qr--off", is_nil(@dbl_reaction) && "ed-qr--on"]}
+                        phx-click="set_dbl_reaction"
+                        phx-value-emoji="off"
+                        role="radio"
+                        aria-checked={to_string(is_nil(@dbl_reaction))}
+                      >
+                        {gettext("Off")}
+                      </button>
                     </div>
                   </div>
                 </section>

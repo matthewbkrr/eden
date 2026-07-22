@@ -1509,6 +1509,18 @@ html {
     border-color: var(--ed-primary);
     background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
   }
+  /* The "Off" choice in the double-click-react radiogroup (#383/R179): a text pill, not a 1.5rem
+     emoji — auto width, muted until selected. */
+  .ed-qr--off {
+    width: auto;
+    padding: 0 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 550;
+    color: var(--ed-muted);
+  }
+  .ed-qr--off.ed-qr--on {
+    color: var(--ed-primary-strong-text);
+  }
   .ed-qr:disabled {
     opacity: 0.35;
     cursor: not-allowed;

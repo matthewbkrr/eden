@@ -2069,7 +2069,9 @@ defmodule EdenWeb.ChatLive do
   # also focus the composer client-side (JS.focus), so this just sets the assign.
   def handle_event("reply", %{"id" => id}, socket) do
     case Chat.get_message(socket.assigns.current_scope, id) do
-      nil -> {:noreply, socket}
+      # A race (the target was deleted while the menu/swipe was open) — say so instead of a silent
+      # no-op that focuses the composer with no quote and no explanation (#383/R175).
+      nil -> {:noreply, put_flash(socket, :error, gettext("That message is unavailable."))}
       message -> {:noreply, assign(socket, reply_to: message)}
     end
   end
@@ -5181,7 +5183,11 @@ defmodule EdenWeb.ChatLive do
             // a double-click reacts instead. The emoji rides #composer's dataset (present
             // for DM, room AND thread rows).
             if (this.el.dataset.messageId) {
-              const dblRow = this.el.closest(".ed-msg") || this.el
+              // The double-click react zone is the BUBBLE, not the whole row (#383/R179) — a
+              // dbl-click on the empty margin beside your own message no longer fires a reaction.
+              // When the gesture is turned off, dbl_click_reaction returns nil → data-dbl-react is
+              // empty → the `if (!emoji) return` below makes this a no-op.
+              const dblRow = this.el.closest(".ed-bubble") || this.el
               const canReact = (t) =>
                 !t.closest("button, input, textarea, video, .ed-reactions, a:not(.ed-photo)")
               // preventDefault on the SECOND mousedown stops the browser selecting the word
@@ -5206,6 +5212,7 @@ defmodule EdenWeb.ChatLive do
             const ENGAGE = 12 // px before a mouse drag counts as a swipe (vs a click)
             const CLAMP = 90 // px the row follows the gesture 1:1 before the elastic tail
             const SETTLE = 200 // ms of wheel silence before a trackpad swipe re-arms
+            const WHEEL_START = 8 // px of horizontal intent before a wheel gesture even begins (#383/R184)
             const reset = () => {
               this.el.style.transition = "transform 0.18s var(--ed-ease)"
               this.el.style.transform = ""
@@ -5310,7 +5317,17 @@ defmodule EdenWeb.ChatLive do
               // frozen until momentum dies. Idle silence (SETTLE) clears the state.
               let wx = 0
               this.el.addEventListener("wheel", (e) => {
-                if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return
+                // A vertically-dominant tick is a scroll, not a swipe — RESET any partial pull so a
+                // diagonal flick's momentum tail can't accumulate into a false reply (#383/R184).
+                if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) {
+                  if (wx > 0) { wx = 0; reset() }
+                  return
+                }
+                // Horizontal scroll INSIDE a wide medium / link is the user scrolling that, not a
+                // reply gesture on the bubble.
+                if (e.target.closest?.("video, a, .ed-media, .ed-album, input, textarea")) return
+                // Require real horizontal intent to START — a stray small deltaX doesn't begin one.
+                if (wx === 0 && Math.abs(e.deltaX) < WHEEL_START) return
                 clearTimeout(this._wheelTimer)
                 this._wheelTimer = setTimeout(() => {
                   wx = 0
@@ -8375,12 +8392,10 @@ defmodule EdenWeb.ChatLive do
         // to an album (data-gallery), the overlay pages through that album's
         // photos with on-screen arrows and ←/→. Cmd/Ctrl/Shift/middle click fall
         // through to the normal "open original in a new tab".
-        // #106: inside a message, a double-click reacts — so a photo there must give the
-        // second click a chance to arrive before opening. We defer the open by DBL_MS and
-        // cancel it when a 2nd click lands (the .ContextMenu row handler then reacts). Photos
-        // OUTSIDE a message row (the profile gallery) keep opening instantly — nothing reacts
-        // there, so there's nothing to disambiguate.
-        const DBL_MS = 250
+        // #106/#383/R186: inside a message a double-click reacts, but the FIRST click opens the
+        // lightbox immediately (no 250ms disambiguation lag) — a landing second click closes it so
+        // the react wins. Photos OUTSIDE a message row (the profile gallery) never react, so they
+        // just open on click.
         // One global overlay nav-close guard, registered ONCE at bundle load: this colocated module's
         // top-level runs when app.js imports it, regardless of whether a photo is on the page, so the
         // listener is wired without a per-hook mounted() call (and without duplicating it in the
@@ -8405,14 +8420,17 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("click", (e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return
               e.preventDefault()
-              if (!inMsg) return this.openLightbox()
-              if (e.detail > 1) return clearTimeout(this._openT) // part of a dbl-click → react
-              clearTimeout(this._openT)
-              this._openT = setTimeout(() => this.openLightbox(), DBL_MS)
+              // Open the lightbox IMMEDIATELY on the first click — no 250ms wait (#383/R186). A
+              // double-click (to react) arrives as a second click; the react is handled by
+              // .ContextMenu, so here we just close the lightbox the first click opened — the react
+              // wins. (A profile photo has no dbl-react, so it always opens on click.)
+              if (inMsg && e.detail > 1) {
+                const box = document.getElementById("ed-lightbox")
+                if (box?.classList.contains("ed-lightbox--open")) box.__close?.()
+                return
+              }
+              this.openLightbox()
             })
-          },
-          destroyed() {
-            clearTimeout(this._openT)
           },
           openLightbox() {
             const gallery = this.el.dataset.gallery
