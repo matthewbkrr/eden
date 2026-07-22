@@ -1870,6 +1870,27 @@ defmodule Eden.ChatTest do
       assert {:ok, _} = Chat.toggle_reaction(scope(bob), gmsg.id, "👍")
     end
 
+    test "a room membership with left_at set can't react — a room is not a reopenable 1:1 (#414 review)",
+         %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
+      {:ok, room} = Channels.create_room(scope(alice), channel.id, %{"name" => "talk"})
+      {:ok, _} = Channels.add_room_members(scope(alice), room.id, [bob.id])
+      {:ok, rmsg} = Chat.create_message(scope(bob), room.id, %{"body" => "in the room"})
+
+      # Rooms are hard-deleted on leave, so this state can't arise today — but defend the
+      # access predicate against a stale/future soft-deleted row: a room (channel_id set) is
+      # never a reopenable 1:1, so left_at must block it, not wave it through.
+      {1, _} =
+        Repo.update_all(
+          from(m in Membership, where: m.conversation_id == ^room.id and m.user_id == ^bob.id),
+          set: [left_at: DateTime.utc_now()]
+        )
+
+      assert {:error, :not_found} = Chat.toggle_reaction(scope(bob), rmsg.id, "👍")
+      # An active member still reacts.
+      assert {:ok, _} = Chat.toggle_reaction(scope(alice), rmsg.id, "👍")
+    end
+
     test "rejects an emoji outside the allowed set", %{alice: alice, msg: msg} do
       assert {:error, %Ecto.Changeset{}} = Chat.toggle_reaction(scope(alice), msg.id, "lol")
       assert Repo.aggregate(MessageReaction, :count) == 0

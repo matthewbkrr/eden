@@ -326,7 +326,7 @@ defmodule Eden.Chat do
         join: m in Membership,
         on:
           m.conversation_id == c.id and m.user_id == ^user.id and
-            (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id))),
+            (is_nil(m.left_at) or (not c.is_group and is_nil(c.channel_id))),
         where: c.id == ^id,
         preload: [memberships: :user]
 
@@ -1655,7 +1655,7 @@ defmodule Eden.Chat do
       # chat. Groups stay strict (left_at nil): a group you left shouldn't resurface in search.
       on:
         my.conversation_id == c.id and my.user_id == ^user.id and
-          (is_nil(my.left_at) or not (c.is_group and is_nil(c.channel_id))),
+          (is_nil(my.left_at) or (not c.is_group and is_nil(c.channel_id))),
       join: m in Membership,
       on: m.conversation_id == c.id,
       join: u in User,
@@ -2157,7 +2157,7 @@ defmodule Eden.Chat do
       # system rows (never a user's to carry, #356/R146) — mirrors access_query/2.
       where:
         m.id in ^ids and is_nil(m.deleted_at) and is_nil(d.id) and m.kind == "user" and
-          (is_nil(mem.left_at) or not (c.is_group and is_nil(c.channel_id))),
+          (is_nil(mem.left_at) or (not c.is_group and is_nil(c.channel_id))),
       order_by: [asc: m.id],
       preload: [:sender, :attachments]
     )
@@ -3799,7 +3799,7 @@ defmodule Eden.Chat do
         on: c.id == m.conversation_id,
         where:
           m.conversation_id == ^conversation_id and m.user_id == ^user.id and
-            (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id)))
+            (is_nil(m.left_at) or (not c.is_group and is_nil(c.channel_id)))
       )
       |> Repo.update_all(set: [last_read_at: read_at])
 
@@ -3821,7 +3821,7 @@ defmodule Eden.Chat do
         join: mem in Membership,
         on:
           mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
-            (is_nil(mem.left_at) or not (c.is_group and is_nil(c.channel_id))),
+            (is_nil(mem.left_at) or (not c.is_group and is_nil(c.channel_id))),
         where: a.id == ^id
 
     case Repo.one(query) do
@@ -3872,12 +3872,18 @@ defmodule Eden.Chat do
     do: Repo.exists?(access_query(user.id, conversation_id))
 
   defp access_query(user_id, conversation_id) do
+    # The reopenable case is a true 1:1 — `not is_group AND no channel_id` — not merely "not a
+    # plain group" (#414 review): the latter would let a LEFT room (channel_id set) through
+    # unconditionally. Rooms are hard-deleted on leave today (so left_at is never set on a room
+    # membership), making this a no-op at runtime, but the precise predicate keeps the invariant
+    # from silently depending on that. The same idiom guards get_conversation, forward-carry read,
+    # mark-read, and attachment access.
     from m in Membership,
       join: c in Conversation,
       on: c.id == m.conversation_id,
       where:
         m.conversation_id == ^conversation_id and m.user_id == ^user_id and
-          (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id)))
+          (is_nil(m.left_at) or (not c.is_group and is_nil(c.channel_id)))
   end
 
   @doc """
