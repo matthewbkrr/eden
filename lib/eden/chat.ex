@@ -326,7 +326,7 @@ defmodule Eden.Chat do
         join: m in Membership,
         on:
           m.conversation_id == c.id and m.user_id == ^user.id and
-            (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id))),
+            (is_nil(m.left_at) or (not c.is_group and is_nil(c.channel_id))),
         where: c.id == ^id,
         preload: [memberships: :user]
 
@@ -1650,7 +1650,12 @@ defmodule Eden.Chat do
     # few dozen conversations at most — sort by recency in memory, then cap.
     from(c in Conversation,
       join: my in Membership,
-      on: my.conversation_id == c.id and my.user_id == ^user.id and is_nil(my.left_at),
+      # Mirror access_query for 1:1 (#383/R126): a self-deleted DM (left_at set) is still openable
+      # and messageable, so keep the person findable — Telegram keeps the contact after you clear a
+      # chat. Groups stay strict (left_at nil): a group you left shouldn't resurface in search.
+      on:
+        my.conversation_id == c.id and my.user_id == ^user.id and
+          (is_nil(my.left_at) or (not c.is_group and is_nil(c.channel_id))),
       join: m in Membership,
       on: m.conversation_id == c.id,
       join: u in User,
@@ -2152,7 +2157,7 @@ defmodule Eden.Chat do
       # system rows (never a user's to carry, #356/R146) — mirrors access_query/2.
       where:
         m.id in ^ids and is_nil(m.deleted_at) and is_nil(d.id) and m.kind == "user" and
-          (is_nil(mem.left_at) or not (c.is_group and is_nil(c.channel_id))),
+          (is_nil(mem.left_at) or (not c.is_group and is_nil(c.channel_id))),
       order_by: [asc: m.id],
       preload: [:sender, :attachments]
     )
@@ -3300,37 +3305,52 @@ defmodule Eden.Chat do
     {:ok, stored || MessageReaction.quick()}
   end
 
+  # Sentinel stored in FolderPrefs.dbl_click_reaction for "double-click-to-react is OFF" (#383/R179)
+  # — distinct from nil (never configured → default emoji). Not an allowed emoji, so no collision.
+  @dbl_click_off "off"
+
   @doc """
-  The scoped user's double-click reaction emoji (#106): their stored choice when
-  it's still an allowed emoji, otherwise the first of their quick-react row.
-  Always returns a valid emoji (the quick row falls back to the default set, which
-  is non-empty), so callers can use it directly.
+  The scoped user's double-click reaction emoji (#106): their stored choice when it's still an
+  allowed emoji, `nil` when they've explicitly turned the gesture OFF (#383/R179), otherwise the
+  first of their quick-react row. A `nil` return means the double-click hook is a no-op.
   """
   def dbl_click_reaction(%Scope{user: user} = scope) do
     stored =
       Repo.one(from p in FolderPrefs, where: p.user_id == ^user.id, select: p.dbl_click_reaction)
 
-    if is_binary(stored) and stored in MessageReaction.allowed() do
-      stored
-    else
-      hd(quick_reactions(scope))
+    cond do
+      stored == @dbl_click_off -> nil
+      is_binary(stored) and stored in MessageReaction.allowed() -> stored
+      true -> hd(quick_reactions(scope))
     end
   end
 
   @doc """
-  Sets the scoped user's double-click reaction (#106). A non-allowed emoji (or
-  `nil`) is stored as `nil`, which resolves back to the first quick reaction.
-  Returns `{:ok, effective_emoji}`.
+  Sets the scoped user's double-click reaction (#106). `"off"` disables the gesture (#383/R179);
+  a non-allowed emoji (or `nil`) is stored as `nil`, which resolves back to the first quick
+  reaction. Returns `{:ok, effective_emoji}` (`nil` when off).
   """
   def set_dbl_click_reaction(%Scope{user: user} = scope, emoji) do
-    stored = if is_binary(emoji) and emoji in MessageReaction.allowed(), do: emoji, else: nil
+    stored =
+      cond do
+        emoji == @dbl_click_off -> @dbl_click_off
+        is_binary(emoji) and emoji in MessageReaction.allowed() -> emoji
+        true -> nil
+      end
 
     Repo.insert!(%FolderPrefs{user_id: user.id, dbl_click_reaction: stored},
       on_conflict: [set: [dbl_click_reaction: stored, updated_at: now()]],
       conflict_target: :user_id
     )
 
-    {:ok, stored || hd(quick_reactions(scope))}
+    effective =
+      cond do
+        stored == @dbl_click_off -> nil
+        is_binary(stored) -> stored
+        true -> hd(quick_reactions(scope))
+      end
+
+    {:ok, effective}
   end
 
   @doc """
@@ -3459,15 +3479,13 @@ defmodule Eden.Chat do
   # delete paths), reacting from a chat you've left would broadcast to the
   # remaining members — so reactions require live membership.
   defp ensure_active_member(%Scope{user: user}, conversation_id) do
-    active? =
-      Repo.exists?(
-        from m in Membership,
-          where:
-            m.conversation_id == ^conversation_id and m.user_id == ^user.id and
-              is_nil(m.left_at)
-      )
-
-    if active?, do: :ok, else: {:error, :not_found}
+    # Mirror access_query (#383/R145): a live member OR a hidden-but-reopenable 1:1 — so a reaction
+    # in a self-deleted DM behaves like a send there (which already works), instead of silently
+    # no-op'ing. A member who LEFT a group/room stays blocked: their reaction must not reach the
+    # people they left (the invariant above).
+    if Repo.exists?(access_query(user.id, conversation_id)),
+      do: :ok,
+      else: {:error, :not_found}
   end
 
   # A single get-then-(insert|delete); no transaction needed — events on one
@@ -3781,7 +3799,7 @@ defmodule Eden.Chat do
         on: c.id == m.conversation_id,
         where:
           m.conversation_id == ^conversation_id and m.user_id == ^user.id and
-            (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id)))
+            (is_nil(m.left_at) or (not c.is_group and is_nil(c.channel_id)))
       )
       |> Repo.update_all(set: [last_read_at: read_at])
 
@@ -3803,7 +3821,7 @@ defmodule Eden.Chat do
         join: mem in Membership,
         on:
           mem.conversation_id == m.conversation_id and mem.user_id == ^user.id and
-            (is_nil(mem.left_at) or not (c.is_group and is_nil(c.channel_id))),
+            (is_nil(mem.left_at) or (not c.is_group and is_nil(c.channel_id))),
         where: a.id == ^id
 
     case Repo.one(query) do
@@ -3854,12 +3872,18 @@ defmodule Eden.Chat do
     do: Repo.exists?(access_query(user.id, conversation_id))
 
   defp access_query(user_id, conversation_id) do
+    # The reopenable case is a true 1:1 — `not is_group AND no channel_id` — not merely "not a
+    # plain group" (#414 review): the latter would let a LEFT room (channel_id set) through
+    # unconditionally. Rooms are hard-deleted on leave today (so left_at is never set on a room
+    # membership), making this a no-op at runtime, but the precise predicate keeps the invariant
+    # from silently depending on that. The same idiom guards get_conversation, forward-carry read,
+    # mark-read, and attachment access.
     from m in Membership,
       join: c in Conversation,
       on: c.id == m.conversation_id,
       where:
         m.conversation_id == ^conversation_id and m.user_id == ^user_id and
-          (is_nil(m.left_at) or not (c.is_group and is_nil(c.channel_id)))
+          (is_nil(m.left_at) or (not c.is_group and is_nil(c.channel_id)))
   end
 
   @doc """

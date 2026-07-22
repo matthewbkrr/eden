@@ -2850,3 +2850,8 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Couldn't change your password."
 msgstr ""
+
+#: lib/eden_web/live/settings_live.ex:911
+#, elixir-autogen, elixir-format
+msgid "Off"
+msgstr ""

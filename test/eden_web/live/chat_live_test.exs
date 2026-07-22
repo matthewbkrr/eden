@@ -298,6 +298,17 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ".ed-reply-bar")
     end
 
+    test "replying to a vanished target flashes instead of silently no-op'ing (#383/R175)", ctx do
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # A stale menu/swipe fires "reply" for a message that no longer exists (deleted mid-gesture).
+      html = render_hook(view, "reply", %{"id" => "999999"})
+      assert html =~ "That message is unavailable."
+      # No composer tray was staged.
+      refute has_element?(view, ".ed-reply-bar")
+    end
+
     test "a quote whose target was deleted renders 'Message deleted' (#71)", ctx do
       {:ok, target} =
         Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{"body" => "doomed"})

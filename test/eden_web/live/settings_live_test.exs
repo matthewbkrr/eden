@@ -432,6 +432,30 @@ defmodule EdenWeb.SettingsLiveTest do
       assert has_element?(view, ~s([role="radiogroup"] .ed-qr--on[phx-value-emoji="❤️"]))
     end
 
+    test "the Off choice turns the double-click reaction off (#383/R179)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/reactions")
+
+      # The radiogroup carries an explicit Off option alongside the emoji.
+      view
+      |> element(~s([role="radiogroup"] .ed-qr--off[phx-value-emoji="off"]))
+      |> render_click()
+
+      # Gesture disabled: dbl_click_reaction returns nil, and Off shows as selected.
+      assert is_nil(Chat.dbl_click_reaction(scope))
+      assert has_element?(view, ~s([role="radiogroup"] .ed-qr--off.ed-qr--on))
+
+      # Picking an emoji turns it back on.
+      view
+      |> element(~s([role="radiogroup"] .ed-qr[phx-value-emoji="❤️"]))
+      |> render_click()
+
+      assert Chat.dbl_click_reaction(scope) == "❤️"
+      refute has_element?(view, ~s([role="radiogroup"] .ed-qr--off.ed-qr--on))
+    end
+
     test "reset returns the quick row to the default (and the button only shows when custom)", %{
       conn: conn
     } do
