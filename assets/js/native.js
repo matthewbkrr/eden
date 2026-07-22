@@ -21,6 +21,9 @@ export function initNativeShell() {
 // Android hardware/gesture back: navigate the WebView history like a browser
 // back; on the root screen minimize the app (Android convention) instead of
 // killing it. Registering a listener replaces Capacitor's default (exit).
+// The backButton event never fires on iOS (no back button), and minimizeApp
+// is Android-only — the catch keeps a hypothetical rejection silent rather
+// than an unhandled-promise log (#423 review).
 function wireBackButton() {
   const app = cap.Plugins?.App;
   if (!app?.addListener) return;
@@ -28,7 +31,7 @@ function wireBackButton() {
     if (canGoBack && window.history.length > 1) {
       window.history.back();
     } else {
-      app.minimizeApp();
+      Promise.resolve(app.minimizeApp?.()).catch(() => {});
     }
   });
 }
