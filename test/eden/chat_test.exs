@@ -2358,6 +2358,28 @@ defmodule Eden.ChatTest do
       {:ok, _} = Chat.toggle_conversation_mute(scope(alice), conv.id)
       assert Chat.messenger_unread_total(scope(alice)) == 0
     end
+
+    test "a chat in a MUTED folder drops out of the total; un-muting restores it (#385/R026)", %{
+      alice: alice,
+      bob: bob
+    } do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "1"})
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "2"})
+      assert Chat.messenger_unread_total(scope(alice)) == 2
+
+      {:ok, folder} = Chat.create_folder(scope(alice), %{"name" => "Work"})
+      {:ok, _} = Chat.toggle_conversation_folder(scope(alice), conv.id, folder.id)
+
+      # A chat sitting in ANY muted folder stops counting toward the messenger total (the
+      # unmuted_messenger_ids subquery), even though the chat itself isn't directly muted.
+      {:ok, _} = Chat.toggle_folder_mute(scope(alice), folder.id)
+      assert Chat.messenger_unread_total(scope(alice)) == 0
+
+      # Un-muting the folder brings its unread back (the chat was never directly muted).
+      {:ok, _} = Chat.toggle_folder_mute(scope(alice), folder.id)
+      assert Chat.messenger_unread_total(scope(alice)) == 2
+    end
   end
 
   describe "quote-reply (#71)" do

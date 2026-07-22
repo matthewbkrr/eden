@@ -116,6 +116,48 @@ defmodule EdenWeb.PresenceTest do
     end
   end
 
+  describe "multi-session status resolution (#385/R097)" do
+    # Track the same user from a SECOND, independent session (pid) — returns the live pid so the
+    # caller can kill it after asserting.
+    defp second_session(user_id, status) do
+      parent = self()
+
+      pid =
+        spawn(fn ->
+          {:ok, _} = Presence.track_user(self(), user_id, status)
+          send(parent, :tracked)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :tracked
+      pid
+    end
+
+    test "surfaces the MOST-available status across a user's sessions (deterministic)" do
+      user = user_fixture()
+      # This session is dnd; a second session is online. statuses/0 folds by rank
+      # (online < away < dnd), so the most-available wins regardless of track order.
+      {:ok, _ref} = Presence.track_user(self(), user.id, "dnd")
+      pid = second_session(user.id, "online")
+
+      assert Presence.statuses()[user.id] == "online"
+
+      Process.exit(pid, :kill)
+    end
+
+    test "an unknown/legacy status ranks as most-available (documents the fallback)" do
+      user = user_fixture()
+      # A meta carrying a status not in @status_rank falls back to rank 0 (most available), so it
+      # currently overrides a real dnd session. Pinned so any change to that fallback is deliberate.
+      {:ok, _ref} = Presence.track_user(self(), user.id, "dnd")
+      pid = second_session(user.id, "legacy-thing")
+
+      assert Presence.statuses()[user.id] == "legacy-thing"
+
+      Process.exit(pid, :kill)
+    end
+  end
+
   test "a status-only update really emits a presence_diff naming the user (#102)" do
     # Guards the sidebar re-stream gate against being circular: confirms the REAL
     # Phoenix.Presence diff for an away→online change carries the key in joins/leaves
