@@ -114,9 +114,9 @@ defmodule EdenWeb.LocaleTest do
         )
       end
 
-      assert at_least.(1) == "должно быть не меньше 1 символа"
-      assert at_least.(3) == "должно быть не меньше 3 символов"
-      assert at_least.(8) == "должно быть не меньше 8 символов"
+      assert at_least.(1) == "Должно быть не меньше 1 символа"
+      assert at_least.(3) == "Должно быть не меньше 3 символов"
+      assert at_least.(8) == "Должно быть не меньше 8 символов"
     end
 
     test "the DM/group glossary is unified to «чат» (R206/R208)" do
