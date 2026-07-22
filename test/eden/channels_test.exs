@@ -266,6 +266,105 @@ defmodule Eden.ChannelsTest do
     end
   end
 
+  describe "ensure_member/2 (#41 auto-join, #375/R020)" do
+    setup %{alice: alice} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Open"})
+      {:ok, [general]} = Channels.list_rooms(scope(alice), channel.id)
+      %{channel: channel, general: general}
+    end
+
+    test "a non-member auto-joins and materializes general", %{
+      bob: bob,
+      channel: channel,
+      general: general
+    } do
+      assert {:ok, joined} = Channels.ensure_member(scope(bob), channel.id)
+      assert joined.id == channel.id
+      # bob is now a channel member...
+      assert Channels.member_role(scope(bob), channel.id) == "member"
+      # ...with general materialized — the only room a #41 auto-join lands in.
+      assert Eden.Chat.room_member?(general.id, bob.id)
+      assert {:ok, [%{name: "general"}]} = Channels.list_rooms(scope(bob), channel.id)
+    end
+
+    test "is idempotent — a repeat call adds no membership row", %{bob: bob, channel: channel} do
+      assert {:ok, _} = Channels.ensure_member(scope(bob), channel.id)
+      count = Repo.aggregate(from(m in Membership, where: m.channel_id == ^channel.id), :count)
+
+      assert {:ok, _} = Channels.ensure_member(scope(bob), channel.id)
+
+      assert count ==
+               Repo.aggregate(from(m in Membership, where: m.channel_id == ^channel.id), :count)
+    end
+
+    test "leaks no existence — :not_found for a missing or garbage id", %{bob: bob} do
+      assert {:error, :not_found} = Channels.ensure_member(scope(bob), 999_999)
+      assert {:error, :not_found} = Channels.ensure_member(scope(bob), "garbage")
+    end
+
+    test "announces the join only on the FIRST (real) join", %{bob: bob, channel: channel} do
+      Channels.subscribe_user(scope(bob))
+      Channels.subscribe_channel(channel.id)
+      cid = channel.id
+
+      assert {:ok, _} = Channels.ensure_member(scope(bob), channel.id)
+      assert_receive :channels_changed
+      assert_receive {:members_changed, ^cid}
+
+      # A repeat call is a pure no-op — no membership written, so no broadcast either.
+      assert {:ok, _} = Channels.ensure_member(scope(bob), channel.id)
+      refute_receive :channels_changed, 100
+      refute_receive {:members_changed, _}, 50
+    end
+  end
+
+  describe "transfer_ownership/3 edge cases (#375/R022)" do
+    setup %{alice: alice, bob: bob} do
+      {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Transfer"})
+      {:ok, _} = insert_member(channel.id, bob.id, "member")
+      %{channel: channel}
+    end
+
+    test "refuses transferring to yourself", %{alice: alice, channel: channel} do
+      assert {:error, :self} = Channels.transfer_ownership(scope(alice), channel.id, alice.id)
+      assert Channels.owner?(scope(alice), channel.id)
+    end
+
+    test "refuses a non-member or garbage target", %{alice: alice, channel: channel} do
+      carol = user_fixture(%{username: "carolt"})
+
+      assert {:error, :not_found} =
+               Channels.transfer_ownership(scope(alice), channel.id, carol.id)
+
+      assert {:error, :not_found} =
+               Channels.transfer_ownership(scope(alice), channel.id, "garbage")
+
+      assert Channels.owner?(scope(alice), channel.id)
+    end
+
+    test "refuses a non-owner actor", %{alice: alice, bob: bob, channel: channel} do
+      assert {:error, :forbidden} = Channels.transfer_ownership(scope(bob), channel.id, alice.id)
+      assert Channels.owner?(scope(alice), channel.id)
+      refute Channels.owner?(scope(bob), channel.id)
+    end
+
+    test "a target who left before the write keeps the channel's owner intact", %{
+      alice: alice,
+      bob: bob,
+      channel: channel
+    } do
+      # bob (the intended new owner) leaves before the transfer — role_of finds no row, so the
+      # promotion transaction never runs and the channel is NOT left ownerless (the count-check
+      # guard's whole point).
+      Repo.delete_all(
+        from m in Membership, where: m.channel_id == ^channel.id and m.user_id == ^bob.id
+      )
+
+      assert {:error, :not_found} = Channels.transfer_ownership(scope(alice), channel.id, bob.id)
+      assert Channels.owner?(scope(alice), channel.id)
+    end
+  end
+
   describe "owner offboarding / reassign_orphaned_ownerships/1 (#358)" do
     test "hands a solely-owned channel to the senior admin", %{alice: alice, bob: bob} do
       {:ok, channel} = Channels.create_channel(scope(alice), %{"name" => "Team"})
