@@ -12,7 +12,7 @@ defmodule EdenWeb.ChatLive do
   on_mount EdenWeb.RailHook
 
   import EdenWeb.ShellComponents
-  import EdenWeb.PresenceHelpers, only: [status_label: 1, status_color_var: 1]
+  import EdenWeb.PresenceHelpers, only: [status_label: 1, status_text_color_var: 1]
 
   alias Eden.{Accounts, Channels, Chat}
   alias EdenWeb.ChatLive.AlbumLayout
@@ -3367,7 +3367,7 @@ defmodule EdenWeb.ChatLive do
                 </div>
                 <div
                   :if={not @selected.is_group}
-                  style={"font-size:0.6875rem; color: var(#{status_color_var(header_peer_status(@selected, @current_scope.user, @statuses, @conv_presence))});"}
+                  style={"font-size:0.6875rem; color: var(#{status_text_color_var(header_peer_status(@selected, @current_scope.user, @statuses, @conv_presence))});"}
                 >
                   <%= if status = header_peer_status(@selected, @current_scope.user, @statuses, @conv_presence) do %>
                     {status_label(status)}
@@ -9583,7 +9583,7 @@ defmodule EdenWeb.ChatLive do
                 <button
                   type="button"
                   class="ed-btn--icon"
-                  style="color: var(--ed-danger);"
+                  style="color: var(--ed-danger-strong);"
                   title={gettext("Remove from channel")}
                   aria-label={gettext("Remove from channel")}
                   phx-click="remove_member"
@@ -10003,7 +10003,7 @@ defmodule EdenWeb.ChatLive do
               <button
                 type="button"
                 class="ed-btn ed-btn--ghost text-sm"
-                style="color: var(--ed-danger);"
+                style="color: var(--ed-danger-strong);"
                 phx-click="revoke_invite"
                 phx-value-id={invite.id}
                 data-confirm={gettext("Revoke this link? Anyone holding it loses access.")}
@@ -10844,7 +10844,7 @@ defmodule EdenWeb.ChatLive do
               <span
                 :if={@group and not @mine and @message.sender}
                 class="block"
-                style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
+                style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong-text);"
               >
                 {@message.sender.display_name}
               </span>
@@ -10884,7 +10884,7 @@ defmodule EdenWeb.ChatLive do
             <span
               :if={@group and not @mine and not is_nil(@message.sender) and @grp in [nil, :first]}
               class="block"
-              style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong);"
+              style="font-size:0.75rem; font-weight:600; color: var(--ed-primary-strong-text);"
             >
               {@message.sender.display_name}
             </span>
@@ -11823,7 +11823,7 @@ defmodule EdenWeb.ChatLive do
               </p>
               <p
                 class="mt-0.5"
-                style={"font-size:0.75rem; color: var(#{status_color_var(@status)});"}
+                style={"font-size:0.75rem; color: var(#{status_text_color_var(@status)});"}
               >
                 {status_label(@status)}
               </p>
@@ -11958,7 +11958,7 @@ defmodule EdenWeb.ChatLive do
           <p
             :if={@peer_status}
             class="mt-0.5"
-            style={"font-size:0.75rem; color: var(#{status_color_var(@peer_status)});"}
+            style={"font-size:0.75rem; color: var(#{status_text_color_var(@peer_status)});"}
           >
             {status_label(@peer_status)}
           </p>
@@ -12013,14 +12013,14 @@ defmodule EdenWeb.ChatLive do
               type="button"
               phx-click="remove_group_avatar"
               class="mt-1.5"
-              style="color: var(--ed-danger); font-size:0.75rem;"
+              style="color: var(--ed-danger-strong); font-size:0.75rem;"
             >
               {gettext("Remove photo")}
             </button>
             <p
               :for={err <- (@upload && upload_errors(@upload)) || []}
               class="mt-1.5"
-              style="color: var(--ed-danger); font-size:0.75rem;"
+              style="color: var(--ed-danger-strong); font-size:0.75rem;"
             >
               {group_avatar_error(err)}
             </p>

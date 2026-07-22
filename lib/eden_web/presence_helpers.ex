@@ -28,11 +28,21 @@ defmodule EdenWeb.PresenceHelpers do
   def status_label("dnd"), do: gettext("do not disturb")
   def status_label(_offline), do: gettext("offline")
 
-  @doc "CSS color variable for an effective presence status (nil = offline)."
+  @doc "CSS color variable for an effective presence status (nil = offline). Bright fill — for the DOT."
   def status_color_var("online"), do: "--ed-online"
   def status_color_var("away"), do: "--ed-away"
   def status_color_var("dnd"), do: "--ed-dnd"
   def status_color_var(_offline), do: "--ed-muted"
+
+  @doc """
+  As-TEXT status color token (#364): the bright fill tokens above are for the presence DOT; a
+  status *label* (`color:`) needs the -strong tiers to clear WCAG AA 4.5:1 on a neutral surface
+  (online/away failed in light, dnd in dark). `--ed-muted` already clears AA.
+  """
+  def status_text_color_var("online"), do: "--ed-online-strong"
+  def status_text_color_var("away"), do: "--ed-warning-strong"
+  def status_text_color_var("dnd"), do: "--ed-danger-strong"
+  def status_text_color_var(_offline), do: "--ed-muted"
 
   @doc "Dot modifier class for the rail self-indicator, by the user's MANUAL status."
   def me_dot_class("away"), do: "ed-avatar__dot--away"
