@@ -1939,6 +1939,32 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "ping from bob"
     end
 
+    test "patch-navigating away keeps the old DM's messages out of the open stream (#385/R052)",
+         ctx do
+      carol = user_fixture(%{username: "carol_r052"})
+      {:ok, conv_b} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      # handle_params doesn't re-run mount, so the subscription swap is manual (#385/R052) — a patch
+      # to B must drop conversation A's topic.
+      render_patch(view, ~p"/app/c/#{conv_b.id}")
+
+      # A realtime message in the LEFT conversation must NOT enter B's open message stream (scoped
+      # to #messages so A's legitimate sidebar-preview bump isn't what we're asserting on).
+      {:ok, _} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{
+          "body" => "stale-from-A"
+        })
+
+      refute render(element(view, "#messages")) =~ "stale-from-A"
+
+      # A message in the CURRENT conversation still streams in.
+      {:ok, _} = Chat.create_message(Scope.for_user(carol), conv_b.id, %{"body" => "live-from-B"})
+      assert render(element(view, "#messages")) =~ "live-from-B"
+    end
+
     test "a hook send creates the message and a same-client_id resend doesn't duplicate", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")

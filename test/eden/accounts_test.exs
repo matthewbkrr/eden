@@ -911,6 +911,24 @@ defmodule Eden.AccountsTest do
       assert Eden.Storage.exists?(u2.avatar_key)
     end
 
+    test "a replace via a STALE struct still reclaims the real stored blob (#385/R114)" do
+      user = user_fixture()
+      {:ok, u1} = Accounts.set_avatar(user, real_png())
+      key1 = u1.avatar_key
+
+      # A second upload that never observed the first — the way a concurrent second tab holds the
+      # pre-avatar struct (avatar_key still nil). The old code deleted `user.avatar_key` (nil → a
+      # no-op) and orphaned key1 forever; the fix reads the CURRENT key from the DB under FOR UPDATE
+      # and reclaims exactly that.
+      assert {:ok, u2} = Accounts.set_avatar(user, real_png())
+      refute u2.avatar_key == key1
+
+      refute Eden.Storage.exists?(key1),
+             "the real previous blob (from the DB, not the stale struct) must be reclaimed"
+
+      assert Eden.Storage.exists?(u2.avatar_key)
+    end
+
     test "remove_avatar clears the key and deletes the blob" do
       {:ok, u} = Accounts.set_avatar(user_fixture(), real_png())
       key = u.avatar_key

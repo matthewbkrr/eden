@@ -568,12 +568,40 @@ defmodule Eden.Accounts do
   def set_avatar(%User{} = user, source_path) do
     with {:ok, jpeg} <- Eden.Images.square_avatar(source_path),
          key = Storage.build_key("avatars", "jpg"),
-         :ok <- Storage.put_binary(key, jpeg),
-         {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
-      # Best-effort cleanup of the replaced blob (don't fail the update on it).
-      if user.avatar_key, do: Storage.delete(user.avatar_key)
-      {:ok, broadcast_user_update(updated)}
+         :ok <- Storage.put_binary(key, jpeg) do
+      finish_avatar_swap(swap_avatar_key(user.id, key), key)
     end
+  end
+
+  # Best-effort cleanup of the REPLACED blob — the one actually in the DB when we swapped (read under
+  # FOR UPDATE), NOT the possibly-stale `user.avatar_key` from the struct: two concurrent uploads
+  # (two tabs) would otherwise each delete the same old key and orphan the winner's committed blob
+  # forever (#385/R114).
+  defp finish_avatar_swap({:ok, {updated, prev_key}}, _key) do
+    if prev_key, do: Storage.delete(prev_key)
+    {:ok, broadcast_user_update(updated)}
+  end
+
+  # The DB write failed AFTER the blob landed — reclaim the just-written orphan, else it leaks in
+  # storage with nothing referencing it (#385/R114).
+  defp finish_avatar_swap({:error, _reason} = error, key) do
+    Storage.delete(key)
+    error
+  end
+
+  # Swap avatar_key under a row lock so concurrent uploads serialize: each reads the key CURRENTLY
+  # stored (not a stale struct value) and returns it for cleanup, so no committed blob is orphaned.
+  defp swap_avatar_key(user_id, key) do
+    Repo.transact(fn ->
+      with %User{} = locked <-
+             Repo.one(from u in User, where: u.id == ^user_id, lock: "FOR UPDATE"),
+           {:ok, updated} <- locked |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
+        {:ok, {updated, locked.avatar_key}}
+      else
+        nil -> {:error, :not_found}
+        err -> err
+      end
+    end)
   end
 
   @doc "Removes the user's avatar (and its stored blob)."
