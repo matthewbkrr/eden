@@ -93,6 +93,11 @@ defmodule EdenWeb.SettingsLive do
   defp first_changeset_error(%Ecto.Changeset{errors: [{_field, error} | _]}),
     do: translate_error(error)
 
+  # An error-free changeset shouldn't reach here (change_password only returns one when invalid),
+  # but never raise on it — fall back to a generic line (#413 review).
+  defp first_changeset_error(%Ecto.Changeset{}),
+    do: gettext("Couldn't change your password.")
+
   # Per-user notification toggles (#214) + chime preset (#289), account-scoped.
   defp assign_notifications(socket) do
     case socket.assigns[:current_scope] do

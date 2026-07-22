@@ -2863,3 +2863,8 @@ msgstr "Повторите новый пароль"
 #, elixir-autogen, elixir-format
 msgid "Forgot your password? Ask an admin to send you a reset link."
 msgstr "Забыли пароль? Попросите администратора выдать ссылку для сброса."
+
+#: lib/eden_web/live/settings_live.ex:97
+#, elixir-autogen, elixir-format
+msgid "Couldn't change your password."
+msgstr "Не удалось изменить пароль."
