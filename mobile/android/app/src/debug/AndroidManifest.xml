@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug-only manifest overlay (#416, PR #422 review): the manifest merger adds
+     networkSecurityConfig — and with it the 10.0.2.2 cleartext exception — to DEBUG
+     builds only. Release builds carry no network security config at all, so the
+     platform default applies: cleartext blocked everywhere. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:networkSecurityConfig="@xml/network_security_config" />
+</manifest>

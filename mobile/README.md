@@ -33,8 +33,10 @@ CocoaPods **не нужен** — Capacitor 8 ходит через Swift Packag
 `chat.ihi.ru`.
 
 Cleartext-HTTP разрешён ТОЛЬКО в дев-профилях и только точечно: Android —
-`network_security_config.xml` (один домен `10.0.2.2`), iOS —
-`NSAllowsLocalNetworking` (loopback/.local; удалённый HTTP остаётся запрещён).
+`network_security_config.xml` в **debug source set** (один домен `10.0.2.2`;
+release-сборка не несёт исключения вовсе — дефолт платформы, cleartext
+запрещён), iOS — `NSAllowsLocalNetworking` (loopback/.local; удалённый HTTP
+остаётся запрещён).
 
 ## Команды
 
