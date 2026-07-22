@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ihichat (eden) — техническое описание</title>
+<style>
+  :root {
+    --accent: #2f66c4;
+    --accent-soft: #eaf0fb;
+    --ink: #1c2330;
+    --muted: #5b6474;
+    --line: #dde2ea;
+    --warn-bg: #fdf3e7;
+    --warn-line: #e8c9a0;
+    --code-bg: #f4f6fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    font-size: 10.3pt;
+    line-height: 1.52;
+  }
+  .cover { padding: 90px 0 40px; page-break-after: always; }
+  .cover .brand {
+    display: inline-block; background: var(--accent); color: #fff;
+    font-weight: 700; font-size: 13pt; padding: 6px 14px; border-radius: 10px;
+  }
+  .cover h1 { font-size: 26pt; line-height: 1.2; margin: 28px 0 10px; letter-spacing: -0.01em; }
+  .cover .subtitle { font-size: 12.5pt; color: var(--muted); max-width: 36em; }
+  .cover .meta { margin-top: 46px; color: var(--muted); font-size: 9.5pt; border-top: 1px solid var(--line); padding-top: 14px; width: 70%; }
+  .cover .meta div { margin-bottom: 3px; }
+  .toc { margin-top: 40px; }
+  .toc h2 { border: none; font-size: 12pt; margin-bottom: 8px; padding: 0; }
+  .toc ol { margin: 0; padding-left: 1.4em; }
+  .toc li { margin-bottom: 3px; }
+  h2 {
+    font-size: 15.5pt; margin: 0 0 12px; padding-bottom: 8px;
+    border-bottom: 2px solid var(--accent); page-break-after: avoid; letter-spacing: -0.01em;
+  }
+  .section { page-break-before: always; padding-top: 6px; }
+  .section.flow { page-break-before: auto; }
+  h3 { font-size: 11.7pt; margin: 18px 0 6px; page-break-after: avoid; }
+  h4 { font-size: 10.5pt; margin: 14px 0 4px; page-break-after: avoid; }
+  h2 .num { color: var(--accent); }
+  p { margin: 0 0 8px; }
+  ul, ol { margin: 0 0 9px; padding-left: 1.5em; }
+  li { margin-bottom: 3px; }
+  code, .kbd {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 4px; padding: 0 4px; font-size: 8.9pt;
+  }
+  pre {
+    background: #20262f; color: #e7ecf3; border-radius: 8px; padding: 10px 14px;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 8.7pt;
+    line-height: 1.5; overflow-x: hidden; white-space: pre-wrap; page-break-inside: avoid;
+    margin: 8px 0 12px;
+  }
+  pre code { background: none; border: none; color: inherit; padding: 0; font-size: inherit; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: 9.3pt; page-break-inside: auto; }
+  th, td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+  th { background: #f4f6fa; font-weight: 650; }
+  tr { page-break-inside: avoid; }
+  .tip, .warn {
+    border-radius: 10px; padding: 9px 14px 9px 40px; margin: 10px 0;
+    position: relative; page-break-inside: avoid;
+  }
+  .tip { background: var(--accent-soft); border: 1px solid #c6d6f2; }
+  .warn { background: var(--warn-bg); border: 1px solid var(--warn-line); }
+  .tip::before, .warn::before { position: absolute; left: 13px; top: 8px; font-size: 12pt; }
+  .tip::before { content: "💡"; }
+  .warn::before { content: "⚠️"; }
+  figure { margin: 12px 0 14px; page-break-inside: avoid; }
+  figure img {
+    max-width: 100%; border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(28,35,48,.08);
+  }
+  figcaption { color: var(--muted); font-size: 9pt; margin-top: 6px; }
+  .diagram { margin: 12px 0 16px; page-break-inside: avoid; }
+  .footer-note { color: var(--muted); font-size: 9pt; margin-top: 26px; border-top: 1px solid var(--line); padding-top: 10px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ ОБЛОЖКА ═══════════ -->
+<div class="cover">
+  <span class="brand">ihichat</span>
+  <h1>Техническое описание системы</h1>
+  <p class="subtitle">Архитектура, модель данных, безопасность, развёртывание и эксплуатация
+  корпоративного мессенджера ihichat (кодовая база <b>eden</b>).</p>
+  <div class="meta">
+    <div><b>Версия документа:</b> 1.0 · 22 июля 2026</div>
+    <div><b>Для кого:</b> ИТ-специалисты — эксплуатация, поддержка, разработка</div>
+    <div><b>Репозиторий:</b> github.com/matthewbkrr/eden (private) · <b>Прод:</b> https://chat.ihi.ru</div>
+  </div>
+
+  <div class="toc">
+    <h2>Содержание</h2>
+    <ol>
+      <li>Обзор системы</li>
+      <li>Технологический стек</li>
+      <li>Архитектура приложения</li>
+      <li>Модель данных</li>
+      <li>Аутентификация и безопасность</li>
+      <li>Администрирование (панель /admin)</li>
+      <li>Развёртывание</li>
+      <li>Эксплуатация: бэкапы, мониторинг, обновления</li>
+      <li>Разработка и контроль качества</li>
+      <li>Известные ограничения и планы</li>
+    </ol>
+  </div>
+</div>
+
+<!-- ═══════════ 1 ═══════════ -->
+<div class="section flow">
+  <h2><span class="num">1.</span> Обзор системы</h2>
+  <p><b>ihichat</b> — корпоративный realtime-мессенджер (текст, фото, видео, файлы),
+  разработанный и эксплуатируемый компанией самостоятельно. Пользовательский бренд — «ihichat»;
+  кодовая база, модули и репозиторий носят имя <b>eden</b>.</p>
+  <p>Ключевые проектные решения:</p>
+  <ul>
+    <li><b>Веб-приложение без клиентов.</b> Единственный клиент — браузер (десктоп и мобильный).
+    UI обновляется в реальном времени по WebSocket (Phoenix LiveView), без REST/JSON-API и
+    без отдельного фронтенд-фреймворка.</li>
+    <li><b>Закрытый периметр.</b> Регистрация только по одноразовым ссылкам-приглашениям.
+    Открытой самостоятельной регистрации нет — это осознанное продуктовое и юридическое решение
+    (см. ADR-0002): система остаётся в рамках существующей позиции компании как оператора ПДн.</li>
+    <li><b>Никакой электронной почты.</b> В системе нет почтовой подсистемы вообще (доставка с
+    зарубежного VPS в российские ящики ненадёжна). Все «почтовые» сценарии — приглашения, сброс
+    пароля — реализованы одноразовыми ссылками, которые администратор передаёт лично.</li>
+    <li><b>Один сервер.</b> Прод — один VPS: Docker Compose (Caddy + приложение + PostgreSQL).
+    Основное сетевое ограничение — трансграничный RTT ~160 мс, а не ресурсы сервера.</li>
+    <li><b>Два слоя общения.</b> Личный мессенджер (диалоги и группы, пузырьковый UI в духе
+    Telegram) и корпоративный слой (каналы → комнаты → треды, плоский UI в духе Mattermost) —
+    на одной и той же механике сообщений.</li>
+  </ul>
+</div>
+
+<!-- ═══════════ 2 ═══════════ -->
+<div class="section">
+  <h2><span class="num">2.</span> Технологический стек</h2>
+  <table>
+    <tr><th>Слой</th><th>Технология</th><th>Примечания</th></tr>
+    <tr><td>Язык / рантайм</td><td>Elixir ~1.19, Erlang/OTP 29 (локально) / 28 (CI и прод)</td><td>OTP-релиз, без Mix в проде</td></tr>
+    <tr><td>Веб-фреймворк</td><td>Phoenix 1.8 + Phoenix LiveView 1.1, HTTP-сервер Bandit</td><td>Весь UI — LiveView; realtime через Phoenix.PubSub</td></tr>
+    <tr><td>БД</td><td>PostgreSQL 16 + Ecto</td><td>Единственное хранилище состояния; поиск — pg_trgm (GIN)</td></tr>
+    <tr><td>Фоновые задачи</td><td>Oban</td><td>Очереди <code>:media</code> (превью), <code>:default</code> (стирание данных удалённого пользователя), Cron (очистка токенов)</td></tr>
+    <tr><td>Ассеты</td><td>Tailwind CSS v4 + esbuild</td><td>Без node-сборки в проде</td></tr>
+    <tr><td>HTTP-клиент</td><td>Req</td><td>Проектное правило: не httpoison/tesla/httpc</td></tr>
+    <tr><td>Медиа</td><td>vix/libvips (bundled); ffmpeg/ffprobe (системная зависимость)</td><td>Миниатюры и аватары — libvips; постеры/длительность видео — ffmpeg</td></tr>
+    <tr><td>Хранилище файлов</td><td>Локальный диск (по умолчанию) или S3-совместимое (AWS S3 / R2 / MinIO / B2)</td><td>Адаптер за общим интерфейсом; SigV4 реализован вручную поверх Req, без SDK</td></tr>
+    <tr><td>Пароли / 2FA</td><td>bcrypt_elixir; nimble_totp (RFC 6238)</td><td>TOTP-секреты шифруются AES-256-GCM (модуль Vault, ключ из env)</td></tr>
+    <tr><td>Качество</td><td>credo, sobelow, dialyxir, mix_audit; Playwright (e2e)</td><td>Единый гейт <code>mix check</code>; e2e — по запросу, не в PR-гейте</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════ 3 ═══════════ -->
+<div class="section">
+  <h2><span class="num">3.</span> Архитектура приложения</h2>
+
+  <div class="diagram">
+  <svg viewBox="0 0 760 400" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, Segoe UI, Roboto, sans-serif">
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#5b6474"/>
+      </marker>
+    </defs>
+    <!-- browser -->
+    <rect x="10" y="150" width="120" height="70" rx="10" fill="#eaf0fb" stroke="#2f66c4" stroke-width="1.5"/>
+    <text x="70" y="180" text-anchor="middle" font-size="13" font-weight="600" fill="#1c2330">Браузер</text>
+    <text x="70" y="198" text-anchor="middle" font-size="10" fill="#5b6474">LiveView / WS</text>
+    <!-- caddy -->
+    <rect x="180" y="150" width="120" height="70" rx="10" fill="#fff" stroke="#5b6474" stroke-width="1.2"/>
+    <text x="240" y="180" text-anchor="middle" font-size="13" font-weight="600" fill="#1c2330">Caddy</text>
+    <text x="240" y="198" text-anchor="middle" font-size="10" fill="#5b6474">:80/:443, авто-TLS</text>
+    <!-- app -->
+    <rect x="350" y="40" width="270" height="300" rx="12" fill="#fff" stroke="#2f66c4" stroke-width="1.6"/>
+    <text x="485" y="66" text-anchor="middle" font-size="13" font-weight="700" fill="#2f66c4">eden (OTP-релиз, Docker)</text>
+    <rect x="366" y="80" width="238" height="34" rx="7" fill="#eaf0fb" stroke="#c6d6f2"/>
+    <text x="485" y="102" text-anchor="middle" font-size="11" fill="#1c2330">EdenWeb — LiveView, контроллеры</text>
+    <rect x="366" y="122" width="112" height="88" rx="7" fill="#f4f6fa" stroke="#dde2ea"/>
+    <text x="422" y="140" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1c2330">Accounts</text>
+    <text x="422" y="156" text-anchor="middle" font-size="9" fill="#5b6474">пользователи,</text>
+    <text x="422" y="169" text-anchor="middle" font-size="9" fill="#5b6474">инвайты, 2FA,</text>
+    <text x="422" y="182" text-anchor="middle" font-size="9" fill="#5b6474">роли</text>
+    <rect x="492" y="122" width="112" height="88" rx="7" fill="#f4f6fa" stroke="#dde2ea"/>
+    <text x="548" y="140" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1c2330">Chat · Channels</text>
+    <text x="548" y="156" text-anchor="middle" font-size="9" fill="#5b6474">диалоги, группы,</text>
+    <text x="548" y="169" text-anchor="middle" font-size="9" fill="#5b6474">каналы, комнаты,</text>
+    <text x="548" y="182" text-anchor="middle" font-size="9" fill="#5b6474">треды, реакции</text>
+    <rect x="366" y="218" width="112" height="56" rx="7" fill="#f4f6fa" stroke="#dde2ea"/>
+    <text x="422" y="238" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1c2330">Storage</text>
+    <text x="422" y="254" text-anchor="middle" font-size="9" fill="#5b6474">адаптер: Local | S3</text>
+    <rect x="492" y="218" width="112" height="56" rx="7" fill="#f4f6fa" stroke="#dde2ea"/>
+    <text x="548" y="238" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1c2330">Notifications</text>
+    <text x="548" y="254" text-anchor="middle" font-size="9" fill="#5b6474">адаптер: Web (in-tab)</text>
+    <rect x="366" y="284" width="238" height="40" rx="7" fill="#f4f6fa" stroke="#dde2ea"/>
+    <text x="485" y="302" text-anchor="middle" font-size="10.5" font-weight="600" fill="#1c2330">Oban · Phoenix.PubSub</text>
+    <text x="485" y="316" text-anchor="middle" font-size="9" fill="#5b6474">фоновые задачи · realtime-шина</text>
+    <!-- pg -->
+    <rect x="660" y="110" width="90" height="64" rx="10" fill="#fff" stroke="#5b6474" stroke-width="1.2"/>
+    <text x="705" y="138" text-anchor="middle" font-size="12" font-weight="600" fill="#1c2330">PostgreSQL</text>
+    <text x="705" y="155" text-anchor="middle" font-size="10" fill="#5b6474">16</text>
+    <!-- storage -->
+    <rect x="660" y="220" width="90" height="72" rx="10" fill="#fff" stroke="#5b6474" stroke-width="1.2"/>
+    <text x="705" y="246" text-anchor="middle" font-size="11" font-weight="600" fill="#1c2330">Файлы</text>
+    <text x="705" y="262" text-anchor="middle" font-size="9" fill="#5b6474">volume uploads</text>
+    <text x="705" y="276" text-anchor="middle" font-size="9" fill="#5b6474">или S3/R2</text>
+    <!-- arrows -->
+    <line x1="130" y1="185" x2="176" y2="185" stroke="#5b6474" stroke-width="1.4" marker-end="url(#arr)"/>
+    <line x1="300" y1="185" x2="346" y2="185" stroke="#5b6474" stroke-width="1.4" marker-end="url(#arr)"/>
+    <line x1="620" y1="142" x2="656" y2="142" stroke="#5b6474" stroke-width="1.4" marker-end="url(#arr)"/>
+    <line x1="620" y1="252" x2="656" y2="252" stroke="#5b6474" stroke-width="1.4" marker-end="url(#arr)"/>
+  </svg>
+  </div>
+
+  <h3>Ограниченные контексты</h3>
+  <p>Домен разбит на контексты в <code>lib/eden/</code>; веб-слой — <code>lib/eden_web/</code>.
+  Инварианты зависимостей: <b>веб-слой вызывает контексты, контексты никогда не вызывают веб-слой
+  и не лезут друг в друга напрямую</b> (сквозные сценарии оркестрируются задачей уровня приложения,
+  например воркером стирания данных).</p>
+  <table>
+    <tr><th>Контекст</th><th>Ответственность</th></tr>
+    <tr><td><code>Eden.Accounts</code></td><td>Пользователи, сессии, приглашения, пароли и их сброс, TOTP-2FA, платформенные роли (member/admin/super_admin), управляемые «кадровые» поля, деактивация и необратимое удаление (анонимизация).</td></tr>
+    <tr><td><code>Eden.Chat</code></td><td>Вся механика сообщений: диалоги/группы (Conversation + Membership), сообщения с вложениями-альбомами, ответы-цитаты, реакции, редактирование, удаление («у себя»/«у всех»), пересылка, треды комнат, папки, непрочитанные, поиск (trigram), системные сообщения.</td></tr>
+    <tr><td><code>Eden.Channels</code></td><td>Корпоративный слой: каналы, роли участников (owner/admin/member), комнаты (это Conversation с <code>channel_id</code>), доступ в приватные комнаты («постучаться»), ссылки-приглашения в канал, передача владения.</td></tr>
+    <tr><td><code>Eden.Storage</code></td><td>Файлы за интерфейсом-поведением (behaviour): ключ + метаданные у вызывающего, реализация — <code>Local</code> (атомарная запись) или <code>S3</code> (ручной SigV4, range-запросы для перемотки видео). Смена — одна строка конфигурации.</td></tr>
+    <tr><td><code>Eden.Notifications</code></td><td>Доставка уведомлений за интерфейсом-адаптером (ADR-0001). «Кому» решает Chat (mute/DND/фокус/подписки на треды/деактивация — в одном месте), адаптеры только доставляют. Сегодня один транспорт — Web (внутривкладочный).</td></tr>
+  </table>
+
+  <h3>Realtime</h3>
+  <p>Каждое открытое LiveView подписано на PubSub-топики: беседа (<code>conversation:&lt;id&gt;</code>),
+  пользовательские топики (<code>user:&lt;id&gt;:chat</code> — синхронизация сайдбара,
+  <code>user:&lt;id&gt;:notify</code> — уведомления, отдельно, чтобы не флудить),
+  канал (<code>channel:&lt;id&gt;</code>). Отправка сообщения широковещает событие, и все клиенты
+  обновляются без опроса. Оптимистичная отправка: сообщение появляется мгновенно, статус
+  «отправляется/отправлено» честный, при обрыве связи очередь досылается после переподключения.</p>
+
+  <h3>Фоновая обработка</h3>
+  <ul>
+    <li><code>:media</code> — миниатюры изображений, постеры и длительность видео (ffmpeg).
+    Габариты в пикселях читаются синхронно при отправке, чтобы вёрстка не «прыгала».</li>
+    <li><code>:default</code> — durable-воркер стирания следов удалённого пользователя
+    (транзакционный outbox: задача ставится внутри транзакции анонимизации).</li>
+    <li>Cron — ежедневная очистка истёкших токенов.</li>
+  </ul>
+</div>
+
+<!-- ═══════════ 4 ═══════════ -->
+<div class="section">
+  <h2><span class="num">4.</span> Модель данных</h2>
+  <p>Основные таблицы (все — PostgreSQL, миграции в <code>priv/repo/migrations</code>):</p>
+  <table>
+    <tr><th>Таблица</th><th>Назначение</th></tr>
+    <tr><td><code>users</code></td><td>Аккаунты: логин-«тег» (@username, переименовываемый), профиль, аватар (<code>avatar_key</code>), платформенная роль, presence-статус, TOTP-поля (секрет зашифрован), <code>active</code>, <code>deleted_at</code>, управляемые поля (corp_email, должность и т.д.).</td></tr>
+    <tr><td><code>users_tokens</code></td><td>Сессионные токены (хранятся хешированными; ссылаются на id пользователя, поэтому переименование логина сессии не рвёт).</td></tr>
+    <tr><td><code>invites</code>, <code>password_reset_tokens</code></td><td>Приглашения и ссылки сброса пароля: только хеш токена, срок действия, лимит использований, погашение под <code>FOR UPDATE</code>.</td></tr>
+    <tr><td><code>conversations</code></td><td>Беседа — первоклассная сущность: 1:1, группа (<code>is_group</code>, title) и комната канала (<code>channel_id</code>, <code>visibility</code> open/private, <code>is_general</code>) — одна модель.</td></tr>
+    <tr><td><code>memberships</code></td><td>Участие в беседе: роль, <code>last_read</code> (непрочитанные), <code>left_at</code> (персональное «удалить чат»), <code>muted_at</code>.</td></tr>
+    <tr><td><code>messages</code></td><td>Сообщения: текст (безопасное markdown-подмножество), <code>reply_to_id</code> (цитаты), <code>root_id</code> + счётчики (треды), <code>edited_at</code>, <code>deleted_at</code> (могила), <code>kind</code> user/system + <code>meta</code>, <code>forwarded_from_id</code>.</td></tr>
+    <tr><td><code>attachments</code></td><td>Вложения (у сообщения — упорядоченный альбом): storage-ключи оригинала и миниатюры, тип по магическим байтам (image/video/file), размеры, длительность.</td></tr>
+    <tr><td><code>message_deletions</code>, <code>message_reactions</code></td><td>Персональные скрытия сообщений; реакции (уникальность «участник+эмодзи», закрытый набор).</td></tr>
+    <tr><td><code>chat_folders</code>, <code>chat_folder_memberships</code>, <code>chat_folder_prefs</code></td><td>Личные папки-вкладки, членство чатов в папках, персональные предпочтения (позиция «Все чаты», быстрые реакции, настройки уведомлений).</td></tr>
+    <tr><td><code>channels</code>, <code>channel_memberships</code>, <code>channel_invites</code></td><td>Каналы, роли и «последняя комната», приглашения в канал/комнату.</td></tr>
+    <tr><td><code>thread_memberships</code></td><td>Подписка на тред и персональный счётчик непрочитанных ответов.</td></tr>
+    <tr><td><code>oban_jobs</code></td><td>Очередь фоновых задач (Oban).</td></tr>
+  </table>
+  <p>Заметные решения: удаление пользователя — <b>анонимизация, а не каскад</b> (строка остаётся,
+  переписка коллег не «дырявится», подпись становится «Удалённый аккаунт»); блобы вложений
+  разделяются при пересылке и убираются только когда не осталось ссылок; поиск по телу сообщений —
+  триграммный индекс GIN (подстрока + устойчивость к опечаткам).</p>
+</div>
+
+<!-- ═══════════ 5 ═══════════ -->
+<div class="section">
+  <h2><span class="num">5.</span> Аутентификация и безопасность</h2>
+  <h3>Вход в периметр</h3>
+  <ul>
+    <li><b>Регистрация только по приглашению.</b> Токены приглашений хранятся хешированными,
+    имеют срок (по умолчанию 30 минут) и лимит использований; погашение транзакционно.</li>
+    <li><b>Пароли</b> — bcrypt. Смена пароля отзывает все сессии. «Выйти везде» доступно пользователю.</li>
+    <li><b>Сброс пароля</b> — только через администратора: одноразовая короткоживущая ссылка
+    (та же токен-механика), выдаётся из /admin. Почты в системе нет.</li>
+    <li><b>TOTP-2FA</b> (RFC 6238): пользователь включает сам (QR + резервные коды), при входе —
+    отдельный второй шаг до выдачи сессии; защита от повтора кода. Секреты шифруются AES-256-GCM
+    (<code>Eden.Vault</code>, ключ <code>EDEN_VAULT_KEY</code> — отдельный секрет, не в БД).
+    <b>Для администраторов 2FA обязательна</b>: без неё админ-панель недоступна.
+    Восстановление при утере устройства — сброс фактора администратором.</li>
+  </ul>
+  <h3>Роли и авторизация</h3>
+  <ul>
+    <li>Платформенные роли: <code>member → admin → super_admin</code>. Назначает только
+    super_admin; <b>последнего работоспособного super_admin понизить/удалить нельзя</b>
+    (блокировка <code>FOR UPDATE</code>) — админ-доступ не может быть потерян.</li>
+    <li>Роли канала: <code>owner / admin / member</code> — отдельная ось, матрица
+    «кто кого может удалить» строгая, владелец уходит только передав канал.</li>
+    <li>Все функции контекстов принимают <code>%Scope{}</code> (текущий пользователь) и сами
+    проверяют доступ: не-участнику возвращается <code>:not_found</code> — существование чужих
+    сущностей не раскрывается. Авторизация живёт в контекстах, а не в шаблонах.</li>
+    <li>Деактивация (обратима) и необратимое удаление-анонимизация: обе мгновенно отзывают
+    сессии; вход деактивированного неотличим от неверного пароля (состояние аккаунта не
+    утекает).</li>
+  </ul>
+  <h3>Защита веб-слоя</h3>
+  <ul>
+    <li><b>Rate limiting</b> по IP на анонимных POST: вход — 10/5 мин, приглашение — 30/5 мин
+    (реальный IP восстанавливается из <code>X-Forwarded-For</code>, который перезаписывает Caddy).
+    Неудачные входы логируются (логин + IP, без пароля).</li>
+    <li><b>CSP</b> с per-request nonce (скрипты только с nonce); CSRF-защита Phoenix; безопасные
+    заголовки браузера.</li>
+    <li><b>Контент.</b> Тип вложения определяется по магическим байтам, а не по заявленному
+    Content-Type; лимиты: фото 8 МБ, видео 50 МБ, файл 25 МБ, до 10 в альбоме; защита от
+    «декомпрессионных бомб». Markdown рендерится по whitelist-подмножеству (HTML-инъекции
+    исключены на уровне генерации).</li>
+    <li><b>Раздача файлов</b> — только через контроллер с проверкой членства в беседе;
+    прямых публичных URL к блобам нет.</li>
+  </ul>
+</div>
+
+<!-- ═══════════ 6 ═══════════ -->
+<div class="section">
+  <h2><span class="num">6.</span> Администрирование (панель /admin)</h2>
+  <p>Панель <code>https://chat.ihi.ru/admin</code> доступна ролям admin/super_admin
+  (обязательно с включённой 2FA). Ссылка на неё видна в настройках только администраторам.</p>
+  <figure>
+    <img src="shots/16-admin.png" alt="Админ-панель">
+    <figcaption>Рис. 1. /admin: выпуск ссылок-приглашений и управление людьми.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Операция</th><th>Кто может</th><th>Детали</th></tr>
+    <tr><td>Выпуск / отзыв ссылок-приглашений</td><td>admin+</td><td>Срок ~30 мин, ограничение использований; показывается один раз.</td></tr>
+    <tr><td>Редактирование «кадровых» полей</td><td>admin+</td><td>Корп-почта, должность, подразделение — пользователь их не редактирует (модель «ihichat как система записи», ADR-0002).</td></tr>
+    <tr><td>Ссылка сброса пароля</td><td>admin+; admin не может сбросить super_admin; никогда себе</td><td>Одноразовая, короткий срок; гасится на <code>/reset/&lt;token&gt;</code>.</td></tr>
+    <tr><td>Сброс TOTP</td><td>та же матрица</td><td>Для утерянного устройства; админ-цель обязана заново включить 2FA при входе в /admin.</td></tr>
+    <tr><td>Деактивация / реактивация</td><td>та же матрица</td><td>Обратимая блокировка: сессии отозваны, вход закрыт.</td></tr>
+    <tr><td>Необратимое удаление</td><td>та же матрица; последний super_admin защищён</td><td>Анонимизация: стирание ПДн/учётных данных/аватара, освобождение @тега, переписка остаётся как «Удалённый аккаунт». Двухшаговое подтверждение.</td></tr>
+    <tr><td>Назначение ролей</td><td>только super_admin</td><td>member/admin/super_admin.</td></tr>
+  </table>
+  <div class="tip">Первый super_admin создаётся на этапе запуска командой релиза
+  (<code>bootstrap_super_admin</code>, см. §7) — повторный запуск безопасно отказывает, если
+  super_admin уже существует.</div>
+</div>
+
+<!-- ═══════════ 7 ═══════════ -->
+<div class="section">
+  <h2><span class="num">7.</span> Развёртывание</h2>
+  <h3>Топология прода</h3>
+  <p>Один хост (Debian 12) с Docker Compose (<code>/opt/eden</code>): контейнеры
+  <b>caddy</b> (реверс-прокси, автоматический TLS Let’s Encrypt), <b>app</b> (OTP-релиз в
+  многостадийном образе), <b>db</b> (PostgreSQL 16). Медиа — локальный volume
+  <code>uploads</code>; переключение на S3/R2 — переменными окружения, без изменения кода.</p>
+  <pre><code>браузер → Caddy (:80/:443, TLS) → app (:4000) → PostgreSQL
+                                      └── медиа: volume uploads | S3/R2</code></pre>
+  <h3>CD</h3>
+  <p>GitHub Actions, workflow <b>Deploy</b> (ручной запуск): сборка образа → публикация в GHCR →
+  по SSH на сервер: <code>docker compose pull</code>, миграции <code>bin/migrate</code>,
+  <code>docker compose up -d</code>. Миграции должны быть обратно-совместимыми
+  (expand/contract): старый контейнер обслуживает трафик до перезапуска.</p>
+  <h3>Переменные окружения (<code>/opt/eden/.env</code>)</h3>
+  <table>
+    <tr><th>Переменная</th><th>Назначение</th></tr>
+    <tr><td><code>DATABASE_URL</code>, <code>POSTGRES_PASSWORD</code></td><td>Подключение к БД.</td></tr>
+    <tr><td><code>SECRET_KEY_BASE</code></td><td>Секрет Phoenix (подпись сессий). Генерация: <code>mix phx.gen.secret</code>.</td></tr>
+    <tr><td><code>EDEN_VAULT_KEY</code></td><td><b>Отдельный</b> ключ шифрования TOTP-секретов. Хранить стабильным: утрата = все настроенные 2FA-факторы нечитаемы.</td></tr>
+    <tr><td><code>PHX_HOST</code>, <code>PHX_SCHEME</code>, <code>PHX_PORT</code>, <code>SITE_ADDRESS</code></td><td>Публичный адрес; переключение «IP по HTTP» ↔ «домен по HTTPS» без пересборки.</td></tr>
+    <tr><td><code>EDEN_UPLOADS_ROOT</code></td><td>Каталог volume с медиа (адаптер Local).</td></tr>
+    <tr><td><code>EDEN_S3_*</code></td><td>Если задан bucket — Storage переключается на S3/R2.</td></tr>
+    <tr><td><code>EDEN_BACKUP_S3_*</code></td><td>Отдельный bucket для офф-сайт копий бэкапов (см. §8).</td></tr>
+    <tr><td><code>EDEN_ALERT_TELEGRAM_TOKEN/CHAT</code>, <code>EDEN_HEALTHCHECK_URL</code></td><td>Алертинг monitor.sh (см. §8).</td></tr>
+  </table>
+  <h3>Проверка живости</h3>
+  <p><code>GET /healthz</code> → <code>ok</code> — отвечает до роутера, без обращения к БД;
+  ходит по HTTP без редиректа (TLS терминируется на Caddy).</p>
+  <h3>Первичный запуск («go-live», уже выполняется по чек-листу deploy/README.md)</h3>
+  <ol>
+    <li>Бэкап текущего состояния (<code>./backup.sh</code>).</li>
+    <li>Сброс данных: <code>Eden.Release.reset!()</code> — TRUNCATE всех таблиц + очистка uploads;
+    защищён точным значением <code>EDEN_ALLOW_RESET=yes-wipe-everything</code>.</li>
+    <li>Первый администратор: <code>Eden.Release.bootstrap_super_admin()</code>
+    (логин/пароль через env, пароль не попадает в историю шелла).</li>
+    <li>Вход → /admin → выпуск приглашений реальным сотрудникам.</li>
+  </ol>
+</div>
+
+<!-- ═══════════ 8 ═══════════ -->
+<div class="section">
+  <h2><span class="num">8.</span> Эксплуатация: бэкапы, мониторинг, обновления</h2>
+  <h3>Шпаргалка (на сервере, из /opt/eden)</h3>
+  <pre><code>docker compose ps                     # статус контейнеров
+docker compose logs -f app            # логи приложения
+docker compose logs -f caddy          # логи TLS/прокси
+docker compose run --rm app /app/bin/migrate    # миграции вручную
+docker compose exec app /app/bin/eden remote    # IEx в работающий релиз
+docker compose up -d                  # применить .env / перезапуск</code></pre>
+
+  <h3>Бэкапы</h3>
+  <ul>
+    <li><code>backup.sh</code> по cron (ежедневно 03:30): pg_dump в <code>/opt/eden/backups/</code>,
+    хранится 14 последних; каждый дамп зеркалируется в отдельный S3/R2-bucket
+    (rclone в одноразовом контейнере). Сбой отгрузки не удаляет локальный дамп и попадает в алерты.</li>
+    <li>Восстановление: <code>gunzip -c backups/eden-&lt;stamp&gt;.sql.gz | docker compose exec -T db psql -U &lt;user&gt; &lt;db&gt;</code>
+    (при потере хоста — сначала забрать дамп из bucket).</li>
+    <li>Медиа-файлы в дампы БД не входят: это volume <code>uploads</code> (или S3-bucket) —
+    учитывать при переносе сервера.</li>
+  </ul>
+
+  <h3>Мониторинг и алерты</h3>
+  <ul>
+    <li><code>monitor.sh</code> по cron каждые 10 минут: заполнение диска (порог 80%),
+    здоровье контейнера приложения; алерты в <b>Telegram</b> (почты в проекте нет),
+    повтор не чаще раза в 6 часов.</li>
+    <li><b>Dead-man switch</b>: пинг внешнего сервиса (healthchecks.io) — падение всего хоста
+    замечает внешняя сторона.</li>
+  </ul>
+
+  <h3>Обновление и откат</h3>
+  <ul>
+    <li>Обновление = merge в <code>main</code> → запуск workflow Deploy.</li>
+    <li>Откат приложения: указать в <code>.env</code> предыдущий образ
+    <code>APP_IMAGE=ghcr.io/…:&lt;sha&gt;</code> и <code>docker compose up -d</code>.</li>
+  </ul>
+  <div class="warn"><b>Миграции — только вперёд.</b> Часть ранних миграций не обратима по данным
+  (например, <code>room_access_general_only</code> удаляет строки членства). Проблемы чинить
+  новой миграцией «вперёд», а не откатом схемы.</div>
+
+  <h3>Типовые инциденты</h3>
+  <table>
+    <tr><th>Симптом</th><th>Действия</th></tr>
+    <tr><td>Диск заполняется (алерт 80%)</td><td>Проверить <code>df -h /var/lib/docker</code>; главный потребитель — медиа. Штатный выход: перевести медиа на R2/S3 (<code>EDEN_S3_*</code> + <code>up -d</code>). Прецедент 2026-06-29: диск добили накопленные Docker-образы — деплой теперь чистит dangling-образы.</td></tr>
+    <tr><td>Приложение не отвечает</td><td><code>curl /healthz</code>; <code>docker compose ps / logs app</code>; перезапуск <code>up -d</code>. Если хост «молчит» — сработает dead-man.</td></tr>
+    <tr><td>Пользователь потерял пароль / 2FA-устройство</td><td>/admin → ссылка сброса пароля или сброс TOTP (матрица прав в §6).</td></tr>
+    <tr><td>Скомпрометирован аккаунт</td><td>/admin → деактивация (мгновенный отзыв сессий) → расследование → сброс пароля и реактивация.</td></tr>
+    <tr><td>Медленно у удалённых пользователей</td><td>Это RTT до сервера (~160 мс трансграничный), не ресурсы хоста: стек на сервере уже тюнингован (BBR/fq). Радикальное улучшение — CDN/edge (Cloudflare) или перенос origin ближе; вариант с Cloudflare расписан в deploy/README §6a.</td></tr>
+  </table>
+</div>
+
+<!-- ═══════════ 9 ═══════════ -->
+<div class="section">
+  <h2><span class="num">9.</span> Разработка и контроль качества</h2>
+  <h3>Локальная среда</h3>
+  <pre><code>mix setup            # зависимости + БД + ассеты
+mix phx.server       # запуск (http://localhost:4000)
+mix test             # тесты
+mix check            # ЕДИНЫЙ гейт: format → compile --warnings-as-errors
+                     #   → credo --strict → sobelow → deps.audit → test
+mix dialyzer         # типовой анализ (обязателен, отдельно от check)</code></pre>
+  <p>Definition of Done: зелёные <code>mix check</code> и <code>mix dialyzer</code>, тесты на новое
+  поведение, заполненный чек-лист PR (обратимость миграций, отсутствие секретов, оценка влияния
+  на безопасность, обновление документации при изменении архитектуры).</p>
+  <h3>CI/CD</h3>
+  <ul>
+    <li>CI на PR: полный гейт + dialyzer; job <b>release-smoke</b> собирает прод-релиз и гоняет
+    миграции через него — прод-специфичные регрессии ловятся до деплоя.</li>
+    <li>E2E (Playwright, мульти-пользовательский харнес в <code>test/e2e/</code>) — запуск вручную
+    (workflow «E2E (manual)»); не является PR-гейтом.</li>
+    <li>Деплой — только ручной запуск workflow Deploy (см. §7).</li>
+  </ul>
+  <h3>Структура репозитория и документация</h3>
+  <table>
+    <tr><th>Файл/каталог</th><th>Содержание</th></tr>
+    <tr><td><code>lib/eden</code>, <code>lib/eden_web</code></td><td>Домен и веб-слой (см. §3).</td></tr>
+    <tr><td><code>CLAUDE.md</code>, <code>AGENTS.md</code></td><td>Проектные правила и соглашения кодирования (в т.ч. для ИИ-агентов); фактическая «карта фич».</td></tr>
+    <tr><td><code>CONTEXT.md</code></td><td>Глоссарий домена — термины употребляются строго по нему.</td></tr>
+    <tr><td><code>docs/adr/</code></td><td>Архитектурные решения: ADR-0001 (доставка уведомлений), ADR-0002 (модель аутентификации и идентичности).</td></tr>
+    <tr><td><code>DESIGN.md</code>, <code>PRODUCT.md</code>, <code>/dev/ui</code></td><td>Дизайн-система и продуктовые принципы (сдержанный, «тихий» UI; тёмная/светлая/системная темы; WCAG 2.1 AA).</td></tr>
+    <tr><td><code>deploy/</code></td><td>Компоуз, Caddyfile, .env.example, backup.sh, monitor.sh, runbook README.</td></tr>
+    <tr><td><code>test/e2e/</code></td><td>Playwright-харнес: сид, мульти-браузерные сценарии.</td></tr>
+  </table>
+  <p>Задачи и баги — GitHub Issues репозитория; типовые метки приоритетов P0–P3
+  (P0 — безопасность/потеря данных, блокирует немедленно; P1 — корректность, блокирует merge;
+  P2/P3 — рекомендации).</p>
+</div>
+
+<!-- ═══════════ 10 ═══════════ -->
+<div class="section">
+  <h2><span class="num">10.</span> Известные ограничения и планы</h2>
+  <ul>
+    <li><b>Уведомления — только в открытой вкладке.</b> Единственный транспорт — внутривкладочный
+    Web-адаптер; браузерных push при закрытой вкладке нет. Архитектурный шов (ADR-0001) готов
+    под будущие транспорты: десктоп-приложение, APNs/FCM, RuStore/VK — новые модули-адаптеры без
+    изменения вызывающего кода. FCM бесплатен, но в РФ доставляется ненадёжно — выбор транспорта
+    остаётся продуктовым решением.</li>
+    <li><b>Электронной почты нет и не планируется</b> — все сценарии восстановления идут через
+    администратора (осознанное ограничение, см. §1).</li>
+    <li><b>Аудио-вложения</b> классифицируются как обычные файлы (голосовые сообщения — отложены).</li>
+    <li><b>Поиск</b> — подстрочный/триграммный; полнотекстовый поиск со стеммингом и ранжированием —
+    зафиксированный follow-up.</li>
+    <li><b>Латентность для дальних пользователей</b> ограничена RTT; заготовлен план Cloudflare
+    (edge-TLS + кэш статики/медиа) — активация требует доступа к DNS-зоне домена.</li>
+    <li><b>Мульти-организации</b> (тенант-модель над каналами), внешние IdP (VK ID / Яндекс ID /
+    корп-OIDC) — проработаны в RFC и ADR-0002 как будущие шаги; в текущей версии один периметр
+    и парольный вход с 2FA.</li>
+  </ul>
+
+  <p class="footer-note">ihichat (eden) · Техническое описание · версия 1.0 от 22.07.2026.
+  Источники: CLAUDE.md, CONTEXT.md, docs/adr, deploy/README.md кодовой базы (состояние на 22.07.2026).
+  Снимок экрана — демонстрационные данные.</p>
+</div>
+
+</body>
+</html>

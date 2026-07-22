@@ -528,6 +528,17 @@ Production runs as an **OTP release** in a thin Docker image (multi-stage
   directly. Larger blast-radius controls (per-username lockout, captcha) are
   deferred — see the issue.
 
+## Product handbook (docs/handbook)
+
+User-facing documentation lives in `docs/handbook/` — two Russian-language HTML
+sources (`user-guide.html` for employees, `tech-doc.html` for IT/ops) rendered
+to distributable PDFs. **A PR that changes user-visible behavior, the admin
+panel, or deploy/ops procedures must update the matching handbook section** —
+this is part of the Definition of Done, same as updating CLAUDE.md. Screenshots
+and PDFs are build artifacts regenerated via the pipeline in
+`docs/handbook/README.md` (demo seed → Playwright shots → crop → PDF); re-shoot
+only when a captured screen actually changed.
+
 ## Agent skills
 
 ### Issue tracker

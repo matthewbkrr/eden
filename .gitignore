@@ -55,3 +55,9 @@ npm-debug.log
 # Local scratch / debug artifacts (never part of the app).
 /test/e2e/scratch/
 /.impeccable/
+
+# Handbook build artifacts (docs/handbook/README.md) — HTML sources are tracked,
+# screenshots/PDFs/seed-output are regenerated locally.
+/docs/handbook/shots/
+/docs/handbook/dist/
+/docs/handbook/.demo.json
