@@ -270,7 +270,7 @@ msgstr ""
 #: lib/eden_web/live/chat_live.ex:1970
 #: lib/eden_web/live/chat_live.ex:1990
 #, elixir-autogen, elixir-format
-msgid "Couldn't start the conversation."
+msgid "Couldn't start the chat."
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:10157
@@ -295,12 +295,12 @@ msgstr ""
 #: lib/eden_web/live/chat_live.ex:10135
 #: lib/eden_web/live/chat_live.ex:10141
 #, elixir-autogen, elixir-format
-msgid "New conversation"
+msgid "New chat"
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:3451
 #, elixir-autogen, elixir-format
-msgid "No conversation selected"
+msgid "No chat selected"
 msgstr ""
 
 #: lib/eden_web/live/chat_live.ex:10149
@@ -2813,4 +2813,24 @@ msgstr ""
 #: lib/eden_web/live/admin_live.ex:149
 #, elixir-autogen, elixir-format
 msgid "Your admin access was removed."
+msgstr ""
+
+#: lib/eden_web/user_auth.ex:79
+#, elixir-autogen, elixir-format
+msgid "You must log in to access this page."
+msgstr ""
+
+#: lib/eden_web/user_auth.ex:144
+#, elixir-autogen, elixir-format
+msgid "You don't have access to that page."
+msgstr ""
+
+#: lib/eden_web/user_auth.ex:155
+#, elixir-autogen, elixir-format
+msgid "Turn on two-factor authentication to use the admin panel."
+msgstr ""
+
+#: lib/eden_web/user_auth.ex:222
+#, elixir-autogen, elixir-format
+msgid "Your session ended. Please sign in again."
 msgstr ""

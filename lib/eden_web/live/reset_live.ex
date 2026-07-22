@@ -38,6 +38,10 @@ defmodule EdenWeb.ResetLive do
   def render(assigns) do
     ~H"""
     <div class="ed-root min-h-screen flex items-center justify-center px-5">
+      <%!-- NotifyHook is mounted on this session; host the notifier so its push_event("notify")
+            has a receiver (a logged-in user redeeming a reset). No-op when logged out —
+            notify_prefs is nil then (#367/R204). --%>
+      <.notifier :if={@notify_prefs} prefs={@notify_prefs} />
       <div
         class="w-full max-w-sm rounded-[var(--ed-radius-lg)] border p-6"
         style="border-color: var(--ed-border); background: var(--ed-surface);"

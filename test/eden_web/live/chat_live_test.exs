@@ -75,7 +75,7 @@ defmodule EdenWeb.ChatLiveTest do
   test "shows the empty state when nothing is selected", %{conn: conn} do
     conn = log_in_user(conn, user_fixture())
     {:ok, _view, html} = live(conn, ~p"/app")
-    assert html =~ "No conversation selected"
+    assert html =~ "No chat selected"
   end
 
   describe "group role actions in the profile panel (#165)" do

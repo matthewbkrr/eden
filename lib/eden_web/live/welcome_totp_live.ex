@@ -86,6 +86,9 @@ defmodule EdenWeb.WelcomeTotpLive do
   def render(assigns) do
     ~H"""
     <div class="ed-root min-h-screen grid place-items-center px-5 py-10">
+      <%!-- NotifyHook is mounted on this session, so host the notifier here too — else its
+            push_event("notify") lands with no receiver (#367/R204). --%>
+      <.notifier :if={@notify_prefs} prefs={@notify_prefs} />
       <%!-- Float the transient welcome/error flash as a top toast so its auto-dismiss
             doesn't shift the CTA out from under a tap (#306 review). --%>
       <div class="fixed left-1/2 top-4 z-50 w-full max-w-md -translate-x-1/2 px-5">

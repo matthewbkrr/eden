@@ -2262,7 +2262,7 @@ defmodule EdenWeb.ChatLive do
          |> push_patch(to: ~p"/app/c/#{conversation.id}")}
       end
     else
-      _ -> {:noreply, put_flash(socket, :error, gettext("Couldn't start the conversation."))}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Couldn't start the chat."))}
     end
   end
 
@@ -2300,7 +2300,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply, put_flash(socket, :error, gettext("Pick at least one person."))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, gettext("Couldn't start the conversation."))}
+        {:noreply, put_flash(socket, :error, gettext("Couldn't start the chat."))}
     end
   end
 
@@ -3121,7 +3121,7 @@ defmodule EdenWeb.ChatLive do
           <button
             class="ed-btn--icon"
             phx-click="toggle_new"
-            aria-label={gettext("New conversation")}
+            aria-label={gettext("New chat")}
           >
             <.icon name="hero-pencil-square-mini" class="size-5" />
           </button>
@@ -3248,7 +3248,7 @@ defmodule EdenWeb.ChatLive do
             <% else %>
               <p style="font-weight:600;">{gettext("No chats yet")}</p>
               <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
-                <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
+                <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New chat")}
               </button>
             <% end %>
           </div>
@@ -3842,12 +3842,12 @@ defmodule EdenWeb.ChatLive do
               </p>
             </div>
             <div :if={is_nil(@channel)} class="space-y-2">
-              <p style="font-weight:600;">{gettext("No conversation selected")}</p>
+              <p style="font-weight:600;">{gettext("No chat selected")}</p>
               <p style="color: var(--ed-muted); font-size:0.875rem;">
                 {gettext("Pick a chat or start a new one.")}
               </p>
               <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
-                <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New conversation")}
+                <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New chat")}
               </button>
             </div>
           </div>
@@ -11611,13 +11611,13 @@ defmodule EdenWeb.ChatLive do
           phx-key="Escape"
           role="dialog"
           aria-modal="true"
-          aria-label={gettext("New conversation")}
+          aria-label={gettext("New chat")}
           id="dlg-new-conv"
           phx-hook=".FocusTrap"
           tabindex="-1"
         >
           <div class="flex items-center justify-between">
-            <h2 style="font-weight:600;">{gettext("New conversation")}</h2>
+            <h2 style="font-weight:600;">{gettext("New chat")}</h2>
             <button class="ed-btn--icon" phx-click="close_new" aria-label={gettext("Close")}>
               <.icon name="hero-x-mark-mini" class="size-5" />
             </button>
