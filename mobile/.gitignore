@@ -1,0 +1,30 @@
+# Node
+node_modules/
+
+# iOS build artifacts (the generated Xcode project itself IS committed)
+ios/App/Pods/
+ios/App/build/
+ios/App/output/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/DerivedData/
+
+# Android build artifacts (the generated Gradle project itself IS committed)
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/app/release/
+
+# Synced derivatives of www/ + capacitor.config.ts — `npx cap sync` regenerates
+# them, and the dev/prod profile switch (CAP_SERVER) must never dirty git.
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+ios/App/App/public/
+ios/App/App/capacitor.config.json
+
+# Misc
+.DS_Store

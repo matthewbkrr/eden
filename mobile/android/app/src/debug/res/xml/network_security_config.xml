@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext is allowed ONLY toward the Android Emulator's host-loopback alias
+     (the local dev server, epic #415 / #416). Lives in the DEBUG source set and is
+     wired up by src/debug/AndroidManifest.xml, so release builds never carry the
+     exception — they fall back to the platform default: cleartext blocked. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

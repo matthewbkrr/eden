@@ -1,0 +1,64 @@
+# ihichat mobile — Capacitor-оболочка (iOS + Android)
+
+Нативная обёртка над LiveView-приложением (эпик #415, каркас #416). Фронтенд НЕ
+бандлится: WebView грузит живой сервер (`server.url`), `www/` держит только
+офлайн-заглушку. Пуш/поведение WebView — следующие тикеты (#417–#419).
+
+## Предусловия на Mac
+
+| Что | Зачем | Как |
+|---|---|---|
+| Node 20+ | Capacitor CLI | уже есть |
+| **Xcode** (полный, не CommandLineTools) | сборка + iOS Simulator | App Store → Xcode, затем `sudo xcode-select -s /Applications/Xcode.app` и `xcodebuild -runFirstLaunch` |
+| iOS Simulator runtime | симулятор iPhone | Xcode → Settings → Components |
+| **Android Studio** | сборка + Android Emulator | brew install --cask android-studio; SDK/JDK ставит сама |
+| Эмулятор-образ **с Google Play** | FCM-пуш в #419 | Device Manager → образ «Google Play» (не «Google APIs») |
+
+CocoaPods **не нужен** — Capacitor 8 ходит через Swift Package Manager
+(`ios/App/CapApp-SPM`).
+
+## Профили сервера (CAP_SERVER)
+
+Выбирается на этапе `cap sync` (см. `capacitor.config.ts`):
+
+| Профиль | URL | Когда |
+|---|---|---|
+| `prod` (дефолт) | `https://chat.ihi.ru` | по умолчанию, строго HTTPS |
+| `ios-dev` | `http://localhost:4001` | iOS Simulator → loopback хоста напрямую |
+| `android-dev` | `http://10.0.2.2:4001` | Android Emulator → алиас loopback хоста |
+
+Дев-сервер: `PORT=4001 mix phx.server` из корня репо. Биндинг `127.0.0.1`
+(`config/dev.exs`) менять не нужно — `10.0.2.2` эмулятора приводит именно туда.
+`check_origin` тоже не трогаем: в dev он выключен, а прод-WebView грузит сам
+`chat.ihi.ru`.
+
+Cleartext-HTTP разрешён ТОЛЬКО в дев-профилях и только точечно: Android —
+`network_security_config.xml` в **debug source set** (один домен `10.0.2.2`;
+release-сборка не несёт исключения вовсе — дефолт платформы, cleartext
+запрещён), iOS — `NSAllowsLocalNetworking` (loopback/.local; удалённый HTTP
+остаётся запрещён).
+
+## Команды
+
+```bash
+npm install                # один раз после clone
+npm run sync               # prod-профиль в обе платформы
+npm run sync:ios-dev       # дев-профиль → ios
+npm run sync:android-dev   # дев-профиль → android
+npm run open:ios           # Xcode  → ▶ на симуляторе
+npm run open:android       # Android Studio → ▶ на эмуляторе
+npm run run:ios-dev        # собрать и запустить на симуляторе (дев)
+npm run run:android-dev    # собрать и запустить на эмуляторе (дев)
+```
+
+После смены `CAP_SERVER` обязателен повторный `sync` — URL зашивается в нативный
+проект. Синк-артефакты (`assets/public/`, `capacitor.config.json` в платформах)
+в git не попадают — после clone первый `npm run sync` обязателен.
+
+## Грабли
+
+- `typescript` запинен на `^5` в devDependencies: TS-загрузчик конфига в
+  Capacitor CLI 8 падает на typescript@6 (`Cannot read properties of undefined
+  (reading 'CommonJS')`).
+- Неизвестный `CAP_SERVER` роняет sync с внятной ошибкой — опечатка в профиле не
+  уедет тихо в прод-URL.

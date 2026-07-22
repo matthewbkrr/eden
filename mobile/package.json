@@ -1,0 +1,29 @@
+{
+  "name": "ihichat-mobile",
+  "version": "0.1.0",
+  "description": "ihichat mobile shell (Capacitor) — iOS/Android WebView wrapper over the LiveView app",
+  "main": "index.js",
+  "scripts": {
+    "sync": "cap sync",
+    "sync:ios-dev": "CAP_SERVER=ios-dev cap sync ios",
+    "sync:android-dev": "CAP_SERVER=android-dev cap sync android",
+    "open:ios": "cap open ios",
+    "open:android": "cap open android",
+    "run:ios-dev": "CAP_SERVER=ios-dev cap run ios",
+    "run:android-dev": "CAP_SERVER=android-dev cap run android"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^8.4.2",
+    "@capacitor/core": "^8.4.2",
+    "@capacitor/ios": "^8.4.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ihichat</string>
+    <string name="title_activity_main">ihichat</string>
+    <string name="package_name">ru.ihi.chat</string>
+    <string name="custom_url_scheme">ru.ihi.chat</string>
+</resources>
