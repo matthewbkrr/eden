@@ -20,7 +20,10 @@ defmodule EdenWeb.DeviceControllerTest do
         |> post(~p"/devices", %{"kind" => "apns", "token" => "test-apns-device-tok"})
 
       assert response(conn, 204)
-      assert [%Target{kind: "apns", token: "test-apns-device-tok", user_id: uid}] = Repo.all(Target)
+
+      assert [%Target{kind: "apns", token: "test-apns-device-tok", user_id: uid}] =
+               Repo.all(Target)
+
       assert uid == user.id
     end
 

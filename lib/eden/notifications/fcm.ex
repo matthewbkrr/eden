@@ -18,15 +18,20 @@ defmodule Eden.Notifications.FCM do
   """
   @behaviour Eden.Notifications.Adapter
 
+  alias Eden.Notifications
   alias Eden.Notifications.PushWorker
 
   @scope "https://www.googleapis.com/auth/firebase.messaging"
 
   @impl true
   def deliver(user_id, payload) do
-    %{user_id: user_id, kind: "fcm", payload: payload}
-    |> PushWorker.new()
-    |> Oban.insert()
+    # Same exists?-gate as APNs: keep the inline send path to an index-only
+    # SELECT for recipients with no Android device (#424 review).
+    if Notifications.has_targets?(user_id, "fcm") do
+      %{user_id: user_id, kind: "fcm", payload: payload}
+      |> PushWorker.new()
+      |> Oban.insert()
+    end
 
     :ok
   end
@@ -57,11 +62,24 @@ defmodule Eden.Notifications.FCM do
       url = "https://fcm.googleapis.com/v1/projects/#{account["project_id"]}/messages:send"
 
       case Req.post(req, url: url, json: message) do
-        {:ok, %{status: 200}} -> :ok
+        {:ok, %{status: 200}} ->
+          :ok
+
         # v1 reports a dead registration as 404/UNREGISTERED.
-        {:ok, %{status: 404}} -> :unregistered
-        {:ok, %{status: status, body: resp}} -> {:error, {:fcm, status, resp}}
-        {:error, reason} -> {:error, reason}
+        {:ok, %{status: 404}} ->
+          :unregistered
+
+        # A rejected access token must not sit in the cache for its ~50-min
+        # TTL — drop it so the Oban retry re-exchanges (#424 review).
+        {:ok, %{status: 401, body: resp}} ->
+          :persistent_term.erase({__MODULE__, :oauth})
+          {:error, {:fcm, 401, resp}}
+
+        {:ok, %{status: status, body: resp}} ->
+          {:error, {:fcm, status, resp}}
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end

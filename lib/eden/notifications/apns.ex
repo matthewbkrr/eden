@@ -20,13 +20,20 @@ defmodule Eden.Notifications.APNs do
   """
   @behaviour Eden.Notifications.Adapter
 
+  alias Eden.Notifications
   alias Eden.Notifications.PushWorker
 
   @impl true
   def deliver(user_id, payload) do
-    %{user_id: user_id, kind: "apns", payload: payload}
-    |> PushWorker.new()
-    |> Oban.insert()
+    # The exists?-gate keeps the inline send path cheap for the common case of
+    # a recipient with no iOS device: an index-only SELECT instead of an Oban
+    # INSERT (+ its notify) per recipient (#424 review). True cross-recipient
+    # batching would need a wider Adapter contract — not worth it at this scale.
+    if Notifications.has_targets?(user_id, "apns") do
+      %{user_id: user_id, kind: "apns", payload: payload}
+      |> PushWorker.new()
+      |> Oban.insert()
+    end
 
     :ok
   end
@@ -61,11 +68,27 @@ defmodule Eden.Notifications.APNs do
       )
 
     case Req.post(req, url: "/3/device/#{token}", json: apns_payload) do
-      {:ok, %{status: 200}} -> :ok
-      {:ok, %{status: 410}} -> :unregistered
-      {:ok, %{status: 400, body: %{"reason" => "BadDeviceToken"}}} -> :unregistered
-      {:ok, %{status: status, body: resp}} -> {:error, {:apns, status, resp}}
-      {:error, reason} -> {:error, reason}
+      {:ok, %{status: 200}} ->
+        :ok
+
+      {:ok, %{status: 410}} ->
+        :unregistered
+
+      {:ok, %{status: 400, body: %{"reason" => "BadDeviceToken"}}} ->
+        :unregistered
+
+      # An auth rejection (ExpiredProviderToken / clock skew) must not pin the
+      # bad JWT for its whole ~45-min TTL — drop the cache so the Oban retry
+      # mints a fresh one (#424 review).
+      {:ok, %{status: 403, body: resp}} ->
+        :persistent_term.erase({__MODULE__, :jwt})
+        {:error, {:apns, 403, resp}}
+
+      {:ok, %{status: status, body: resp}} ->
+        {:error, {:apns, status, resp}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

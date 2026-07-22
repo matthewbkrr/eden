@@ -22,12 +22,26 @@ defmodule Eden.Notifications.PushWorkerTest do
   }
 
   describe "adapter deliver/2 (the inline send path)" do
-    test "only enqueues a job — no HTTP, no target resolution" do
-      assert :ok = APNs.deliver(123, @payload)
-      assert_enqueued(worker: PushWorker, args: %{user_id: 123, kind: "apns"})
+    test "enqueues a job for a recipient with a registered device — no HTTP inline" do
+      user = user_fixture()
+      other = user_fixture()
+      {:ok, _} = Notifications.upsert_target(scope(user), "apns", "tok-ios-device")
+      {:ok, _} = Notifications.upsert_target(scope(other), "fcm", "tok-android-dev")
 
-      assert :ok = FCM.deliver(456, @payload)
-      assert_enqueued(worker: PushWorker, args: %{user_id: 456, kind: "fcm"})
+      assert :ok = APNs.deliver(user.id, @payload)
+      assert_enqueued(worker: PushWorker, args: %{user_id: user.id, kind: "apns"})
+
+      assert :ok = FCM.deliver(other.id, @payload)
+      assert_enqueued(worker: PushWorker, args: %{user_id: other.id, kind: "fcm"})
+    end
+
+    test "a recipient with no device of that kind costs no job (#424 review)" do
+      user = user_fixture()
+      {:ok, _} = Notifications.upsert_target(scope(user), "fcm", "tok-android-dev")
+
+      # Has an fcm device, but not an apns one — the apns adapter skips.
+      assert :ok = APNs.deliver(user.id, @payload)
+      refute_enqueued(worker: PushWorker, args: %{user_id: user.id, kind: "apns"})
     end
   end
 

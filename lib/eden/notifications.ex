@@ -128,6 +128,15 @@ defmodule Eden.Notifications do
   end
 
   @doc """
+  Whether the user has any enabled device of `kind` — the adapters' cheap
+  inline gate before enqueueing a push job (an index-only probe on the unique
+  triple; most recipients have no device rows until the apps spread).
+  """
+  def has_targets?(user_id, kind) do
+    Repo.exists?(from t in Target, where: t.user_id == ^user_id and t.kind == ^kind and t.enabled)
+  end
+
+  @doc """
   Render the locale-neutral payload (the moduledoc contract) into the push
   notification's `%{title, body, data}`.
 

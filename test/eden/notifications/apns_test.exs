@@ -66,6 +66,17 @@ defmodule Eden.Notifications.APNsTest do
     assert byte_size(Base.url_decode64!(signature, padding: false)) == 64
   end
 
+  test "an auth rejection (403) drops the cached provider JWT so the retry re-mints" do
+    Req.Test.stub(APNs, fn conn ->
+      conn
+      |> Plug.Conn.put_status(403)
+      |> Req.Test.json(%{"reason" => "ExpiredProviderToken"})
+    end)
+
+    assert {:error, {:apns, 403, _}} = APNs.push("abcdef0123456789", @rendered)
+    assert :persistent_term.get({APNs, :jwt}, nil) == nil
+  end
+
   test "410 maps to :unregistered, other failures to a retryable error" do
     Req.Test.stub(APNs, fn conn ->
       case conn.request_path do

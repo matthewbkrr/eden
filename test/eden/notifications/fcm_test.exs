@@ -84,6 +84,23 @@ defmodule Eden.Notifications.FCMTest do
     refute_received :oauth_exchange
   end
 
+  test "a rejected access token (401) drops the OAuth cache so the retry re-exchanges" do
+    Req.Test.stub(FCM, fn conn ->
+      case conn.host do
+        "oauth2.example.com" ->
+          Req.Test.json(conn, %{"access_token" => "test-access-token"})
+
+        "fcm.googleapis.com" ->
+          conn
+          |> Plug.Conn.put_status(401)
+          |> Req.Test.json(%{"error" => %{"status" => "UNAUTHENTICATED"}})
+      end
+    end)
+
+    assert {:error, {:fcm, 401, _}} = FCM.push("registration-token-1", @rendered)
+    assert :persistent_term.get({FCM, :oauth}, nil) == nil
+  end
+
   test "404 maps to :unregistered (the v1 UNREGISTERED verdict)" do
     Req.Test.stub(FCM, fn conn ->
       case conn.host do

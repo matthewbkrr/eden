@@ -20,8 +20,11 @@ end
 # private key — even a fake one — would trip gitleaks), plus Req.Test plugs so
 # the APNs/FCM modules never touch the network. Written once before the suite,
 # read-only after → safe under async tests.
+# PKCS#8 ("BEGIN PRIVATE KEY") on purpose — Apple ships the .p8 in that frame
+# and Google service accounts too, so the tests exercise the production decode
+# path, not just the bare SEC1/PKCS#1 one (#424 review).
 ec_key = :public_key.generate_key({:namedCurve, :secp256r1})
-ec_pem = :public_key.pem_encode([:public_key.pem_entry_encode(:ECPrivateKey, ec_key)])
+ec_pem = :public_key.pem_encode([:public_key.pem_entry_encode(:PrivateKeyInfo, ec_key)])
 
 Application.put_env(:eden, Eden.Notifications.APNs,
   key_p8: ec_pem,
@@ -33,7 +36,7 @@ Application.put_env(:eden, Eden.Notifications.APNs,
 )
 
 rsa_key = :public_key.generate_key({:rsa, 2048, 65_537})
-rsa_pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, rsa_key)])
+rsa_pem = :public_key.pem_encode([:public_key.pem_entry_encode(:PrivateKeyInfo, rsa_key)])
 
 Application.put_env(:eden, Eden.Notifications.FCM,
   service_account: %{
