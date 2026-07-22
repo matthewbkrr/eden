@@ -248,6 +248,23 @@ html {
     background: var(--ed-bg);
     color: var(--ed-ink);
     font-family: var(--ed-font);
+    /* Native shell (#417): with viewport-fit=cover the Capacitor WebView draws
+       edge-to-edge — under the iOS status bar / Dynamic Island and the home
+       indicator — so pad the shell by the device insets. env() is 0 in regular
+       browsers (a no-op), and Safari-mobile only ever reports a bottom inset,
+       where the padding helps rather than hurts. */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /* Inside the Capacitor shells (html.ed-native, set by initNativeShell) the
+     page must feel like an app, not a web page: no rubber-band overscroll or
+     accidental pull-to-refresh tugging the chat list (#417). Browsers keep
+     their native scroll feel. */
+  .ed-native,
+  .ed-native body {
+    overscroll-behavior: none;
   }
 
   /* Buttons ------------------------------------------------------------- */
@@ -396,6 +413,21 @@ html {
     transition: border-color 0.16s var(--ed-ease), box-shadow 0.16s var(--ed-ease);
   }
   .ed-input::placeholder { color: var(--ed-muted); }
+  /* iOS WebKit auto-zooms the WHOLE page when a focused text control computes
+     below 16px (#417 — the login autofocus left the Capacitor WebView zoomed
+     exactly 16/15 ≈ 1.066× with the form clipped off the right edge). On touch
+     devices every text-entry control renders at ≥16px so the zoom never
+     triggers; desktop keeps the compact 15px look. max() preserves anything
+     already larger. !important is deliberate: element selectors lose to every
+     classed font rule (.ed-input & co), and this is a user-agent-behavior
+     guard that must beat them all. */
+  @media (pointer: coarse) {
+    input,
+    textarea,
+    select {
+      font-size: max(1rem, 1em) !important;
+    }
+  }
   .ed-input:focus {
     outline: none;
     border-color: var(--ed-primary);

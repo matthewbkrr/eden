@@ -28,6 +28,9 @@ import topbar from "../vendor/topbar"
 // global so an in-flight upload survives a page reload (persisted to IndexedDB, resumed on mount).
 import {SendStore} from "./send_store"
 window.__edenSendStore = SendStore
+// Capacitor shells only (#417) — a complete no-op in browsers.
+import {initNativeShell} from "./native"
+initNativeShell()
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 

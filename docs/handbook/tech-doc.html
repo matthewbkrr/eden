@@ -255,7 +255,7 @@
   <table>
     <tr><th>Таблица</th><th>Назначение</th></tr>
     <tr><td><code>users</code></td><td>Аккаунты: логин-«тег» (@username, переименовываемый), профиль, аватар (<code>avatar_key</code>), платформенная роль, presence-статус, TOTP-поля (секрет зашифрован), <code>active</code>, <code>deleted_at</code>, управляемые поля (corp_email, должность и т.д.).</td></tr>
-    <tr><td><code>users_tokens</code></td><td>Сессионные токены (хранятся хешированными; ссылаются на id пользователя, поэтому переименование логина сессии не рвёт).</td></tr>
+    <tr><td><code>users_tokens</code></td><td>Сессионные токены (хранятся хешированными; ссылаются на id пользователя, поэтому переименование логина сессии не рвёт). Кука сессии — постоянная, 60 дней (выровнена с серверной валидностью токена): вход переживает перезапуск браузера и мобильного приложения; отзыв всегда серверный («Выйти везде», смена пароля, деактивация).</td></tr>
     <tr><td><code>invites</code>, <code>password_reset_tokens</code></td><td>Приглашения и ссылки сброса пароля: только хеш токена, срок действия, лимит использований, погашение под <code>FOR UPDATE</code>.</td></tr>
     <tr><td><code>conversations</code></td><td>Беседа — первоклассная сущность: 1:1, группа (<code>is_group</code>, title) и комната канала (<code>channel_id</code>, <code>visibility</code> open/private, <code>is_general</code>) — одна модель.</td></tr>
     <tr><td><code>memberships</code></td><td>Участие в беседе: роль, <code>last_read</code> (непрочитанные), <code>left_at</code> (персональное «удалить чат»), <code>muted_at</code>.</td></tr>
