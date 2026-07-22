@@ -1134,6 +1134,14 @@ defmodule Eden.Channels do
         channel -> {:ok, %{channel | role: role_of(channel_id, user.id) || "member"}, room_id}
       end
     end
+  rescue
+    # Mirror approve_pending's rescue (#375/R023): the channel/room GC'd between lock_invite and
+    # the join_channel_tx / join_room writes surfaces as an FK-violation Postgrex.Error (their
+    # `on_conflict: :nothing` catches unique conflicts, NOT FK). The transaction rolls back and
+    # re-raises; map it to a dead-link `:invalid` (join_by_token's own contract, vs approve's
+    # `:not_found`) so the redemption is non-crashing — the controller's catch-all renders a flash
+    # instead of a 500. The invite's FOR UPDATE lock makes this window tiny, but the symmetry holds.
+    Postgrex.Error -> {:error, :invalid}
   end
 
   # Inside the locking transaction: validate, join the channel (general) and,
