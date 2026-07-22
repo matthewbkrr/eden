@@ -30,7 +30,7 @@ defmodule EdenWeb.AuthLiveTest do
     test "renders the chat for an authenticated user", %{conn: conn} do
       conn = log_in_user(conn, user_fixture(%{display_name: "Anna"}))
       {:ok, _view, html} = live(conn, ~p"/app")
-      assert html =~ "No conversation selected"
+      assert html =~ "No chat selected"
     end
   end
 

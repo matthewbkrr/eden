@@ -5,6 +5,7 @@ defmodule EdenWeb.UserAuth do
   are established by accepting an invite or signing in with username + password.
   """
   use EdenWeb, :verified_routes
+  use Gettext, backend: EdenWeb.Gettext
 
   import Plug.Conn
   import Phoenix.Controller
@@ -75,7 +76,7 @@ defmodule EdenWeb.UserAuth do
       conn
     else
       conn
-      |> put_flash(:error, "You must log in to access this page.")
+      |> put_flash(:error, gettext("You must log in to access this page."))
       |> maybe_store_return_to()
       |> redirect(to: ~p"/login")
       |> halt()
@@ -117,7 +118,7 @@ defmodule EdenWeb.UserAuth do
     else
       socket =
         socket
-        |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
+        |> Phoenix.LiveView.put_flash(:error, gettext("You must log in to access this page."))
         |> Phoenix.LiveView.redirect(to: ~p"/login")
 
       {:halt, socket}
@@ -132,7 +133,7 @@ defmodule EdenWeb.UserAuth do
       is_nil(user) ->
         {:halt,
          socket
-         |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
+         |> Phoenix.LiveView.put_flash(:error, gettext("You must log in to access this page."))
          |> Phoenix.LiveView.redirect(to: ~p"/login")}
 
       not Accounts.admin?(user) ->
@@ -140,7 +141,7 @@ defmodule EdenWeb.UserAuth do
         # admin panel even exists.
         {:halt,
          socket
-         |> Phoenix.LiveView.put_flash(:error, "You don't have access to that page.")
+         |> Phoenix.LiveView.put_flash(:error, gettext("You don't have access to that page."))
          |> Phoenix.LiveView.redirect(to: signed_in_path(socket))}
 
       not Accounts.totp_enrolled?(user) ->
@@ -151,7 +152,7 @@ defmodule EdenWeb.UserAuth do
          socket
          |> Phoenix.LiveView.put_flash(
            :error,
-           "Turn on two-factor authentication to use the admin panel."
+           gettext("Turn on two-factor authentication to use the admin panel.")
          )
          |> Phoenix.LiveView.redirect(to: ~p"/settings")}
 
@@ -218,7 +219,7 @@ defmodule EdenWeb.UserAuth do
   defp on_sessions_revoked(:sessions_revoked, socket) do
     {:halt,
      socket
-     |> Phoenix.LiveView.put_flash(:error, "Your session ended. Please sign in again.")
+     |> Phoenix.LiveView.put_flash(:error, gettext("Your session ended. Please sign in again."))
      |> Phoenix.LiveView.redirect(to: ~p"/login")}
   end
 

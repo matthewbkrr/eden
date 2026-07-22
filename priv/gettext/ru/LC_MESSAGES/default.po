@@ -270,8 +270,8 @@ msgstr "Беседа не найдена."
 #: lib/eden_web/live/chat_live.ex:1970
 #: lib/eden_web/live/chat_live.ex:1990
 #, elixir-autogen, elixir-format
-msgid "Couldn't start the conversation."
-msgstr "Не удалось начать беседу."
+msgid "Couldn't start the chat."
+msgstr "Не удалось начать чат."
 
 #: lib/eden_web/live/chat_live.ex:10157
 #, elixir-autogen, elixir-format
@@ -295,13 +295,13 @@ msgstr "Написать"
 #: lib/eden_web/live/chat_live.ex:10135
 #: lib/eden_web/live/chat_live.ex:10141
 #, elixir-autogen, elixir-format
-msgid "New conversation"
-msgstr "Новая беседа"
+msgid "New chat"
+msgstr "Новый чат"
 
 #: lib/eden_web/live/chat_live.ex:3451
 #, elixir-autogen, elixir-format
-msgid "No conversation selected"
-msgstr "Беседа не выбрана"
+msgid "No chat selected"
+msgstr "Чат не выбран"
 
 #: lib/eden_web/live/chat_live.ex:10149
 #, elixir-autogen, elixir-format
@@ -2645,7 +2645,7 @@ msgstr "Деактивация сразу завершает все сессии
 #: lib/eden_web/live/admin_live.ex:337
 #, elixir-autogen, elixir-format
 msgid "Reactivate account"
-msgstr "Реактивировать аккаунт"
+msgstr "Восстановить аккаунт"
 
 #: lib/eden_web/live/admin_live.ex:334
 #, elixir-autogen, elixir-format
@@ -2791,7 +2791,7 @@ msgstr "Показать пароль"
 #: lib/eden_web/live/welcome_totp_live.ex:181
 #, elixir-autogen, elixir-format
 msgid "Skip for now"
-msgstr "Пропустить пока"
+msgstr "Пропустить"
 
 #: lib/eden_web/live/settings_live.ex:778
 #, elixir-autogen, elixir-format
@@ -2828,7 +2828,27 @@ msgstr "Двухфакторная аутентификация включена
 msgid "You can't edit that person."
 msgstr "Вы не можете редактировать этого пользователя."
 
-#: lib/eden_web/live/admin_live.ex:149
+#: lib/eden_web/live/admin_live.ex:257
 #, elixir-autogen, elixir-format
 msgid "Your admin access was removed."
-msgstr ""
+msgstr "Ваши права администратора отозваны."
+
+#: lib/eden_web/user_auth.ex:79
+#, elixir-autogen, elixir-format
+msgid "You must log in to access this page."
+msgstr "Необходимо войти, чтобы открыть эту страницу."
+
+#: lib/eden_web/user_auth.ex:144
+#, elixir-autogen, elixir-format
+msgid "You don't have access to that page."
+msgstr "У вас нет доступа к этой странице."
+
+#: lib/eden_web/user_auth.ex:155
+#, elixir-autogen, elixir-format
+msgid "Turn on two-factor authentication to use the admin panel."
+msgstr "Включите двухфакторную аутентификацию, чтобы пользоваться админ-панелью."
+
+#: lib/eden_web/user_auth.ex:222
+#, elixir-autogen, elixir-format
+msgid "Your session ended. Please sign in again."
+msgstr "Сессия завершена. Войдите снова."
