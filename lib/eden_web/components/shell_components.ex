@@ -342,7 +342,7 @@ defmodule EdenWeb.ShellComponents do
                     type="button"
                     phx-click="remove_channel_avatar"
                     class="ed-btn ed-btn--ghost text-sm"
-                    style="color: var(--ed-danger);"
+                    style="color: var(--ed-danger-strong);"
                   >
                     {gettext("Remove")}
                   </button>
@@ -360,14 +360,14 @@ defmodule EdenWeb.ShellComponents do
                       failing silently. --%>
                 <p
                   :for={err <- (@upload && upload_errors(@upload)) || []}
-                  style="color: var(--ed-danger); font-size:0.75rem;"
+                  style="color: var(--ed-danger-strong); font-size:0.75rem;"
                 >
                   {channel_avatar_error(err)}
                 </p>
                 <%= for e <- (@upload && @upload.entries) || [] do %>
                   <p
                     :for={err <- upload_errors(@upload, e)}
-                    style="color: var(--ed-danger); font-size:0.75rem;"
+                    style="color: var(--ed-danger-strong); font-size:0.75rem;"
                   >
                     {channel_avatar_error(err)}
                   </p>

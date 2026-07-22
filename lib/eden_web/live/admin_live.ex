@@ -478,7 +478,7 @@ defmodule EdenWeb.AdminLive do
                     <span class="block truncate" style="color: var(--ed-muted); font-size:0.8125rem;">
                       @{u.username}
                       <span :if={u.position}>· {u.position}</span>
-                      <span :if={!u.active} style="color: var(--ed-danger);">
+                      <span :if={!u.active} style="color: var(--ed-danger-strong);">
                         · {gettext("Deactivated")}
                       </span>
                     </span>
@@ -578,13 +578,13 @@ defmodule EdenWeb.AdminLive do
                     gettext("Deactivate this account? Their sessions end now and they can't sign in.")
                   }
                   class="ed-btn ed-btn--ghost text-sm mt-2"
-                  style="color: var(--ed-danger);"
+                  style="color: var(--ed-danger-strong);"
                 >
                   {gettext("Deactivate account")}
                 </button>
               </div>
               <div :if={!@selected.active} class="mt-2">
-                <p style="font-size:0.75rem; color: var(--ed-danger);">
+                <p style="font-size:0.75rem; color: var(--ed-danger-strong);">
                   {gettext("This account is deactivated — the person can't sign in.")}
                 </p>
                 <button type="button" phx-click="reactivate" class="ed-btn ed-btn--ghost text-sm mt-2">

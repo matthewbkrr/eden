@@ -589,7 +589,11 @@ defmodule EdenWeb.CoreComponents do
     ~H"""
     <label class="block space-y-1.5">
       <span style="font-size:0.8125rem; color: var(--ed-muted);">
-        {@label}<span :if={@rest[:required]} style="color: var(--ed-danger);" aria-hidden="true"> *</span>
+        {@label}<span
+          :if={@rest[:required]}
+          style="color: var(--ed-danger-strong);"
+          aria-hidden="true"
+        > *</span>
       </span>
       <input
         class="ed-input"
@@ -638,7 +642,11 @@ defmodule EdenWeb.CoreComponents do
     ~H"""
     <label class="block space-y-1.5" phx-hook=".PasswordReveal" id={"#{@field.id}-wrap"}>
       <span style="font-size:0.8125rem; color: var(--ed-muted);">
-        {@label}<span :if={@rest[:required]} style="color: var(--ed-danger);" aria-hidden="true"> *</span>
+        {@label}<span
+          :if={@rest[:required]}
+          style="color: var(--ed-danger-strong);"
+          aria-hidden="true"
+        > *</span>
       </span>
       <div class="relative">
         <input

@@ -69,7 +69,7 @@ defmodule EdenWeb.ResetLive do
               />
               <span
                 :for={msg <- Enum.map(@form[:password].errors, &translate_error/1)}
-                style="color: var(--ed-danger); font-size:0.75rem;"
+                style="color: var(--ed-danger-strong); font-size:0.75rem;"
               >
                 {msg}
               </span>

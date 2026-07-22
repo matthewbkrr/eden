@@ -307,7 +307,7 @@ defmodule EdenWeb.SettingsLive do
                             type="button"
                             phx-click="remove_avatar"
                             class="ed-btn ed-btn--ghost text-sm"
-                            style="color: var(--ed-danger);"
+                            style="color: var(--ed-danger-strong);"
                           >
                             {gettext("Remove")}
                           </button>
@@ -323,14 +323,14 @@ defmodule EdenWeb.SettingsLive do
                         </div>
                         <p
                           :for={err <- upload_errors(@uploads.avatar)}
-                          style="color: var(--ed-danger); font-size:0.75rem;"
+                          style="color: var(--ed-danger-strong); font-size:0.75rem;"
                         >
                           {avatar_error(err)}
                         </p>
                         <%= for e <- @uploads.avatar.entries do %>
                           <p
                             :for={err <- upload_errors(@uploads.avatar, e)}
-                            style="color: var(--ed-danger); font-size:0.75rem;"
+                            style="color: var(--ed-danger-strong); font-size:0.75rem;"
                           >
                             {avatar_error(err)}
                           </p>
@@ -365,7 +365,7 @@ defmodule EdenWeb.SettingsLive do
                       <div class="flex items-start justify-between gap-3">
                         <span
                           :for={msg <- Enum.map(@profile_form[:bio].errors, &translate_error/1)}
-                          style="color: var(--ed-danger); font-size:0.75rem;"
+                          style="color: var(--ed-danger-strong); font-size:0.75rem;"
                         >
                           {msg}
                         </span>
@@ -449,7 +449,7 @@ defmodule EdenWeb.SettingsLive do
                       </span>
                       <span
                         :for={msg <- Enum.map(@username_form[:username].errors, &translate_error/1)}
-                        style="color: var(--ed-danger); font-size:0.75rem;"
+                        style="color: var(--ed-danger-strong); font-size:0.75rem;"
                       >
                         {msg}
                       </span>
@@ -536,7 +536,10 @@ defmodule EdenWeb.SettingsLive do
                         required
                       />
                     </label>
-                    <p :if={@password_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                    <p
+                      :if={@password_error}
+                      style="color: var(--ed-danger-strong); font-size:0.75rem;"
+                    >
                       {@password_error}
                     </p>
                     <div class="flex justify-end">
@@ -646,7 +649,7 @@ defmodule EdenWeb.SettingsLive do
                     <p
                       :if={@totp_error}
                       class="mt-2"
-                      style="color: var(--ed-danger); font-size:0.75rem;"
+                      style="color: var(--ed-danger-strong); font-size:0.75rem;"
                     >
                       {@totp_error}
                     </p>
@@ -714,7 +717,7 @@ defmodule EdenWeb.SettingsLive do
                         {gettext("Cancel")}
                       </button>
                     </.form>
-                    <p :if={@totp_error} style="color: var(--ed-danger); font-size:0.75rem;">
+                    <p :if={@totp_error} style="color: var(--ed-danger-strong); font-size:0.75rem;">
                       {@totp_error}
                     </p>
                   </div>
@@ -1098,7 +1101,7 @@ defmodule EdenWeb.SettingsLive do
                         <button
                           type="button"
                           class="ed-btn--icon"
-                          style="color: var(--ed-danger);"
+                          style="color: var(--ed-danger-strong);"
                           phx-click="delete_folder"
                           phx-value-id={row.id}
                           data-confirm={
