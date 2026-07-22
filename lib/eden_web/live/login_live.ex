@@ -37,15 +37,20 @@ defmodule EdenWeb.LoginLive do
             required
             autofocus
           />
-          <.ed_field
+          <.ed_password_field
             field={@form[:password]}
             label={gettext("Password")}
-            type="password"
             autocomplete="current-password"
             required
           />
           <button class="ed-btn ed-btn--primary w-full" type="submit">{gettext("Log in")}</button>
         </.form>
+
+        <%!-- No email self-recovery by design — the only path back is an admin-minted reset link
+              (#368/R087). Say so, so a locked-out user knows where to go. --%>
+        <p class="mt-5 text-center" style="color: var(--ed-muted); font-size:0.8125rem;">
+          {gettext("Forgot your password? Ask an admin to send you a reset link.")}
+        </p>
       </div>
     </div>
     """

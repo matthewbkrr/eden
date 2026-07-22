@@ -32,7 +32,11 @@ defmodule EdenWeb.ResetLiveTest do
     {:ok, view, _} = live(conn, ~p"/reset/#{raw}")
 
     assert {:error, {:live_redirect, %{to: "/login"}}} =
-             view |> form("form", reset: %{password: "brandnewpass1"}) |> render_submit()
+             view
+             |> form("form",
+               reset: %{password: "brandnewpass1", password_confirmation: "brandnewpass1"}
+             )
+             |> render_submit()
 
     assert %User{} = Accounts.get_user_by_username_and_password("resetlv", "brandnewpass1")
   end

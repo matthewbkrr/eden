@@ -154,7 +154,7 @@ defmodule EdenWeb.UserAuth do
            :error,
            gettext("Turn on two-factor authentication to use the admin panel.")
          )
-         |> Phoenix.LiveView.redirect(to: ~p"/settings")}
+         |> Phoenix.LiveView.redirect(to: ~p"/settings/security")}
 
       true ->
         {:cont, socket}

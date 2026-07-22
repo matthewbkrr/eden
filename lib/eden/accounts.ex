@@ -713,10 +713,14 @@ defmodule Eden.Accounts do
   their sessions (including the current one — a password change kills every login).
   Returns `{:ok, user}` | `{:error, :invalid_current_password | changeset}`.
   """
-  def change_password(%User{} = user, current_password, new_password) do
+  def change_password(%User{} = user, current_password, new_password, new_confirmation \\ nil) do
     if User.valid_password?(user, current_password) do
+      attrs = %{"password" => new_password, "password_confirmation" => new_confirmation}
+
       with {:ok, updated} <-
-             user |> User.password_changeset(%{password: new_password}) |> Repo.update() do
+             user
+             |> User.password_changeset(attrs, confirm: not is_nil(new_confirmation))
+             |> Repo.update() do
         revoke_all_user_sessions(updated)
         # A self-chosen password kills any pending admin reset link — otherwise
         # that link stays a 24h backdoor to the account.
@@ -790,9 +794,10 @@ defmodule Eden.Accounts do
   all the user's sessions. Returns `{:ok, user}` | `{:error, :invalid | :expired |
   changeset}`.
   """
-  def reset_password_with_token(raw_token, new_password) when is_binary(raw_token) do
+  def reset_password_with_token(raw_token, new_password, new_confirmation \\ nil)
+      when is_binary(raw_token) do
     hashed = Eden.Tokens.hash(raw_token)
-    Repo.transact(fn -> redeem_reset(hashed, new_password) end)
+    Repo.transact(fn -> redeem_reset(hashed, new_password, new_confirmation) end)
   end
 
   @doc """
@@ -809,10 +814,10 @@ defmodule Eden.Accounts do
     end
   end
 
-  defp redeem_reset(hashed, new_password) do
+  defp redeem_reset(hashed, new_password, new_confirmation) do
     with %PasswordResetToken{} = token <- Repo.one(locked_reset_query(hashed)),
          false <- reset_expired?(token) do
-      apply_reset(token, new_password)
+      apply_reset(token, new_password, new_confirmation)
     else
       nil -> {:error, :invalid}
       true -> {:error, :expired}
@@ -830,9 +835,13 @@ defmodule Eden.Accounts do
   defp reset_expired?(%PasswordResetToken{expires_at: at}),
     do: DateTime.after?(DateTime.utc_now(), at)
 
-  defp apply_reset(%PasswordResetToken{} = token, new_password) do
+  defp apply_reset(%PasswordResetToken{} = token, new_password, new_confirmation) do
+    attrs = %{"password" => new_password, "password_confirmation" => new_confirmation}
+
     with {:ok, updated} <-
-           token.user |> User.password_changeset(%{password: new_password}) |> Repo.update() do
+           token.user
+           |> User.password_changeset(attrs, confirm: not is_nil(new_confirmation))
+           |> Repo.update() do
       # Delete every reset token for this user, not just the redeemed one — a
       # redemption single-uses this link AND invalidates any sibling links.
       delete_reset_tokens(token.user_id)
