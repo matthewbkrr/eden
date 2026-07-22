@@ -11,6 +11,7 @@ defmodule Eden.Accounts do
 
   alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
   alias Eden.DeletedUserScrubWorker
+  alias Eden.Notifications
   alias Eden.Repo
   alias Eden.Storage
 
@@ -199,6 +200,11 @@ defmodule Eden.Accounts do
       # sessions and refreshing open views must never fire on a rolled-back write.
       broadcast_sessions_revoked(updated.id)
       broadcast_invites_changed()
+      # Push-device hygiene (#418): delivery already excludes deactivated users
+      # at the gating layer (#363/R150), so this only reaps orphaned tokens —
+      # best-effort post-commit is enough (public cross-context call, the #271
+      # precedent). After reactivation the app re-registers on its next start.
+      Notifications.delete_user_targets(updated.id)
       {:ok, broadcast_user_update(updated)}
     end
   end

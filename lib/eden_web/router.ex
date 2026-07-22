@@ -60,6 +60,9 @@ defmodule EdenWeb.Router do
       # Channel invite links. Declared before the /channels/:channel_id live
       # route, so "join" is never parsed as a channel id.
       get "/channels/join/:token", ChannelJoinController, :join
+      # Push-device registration (#418): the mobile shell posts {kind, token}
+      # over the existing cookie session — no bearer auth by design.
+      post "/devices", DeviceController, :register
     end
 
     # Authenticated pages. NotifyHook (#272) rides every authed live_session — after

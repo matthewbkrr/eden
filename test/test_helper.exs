@@ -16,5 +16,34 @@ if media_excludes != [] do
   IO.puts("[test] missing media tools — excluding tags: #{inspect(media_excludes)}")
 end
 
+# Push-transport test rig (#418): throwaway keys GENERATED here (a checked-in
+# private key — even a fake one — would trip gitleaks), plus Req.Test plugs so
+# the APNs/FCM modules never touch the network. Written once before the suite,
+# read-only after → safe under async tests.
+ec_key = :public_key.generate_key({:namedCurve, :secp256r1})
+ec_pem = :public_key.pem_encode([:public_key.pem_entry_encode(:ECPrivateKey, ec_key)])
+
+Application.put_env(:eden, Eden.Notifications.APNs,
+  key_p8: ec_pem,
+  key_id: "TESTKEY123",
+  team_id: "TESTTEAM12",
+  topic: "ru.ihi.chat",
+  env: :sandbox,
+  req_options: [plug: {Req.Test, Eden.Notifications.APNs}]
+)
+
+rsa_key = :public_key.generate_key({:rsa, 2048, 65_537})
+rsa_pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, rsa_key)])
+
+Application.put_env(:eden, Eden.Notifications.FCM,
+  service_account: %{
+    "private_key" => rsa_pem,
+    "client_email" => "eden-test@example.iam.gserviceaccount.com",
+    "project_id" => "eden-test",
+    "token_uri" => "https://oauth2.example.com/token"
+  },
+  req_options: [plug: {Req.Test, Eden.Notifications.FCM}]
+)
+
 ExUnit.start()
 Ecto.Adapters.SQL.Sandbox.mode(Eden.Repo, :manual)
