@@ -556,11 +556,11 @@ defmodule Eden.Channels do
         {:error, :not_found}
     end
   rescue
-    # The room was GC'd between get_room and the join writes (#258 review): join_room's
-    # insert_all hits an FK violation (Postgrex.Error), which the transaction rolls back
-    # (no half-done, #261) and re-raises. Map it to :not_found so approve is non-crashing,
-    # like decline/request.
-    Postgrex.Error -> {:error, :not_found}
+    # The room was GC'd between get_room and the join writes (#258): join_room's insert_all hits an
+    # FK violation the transaction rolls back (no half-done, #261) and re-raises — map it to
+    # :not_found (non-crashing, like decline/request). A non-FK Postgrex error (deadlock,
+    # serialization) re-raises via the shared helper rather than masking a retryable failure (#375).
+    e in Postgrex.Error -> fk_or_reraise(e, __STACKTRACE__, {:error, :not_found})
   end
 
   defp requester_deleted?(req_id) do
@@ -1135,14 +1135,23 @@ defmodule Eden.Channels do
       end
     end
   rescue
-    # Mirror approve_pending's rescue (#375/R023): the channel/room GC'd between lock_invite and
-    # the join_channel_tx / join_room writes surfaces as an FK-violation Postgrex.Error (their
-    # `on_conflict: :nothing` catches unique conflicts, NOT FK). The transaction rolls back and
-    # re-raises; map it to a dead-link `:invalid` (join_by_token's own contract, vs approve's
-    # `:not_found`) so the redemption is non-crashing — the controller's catch-all renders a flash
-    # instead of a 500. The invite's FOR UPDATE lock makes this window tiny, but the symmetry holds.
-    Postgrex.Error -> {:error, :invalid}
+    # A channel/room GC'd between lock_invite and the join writes surfaces as an FK violation (which
+    # on_conflict: :nothing does NOT swallow) — map it to a dead-link `:invalid` (this function's own
+    # contract, vs approve_pending's `:not_found`) so the controller renders a flash, not a 500. The
+    # invite's FOR UPDATE lock keeps the window tiny; the shared fk_or_reraise closes the symmetry
+    # with approve_pending (#375/R023 + review).
+    e in Postgrex.Error -> fk_or_reraise(e, __STACKTRACE__, {:error, :invalid})
   end
+
+  # Inside a Postgrex.Error rescue: a real FK violation (a concurrent channel/room delete the join's
+  # insert_all hit — on_conflict: :nothing swallows unique conflicts, NOT FK) maps to the caller's
+  # dead-link `tag`; anything else (deadlock, serialization, an unrelated constraint) is a real,
+  # retryable failure and re-raises WITH its stacktrace, never mislabelled a dead link (#375 review).
+  # Shared by approve_pending + join_by_token.
+  defp fk_or_reraise(%Postgrex.Error{postgres: %{code: :foreign_key_violation}}, _stack, tag),
+    do: tag
+
+  defp fk_or_reraise(error, stack, _tag), do: reraise(error, stack)
 
   # Inside the locking transaction: validate, join the channel (general) and,
   # for a room invite, the room — both idempotent. A use is consumed only when
