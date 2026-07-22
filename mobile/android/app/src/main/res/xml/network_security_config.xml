@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext is allowed ONLY toward the Android Emulator's host-loopback alias
+     (the local dev server, epic #415 / #416). Everything else — prod included —
+     is strictly HTTPS. Shipping this domain-scoped exception is harmless: on a
+     real device 10.0.2.2 routes nowhere meaningful. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
