@@ -45,38 +45,50 @@ function wirePush() {
   const push = cap.Plugins?.PushNotifications;
   if (!push?.addListener) return;
 
-  // Tap routing is attached UNCONDITIONALLY and FIRST: on a cold start (app
-  // launched by tapping the notification) the plugin replays the launch
-  // notification to this listener, and it must exist before load completes.
-  push.addListener("pushNotificationActionPerformed", (ev) => {
-    const data = ev?.notification?.data || {};
-    if (!data.conversation_id) return;
-    const path = data.channel_id
-      ? `/channels/${data.channel_id}/r/${data.conversation_id}`
-      : `/app/c/${data.conversation_id}`;
-    window.location.assign(path);
-  });
+  // Listeners live on the native plugin and SURVIVE WebView reloads, while
+  // initNativeShell re-runs on every full page load (login→app, the deep-link
+  // assign below, a cold start). Bind them ONCE per app process or they stack:
+  // N navigations per tap, N token POSTs (#425 review). The window flag is the
+  // per-process latch (same pattern as the overlay nav guard).
+  if (!window.__edPushWired) {
+    window.__edPushWired = true;
 
-  // Register only on an authed page — #notifier rides every authed
-  // live_session (#272). Asking for notification permission on the login
-  // screen would be noise; after login the full-page redirect re-runs this.
+    // Cold start (app launched by tapping a notification): Capacitor retains
+    // the launch action and replays it once this listener binds, so a tap that
+    // beats the async bind is still delivered, not dropped.
+    push.addListener("pushNotificationActionPerformed", (ev) => {
+      const data = ev?.notification?.data || {};
+      if (!data.conversation_id) return;
+      const path = data.channel_id
+        ? `/channels/${data.channel_id}/r/${data.conversation_id}`
+        : `/app/c/${data.conversation_id}`;
+      window.location.assign(path);
+    });
+
+    push.addListener("registration", ({ value }) => {
+      const kind = cap.getPlatform() === "ios" ? "apns" : "fcm";
+      const csrf = document
+        .querySelector("meta[name='csrf-token']")
+        ?.getAttribute("content");
+      // Bail without the CSRF token rather than send the literal "undefined",
+      // which the server would reject and silently drop the device (#425).
+      if (!csrf) return;
+      fetch("/devices", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ kind, token: value }),
+      }).catch(() => {});
+    });
+
+    // No Firebase config / no APNs entitlement yet → registration fails on that
+    // platform; push is simply unavailable there, never an error surface.
+    push.addListener("registrationError", () => {});
+  }
+
+  // register() only on an authed page (#notifier rides every authed
+  // live_session, #272) — prompting on the login screen would be noise.
+  // Idempotent, so re-running on a later authed load is harmless.
   if (!document.getElementById("notifier")) return;
-
-  push.addListener("registration", ({ value }) => {
-    const kind = cap.getPlatform() === "ios" ? "apns" : "fcm";
-    const csrf = document
-      .querySelector("meta[name='csrf-token']")
-      ?.getAttribute("content");
-    fetch("/devices", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-csrf-token": csrf },
-      body: JSON.stringify({ kind, token: value }),
-    }).catch(() => {});
-  });
-
-  // No Firebase config / no APNs entitlement yet → registration fails on that
-  // platform; push is simply unavailable there, never an error surface.
-  push.addListener("registrationError", () => {});
 
   push
     .checkPermissions()
