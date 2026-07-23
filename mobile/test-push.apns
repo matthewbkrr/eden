@@ -1,0 +1,11 @@
+{
+  "aps": {
+    "alert": {
+      "title": "Bob (E2E)",
+      "body": "проверка пуша с симулятора"
+    },
+    "sound": "default"
+  },
+  "conversation_id": "REPLACE_WITH_CONV_ID",
+  "message_id": "1"
+}

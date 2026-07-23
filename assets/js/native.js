@@ -16,6 +16,7 @@ export function initNativeShell() {
 
   wireBackButton();
   wireStatusBar();
+  wirePush();
 }
 
 // Android hardware/gesture back: navigate the WebView history like a browser
@@ -34,6 +35,60 @@ function wireBackButton() {
       Promise.resolve(app.minimizeApp?.()).catch(() => {});
     }
   });
+}
+
+// Native push (#419, ADR-0001): ask, register, hand the device token to the
+// backend, and route a notification tap into its chat. The backend half
+// (#418: POST /devices + the APNs/FCM adapters) is already live; delivery
+// itself turns on when the server gets its push env keys.
+function wirePush() {
+  const push = cap.Plugins?.PushNotifications;
+  if (!push?.addListener) return;
+
+  // Tap routing is attached UNCONDITIONALLY and FIRST: on a cold start (app
+  // launched by tapping the notification) the plugin replays the launch
+  // notification to this listener, and it must exist before load completes.
+  push.addListener("pushNotificationActionPerformed", (ev) => {
+    const data = ev?.notification?.data || {};
+    if (!data.conversation_id) return;
+    const path = data.channel_id
+      ? `/channels/${data.channel_id}/r/${data.conversation_id}`
+      : `/app/c/${data.conversation_id}`;
+    window.location.assign(path);
+  });
+
+  // Register only on an authed page — #notifier rides every authed
+  // live_session (#272). Asking for notification permission on the login
+  // screen would be noise; after login the full-page redirect re-runs this.
+  if (!document.getElementById("notifier")) return;
+
+  push.addListener("registration", ({ value }) => {
+    const kind = cap.getPlatform() === "ios" ? "apns" : "fcm";
+    const csrf = document
+      .querySelector("meta[name='csrf-token']")
+      ?.getAttribute("content");
+    fetch("/devices", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify({ kind, token: value }),
+    }).catch(() => {});
+  });
+
+  // No Firebase config / no APNs entitlement yet → registration fails on that
+  // platform; push is simply unavailable there, never an error surface.
+  push.addListener("registrationError", () => {});
+
+  push
+    .checkPermissions()
+    .then((s) =>
+      s.receive === "prompt" || s.receive === "prompt-with-rationale"
+        ? push.requestPermissions()
+        : s,
+    )
+    .then((s) => {
+      if (s.receive === "granted") push.register();
+    })
+    .catch(() => {});
 }
 
 // Keep the OS status bar readable on both themes: our dark theme needs light

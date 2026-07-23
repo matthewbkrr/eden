@@ -28,3 +28,4 @@ ios/App/App/capacitor.config.json
 
 # Misc
 .DS_Store
+android/app/google-services.json
