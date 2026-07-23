@@ -16,6 +16,7 @@ export function initNativeShell() {
 
   wireBackButton();
   wireStatusBar();
+  wirePush();
 }
 
 // Android hardware/gesture back: navigate the WebView history like a browser
@@ -34,6 +35,72 @@ function wireBackButton() {
       Promise.resolve(app.minimizeApp?.()).catch(() => {});
     }
   });
+}
+
+// Native push (#419, ADR-0001): ask, register, hand the device token to the
+// backend, and route a notification tap into its chat. The backend half
+// (#418: POST /devices + the APNs/FCM adapters) is already live; delivery
+// itself turns on when the server gets its push env keys.
+function wirePush() {
+  const push = cap.Plugins?.PushNotifications;
+  if (!push?.addListener) return;
+
+  // Listeners live on the native plugin and SURVIVE WebView reloads, while
+  // initNativeShell re-runs on every full page load (login→app, the deep-link
+  // assign below, a cold start). Bind them ONCE per app process or they stack:
+  // N navigations per tap, N token POSTs (#425 review). The window flag is the
+  // per-process latch (same pattern as the overlay nav guard).
+  if (!window.__edPushWired) {
+    window.__edPushWired = true;
+
+    // Cold start (app launched by tapping a notification): Capacitor retains
+    // the launch action and replays it once this listener binds, so a tap that
+    // beats the async bind is still delivered, not dropped.
+    push.addListener("pushNotificationActionPerformed", (ev) => {
+      const data = ev?.notification?.data || {};
+      if (!data.conversation_id) return;
+      const path = data.channel_id
+        ? `/channels/${data.channel_id}/r/${data.conversation_id}`
+        : `/app/c/${data.conversation_id}`;
+      window.location.assign(path);
+    });
+
+    push.addListener("registration", ({ value }) => {
+      const kind = cap.getPlatform() === "ios" ? "apns" : "fcm";
+      const csrf = document
+        .querySelector("meta[name='csrf-token']")
+        ?.getAttribute("content");
+      // Bail without the CSRF token rather than send the literal "undefined",
+      // which the server would reject and silently drop the device (#425).
+      if (!csrf) return;
+      fetch("/devices", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-csrf-token": csrf },
+        body: JSON.stringify({ kind, token: value }),
+      }).catch(() => {});
+    });
+
+    // No Firebase config / no APNs entitlement yet → registration fails on that
+    // platform; push is simply unavailable there, never an error surface.
+    push.addListener("registrationError", () => {});
+  }
+
+  // register() only on an authed page (#notifier rides every authed
+  // live_session, #272) — prompting on the login screen would be noise.
+  // Idempotent, so re-running on a later authed load is harmless.
+  if (!document.getElementById("notifier")) return;
+
+  push
+    .checkPermissions()
+    .then((s) =>
+      s.receive === "prompt" || s.receive === "prompt-with-rationale"
+        ? push.requestPermissions()
+        : s,
+    )
+    .then((s) => {
+      if (s.receive === "granted") push.register();
+    })
+    .catch(() => {});
 }
 
 // Keep the OS status bar readable on both themes: our dark theme needs light

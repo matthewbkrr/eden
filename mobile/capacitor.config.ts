@@ -38,6 +38,13 @@ const config: CapacitorConfig = {
       // WebKit panning the whole page up under the status bar.
       resize: 'native',
     },
+    PushNotifications: {
+      // No OS banner while the app is FOREGROUND (#419): the in-app Web
+      // adapter already chimes/banners there, so an OS banner would double up.
+      // Server-side push-vs-active-session suppression (ADR-0001) is the full
+      // fix later; this hides the symptom on the device meanwhile.
+      presentationOptions: [],
+    },
   },
 };
 
