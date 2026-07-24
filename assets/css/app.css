@@ -3085,6 +3085,17 @@ html {
     gap: 0.5rem;
     overflow: hidden;
   }
+  /* Cached-thread variant: real (display-only) message rows replace the skeleton bubbles. Made
+     scrollable so fillCache() can pin it to the newest message (flex justify-end alone drops the
+     bottom off-screen once content overflows); the scrollbar is hidden so the momentary preview
+     never flashes one. */
+  .ed-nav-skel__body--cache {
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .ed-nav-skel__body--cache::-webkit-scrollbar {
+    display: none;
+  }
   .ed-nav-skel__row {
     display: flex;
     align-items: flex-end;

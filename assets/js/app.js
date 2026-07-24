@@ -28,6 +28,10 @@ import topbar from "../vendor/topbar"
 // global so an in-flight upload survives a page reload (persisted to IndexedDB, resumed on mount).
 import {SendStore} from "./send_store"
 window.__edenSendStore = SendStore
+// Message-list cache (instant navigation, phase 2): the colocated InstantNav hook reaches it via
+// this global to paint a re-opened chat from cache instantly + snapshot each shown thread.
+import {MsgCache} from "./msg_cache"
+window.__edMsgCache = MsgCache
 // Capacitor shells only (#417) — a complete no-op in browsers.
 import {initNativeShell} from "./native"
 initNativeShell()
