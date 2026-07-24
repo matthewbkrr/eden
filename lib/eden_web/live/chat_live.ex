@@ -2876,7 +2876,19 @@ defmodule EdenWeb.ChatLive do
             this.timer = null
             this.userId = this.el.dataset.userId // scopes the cache so accounts never cross
             this.cache = window.__edMsgCache
-            if (this.cache) this.cache.requestPersist()
+            if (this.cache && this.userId) {
+              // A DIFFERENT account now uses this browser → wipe the previous user's at-rest
+              // snapshots (belt-and-suspenders with the logout-link clear in maybeStart; also
+              // covers a silent session expiry that never hit the logout link).
+              try {
+                const last = localStorage.getItem("ed:cacheUser")
+                if (last && last !== this.userId) this.cache.clearAll()
+                localStorage.setItem("ed:cacheUser", this.userId)
+              } catch (_e) {
+                /* private mode: no localStorage — the memory cache dies with the tab anyway */
+              }
+              this.cache.requestPersist()
+            }
             // Capture phase so we paint BEFORE LiveView's click handling kicks off the patch.
             this.onClick = (e) => this.maybeStart(e)
             document.addEventListener("click", this.onClick, true)
@@ -2892,8 +2904,15 @@ defmodule EdenWeb.ChatLive do
           maybeStart(e) {
             // Primary click only — modified clicks (open-in-new-tab etc.) don't patch.
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-            const link = e.target.closest && e.target.closest("a.ed-convo")
-            if (!link) return
+            const anchor = e.target.closest && e.target.closest("a")
+            if (!anchor) return
+            // Logging out wipes the at-rest cache BEFORE navigating away (shared-machine privacy).
+            if (anchor.getAttribute("href") === "/users/log_out") {
+              if (this.cache) this.cache.clearAll()
+              return
+            }
+            if (!anchor.classList.contains("ed-convo")) return
+            const link = anchor
             // The tapped row is already open? The patch is a no-op, so nothing will ever
             // announce — don't strand an overlay.
             if (link.classList.contains("ed-convo--active")) return
@@ -2972,8 +2991,18 @@ defmodule EdenWeb.ChatLive do
           // conversation paints instantly. Best-effort; scoped by user id.
           snapshot(convId) {
             if (!this.cache || !this.userId || !convId) return
-            const msgs = document.getElementById("messages")
-            if (msgs) this.cache.put(this.userId, convId, msgs.innerHTML)
+            // Defer the ~0.5 MB innerHTML serialization + IndexedDB write off the navigation paint.
+            // At idle, only snapshot if this conversation is STILL open — a fast navigate-away must
+            // not cache the new conversation's DOM under the old id (the new one snapshots itself on
+            // its own ed:conv-shown).
+            const run = () => {
+              const scroll = document.getElementById("message-scroll")
+              if (!scroll || scroll.dataset.conversationId !== String(convId)) return
+              const msgs = document.getElementById("messages")
+              if (msgs) this.cache.put(this.userId, convId, msgs.innerHTML)
+            }
+            if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2000 })
+            else setTimeout(run, 200)
           },
           shellMarkup(isRoom) {
             let rows = ""

@@ -30,6 +30,16 @@ test.describe("instant navigation cache", () => {
     const realCount = await page.locator("#messages .ed-msg, #messages .ed-flat").count()
     expect(realCount, "A must have messages to cache").toBeGreaterThan(0)
 
+    // The snapshot is idle-deferred — wait until A is actually in the in-memory cache.
+    await expect
+      .poll(() =>
+        page.evaluate((dm) => {
+          const uid = document.getElementById("instant-nav").dataset.userId
+          return !!window.__edMsgCache.peek(uid, dm)
+        }, String(seed.dm_id)),
+      )
+      .toBe(true)
+
     // Switch to B so A is no longer the active row.
     await page.locator(bSel).click()
     await expect(
@@ -67,7 +77,29 @@ test.describe("instant navigation cache", () => {
     await page.goto(`/app/c/${seed.dm_id}`)
     await connected(page)
     await expect(page.locator("#messages .ed-msg, #messages .ed-flat").first()).toBeVisible()
-    await page.waitForTimeout(400) // let the async IDB put settle
+    // The snapshot is idle-deferred — deterministically wait for it to land in IndexedDB (not a
+    // fixed timeout) before reloading, so this never flakes on slow CI.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            (dm) =>
+              new Promise((resolve) => {
+                const req = indexedDB.open("eden-msg-cache", 1)
+                req.onsuccess = () => {
+                  const uid = document.getElementById("instant-nav").dataset.userId
+                  const tx = req.result.transaction("snapshots", "readonly")
+                  tx.objectStore("snapshots").get(uid + ":" + dm).onsuccess = (e) =>
+                    resolve(!!e.target.result)
+                  tx.onerror = () => resolve(false)
+                }
+                req.onerror = () => resolve(false)
+              }),
+            String(seed.dm_id),
+          ),
+        { timeout: 6_000 },
+      )
+      .toBe(true)
 
     // Full reload wipes the in-memory cache; the IDB snapshot survives. Slow the server so the IDB
     // fill wins the race and is observable before the real stream replaces it.
@@ -86,5 +118,38 @@ test.describe("instant navigation cache", () => {
     ).toBeGreaterThan(0)
     await shot(page, testInfo, "cache-thread-from-idb")
     await page.evaluate(() => window.liveSocket.disableLatencySim())
+  })
+
+  test("logging out wipes the cached threads (shared-machine privacy)", async ({ alice, seed }) => {
+    const page = alice
+    const idbHas = () =>
+      page.evaluate(
+        (dm) =>
+          new Promise((resolve) => {
+            const req = indexedDB.open("eden-msg-cache", 1)
+            req.onsuccess = () => {
+              const host = document.getElementById("instant-nav")
+              if (!host) return resolve(false)
+              const tx = req.result.transaction("snapshots", "readonly")
+              tx.objectStore("snapshots").get(host.dataset.userId + ":" + dm).onsuccess = (e) =>
+                resolve(!!e.target.result)
+              tx.onerror = () => resolve(false)
+            }
+            req.onerror = () => resolve(false)
+          }),
+        String(seed.dm_id),
+      )
+
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await expect(page.locator("#messages .ed-msg, #messages .ed-flat").first()).toBeVisible()
+    await expect.poll(idbHas, { timeout: 6_000 }).toBe(true) // snapshot persisted
+
+    // Block the logout navigation so we can inspect IndexedDB after the click; the click's cache
+    // wipe (maybeStart, capture phase) still runs.
+    await page.route("**/users/log_out", (r) => r.abort())
+    await page.evaluate(() => document.querySelector('a[href="/users/log_out"]').click())
+
+    await expect.poll(idbHas, { timeout: 4_000 }).toBe(false) // clearAll() wiped it
   })
 })

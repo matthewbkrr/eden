@@ -163,7 +163,9 @@ export const MsgCache = {
   // Cache the current render of a conversation. Skips oversized snapshots (media-heavy rooms) so
   // one huge thread can't dominate the store. Best-effort persistence; never throws.
   async put(userId, convId, html) {
-    if (!userId || !convId || typeof html !== "string" || html.length > MAX_BYTES) return;
+    // Blob([html]).size is the real UTF-8 byte length (html.length counts UTF-16 code units, which
+    // undercounts Cyrillic ~2×); this keeps the store bound honest for a RU app.
+    if (!userId || !convId || typeof html !== "string" || new Blob([html]).size > MAX_BYTES) return;
     const rec = { id: key(userId, convId), html, updatedAt: Date.now() };
     this._memSet(rec.id, { html: rec.html, updatedAt: rec.updatedAt });
     const db = await this.db();
@@ -172,6 +174,25 @@ export const MsgCache = {
       await idbPut(db, rec);
     } catch (e) {
       this._fail("put", e);
+    }
+  },
+
+  // Wipe every cached snapshot (all users) — called on logout / when a different account uses this
+  // browser, so a person's messages don't sit at rest in IndexedDB after they leave a shared machine.
+  async clearAll() {
+    this._mem.clear();
+    const db = await this.db();
+    if (!db) return;
+    try {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        tx.objectStore(STORE).clear();
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("aborted"));
+      });
+    } catch (e) {
+      this._fail("clearAll", e);
     }
   },
 
