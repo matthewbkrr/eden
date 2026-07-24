@@ -32,6 +32,16 @@ window.__edenSendStore = SendStore
 // this global to paint a re-opened chat from cache instantly + snapshot each shown thread.
 import {MsgCache} from "./msg_cache"
 window.__edMsgCache = MsgCache
+// Privacy: cached snapshots are a plaintext copy of someone's threads at rest. Any SIGNED-OUT
+// page (login, invite, reset — marked by the absence of the #notifier host that every authed
+// page renders, #272) means the previous session ended — however it ended: the logout link,
+// "log out everywhere", expiry, or an admin revoke. Wipe here, deterministically, instead of
+// relying on a logout click racing the page unload. A logged-in tab elsewhere just reopens the
+// (now empty) store on its next snapshot — the cache is an accelerator, losing it is harmless.
+if (!document.getElementById("notifier")) {
+  MsgCache.clearAll()
+  try { localStorage.removeItem("ed:cacheUser") } catch (_e) { /* private mode */ }
+}
 // Capacitor shells only (#417) — a complete no-op in browsers.
 import {initNativeShell} from "./native"
 initNativeShell()

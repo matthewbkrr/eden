@@ -2,7 +2,7 @@
 // from cache INSTANTLY (in-memory for same-session revisits, IndexedDB across reloads), while the
 // real stream loads and replaces it. The cache only ever feeds the display-only overlay, so it's
 // never authoritative — the real stream always reconciles (no duplicate rows).
-const { test, expect, shot } = require("../helpers/fixtures")
+const { test, expect, shot, send } = require("../helpers/fixtures")
 
 async function connected(page) {
   await page.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
@@ -122,21 +122,37 @@ test.describe("instant navigation cache", () => {
 
   test("logging out wipes the cached threads (shared-machine privacy)", async ({ alice, seed }) => {
     const page = alice
+    // Probe WITHOUT creating: a versioned open() would materialize an empty store-less DB and
+    // make the app's own put throw NotFoundError. Check existence first, close after reading.
     const idbHas = () =>
       page.evaluate(
         (dm) =>
-          new Promise((resolve) => {
-            const req = indexedDB.open("eden-msg-cache", 1)
-            req.onsuccess = () => {
-              const host = document.getElementById("instant-nav")
-              if (!host) return resolve(false)
-              const tx = req.result.transaction("snapshots", "readonly")
-              tx.objectStore("snapshots").get(host.dataset.userId + ":" + dm).onsuccess = (e) =>
-                resolve(!!e.target.result)
-              tx.onerror = () => resolve(false)
-            }
-            req.onerror = () => resolve(false)
-          }),
+          (async () => {
+            const dbs = await indexedDB.databases()
+            if (!dbs.some((d) => d.name === "eden-msg-cache")) return false
+            return new Promise((resolve) => {
+              const req = indexedDB.open("eden-msg-cache")
+              req.onsuccess = () => {
+                const db = req.result
+                const done = (hit) => {
+                  db.close()
+                  resolve(hit)
+                }
+                try {
+                  const host = document.getElementById("instant-nav")
+                  if (!host) return done(false)
+                  const tx = db.transaction("snapshots", "readonly")
+                  tx.objectStore("snapshots").get(host.dataset.userId + ":" + dm).onsuccess = (
+                    e,
+                  ) => done(!!e.target.result)
+                  tx.onerror = () => done(false)
+                } catch (_e) {
+                  done(false)
+                }
+              }
+              req.onerror = () => resolve(false)
+            })
+          })(),
         String(seed.dm_id),
       )
 
@@ -151,5 +167,86 @@ test.describe("instant navigation cache", () => {
     await page.evaluate(() => document.querySelector('a[href="/users/log_out"]').click())
 
     await expect.poll(idbHas, { timeout: 4_000 }).toBe(false) // clearAll() wiped it
+  })
+
+  test("any signed-out page load wipes the cache (covers logout-everywhere / expiry)", async ({
+    alice,
+    seed,
+  }) => {
+    const page = alice
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await expect(page.locator("#messages .ed-msg, #messages .ed-flat").first()).toBeVisible()
+    const uid = await page.evaluate(() => document.getElementById("instant-nav").dataset.userId)
+
+    // uid-parameterized, non-creating IDB probe — usable on pages without #instant-nav (/login).
+    const idbHas = () =>
+      page.evaluate(
+        ([u, dm]) =>
+          (async () => {
+            const dbs = await indexedDB.databases()
+            if (!dbs.some((d) => d.name === "eden-msg-cache")) return false
+            return new Promise((resolve) => {
+              const req = indexedDB.open("eden-msg-cache")
+              req.onsuccess = () => {
+                const db = req.result
+                const done = (hit) => {
+                  db.close()
+                  resolve(hit)
+                }
+                try {
+                  const tx = db.transaction("snapshots", "readonly")
+                  tx.objectStore("snapshots").get(u + ":" + dm).onsuccess = (e) =>
+                    done(!!e.target.result)
+                  tx.onerror = () => done(false)
+                } catch (_e) {
+                  done(false)
+                }
+              }
+              req.onerror = () => resolve(false)
+            })
+          })(),
+        [uid, String(seed.dm_id)],
+      )
+
+    await expect.poll(idbHas, { timeout: 6_000 }).toBe(true) // snapshot persisted
+
+    // End the session for real (an authed /login visit just redirects to /app): kill the cookies
+    // — the logout-everywhere / expiry / admin-revoke shape — then land on the login page. app.js
+    // sees no #notifier host and wipes the store deterministically.
+    await page.context().clearCookies()
+    await page.goto("/login")
+    await expect.poll(idbHas, { timeout: 6_000 }).toBe(false)
+  })
+
+  test("leaving a chat re-snapshots it — a just-sent message survives into the cache", async ({
+    alice,
+    seed,
+  }) => {
+    const page = alice
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await expect(page.locator("#messages .ed-msg, #messages .ed-flat").first()).toBeVisible()
+
+    // Send AFTER the shown-time snapshot; only the leave-time snapshot can contain this text.
+    const marker = `freshness-${Date.now()}`
+    await send(page, marker)
+    await expect(page.locator(`#messages :text("${marker}")`)).toBeVisible()
+
+    // Navigate away via a sidebar tap — maybeStart snapshots the departing conversation.
+    await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.group_id}"]`).click()
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.group_id}"]`),
+    ).toBeVisible()
+
+    const cachedHasMarker = await page.evaluate(
+      ([dm, m]) => {
+        const uid = document.getElementById("instant-nav").dataset.userId
+        const rec = window.__edMsgCache.peek(uid, dm)
+        return !!rec && rec.html.includes(m)
+      },
+      [String(seed.dm_id), marker],
+    )
+    expect(cachedHasMarker, "leave-time snapshot carries the message sent while open").toBe(true)
   })
 })

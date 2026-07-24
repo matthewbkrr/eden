@@ -37,7 +37,20 @@ function openDB() {
         os.createIndex("by_updated", "updatedAt", { unique: false });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Another tab ran clearAll's deleteDatabase (logout there): close our handle so the
+      // delete can proceed. Don't mark the store broken — the next db() just reopens.
+      db.onversionchange = () => {
+        try {
+          db.close();
+        } catch (_e) {
+          /* already closing */
+        }
+        if (MsgCache._db === db) MsgCache._db = null;
+      };
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
     req.onblocked = () => reject(new Error("blocked"));
   });
@@ -177,31 +190,31 @@ export const MsgCache = {
     }
   },
 
-  // Wipe every cached snapshot (all users) — called on logout / when a different account uses this
-  // browser, so a person's messages don't sit at rest in IndexedDB after they leave a shared machine.
+  // Wipe every cached snapshot (all users) — a person's messages must not sit at rest in
+  // IndexedDB after their session ends. Deliberately does NOT go through db()/_broken: the wipe
+  // must work even when the store previously errored (quota etc.), so it closes any handle and
+  // deletes the whole database. onblocked (another tab holds a connection) still resolves — that
+  // tab's onversionchange closes it and the delete completes; blocked = same user still active
+  // there, which is fine.
   async clearAll() {
     this._mem.clear();
-    const db = await this.db();
-    if (!db) return;
     try {
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE, "readwrite");
-        tx.objectStore(STORE).clear();
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-        tx.onabort = () => reject(tx.error || new Error("aborted"));
-      });
-    } catch (e) {
-      this._fail("clearAll", e);
-    }
-  },
-
-  // Best-effort: ask the browser not to evict our storage. Never blocks or throws.
-  async requestPersist() {
-    try {
-      if (navigator.storage && navigator.storage.persist) await navigator.storage.persist();
+      if (this._db) this._db.close();
     } catch (_e) {
-      /* ignore */
+      /* already closing */
     }
+    this._db = null;
+    this._broken = false; // the wipe resets the store; a fresh session may reopen cleanly
+    if (typeof indexedDB === "undefined") return;
+    await new Promise((resolve) => {
+      let req;
+      try {
+        req = indexedDB.deleteDatabase(DB_NAME);
+      } catch (_e) {
+        resolve();
+        return;
+      }
+      req.onsuccess = req.onerror = req.onblocked = () => resolve();
+    });
   },
 };

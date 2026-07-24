@@ -3079,6 +3079,10 @@ html {
     flex: 1;
     min-height: 0;
     padding: 1rem;
+    /* Reserve the pane's bottom chrome (composer) so rows sit where the real stream's rows
+       will land — the hook measures it into --ed-skel-chrome at paint time; without this the
+       whole list would jump up by a composer's height at the overlay → real handoff. */
+    padding-bottom: calc(1rem + var(--ed-skel-chrome, 72px));
     display: flex;
     flex-direction: column;
     justify-content: flex-end; /* a chat opens pinned to its newest message */
