@@ -3015,6 +3015,130 @@ html {
     line-height: 1.5;
   }
 
+  /* Instant-navigation skeleton (#instant-nav): painted client-side the moment a
+     chat/room row is tapped, so the pane opens in the SAME frame instead of waiting
+     out the ~160ms cross-border RTT to chat.ihi.ru. The real name + avatar are cloned
+     from the tapped row (you see WHO you're opening instantly); only the message area
+     shimmers. The .InstantNav hook fades it out when .ScrollBottom announces the real
+     stream landed (ed:conv-shown). It lives in a body-level overlay and never touches
+     #messages / morphdom. */
+  .ed-nav-skel {
+    position: fixed;
+    z-index: 40; /* above pane content (≤30), below modals/toasts (50+) */
+    display: flex;
+    flex-direction: column;
+    background: var(--ed-bg);
+    opacity: 1;
+    transition: opacity 180ms var(--ed-ease);
+  }
+  .ed-nav-skel--full {
+    inset: 0;
+  }
+  /* Once the real stream has landed the overlay only fades — let taps fall through to the
+     now-interactive chat underneath instead of being swallowed during the ~180ms fade. */
+  .ed-nav-skel--out {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .ed-nav-skel__head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    height: 3.5rem; /* match the real header (h-14) */
+    padding-inline: 1rem;
+    border-bottom: 1px solid var(--ed-border);
+    flex-shrink: 0;
+  }
+  .ed-nav-skel__head > .ed-avatar,
+  .ed-nav-skel__head > .ed-room__hash {
+    flex: none;
+  }
+  .ed-nav-skel__title {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .ed-nav-skel__name {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: var(--ed-ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 60vw;
+  }
+  .ed-nav-skel__sub {
+    width: 6rem;
+    height: 0.5rem;
+    border-radius: var(--ed-radius-full);
+  }
+
+  .ed-nav-skel__body {
+    flex: 1;
+    min-height: 0;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end; /* a chat opens pinned to its newest message */
+    gap: 0.5rem;
+    overflow: hidden;
+  }
+  .ed-nav-skel__row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.5rem;
+    max-width: 100%;
+  }
+  .ed-nav-skel__row--me {
+    justify-content: flex-end;
+  }
+  .ed-nav-skel__av {
+    width: 2rem;
+    height: 2rem;
+    border-radius: var(--ed-radius-full);
+    flex: none;
+  }
+  .ed-nav-skel__bubble {
+    height: 2.25rem;
+    max-width: 72%;
+    border-radius: var(--ed-radius-lg);
+  }
+  .ed-nav-skel__row--me .ed-nav-skel__bubble {
+    border-bottom-right-radius: var(--ed-radius-sm);
+  }
+
+  /* Shimmer surface: a theme-token gradient sweeping surface → surface-2 → surface,
+     so it reads right in both light and dark (tokens flip with the theme). */
+  .ed-skel-shimmer {
+    background: linear-gradient(
+      100deg,
+      var(--ed-surface) 30%,
+      var(--ed-surface-2) 50%,
+      var(--ed-surface) 70%
+    );
+    background-size: 300% 100%;
+    animation: ed-skel-sweep 1.3s var(--ed-ease) infinite;
+  }
+  @keyframes ed-skel-sweep {
+    from {
+      background-position: 150% 0;
+    }
+    to {
+      background-position: -50% 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-nav-skel {
+      transition: none;
+    }
+    .ed-skel-shimmer {
+      animation: none;
+      background: var(--ed-surface-2);
+    }
+  }
+
   /* Channel rooms (sidebar rows; reuse .ed-convo geometry) -------------- */
   .ed-room {
     gap: 0.5rem;

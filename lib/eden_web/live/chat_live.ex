@@ -2856,6 +2856,120 @@ defmodule EdenWeb.ChatLive do
       <%!-- Carry-and-drop forward: re-hydrates the plaque from sessionStorage on every mount,
             so a carried message survives navigation across DMs, rooms and channels. --%>
       <div id="forward-carry" phx-hook=".ForwardCarry" hidden></div>
+      <%!-- Instant navigation: paints the tapped chat's shell + a shimmer skeleton the
+            moment a sidebar row is tapped, so the pane opens in the SAME frame instead of
+            waiting out the cross-border RTT to chat.ihi.ru (patch nav is a full round-trip).
+            The .ScrollBottom hook announces when the real stream lands (ed:conv-shown) and
+            this fades out. Pure client-side overlay — never touches #messages / morphdom. --%>
+      <div id="instant-nav" phx-hook=".InstantNav" hidden></div>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".InstantNav">
+        export default {
+          mounted() {
+            this.target = null   // conversation id we're transitioning to (string), or null
+            this.overlay = null
+            this.timer = null
+            // Capture phase so we paint BEFORE LiveView's click handling kicks off the patch.
+            this.onClick = (e) => this.maybeStart(e)
+            document.addEventListener("click", this.onClick, true)
+            // .ScrollBottom fires this once the real stream for a conversation is in the DOM.
+            this.onShown = (e) => {
+              if (this.target != null && String(e.detail.id) === String(this.target)) this.dismiss()
+            }
+            window.addEventListener("ed:conv-shown", this.onShown)
+          },
+          maybeStart(e) {
+            // Primary click only — modified clicks (open-in-new-tab etc.) don't patch.
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+            const link = e.target.closest && e.target.closest("a.ed-convo")
+            if (!link) return
+            // The tapped row is already open? The patch is a no-op, so nothing will ever
+            // announce — don't strand an overlay.
+            if (link.classList.contains("ed-convo--active")) return
+            const wrap = link.closest(".ed-convo-wrap")
+            const id = wrap && wrap.dataset.id
+            if (!id) return
+            const isRoom = wrap.classList.contains("ed-room-wrap")
+            const name = (link.querySelector(".ed-convo__name")?.textContent || "").trim()
+            // The leading child is the real avatar (DM/group) or the room # glyph — CLONE the
+            // node (never serialize→re-parse its HTML) so the header shows WHO you're opening
+            // instantly, with no innerHTML path for the (user-controlled) display name/initials.
+            const iconNode = link.firstElementChild ? link.firstElementChild.cloneNode(true) : null
+            this.target = id
+            this.paint({ name, iconNode, isRoom })
+            // Do NOT preventDefault — the <.link patch> navigation must still fire.
+          },
+          paint({ name, iconNode, isRoom }) {
+            this.remove() // clear any prior overlay instantly (rapid taps)
+            const ov = document.createElement("div")
+            ov.className = "ed-nav-skel"
+            ov.setAttribute("aria-hidden", "true") // decorative; real content lands in ~RTT
+            const pane = document.getElementById("chat-dropzone")
+            const desktop = window.matchMedia("(min-width: 768px)").matches
+            // Desktop: cover just the message pane (sidebar stays live). Mobile / hidden pane:
+            // full-screen (the pane goes full-screen when a chat is open).
+            if (desktop && pane && pane.offsetParent !== null) {
+              const r = pane.getBoundingClientRect()
+              ov.style.left = r.left + "px"
+              ov.style.top = r.top + "px"
+              ov.style.width = r.width + "px"
+              ov.style.height = r.height + "px"
+            } else {
+              ov.classList.add("ed-nav-skel--full")
+            }
+            // Static skeleton via innerHTML (no dynamic content); the name goes in as text and the
+            // avatar/glyph as a cloned node — so nothing user-controlled is ever parsed as HTML.
+            ov.innerHTML = this.shellMarkup(isRoom)
+            ov.querySelector(".ed-nav-skel__name").textContent = name
+            if (iconNode) ov.querySelector(".ed-nav-skel__head").prepend(iconNode)
+            document.body.appendChild(ov)
+            this.overlay = ov
+            // Safety net: if the nav errors and nothing ever announces, don't strand it.
+            this.timer = setTimeout(() => this.dismiss(), 6000)
+          },
+          shellMarkup(isRoom) {
+            let rows = ""
+            if (isRoom) {
+              // Flat rooms: a leading avatar on every row (Mattermost layout).
+              for (const w of [58, 40, 72, 34, 64, 48, 30]) {
+                rows += `<div class="ed-nav-skel__row"><span class="ed-nav-skel__av ed-skel-shimmer"></span><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
+              }
+            } else {
+              // DMs: alternating incoming/outgoing bubbles.
+              for (const [me, w] of [[0, 60], [1, 44], [0, 72], [0, 32], [1, 54], [1, 38], [0, 66]]) {
+                rows += `<div class="ed-nav-skel__row ${me ? "ed-nav-skel__row--me" : ""}"><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
+              }
+            }
+            return `<div class="ed-nav-skel__head"><div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>`
+          },
+          dismiss() {
+            if (!this.overlay) { this.target = null; return }
+            clearTimeout(this.timer)
+            this.timer = null
+            this.target = null
+            const ov = this.overlay
+            this.overlay = null
+            if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { ov.remove(); return }
+            // Fade out on the next frame so the opacity transition actually runs.
+            requestAnimationFrame(() => {
+              ov.classList.add("ed-nav-skel--out")
+              let done = false
+              const fin = () => { if (!done) { done = true; ov.remove() } }
+              ov.addEventListener("transitionend", fin, { once: true })
+              setTimeout(fin, 400) // fallback if transitionend never fires
+            })
+          },
+          remove() {
+            clearTimeout(this.timer)
+            this.timer = null
+            if (this.overlay) { this.overlay.remove(); this.overlay = null }
+          },
+          destroyed() {
+            document.removeEventListener("click", this.onClick, true)
+            window.removeEventListener("ed:conv-shown", this.onShown)
+            this.remove()
+          },
+        }
+      </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ForwardCarry">
         export default {
           mounted() {
@@ -4812,6 +4926,8 @@ defmodule EdenWeb.ChatLive do
             const focus = this.checkFocus()
             if (focus) this.focusOn(focus)
             else this.toBottom()
+            // A fresh mount = list→chat (or a deep-link): the real stream is in the DOM now.
+            this.announceShown()
             // Thread-reply targets (`thread-<id>`, a different container with no
             // scroll-to-bottom of its own) arrive as an event rather than via data-focus-*.
             this.handleEvent("focus_message", ({ domId }) => this.focusOn(domId))
@@ -5083,6 +5199,7 @@ defmodule EdenWeb.ChatLive do
               this.convId = this.el.dataset.conversationId
               this.loadingMore = false
               this.toBottom(false)
+              this.announceShown()
               return
             }
             // An older-page prepend (#113): keep the same content under the viewport
@@ -5136,6 +5253,13 @@ defmodule EdenWeb.ChatLive do
                 ? "smooth"
                 : "auto"
             this.el.scrollTo({ top: this.el.scrollHeight, behavior: motion })
+          },
+          // Tell the .InstantNav hook the real stream for this conversation is now in the
+          // DOM, so it can fade its instant-navigation skeleton. Fired whenever we (re)pin
+          // to a conversation — a fresh mount (list→chat) or a switch (chat→chat).
+          announceShown() {
+            const id = this.el.dataset.conversationId
+            if (id) window.dispatchEvent(new CustomEvent("ed:conv-shown", { detail: { id } }))
           }
         }
       </script>
@@ -8878,7 +9002,7 @@ defmodule EdenWeb.ChatLive do
 
   defp conversation_item(assigns) do
     ~H"""
-    <div id={@id} class="ed-convo-wrap" phx-hook=".ContextMenu">
+    <div id={@id} class="ed-convo-wrap" data-id={@conversation.id} phx-hook=".ContextMenu">
       <.link
         patch={~p"/app/c/#{@conversation.id}"}
         class={["ed-convo", @active && "ed-convo--active"]}
