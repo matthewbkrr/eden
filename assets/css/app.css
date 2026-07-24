@@ -3034,8 +3034,11 @@ html {
   .ed-nav-skel--full {
     inset: 0;
   }
+  /* Once the real stream has landed the overlay only fades — let taps fall through to the
+     now-interactive chat underneath instead of being swallowed during the ~180ms fade. */
   .ed-nav-skel--out {
     opacity: 0;
+    pointer-events: none;
   }
 
   .ed-nav-skel__head {

@@ -2890,14 +2890,15 @@ defmodule EdenWeb.ChatLive do
             if (!id) return
             const isRoom = wrap.classList.contains("ed-room-wrap")
             const name = (link.querySelector(".ed-convo__name")?.textContent || "").trim()
-            // The leading child is the real avatar (DM/group) or the room # glyph — clone it
-            // so the header shows WHO you're opening instantly, not a placeholder.
-            const iconHTML = link.firstElementChild ? link.firstElementChild.outerHTML : ""
+            // The leading child is the real avatar (DM/group) or the room # glyph — CLONE the
+            // node (never serialize→re-parse its HTML) so the header shows WHO you're opening
+            // instantly, with no innerHTML path for the (user-controlled) display name/initials.
+            const iconNode = link.firstElementChild ? link.firstElementChild.cloneNode(true) : null
             this.target = id
-            this.paint({ name, iconHTML, isRoom })
+            this.paint({ name, iconNode, isRoom })
             // Do NOT preventDefault — the <.link patch> navigation must still fire.
           },
-          paint({ name, iconHTML, isRoom }) {
+          paint({ name, iconNode, isRoom }) {
             this.remove() // clear any prior overlay instantly (rapid taps)
             const ov = document.createElement("div")
             ov.className = "ed-nav-skel"
@@ -2915,18 +2916,17 @@ defmodule EdenWeb.ChatLive do
             } else {
               ov.classList.add("ed-nav-skel--full")
             }
-            ov.innerHTML = this.markup({ name, iconHTML, isRoom })
+            // Static skeleton via innerHTML (no dynamic content); the name goes in as text and the
+            // avatar/glyph as a cloned node — so nothing user-controlled is ever parsed as HTML.
+            ov.innerHTML = this.shellMarkup(isRoom)
+            ov.querySelector(".ed-nav-skel__name").textContent = name
+            if (iconNode) ov.querySelector(".ed-nav-skel__head").prepend(iconNode)
             document.body.appendChild(ov)
             this.overlay = ov
             // Safety net: if the nav errors and nothing ever announces, don't strand it.
             this.timer = setTimeout(() => this.dismiss(), 6000)
           },
-          markup({ name, iconHTML, isRoom }) {
-            const esc = (s) =>
-              String(s).replace(
-                /[&<>"]/g,
-                (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
-              )
+          shellMarkup(isRoom) {
             let rows = ""
             if (isRoom) {
               // Flat rooms: a leading avatar on every row (Mattermost layout).
@@ -2939,7 +2939,7 @@ defmodule EdenWeb.ChatLive do
                 rows += `<div class="ed-nav-skel__row ${me ? "ed-nav-skel__row--me" : ""}"><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
               }
             }
-            return `<div class="ed-nav-skel__head">${iconHTML}<div class="ed-nav-skel__title"><span class="ed-nav-skel__name">${esc(name)}</span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>`
+            return `<div class="ed-nav-skel__head"><div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>`
           },
           dismiss() {
             if (!this.overlay) { this.target = null; return }

@@ -99,13 +99,10 @@ test.describe("instant navigation skeleton", () => {
     await connected(page)
     const dm = page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`)
     await dm.waitFor()
-    // Swallow the dismissal signal (capture-phase stopImmediatePropagation) so the REAL hook
-    // overlay lingers while the chat loads underneath — long enough to screenshot both themes.
-    // It self-clears via the hook's 6s safety timeout after the test.
-    await page.evaluate(() => {
-      window.__block = (e) => e.stopImmediatePropagation()
-      window.addEventListener("ed:conv-shown", window.__block, true)
-    })
+    // Slow the socket round-trip so the real overlay lingers (real dismiss path, just delayed)
+    // — long enough to screenshot both themes. No event hacks: this is exactly what a bad
+    // connection does, and it's what makes the effect worth having.
+    await page.evaluate(() => window.liveSocket.enableLatencySim(3000))
     await dm.click()
     await expect(page.locator(".ed-nav-skel")).toBeVisible()
     await shot(page, testInfo, "skeleton-light")
@@ -113,7 +110,7 @@ test.describe("instant navigation skeleton", () => {
     await page.waitForTimeout(150)
     await expect(page.locator(".ed-nav-skel")).toBeVisible()
     await shot(page, testInfo, "skeleton-dark")
-    await page.evaluate(() => window.removeEventListener("ed:conv-shown", window.__block, true))
+    await page.evaluate(() => window.liveSocket.disableLatencySim())
   })
 
   test("tapping the already-open chat paints no overlay", async ({ alice, seed }, testInfo) => {
