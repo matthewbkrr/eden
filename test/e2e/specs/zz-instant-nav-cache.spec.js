@@ -11,6 +11,13 @@ async function connected(page) {
 }
 
 test.describe("instant navigation cache", () => {
+  // Desktop-only: these flows drive the sidebar while a chat is open (hidden on mobile) and use
+  // same-task synthetic-click probes that WebKit doesn't deliver to the hook. The cache engine is
+  // platform-agnostic JS; the mobile-specific overlay behavior is covered in zz-instant-nav.
+  test.beforeEach(async ({}, testInfo) => {
+    test.skip(testInfo.project.name.startsWith("mobile"), "desktop-only cache flows")
+  })
+
   test("same-session revisit paints the cached thread synchronously (no skeleton)", async ({
     alice,
     seed,
