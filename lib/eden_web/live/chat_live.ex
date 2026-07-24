@@ -2861,27 +2861,67 @@ defmodule EdenWeb.ChatLive do
             waiting out the cross-border RTT to chat.ihi.ru (patch nav is a full round-trip).
             The .ScrollBottom hook announces when the real stream lands (ed:conv-shown) and
             this fades out. Pure client-side overlay — never touches #messages / morphdom. --%>
-      <div id="instant-nav" phx-hook=".InstantNav" hidden></div>
+      <div
+        id="instant-nav"
+        phx-hook=".InstantNav"
+        data-user-id={@current_scope.user.id}
+        hidden
+      >
+      </div>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".InstantNav">
         export default {
           mounted() {
             this.target = null   // conversation id we're transitioning to (string), or null
             this.overlay = null
             this.timer = null
+            this.userId = this.el.dataset.userId // scopes the cache so accounts never cross
+            this.cache = window.__edMsgCache
+            if (this.cache && this.userId) {
+              // A DIFFERENT account now uses this browser → wipe the previous user's at-rest
+              // snapshots. Belt-and-suspenders: the PRIMARY eviction is app.js wiping on any
+              // signed-out page render; this catches a user switch that somehow skipped one.
+              try {
+                const last = localStorage.getItem("ed:cacheUser")
+                if (last && last !== this.userId) this.cache.clearAll()
+                localStorage.setItem("ed:cacheUser", this.userId)
+              } catch (_e) {
+                /* private mode: no localStorage — the memory cache dies with the tab anyway */
+              }
+            }
             // Capture phase so we paint BEFORE LiveView's click handling kicks off the patch.
             this.onClick = (e) => this.maybeStart(e)
             document.addEventListener("click", this.onClick, true)
-            // .ScrollBottom fires this once the real stream for a conversation is in the DOM.
+            // .ScrollBottom fires this once the real stream for a conversation is in the DOM:
+            // snapshot it into the cache (so the NEXT open paints instantly), then, if this is the
+            // conversation we're transitioning to, drop the overlay.
             this.onShown = (e) => {
+              this.snapshot(e.detail.id)
               if (this.target != null && String(e.detail.id) === String(this.target)) this.dismiss()
             }
             window.addEventListener("ed:conv-shown", this.onShown)
+            // A patch can settle WITHOUT the target stream ever mounting — tap a room whose
+            // membership just got revoked (knock window, selected: nil) and #message-scroll
+            // leaves the DOM entirely. Don't shimmer over the knock window for the full safety
+            // timeout: when live navigation finishes and there's no message pane at all, drop the
+            // overlay. (A rapid A→B mid-flight keeps its pane — A's id ≠ B's — so this never
+            // dismisses a still-loading transition.)
+            this.onLoadStop = () => {
+              if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
+            }
+            window.addEventListener("phx:page-loading-stop", this.onLoadStop)
           },
           maybeStart(e) {
             // Primary click only — modified clicks (open-in-new-tab etc.) don't patch.
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
-            const link = e.target.closest && e.target.closest("a.ed-convo")
-            if (!link) return
+            const anchor = e.target.closest && e.target.closest("a")
+            if (!anchor) return
+            // Logging out wipes the at-rest cache BEFORE navigating away (shared-machine privacy).
+            if (anchor.getAttribute("href") === "/users/log_out") {
+              if (this.cache) this.cache.clearAll()
+              return
+            }
+            if (!anchor.classList.contains("ed-convo")) return
+            const link = anchor
             // The tapped row is already open? The patch is a no-op, so nothing will ever
             // announce — don't strand an overlay.
             if (link.classList.contains("ed-convo--active")) return
@@ -2889,16 +2929,44 @@ defmodule EdenWeb.ChatLive do
             const id = wrap && wrap.dataset.id
             if (!id) return
             const isRoom = wrap.classList.contains("ed-room-wrap")
-            const name = (link.querySelector(".ed-convo__name")?.textContent || "").trim()
+            // The name span nests badge spans whose sr-only text ("Muted"/"Favorite") would ride
+            // along in textContent — strip them on a clone so a muted chat's overlay header reads
+            // "Вася", not "Вася Без звука".
+            const nameEl = link.querySelector(".ed-convo__name")
+            let name = ""
+            if (nameEl) {
+              const clone = nameEl.cloneNode(true)
+              clone.querySelectorAll(".ed-convo__muted, .sr-only").forEach((n) => n.remove())
+              name = clone.textContent.trim()
+            }
             // The leading child is the real avatar (DM/group) or the room # glyph — CLONE the
             // node (never serialize→re-parse its HTML) so the header shows WHO you're opening
             // instantly, with no innerHTML path for the (user-controlled) display name/initials.
             const iconNode = link.firstElementChild ? link.firstElementChild.cloneNode(true) : null
             this.target = id
-            this.paint({ name, iconNode, isRoom })
+            // Same-session revisit → paint the cached thread synchronously (no skeleton flash).
+            const cached = this.cache && this.userId ? this.cache.peek(this.userId, id) : null
+            this.paint({ name, iconNode, isRoom, cachedHTML: cached && cached.html })
+            // Freshness: snapshot the conversation we're LEAVING, right now — everything sent or
+            // received while it was open (including the user's own last message) is in this DOM
+            // and would otherwise be missing from its next cache paint (the shown-time snapshot
+            // is as-of-OPEN). After paint() so the innerHTML serialization can't delay the
+            // overlay's first frame; the IDB write inside put() is async anyway.
+            const leaving = document.getElementById("message-scroll")
+            const leavingMsgs = leaving && document.getElementById("messages")
+            if (leaving && leavingMsgs && this.cache && this.userId && leaving.dataset.conversationId) {
+              this.cache.put(this.userId, leaving.dataset.conversationId, leavingMsgs.innerHTML)
+            }
+            // No in-memory hit (a cross-reload first open): try IndexedDB and swap in if it lands
+            // before the real stream — else the skeleton just stays until the real stream does.
+            if (!cached && this.cache && this.userId) {
+              this.cache.get(this.userId, id).then((hit) => {
+                if (hit && this.target === id && this.overlay) this.fillCache(hit.html)
+              })
+            }
             // Do NOT preventDefault — the <.link patch> navigation must still fire.
           },
-          paint({ name, iconNode, isRoom }) {
+          paint({ name, iconNode, isRoom, cachedHTML }) {
             this.remove() // clear any prior overlay instantly (rapid taps)
             const ov = document.createElement("div")
             ov.className = "ed-nav-skel"
@@ -2916,6 +2984,19 @@ defmodule EdenWeb.ChatLive do
             } else {
               ov.classList.add("ed-nav-skel--full")
             }
+            // The pane's bottom chrome (composer) sits INSIDE the covered rect. Without matching
+            // bottom padding the rows pin ~a composer too low and visibly jump up at the overlay
+            // → real-stream handoff. Measure the live chrome when a chat is open (pane bottom −
+            // #message-scroll bottom); from the list view (no open chat) approximate the base
+            // composer. +1rem mirrors the scroller's own p-4 above the composer.
+            const curScroll = document.getElementById("message-scroll")
+            const paneBottom = ov.classList.contains("ed-nav-skel--full")
+              ? window.innerHeight
+              : pane.getBoundingClientRect().bottom
+            const chrome = curScroll
+              ? Math.max(0, paneBottom - curScroll.getBoundingClientRect().bottom)
+              : 72
+            ov.style.setProperty("--ed-skel-chrome", chrome + "px")
             // Static skeleton via innerHTML (no dynamic content); the name goes in as text and the
             // avatar/glyph as a cloned node — so nothing user-controlled is ever parsed as HTML.
             ov.innerHTML = this.shellMarkup(isRoom)
@@ -2923,8 +3004,54 @@ defmodule EdenWeb.ChatLive do
             if (iconNode) ov.querySelector(".ed-nav-skel__head").prepend(iconNode)
             document.body.appendChild(ov)
             this.overlay = ov
+            if (cachedHTML) this.fillCache(cachedHTML)
             // Safety net: if the nav errors and nothing ever announces, don't strand it.
             this.timer = setTimeout(() => this.dismiss(), 6000)
+          },
+          // Replace the skeleton body with a cached render of the thread (display-only). The source
+          // is the app's OWN prior server render (HEEx-escaped), parsed via <template> and shown
+          // outside LiveView's managed tree — so phx-hooks stay dormant. <script> nodes are
+          // REMOVED before adoption (template parsing doesn't run them, but adopting the content
+          // would — none should exist in our render; defense-in-depth since IndexedDB is
+          // client-writable). ids are stripped to avoid duplicate-id collisions with the real
+          // #messages during the fade; transient state classes (selection wash, jump highlight,
+          // enter animation) captured mid-effect are stripped so they don't replay.
+          fillCache(html) {
+            if (!this.overlay) return
+            const body = this.overlay.querySelector(".ed-nav-skel__body")
+            if (!body) return
+            try {
+              const tpl = document.createElement("template")
+              tpl.innerHTML = html
+              tpl.content.querySelectorAll("script").forEach((n) => n.remove())
+              tpl.content.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"))
+              const transient = ["ed-msg--selected", "ed-flat--selected", "ed-msg--focus", "ed-msg--enter"]
+              tpl.content.querySelectorAll("." + transient.join(", .")).forEach((n) => {
+                n.classList.remove(...transient)
+              })
+              body.replaceChildren(tpl.content)
+              body.classList.add("ed-nav-skel__body--cache")
+              body.scrollTop = body.scrollHeight // a chat opens pinned to its newest message
+            } catch (_e) {
+              /* a malformed snapshot just leaves the skeleton — navigation must not break */
+            }
+          },
+          // Snapshot the just-rendered #messages into the cache so the NEXT open of this
+          // conversation paints instantly. Best-effort; scoped by user id.
+          snapshot(convId) {
+            if (!this.cache || !this.userId || !convId) return
+            // Defer the ~0.5 MB innerHTML serialization + IndexedDB write off the navigation paint.
+            // At idle, only snapshot if this conversation is STILL open — a fast navigate-away must
+            // not cache the new conversation's DOM under the old id (the new one snapshots itself on
+            // its own ed:conv-shown).
+            const run = () => {
+              const scroll = document.getElementById("message-scroll")
+              if (!scroll || scroll.dataset.conversationId !== String(convId)) return
+              const msgs = document.getElementById("messages")
+              if (msgs) this.cache.put(this.userId, convId, msgs.innerHTML)
+            }
+            if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2000 })
+            else setTimeout(run, 200)
           },
           shellMarkup(isRoom) {
             let rows = ""
@@ -2961,11 +3088,15 @@ defmodule EdenWeb.ChatLive do
           remove() {
             clearTimeout(this.timer)
             this.timer = null
-            if (this.overlay) { this.overlay.remove(); this.overlay = null }
+            // Sweep ALL overlays, not just this.overlay: dismiss() nulls this.overlay while its node
+            // is still fading, so a rapid re-nav must clear that lingering node too (never stack).
+            document.querySelectorAll(".ed-nav-skel").forEach((n) => n.remove())
+            this.overlay = null
           },
           destroyed() {
             document.removeEventListener("click", this.onClick, true)
             window.removeEventListener("ed:conv-shown", this.onShown)
+            window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
             this.remove()
           },
         }
