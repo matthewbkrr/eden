@@ -17,6 +17,7 @@ async function instrument(page) {
             window.__skel.addedName = (n.querySelector(".ed-nav-skel__name")?.textContent || "").trim()
             window.__skel.hasShimmer = !!n.querySelector(".ed-skel-shimmer")
             window.__skel.full = n.classList.contains("ed-nav-skel--full")
+            window.__skel.hasFoot = !!n.querySelector(".ed-nav-skel__foot")
           }
         }
         for (const n of m.removedNodes) {
@@ -111,6 +112,60 @@ test.describe("instant navigation skeleton", () => {
     await expect(page.locator(".ed-nav-skel")).toBeVisible()
     await shot(page, testInfo, "skeleton-dark")
     await page.evaluate(() => window.liveSocket.disableLatencySim())
+  })
+
+  test("overlay mirrors the pane card: ends above the composer, rounded, sm avatar", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    // Desktop geometry only: on mobile the sidebar is hidden while a chat is open, and the
+    // overlay goes full-screen instead of mirroring the pane card.
+    test.skip(testInfo.project.name.startsWith("mobile"), "desktop-only geometry")
+    const page = alice
+    // Open A so a real chat (with its composer) is on screen, then tap B.
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await instrument(page)
+
+    const probe = await page.evaluate((sel) => {
+      const scroll = document.getElementById("message-scroll").getBoundingClientRect()
+      const composer = document.getElementById("composer").getBoundingClientRect()
+      document.querySelector(sel).click()
+      const ov = document.querySelector(".ed-nav-skel")
+      const r = ov.getBoundingClientRect()
+      const cs = getComputedStyle(ov)
+      const av = ov.querySelector(".ed-nav-skel__head .ed-avatar")
+      return {
+        bottomGap: Math.abs(r.bottom - scroll.bottom),
+        composerClear: composer.top >= r.bottom - 1,
+        radius: cs.borderTopLeftRadius,
+        avatarSm: !!av && av.classList.contains("ed-avatar--sm"),
+        hasFoot: !!ov.querySelector(".ed-nav-skel__foot"),
+      }
+    }, `#conversations a.ed-convo[href$="/app/c/${seed.group_id}"]`)
+
+    expect(probe.bottomGap, "overlay bottom sits at the top of the composer").toBeLessThan(2)
+    expect(probe.composerClear, "the real composer stays visible below the overlay").toBe(true)
+    expect(probe.radius, "overlay inherits the pane card's rounding").not.toBe("0px")
+    expect(probe.avatarSm, "cloned avatar matches the real header's sm size").toBe(true)
+    expect(probe.hasFoot, "no composer skeleton when the real composer shows through").toBe(false)
+  })
+
+  test("mobile full-screen overlay carries a composer skeleton", async ({ alice, seed }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile-only variant")
+    const page = alice
+    await page.goto("/app")
+    await connected(page)
+    await instrument(page)
+    // Real tap (a synthetic el.click() from evaluate doesn't reach the hook on WebKit);
+    // the MutationObserver records the overlay's shape at insertion time.
+    await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`).click()
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+    const skel = await page.evaluate(() => window.__skel)
+    expect(skel.full, "mobile overlay covers the full screen").toBe(true)
+    expect(skel.hasFoot, "full-screen overlay draws the composer skeleton").toBe(true)
   })
 
   test("tapping the already-open chat paints no overlay", async ({ alice, seed }, testInfo) => {

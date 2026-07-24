@@ -2943,6 +2943,10 @@ defmodule EdenWeb.ChatLive do
             // node (never serialize→re-parse its HTML) so the header shows WHO you're opening
             // instantly, with no innerHTML path for the (user-controlled) display name/initials.
             const iconNode = link.firstElementChild ? link.firstElementChild.cloneNode(true) : null
+            // The sidebar renders the avatar at base size and the room glyph small; the REAL
+            // header uses size sm for avatars and --lg for the glyph. Match it, or the clone
+            // reads oversized/undersized for the overlay's lifetime (the "аватарка больше" jump).
+            if (iconNode) iconNode.classList.add(isRoom ? "ed-room__hash--lg" : "ed-avatar--sm")
             this.target = id
             // Same-session revisit → paint the cached thread synchronously (no skeleton flash).
             const cached = this.cache && this.userId ? this.cache.peek(this.userId, id) : null
@@ -2973,35 +2977,49 @@ defmodule EdenWeb.ChatLive do
             ov.setAttribute("aria-hidden", "true") // decorative; real content lands in ~RTT
             const pane = document.getElementById("chat-dropzone")
             const desktop = window.matchMedia("(min-width: 768px)").matches
-            // Desktop: cover just the message pane (sidebar stays live). Mobile / hidden pane:
-            // full-screen (the pane goes full-screen when a chat is open).
+            const curScroll = document.getElementById("message-scroll")
+            // Desktop: cover the pane's header + message area ONLY. When a chat is open, the
+            // overlay's bottom edge sits at the top of the composer, so the real input stays
+            // visible (and interactive) straight through the transition — TG-style, the composer
+            // persists across chats. The pane is a floating card on desktop (1px border +
+            // --ed-radius-panel, overflow hidden): mirror its border and corners so the card
+            // doesn't visibly square off for the overlay's lifetime.
             if (desktop && pane && pane.offsetParent !== null) {
               const r = pane.getBoundingClientRect()
+              const cs = getComputedStyle(pane)
+              const bottom = curScroll ? curScroll.getBoundingClientRect().bottom : r.bottom
               ov.style.left = r.left + "px"
               ov.style.top = r.top + "px"
               ov.style.width = r.width + "px"
-              ov.style.height = r.height + "px"
+              ov.style.height = bottom - r.top + "px"
+              ov.style.borderTop = ov.style.borderLeft = ov.style.borderRight =
+                cs.borderTopWidth + " " + cs.borderTopStyle + " " + cs.borderTopColor
+              ov.style.borderTopLeftRadius = cs.borderTopLeftRadius
+              ov.style.borderTopRightRadius = cs.borderTopRightRadius
+              if (!curScroll) {
+                // Empty state (no chat open): the whole card is covered — keep its bottom edge too.
+                ov.style.borderBottom = ov.style.borderTop
+                ov.style.borderBottomLeftRadius = cs.borderBottomLeftRadius
+                ov.style.borderBottomRightRadius = cs.borderBottomRightRadius
+              }
             } else {
+              // Mobile / hidden pane: the chat opens as a full-screen pane.
               ov.classList.add("ed-nav-skel--full")
             }
-            // The pane's bottom chrome (composer) sits INSIDE the covered rect. Without matching
-            // bottom padding the rows pin ~a composer too low and visibly jump up at the overlay
-            // → real-stream handoff. Measure the live chrome when a chat is open (pane bottom −
-            // #message-scroll bottom); from the list view (no open chat) approximate the base
-            // composer. +1rem mirrors the scroller's own p-4 above the composer.
-            const curScroll = document.getElementById("message-scroll")
-            const paneBottom = ov.classList.contains("ed-nav-skel--full")
-              ? window.innerHeight
-              : pane.getBoundingClientRect().bottom
-            const chrome = curScroll
-              ? Math.max(0, paneBottom - curScroll.getBoundingClientRect().bottom)
-              : 72
-            ov.style.setProperty("--ed-skel-chrome", chrome + "px")
+            const full = ov.classList.contains("ed-nav-skel--full")
+            // No real composer visible beneath (mobile full-screen from the list / desktop empty
+            // state) → the overlay draws a composer SKELETON at its bottom, so the shell reads
+            // complete ("шапка + лента + инпут") instead of ending in blank space. The full-screen
+            // (mobile) header also leads with a back-arrow placeholder — the real mobile header
+            // has one, and without it the avatar/name would jump right at the handoff.
+            const needFoot = !curScroll
             // Static skeleton via innerHTML (no dynamic content); the name goes in as text and the
             // avatar/glyph as a cloned node — so nothing user-controlled is ever parsed as HTML.
-            ov.innerHTML = this.shellMarkup(isRoom)
+            ov.innerHTML = this.shellMarkup(isRoom, needFoot, full)
             ov.querySelector(".ed-nav-skel__name").textContent = name
-            if (iconNode) ov.querySelector(".ed-nav-skel__head").prepend(iconNode)
+            // Before the title (not head-prepend): the mobile variant's back placeholder must
+            // stay leftmost, icon between it and the title — mirroring the real header order.
+            if (iconNode) ov.querySelector(".ed-nav-skel__title").before(iconNode)
             document.body.appendChild(ov)
             this.overlay = ov
             if (cachedHTML) this.fillCache(cachedHTML)
@@ -3053,7 +3071,7 @@ defmodule EdenWeb.ChatLive do
             if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2000 })
             else setTimeout(run, 200)
           },
-          shellMarkup(isRoom) {
+          shellMarkup(isRoom, withFoot, withBack) {
             let rows = ""
             if (isRoom) {
               // Flat rooms: a leading avatar on every row (Mattermost layout).
@@ -3066,7 +3084,16 @@ defmodule EdenWeb.ChatLive do
                 rows += `<div class="ed-nav-skel__row ${me ? "ed-nav-skel__row--me" : ""}"><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
               }
             }
-            return `<div class="ed-nav-skel__head"><div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>`
+            // A composer skeleton (input pill + send disc) when no real composer shows beneath.
+            const foot = withFoot
+              ? `<div class="ed-nav-skel__foot"><span class="ed-nav-skel__input ed-skel-shimmer"></span><span class="ed-nav-skel__send ed-skel-shimmer"></span></div>`
+              : ""
+            // The real mobile header leads with a back arrow (md:hidden) — mirror it on the
+            // full-screen variant so the avatar/name don't shift right at the handoff.
+            const back = withBack
+              ? `<span class="ed-nav-skel__back"><span class="hero-arrow-left-mini size-5"></span></span>`
+              : ""
+            return `<div class="ed-nav-skel__head">${back}<div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>${foot}`
           },
           dismiss() {
             if (!this.overlay) { this.target = null; return }

@@ -3028,6 +3028,9 @@ html {
     display: flex;
     flex-direction: column;
     background: var(--ed-bg);
+    /* The hook mirrors the pane card's border/radius onto the overlay (desktop); clip children
+       so the header's border-bottom can't poke through the rounded corners. */
+    overflow: hidden;
     opacity: 1;
     transition: opacity 180ms var(--ed-ease);
   }
@@ -3054,6 +3057,22 @@ html {
   .ed-nav-skel__head > .ed-room__hash {
     flex: none;
   }
+  /* Back-arrow placeholder (full-screen/mobile variant): mirrors the real header's
+     .ed-btn--icon back link (2.75rem on phones) so the avatar/name sit where they'll land. */
+  .ed-nav-skel__back {
+    flex: none;
+    width: 2.25rem;
+    height: 2.25rem;
+    display: grid;
+    place-items: center;
+    color: var(--ed-ink);
+  }
+  @media (max-width: 768px) {
+    .ed-nav-skel__back {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+  }
   .ed-nav-skel__title {
     min-width: 0;
     display: flex;
@@ -3078,27 +3097,47 @@ html {
   .ed-nav-skel__body {
     flex: 1;
     min-height: 0;
-    padding: 1rem;
-    /* Reserve the pane's bottom chrome (composer) so rows sit where the real stream's rows
-       will land — the hook measures it into --ed-skel-chrome at paint time; without this the
-       whole list would jump up by a composer's height at the overlay → real handoff. */
-    padding-bottom: calc(1rem + var(--ed-skel-chrome, 72px));
+    padding: 1rem; /* mirrors #message-scroll's p-4, so rows land where the real ones will */
     display: flex;
     flex-direction: column;
-    justify-content: flex-end; /* a chat opens pinned to its newest message */
+    justify-content: flex-end; /* skeleton bubbles gather at the bottom, like a busy chat */
     gap: 0.5rem;
     overflow: hidden;
   }
-  /* Cached-thread variant: real (display-only) message rows replace the skeleton bubbles. Made
-     scrollable so fillCache() can pin it to the newest message (flex justify-end alone drops the
-     bottom off-screen once content overflows); the scrollbar is hidden so the momentary preview
-     never flashes one. */
+  /* Cached-thread variant: real (display-only) message rows replace the skeleton bubbles.
+     TOP-aligned like the real stream container — a short thread must sit at the top exactly
+     as it will after the handoff; a long one still lands at the newest message because
+     fillCache() scrolls to the bottom. Scrollbar hidden so the momentary preview never
+     flashes one. */
   .ed-nav-skel__body--cache {
+    justify-content: flex-start;
     overflow-y: auto;
     scrollbar-width: none;
   }
   .ed-nav-skel__body--cache::-webkit-scrollbar {
     display: none;
+  }
+  /* Composer skeleton (input pill + send disc): shown only when no real composer is visible
+     beneath the overlay — mobile opens from the list full-screen, desktop from the empty
+     state — so the shell reads complete instead of ending in blank space. */
+  .ed-nav-skel__foot {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--ed-border);
+  }
+  .ed-nav-skel__input {
+    flex: 1;
+    height: 2.5rem;
+    border-radius: var(--ed-radius-full);
+  }
+  .ed-nav-skel__send {
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: var(--ed-radius-full);
   }
   .ed-nav-skel__row {
     display: flex;
