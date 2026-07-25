@@ -2928,9 +2928,16 @@ defmodule EdenWeb.ChatLive do
               const fire = () => {
                 if (sent) return
                 sent = true
+                sheet.removeEventListener("transitionend", onEnd)
                 this.pushEvent(evt, {})
               }
-              sheet.addEventListener("transitionend", fire, { once: true })
+              // transitionend BUBBLES: a child's transition (the tapped button's own 160ms
+              // background fade, hovers) would fire a {once:true} listener before the sheet's
+              // slide finishes — filter for the sheet's own transform (#433 review).
+              const onEnd = (ev) => {
+                if (ev.target === sheet && ev.propertyName === "transform") fire()
+              }
+              sheet.addEventListener("transitionend", onEnd)
               setTimeout(fire, 300)
               sheet.classList.add("ed-thread--out")
               return
@@ -2957,6 +2964,10 @@ defmodule EdenWeb.ChatLive do
               const main = document.getElementById("chat-dropzone")
               const aside = document.querySelector(".ed-root > aside")
               if (!main || !aside) return
+              // Armed for the WHOLE choreography (#433 review): a double-tap mid-slide falls
+              // through to the plain instant patch above instead of re-running the slide, and
+              // the programmatic re-click below passes through to LiveView the same way.
+              this._backing = true
               e.preventDefault()
               e.stopPropagation()
               // Same task: lift main into a fixed layer FIRST, then un-hide the list — no
@@ -2965,14 +2976,21 @@ defmodule EdenWeb.ChatLive do
               aside.classList.remove("hidden")
               requestAnimationFrame(() => {
                 main.classList.add("ed-main-pop--out")
+                let done = false
                 const go = () => {
-                  if (this._backing) return
-                  this._backing = true
+                  if (done) return
+                  done = true
+                  main.removeEventListener("transitionend", onEnd)
                   anchor.click() // real patch; morphdom then normalizes every class
                   setTimeout(() => (this._backing = false), 1000)
                 }
-                main.addEventListener("transitionend", go, { once: true })
-                setTimeout(go, 350) // fallback if transitionend never fires
+                // transitionend BUBBLES — a child's transition (the tapped back button's own
+                // background fade) would fire early; filter for the pane's own transform.
+                const onEnd = (ev) => {
+                  if (ev.target === main && ev.propertyName === "transform") go()
+                }
+                main.addEventListener("transitionend", onEnd)
+                setTimeout(go, 350) // fallback if the filtered event never fires
               })
               return
             }
@@ -3165,8 +3183,12 @@ defmodule EdenWeb.ChatLive do
                 ov.classList.add("ed-nav-skel--out")
                 let done = false
                 const fin = () => { if (!done) { done = true; ov.remove() } }
-                ov.addEventListener("transitionend", fin, { once: true })
-                setTimeout(fin, 400) // fallback if transitionend never fires
+                // transitionend BUBBLES — a hovered cached row's transition would remove the
+                // overlay mid-fade; filter for the overlay's own opacity (#433 review).
+                ov.addEventListener("transitionend", (ev) => {
+                  if (ev.target === ov && ev.propertyName === "opacity") fin()
+                })
+                setTimeout(fin, 400) // fallback if the filtered event never fires
               })
             }
             // A fast server can land the real stream before the TG-push entrance finishes —
