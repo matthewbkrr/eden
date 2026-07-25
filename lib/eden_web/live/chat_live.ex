@@ -2926,8 +2926,11 @@ defmodule EdenWeb.ChatLive do
               if (m) {
                 // Traversing INTO a chat (back from deeper, or forward-swipe): full instant
                 // treatment off the (hidden but present) sidebar row — overlay from cache.
+                // CSS.escape: the id segment is user-influenced (URL), a quote would throw in
+                // querySelector (#437 review). Matches ROOM rows too — they carry BOTH classes
+                // (ed-convo-wrap ed-room-wrap); closest() below just detects which kind.
                 const row = document.querySelector(
-                  `.ed-convo-wrap[data-id="${m[1]}"] a.ed-convo`,
+                  `.ed-convo-wrap[data-id="${CSS.escape(m[1])}"] a.ed-convo`,
                 )
                 if (row && String(this.target) !== String(m[1])) {
                   this.begin(row, m[1], !!row.closest(".ed-room-wrap"))
