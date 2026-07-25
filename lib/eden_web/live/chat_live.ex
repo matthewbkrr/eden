@@ -2955,6 +2955,20 @@ defmodule EdenWeb.ChatLive do
             // chat only; the pane follows the finger over the pre-revealed list, release runs
             // the SAME deterministic choreography as the header back button.
             this._swipe = null
+            this._swipeGen = 0
+            // The non-passive touchmove listener attaches ONLY for a touch that started in the
+            // edge zone, and detaches on release (#438 review): a document-wide non-passive
+            // touchmove would force the browser to await JS on EVERY move — scroll jank.
+            this._trackSwipe = () => {
+              document.addEventListener("touchmove", this.onTouchMove, { passive: false })
+              document.addEventListener("touchend", this.onTouchEnd)
+              document.addEventListener("touchcancel", this.onTouchEnd)
+            }
+            this._untrackSwipe = () => {
+              document.removeEventListener("touchmove", this.onTouchMove)
+              document.removeEventListener("touchend", this.onTouchEnd)
+              document.removeEventListener("touchcancel", this.onTouchEnd)
+            }
             this.onTouchStart = (e) => {
               if (e.touches.length !== 1 || this._backing) return
               if (window.matchMedia("(min-width: 768px)").matches) return
@@ -2968,6 +2982,7 @@ defmodule EdenWeb.ChatLive do
               const aside = document.querySelector(".ed-root > aside")
               if (!main || !aside) return
               this._swipe = { x: t.clientX, y: t.clientY, t0: e.timeStamp, main, aside, armed: false, dx: 0 }
+              this._trackSwipe()
             }
             this.onTouchMove = (e) => {
               const s = this._swipe
@@ -2977,9 +2992,14 @@ defmodule EdenWeb.ChatLive do
               const dy = t.clientY - s.y
               if (!s.armed) {
                 // A mostly-vertical start is a scroll — hand the touch back untouched.
-                if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { this._swipe = null; return }
+                if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) {
+                  this._swipe = null
+                  this._untrackSwipe()
+                  return
+                }
                 if (dx < 8) return
                 s.armed = true
+                s.gen = ++this._swipeGen
                 // Lift the pane and reveal the list + rail beneath, exactly like the button path.
                 s.main.classList.add("ed-main-pop", "ed-main-pop--drag")
                 s.aside.classList.remove("hidden")
@@ -2992,6 +3012,7 @@ defmodule EdenWeb.ChatLive do
             this.onTouchEnd = (e) => {
               const s = this._swipe
               this._swipe = null
+              this._untrackSwipe()
               if (!s || !s.armed) return
               const w = s.main.offsetWidth || window.innerWidth
               const dt = Math.max(1, e.timeStamp - s.t0)
@@ -3003,13 +3024,22 @@ defmodule EdenWeb.ChatLive do
                 s.main.style.transform = ""
                 s.main.classList.add("ed-main-pop--out")
                 const anchor = document.querySelector("[data-nav-back]")
-                if (anchor) this.backFinish(s.main, anchor)
-                else history.back() // can't happen on a chat screen; belt only
+                if (anchor) {
+                  this.backFinish(s.main, anchor)
+                } else {
+                  // Can't happen on a chat screen; belt only — and it must release the guard
+                  // too, or back would stay dead until a remount (#438 review).
+                  history.back()
+                  setTimeout(() => (this._backing = false), 1000)
+                }
               } else {
                 // Cancelled: glide home, then restore the exact pre-gesture state (the server
-                // never heard about any of this).
+                // never heard about any of this). Generation-stamped (#438 review): if a NEW
+                // gesture armed during the ~450ms glide, this stale cleanup must not strip its
+                // classes / re-hide the list out from under it.
                 const fin = () => {
                   s.main.removeEventListener("transitionend", onEnd)
+                  if (this._swipeGen !== s.gen) return
                   s.main.classList.remove("ed-main-pop")
                   s.main.style.transform = ""
                   s.aside.classList.add("hidden")
@@ -3026,9 +3056,6 @@ defmodule EdenWeb.ChatLive do
               }
             }
             document.addEventListener("touchstart", this.onTouchStart, { passive: true })
-            document.addEventListener("touchmove", this.onTouchMove, { passive: false })
-            document.addEventListener("touchend", this.onTouchEnd)
-            document.addEventListener("touchcancel", this.onTouchEnd)
             // Readiness beacon: the e2e sync-probes (click + read the overlay in one task) must
             // not race this listener's attachment — connected() alone doesn't guarantee hooks
             // have mounted yet.
@@ -3371,9 +3398,7 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
             window.removeEventListener("popstate", this.onPop)
             document.removeEventListener("touchstart", this.onTouchStart)
-            document.removeEventListener("touchmove", this.onTouchMove)
-            document.removeEventListener("touchend", this.onTouchEnd)
-            document.removeEventListener("touchcancel", this.onTouchEnd)
+            this._untrackSwipe() // move/end may still be attached mid-gesture
             this.remove()
           },
         }
