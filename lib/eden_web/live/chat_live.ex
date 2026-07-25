@@ -2949,6 +2949,86 @@ defmodule EdenWeb.ChatLive do
               }
             }
             window.addEventListener("popstate", this.onPop)
+            // Edge swipe-back (#432): OUR recognizer, replacing WKWebView's native gesture
+            // (see BridgeViewController — the native same-document traversal double-navigated
+            // and flashed the just-left chat back over the list). Touch-only, left edge, open
+            // chat only; the pane follows the finger over the pre-revealed list, release runs
+            // the SAME deterministic choreography as the header back button.
+            this._swipe = null
+            this.onTouchStart = (e) => {
+              if (e.touches.length !== 1 || this._backing) return
+              if (window.matchMedia("(min-width: 768px)").matches) return
+              if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+              const t = e.touches[0]
+              if (t.clientX > 24) return
+              // Only on an open chat (its header carries the back link); the thread sheet has
+              // its own back affordance — don't fight it.
+              if (!document.querySelector("[data-nav-back]") || document.querySelector(".ed-thread")) return
+              const main = document.getElementById("chat-dropzone")
+              const aside = document.querySelector(".ed-root > aside")
+              if (!main || !aside) return
+              this._swipe = { x: t.clientX, y: t.clientY, t0: e.timeStamp, main, aside, armed: false, dx: 0 }
+            }
+            this.onTouchMove = (e) => {
+              const s = this._swipe
+              if (!s) return
+              const t = e.touches[0]
+              const dx = t.clientX - s.x
+              const dy = t.clientY - s.y
+              if (!s.armed) {
+                // A mostly-vertical start is a scroll — hand the touch back untouched.
+                if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { this._swipe = null; return }
+                if (dx < 8) return
+                s.armed = true
+                // Lift the pane and reveal the list + rail beneath, exactly like the button path.
+                s.main.classList.add("ed-main-pop", "ed-main-pop--drag")
+                s.aside.classList.remove("hidden")
+                document.querySelector("nav.ed-rail")?.classList.remove("hidden")
+              }
+              s.dx = Math.max(0, dx)
+              s.main.style.transform = "translateX(" + s.dx + "px)"
+              e.preventDefault() // the pane is following the finger — no scroll/selection
+            }
+            this.onTouchEnd = (e) => {
+              const s = this._swipe
+              this._swipe = null
+              if (!s || !s.armed) return
+              const w = s.main.offsetWidth || window.innerWidth
+              const dt = Math.max(1, e.timeStamp - s.t0)
+              const commit = s.dx > w * 0.35 || s.dx / dt > 0.35 // far enough, or a flick
+              s.main.classList.remove("ed-main-pop--drag") // transitions back on
+              void s.main.offsetWidth
+              if (commit) {
+                this._backing = true
+                s.main.style.transform = ""
+                s.main.classList.add("ed-main-pop--out")
+                const anchor = document.querySelector("[data-nav-back]")
+                if (anchor) this.backFinish(s.main, anchor)
+                else history.back() // can't happen on a chat screen; belt only
+              } else {
+                // Cancelled: glide home, then restore the exact pre-gesture state (the server
+                // never heard about any of this).
+                const fin = () => {
+                  s.main.removeEventListener("transitionend", onEnd)
+                  s.main.classList.remove("ed-main-pop")
+                  s.main.style.transform = ""
+                  s.aside.classList.add("hidden")
+                  document.querySelector("nav.ed-rail")?.classList.add("hidden")
+                }
+                let done = false
+                const once = () => { if (!done) { done = true; fin() } }
+                const onEnd = (ev) => {
+                  if (ev.target === s.main && ev.propertyName === "transform") once()
+                }
+                s.main.addEventListener("transitionend", onEnd)
+                setTimeout(once, 450)
+                s.main.style.transform = "translateX(0px)"
+              }
+            }
+            document.addEventListener("touchstart", this.onTouchStart, { passive: true })
+            document.addEventListener("touchmove", this.onTouchMove, { passive: false })
+            document.addEventListener("touchend", this.onTouchEnd)
+            document.addEventListener("touchcancel", this.onTouchEnd)
             // Readiness beacon: the e2e sync-probes (click + read the overlay in one task) must
             // not race this listener's attachment — connected() alone doesn't guarantee hooks
             // have mounted yet.
@@ -3028,21 +3108,7 @@ defmodule EdenWeb.ChatLive do
               // lottery, not a logic change). Reading offsetWidth commits translateX(0) first.
               void main.offsetWidth
               main.classList.add("ed-main-pop--out")
-              let done = false
-              const go = () => {
-                if (done) return
-                done = true
-                main.removeEventListener("transitionend", onEnd)
-                anchor.click() // real patch; morphdom then normalizes every class
-                setTimeout(() => (this._backing = false), 1000)
-              }
-              // transitionend BUBBLES — a child's transition (the tapped back button's own
-              // background fade) would fire early; filter for the pane's own transform.
-              const onEnd = (ev) => {
-                if (ev.target === main && ev.propertyName === "transform") go()
-              }
-              main.addEventListener("transitionend", onEnd)
-              setTimeout(go, 450) // fallback if the filtered event never fires
+              this.backFinish(main, anchor)
               return
             }
             if (!anchor.classList.contains("ed-convo")) return
@@ -3066,6 +3132,25 @@ defmodule EdenWeb.ChatLive do
             const isRoom = wrap.classList.contains("ed-room-wrap")
             this.begin(link, id, isRoom)
             // Do NOT preventDefault — the <.link patch> navigation must still fire.
+          },
+          // Run the real patch once the pane's slide-out lands. Shared by the header back
+          // button and the edge-swipe recognizer. transitionend BUBBLES — a child's transition
+          // (the tapped button's own background fade) would fire early; filter for the pane's
+          // own transform, with a timeout fallback.
+          backFinish(main, anchor) {
+            let done = false
+            const go = () => {
+              if (done) return
+              done = true
+              main.removeEventListener("transitionend", onEnd)
+              anchor.click() // real patch; morphdom then normalizes every class
+              setTimeout(() => (this._backing = false), 1000)
+            }
+            const onEnd = (ev) => {
+              if (ev.target === main && ev.propertyName === "transform") go()
+            }
+            main.addEventListener("transitionend", onEnd)
+            setTimeout(go, 450) // fallback if the filtered event never fires
           },
           // Start the instant transition INTO a chat: paint the overlay (cache or skeleton),
           // snapshot the conversation being left, kick the async IDB fill. Shared by the tap
@@ -3285,6 +3370,10 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("ed:conv-shown", this.onShown)
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
             window.removeEventListener("popstate", this.onPop)
+            document.removeEventListener("touchstart", this.onTouchStart)
+            document.removeEventListener("touchmove", this.onTouchMove)
+            document.removeEventListener("touchend", this.onTouchEnd)
+            document.removeEventListener("touchcancel", this.onTouchEnd)
             this.remove()
           },
         }
