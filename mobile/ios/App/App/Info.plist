@@ -39,7 +39,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>ihichat открывает камеру, чтобы снять фото для сообщения.</string>
 	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
+	<string>Launch</string>
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	<key>UIRequiredDeviceCapabilities</key>

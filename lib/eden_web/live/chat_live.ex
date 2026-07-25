@@ -3303,6 +3303,16 @@ defmodule EdenWeb.ChatLive do
               body.replaceChildren(tpl.content)
               body.classList.add("ed-nav-skel__body--cache")
               body.scrollTop = body.scrollHeight // a chat opens pinned to its newest message
+              // A photo that needs a (re)decode painted as a hard gray box for a frame or two
+              // (user recording, t≈11.4s) — fade late images in instead; already-decoded ones
+              // (img.complete) render instantly as before. Errors reveal too (alt box > void).
+              body.querySelectorAll("img").forEach((img) => {
+                if (img.complete) return
+                img.classList.add("ed-imgwait")
+                const show = () => img.classList.add("ed-imgin")
+                img.addEventListener("load", show, { once: true })
+                img.addEventListener("error", show, { once: true })
+              })
             } catch (_e) {
               /* a malformed snapshot just leaves the skeleton — navigation must not break */
             }

@@ -2613,7 +2613,11 @@ html {
   }
   @media (max-width: 767px) {
     .ed-profile {
-      animation: ed-sheet-in 0.2s var(--ed-ease);
+      /* No entrance of its own on mobile (#439): the parent sheet already slides in from the
+         right (ed-nav-push on .ed-thread); ed-sheet-in here rode the content up from the BOTTOM
+         inside that sliding card, so for the first ~150ms the card was blank white (the
+         "белые пустые кадры" in the user's recording, t≈64s). One entrance, owned by the sheet. */
+      animation: none;
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -3165,6 +3169,20 @@ html {
   }
   .ed-nav-skel__body--cache::-webkit-scrollbar {
     display: none;
+  }
+  /* Cached photos that still need a (re)decode fade in instead of popping from a gray box;
+     decoded ones (img.complete) skip this entirely. */
+  .ed-nav-skel__body--cache img.ed-imgwait {
+    opacity: 0;
+  }
+  .ed-nav-skel__body--cache img.ed-imgwait.ed-imgin {
+    opacity: 1;
+    transition: opacity 0.18s var(--ed-ease);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-nav-skel__body--cache img.ed-imgwait.ed-imgin {
+      transition: none;
+    }
   }
   /* Composer skeleton (input pill + send disc): shown only when no real composer is visible
      beneath the overlay — mobile opens from the list full-screen, desktop from the empty
