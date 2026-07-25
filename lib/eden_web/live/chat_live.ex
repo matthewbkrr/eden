@@ -2909,6 +2909,46 @@ defmodule EdenWeb.ChatLive do
               if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
+            // History traversal (the native WKWebView swipe-back, Android system back, browser
+            // back/forward): the gesture's snapshot promises the previous screen, but the live
+            // DOM only catches up after LiveView's round-trip — so the old screen flashed back
+            // for ~RTT after the swipe (user report: "свайп → тот же чат → потом список").
+            // Mirror the tap path: make the DOM match the target URL instantly, client-side;
+            // the patch then normalizes everything. Mobile only — desktop shows both panes.
+            this.onPop = () => {
+              if (window.matchMedia("(min-width: 768px)").matches) return
+              const main = document.getElementById("chat-dropzone")
+              const aside = document.querySelector(".ed-root > aside")
+              if (!main || !aside) return
+              const m =
+                location.pathname.match(/^\/app\/c\/([^\/]+)$/) ||
+                location.pathname.match(/^\/channels\/[^\/]+\/r\/([^\/]+)$/)
+              if (m) {
+                // Traversing INTO a chat (back from deeper, or forward-swipe): full instant
+                // treatment off the (hidden but present) sidebar row — overlay from cache.
+                // CSS.escape: the id segment is user-influenced (URL), a quote would throw in
+                // querySelector (#437 review). Matches ROOM rows too — they carry BOTH classes
+                // (ed-convo-wrap ed-room-wrap); closest() below just detects which kind.
+                const row = document.querySelector(
+                  `.ed-convo-wrap[data-id="${CSS.escape(m[1])}"] a.ed-convo`,
+                )
+                if (row && String(this.target) !== String(m[1])) {
+                  this.begin(row, m[1], !!row.closest(".ed-room-wrap"))
+                }
+                main.classList.remove("hidden")
+                aside.classList.add("hidden")
+                document.querySelector("nav.ed-rail")?.classList.add("hidden")
+              } else {
+                // Back to the list: both screens are local DOM — swap them in the same task
+                // the history commits, so the settled gesture never shows the stale chat.
+                main.classList.add("hidden")
+                aside.classList.remove("hidden")
+                document.querySelector("nav.ed-rail")?.classList.remove("hidden")
+                // A full-screen thread sheet would keep covering the list until the patch.
+                document.querySelector(".ed-thread")?.classList.add("hidden")
+              }
+            }
+            window.addEventListener("popstate", this.onPop)
             // Readiness beacon: the e2e sync-probes (click + read the overlay in one task) must
             // not race this listener's attachment — connected() alone doesn't guarantee hooks
             // have mounted yet.
@@ -3024,6 +3064,13 @@ defmodule EdenWeb.ChatLive do
               return
             }
             const isRoom = wrap.classList.contains("ed-room-wrap")
+            this.begin(link, id, isRoom)
+            // Do NOT preventDefault — the <.link patch> navigation must still fire.
+          },
+          // Start the instant transition INTO a chat: paint the overlay (cache or skeleton),
+          // snapshot the conversation being left, kick the async IDB fill. Shared by the tap
+          // path (maybeStart) and history traversal (onPop — the native swipe-back/forward).
+          begin(link, id, isRoom) {
             // The name span nests badge spans whose sr-only text ("Muted"/"Favorite") would ride
             // along in textContent — strip them on a clone so a muted chat's overlay header reads
             // "Вася", not "Вася Без звука".
@@ -3063,7 +3110,6 @@ defmodule EdenWeb.ChatLive do
                 if (hit && this.target === id && this.overlay) this.fillCache(hit.html)
               })
             }
-            // Do NOT preventDefault — the <.link patch> navigation must still fire.
           },
           paint({ name, iconNode, isRoom, cachedHTML }) {
             this.remove() // clear any prior overlay instantly (rapid taps)
@@ -3238,6 +3284,7 @@ defmodule EdenWeb.ChatLive do
             document.removeEventListener("click", this.onClick, true)
             window.removeEventListener("ed:conv-shown", this.onShown)
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
+            window.removeEventListener("popstate", this.onPop)
             this.remove()
           },
         }
