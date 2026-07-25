@@ -291,6 +291,67 @@ test.describe("instant navigation skeleton", () => {
     await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
   })
 
+  test("history back (swipe/system): list shows instantly, no stale-chat flash", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(testInfo.project.name.startsWith("mobile") === false, "mobile-only screen swap")
+    const page = alice
+    await page.goto("/app")
+    await connected(page)
+    // Open the chat via a real tap so a history entry exists.
+    await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`).click()
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+    // Delay the server so the popstate handler's client-side swap is the only thing that
+    // could make the list visible — exactly the native swipe-back situation on a real RTT.
+    await page.evaluate(() => window.liveSocket.enableLatencySim(2500))
+    await page.goBack()
+    const swapped = await page.evaluate(() => {
+      const main = document.getElementById("chat-dropzone")
+      const aside = document.querySelector(".ed-root > aside")
+      return (
+        main.classList.contains("hidden") &&
+        !aside.classList.contains("hidden") &&
+        !document.querySelector("nav.ed-rail")?.classList.contains("hidden")
+      )
+    })
+    expect(swapped, "list + rail visible the moment history commits, before the patch").toBe(true)
+    await page.evaluate(() => window.liveSocket.disableLatencySim())
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
+    await expect(page.locator("#conversations")).toBeVisible()
+  })
+
+  test("history forward INTO a chat paints the instant overlay from the sidebar row", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(testInfo.project.name.startsWith("mobile") === false, "mobile-only screen swap")
+    const page = alice
+    await page.goto("/app")
+    await connected(page)
+    await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`).click()
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+    await page.goBack()
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
+    await instrument(page)
+    await page.evaluate(() => window.liveSocket.enableLatencySim(2500))
+    await page.goForward() // popstate → /app/c/:id → begin() off the hidden sidebar row
+    const probe = await page.evaluate(() => ({
+      overlay: !!document.querySelector(".ed-nav-skel"),
+      mainShown: !document.getElementById("chat-dropzone").classList.contains("hidden"),
+    }))
+    expect(probe.overlay, "overlay painted on forward traversal").toBe(true)
+    expect(probe.mainShown, "chat pane is the visible screen").toBe(true)
+    await page.evaluate(() => window.liveSocket.disableLatencySim())
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+  })
+
   test("mobile back with reduced motion: plain instant patch, no slide classes", async ({
     alice,
     seed,
