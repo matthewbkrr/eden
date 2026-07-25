@@ -32,6 +32,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- Usage strings for the composer's file picker (#420): WKWebView needs these
+	     before it may open the photo library or camera, else the OS kills the request. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>ihichat открывает галерею, чтобы прикрепить фото к сообщению.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>ihichat открывает камеру, чтобы снять фото для сообщения.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -40,11 +46,11 @@
 	<array>
 		<string>armv7</string>
 	</array>
+	<!-- Phone: portrait-only main flow (#420, Telegram-style). iPad orientations
+	     stay unrestricted below — a tablet isn't targeted in v1 but isn't blocked. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
