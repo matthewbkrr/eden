@@ -18,6 +18,7 @@ async function instrument(page) {
             window.__skel.hasShimmer = !!n.querySelector(".ed-skel-shimmer")
             window.__skel.full = n.classList.contains("ed-nav-skel--full")
             window.__skel.hasFoot = !!n.querySelector(".ed-nav-skel__foot")
+            window.__skel.anim = getComputedStyle(n).animationName
           }
         }
         for (const n of m.removedNodes) {
@@ -166,6 +167,101 @@ test.describe("instant navigation skeleton", () => {
     const skel = await page.evaluate(() => window.__skel)
     expect(skel.full, "mobile overlay covers the full screen").toBe(true)
     expect(skel.hasFoot, "full-screen overlay draws the composer skeleton").toBe(true)
+    expect(skel.anim, "mobile overlay slides in TG-style").toContain("ed-nav-push")
+  })
+
+  test("desktop overlay enters with the light drift, not the mobile push", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(testInfo.project.name.startsWith("mobile"), "desktop variant")
+    const page = alice
+    await page.goto("/app")
+    await connected(page)
+    await instrument(page)
+    await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`).click()
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+    const skel = await page.evaluate(() => window.__skel)
+    expect(skel.anim).toContain("ed-nav-in")
+    expect(skel.anim).not.toContain("ed-nav-push")
+  })
+
+  test("mobile back: pane slides out over the revealed list, then the patch lands", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile-only back choreography")
+    const page = alice
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await page.evaluate(() => {
+      window.__back = { popped: false, asideShown: false }
+      const main = document.getElementById("chat-dropzone")
+      const aside = document.querySelector(".ed-root > aside")
+      new MutationObserver(() => {
+        if (main.classList.contains("ed-main-pop")) window.__back.popped = true
+      }).observe(main, { attributes: true, attributeFilter: ["class"] })
+      new MutationObserver(() => {
+        if (!aside.classList.contains("hidden")) window.__back.asideShown = true
+      }).observe(aside, { attributes: true, attributeFilter: ["class"] })
+    })
+    await page.locator("[data-nav-back]").click()
+    await expect.poll(() => page.evaluate(() => window.__back.popped)).toBe(true)
+    expect(await page.evaluate(() => window.__back.asideShown), "list revealed for the slide").toBe(
+      true,
+    )
+    // The real patch fires after the slide — we land on the list.
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
+    await expect(page.locator("#conversations")).toBeVisible()
+  })
+
+  test("mobile back with reduced motion: plain instant patch, no slide classes", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile-only")
+    const page = alice
+    await page.emulateMedia({ reducedMotion: "reduce" })
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await page.evaluate(() => {
+      window.__popped = false
+      const main = document.getElementById("chat-dropzone")
+      new MutationObserver(() => {
+        if (main.classList.contains("ed-main-pop")) window.__popped = true
+      }).observe(main, { attributes: true, attributeFilter: ["class"] })
+    })
+    await page.locator("[data-nav-back]").click()
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
+    expect(await page.evaluate(() => window.__popped), "no slide under reduced motion").toBe(false)
+    await page.emulateMedia({ reducedMotion: null })
+  })
+
+  test("safe-area strips follow the visible screen (mobile)", async ({ alice, seed }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile-only strip rule")
+    const page = alice
+    // List visible → the root (which paints the strips) matches the list's surface bg.
+    await page.goto("/app")
+    await connected(page)
+    const onList = await page.evaluate(() => {
+      const root = getComputedStyle(document.querySelector(".ed-root")).backgroundColor
+      const aside = getComputedStyle(document.querySelector(".ed-root > aside")).backgroundColor
+      return { root, aside }
+    })
+    expect(onList.root, "strips match the list surface").toBe(onList.aside)
+
+    // Chat open → the root matches the chat pane bg again.
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    const onChat = await page.evaluate(() => {
+      const root = getComputedStyle(document.querySelector(".ed-root")).backgroundColor
+      const main = getComputedStyle(document.getElementById("chat-dropzone")).backgroundColor
+      return { root, main }
+    })
+    expect(onChat.root, "strips match the chat pane").toBe(onChat.main)
+    expect(onChat.root).not.toBe(onList.root)
   })
 
   test("history loads don't rise-in; a live message still does", async ({ alice, bob, seed }, testInfo) => {
