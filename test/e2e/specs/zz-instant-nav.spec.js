@@ -231,6 +231,66 @@ test.describe("instant navigation skeleton", () => {
     await expect(page.locator("#conversations")).toBeVisible()
   })
 
+  test("repeat tap on the same chat while in flight is swallowed", async ({ alice, seed }, testInfo) => {
+    test.skip(testInfo.project.name.startsWith("mobile"), "uses a synthetic second click (WebKit drops those)")
+    const page = alice
+    await page.goto("/app")
+    await connected(page)
+    // Hold the transition open so the second tap lands while the first is still in flight.
+    await page.evaluate(() => window.liveSocket.enableLatencySim(2500))
+    const sel = `#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`
+    const before = await page.evaluate(() => history.length)
+    await page.locator(sel).click()
+    await expect(page.locator(".ed-nav-skel")).toBeVisible()
+    const prevented = await page.evaluate((s) => {
+      const link = document.querySelector(s)
+      const ev = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })
+      link.dispatchEvent(ev)
+      return ev.defaultPrevented
+    }, sel)
+    expect(prevented, "second tap swallowed while the first is in flight").toBe(true)
+    await page.evaluate(() => window.liveSocket.disableLatencySim())
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+    const after = await page.evaluate(() => history.length)
+    expect(after - before, "exactly one history entry despite the double tap").toBe(1)
+  })
+
+  test("mobile back really slides (the transition runs, not a jump)", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile-only back choreography")
+    const page = alice
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    await page.locator("[data-nav-back]").click()
+    // Sample the pane's computed transform every frame: a real transition passes through
+    // mid-flight translateX values; the old rAF-batched class flip sometimes skipped the
+    // transition entirely (the "back animation is gone" report).
+    const moved = await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const main = document.getElementById("chat-dropzone")
+          const t0 = performance.now()
+          const tick = () => {
+            const tr = main && getComputedStyle(main).transform
+            if (tr && tr !== "none") {
+              const parts = tr.match(/matrix\(([^)]+)\)/)
+              const tx = parts ? parseFloat(parts[1].split(",")[4]) : 0
+              if (tx > 1 && tx < main.offsetWidth - 1) return resolve(true)
+            }
+            if (!main || performance.now() - t0 > 700) return resolve(false)
+            requestAnimationFrame(tick)
+          }
+          tick()
+        }),
+    )
+    expect(moved, "pane passes through mid-flight transform values").toBe(true)
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
+  })
+
   test("mobile back with reduced motion: plain instant patch, no slide classes", async ({
     alice,
     seed,

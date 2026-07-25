@@ -2569,11 +2569,11 @@ html {
      close_thread(s) after the slide. */
   @media (max-width: 767px) {
     .ed-thread {
-      animation: ed-nav-push 0.25s var(--ed-ease);
+      animation: ed-nav-push 0.32s var(--ed-ease);
     }
     .ed-thread--out {
       transform: translateX(100%);
-      transition: transform 0.2s var(--ed-ease);
+      transition: transform 0.28s var(--ed-ease);
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -3068,7 +3068,7 @@ html {
     /* TG-style push (#432): the full-screen chat "card" slides in from the right. Transform-only
        (GPU); the .InstantNav hook holds the dismissal fade until this finishes, so a fast server
        can't fade the overlay mid-slide. */
-    animation: ed-nav-push 0.25s var(--ed-ease);
+    animation: ed-nav-push 0.32s var(--ed-ease);
   }
   /* Desktop (pane variant): the sidebar stays visible, so a full page-slide would be foreign —
      a barely-there drift + fade keeps the open feeling alive without slowing perception (#432). */
@@ -3259,7 +3259,7 @@ html {
       z-index: 15; /* over the list; under the thread sheet (20) and nav overlay (40) */
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
-      transition: transform 0.2s var(--ed-ease);
+      transition: transform 0.28s var(--ed-ease);
     }
     .ed-main-pop--out {
       transform: translateX(100%);
