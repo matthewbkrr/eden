@@ -2558,6 +2558,31 @@ html {
     position: fixed;
     inset: 0;
     z-index: 20;
+    /* Full-screen sheet lives OUTSIDE .ed-root's safe-area padding — without its own inset
+       the header sat under the iOS status bar (same defect class as the nav overlay, #432).
+       env() is 0 in browsers/desktop, where position:static ignores it anyway. */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* Mobile: enter from the right like every screen-open (#432, was: no entrance at all);
+     .ed-thread--out is the exit — the .InstantNav hook adds it on the back tap and sends
+     close_thread(s) after the slide. */
+  @media (max-width: 767px) {
+    .ed-thread {
+      animation: ed-nav-push 0.25s var(--ed-ease);
+    }
+    .ed-thread--out {
+      transform: translateX(100%);
+      transition: transform 0.2s var(--ed-ease);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-thread {
+      animation: none;
+    }
+    .ed-thread--out {
+      transition: none;
+    }
   }
   @media (min-width: 768px) {
     .ed-thread {
@@ -3040,6 +3065,26 @@ html {
        inset:0 overlay jammed the fake header under the iOS status bar, so the whole shell sat
        ~a notch too high and visibly dropped at the handoff (user report, iPhone). Mirror it. */
     padding-top: env(safe-area-inset-top);
+    /* TG-style push (#432): the full-screen chat "card" slides in from the right. Transform-only
+       (GPU); the .InstantNav hook holds the dismissal fade until this finishes, so a fast server
+       can't fade the overlay mid-slide. */
+    animation: ed-nav-push 0.25s var(--ed-ease);
+  }
+  /* Desktop (pane variant): the sidebar stays visible, so a full page-slide would be foreign —
+     a barely-there drift + fade keeps the open feeling alive without slowing perception (#432). */
+  .ed-nav-skel:not(.ed-nav-skel--full) {
+    animation: ed-nav-in 0.15s var(--ed-ease);
+  }
+  @keyframes ed-nav-push {
+    from {
+      transform: translateX(100%);
+    }
+  }
+  @keyframes ed-nav-in {
+    from {
+      opacity: 0;
+      transform: translateX(12px);
+    }
   }
   /* Once the real stream has landed the overlay only fades — let taps fall through to the
      now-interactive chat underneath instead of being swallowed during the ~180ms fade. */
@@ -3188,12 +3233,46 @@ html {
     }
   }
   @media (prefers-reduced-motion: reduce) {
-    .ed-nav-skel {
+    .ed-nav-skel,
+    .ed-main-pop {
       transition: none;
     }
+    .ed-nav-skel,
+    .ed-nav-skel--full,
     .ed-skel-shimmer {
       animation: none;
+    }
+    .ed-skel-shimmer {
       background: var(--ed-surface-2);
+    }
+  }
+
+  /* Mobile back (chat → list, #432): the chat pane lifts into a fixed layer and slides off to
+     the right over the already-revealed list beneath (both screens are local DOM — no network
+     in the gesture). The .InstantNav hook adds these, runs the real patch on transitionend,
+     and morphdom then normalizes every class. Safe-area padding keeps the pane's inner box
+     byte-identical to its in-flow position, so lifting it can't reflow the scroll. */
+  @media (max-width: 767px) {
+    .ed-main-pop {
+      position: fixed;
+      inset: 0;
+      z-index: 15; /* over the list; under the thread sheet (20) and nav overlay (40) */
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+      transition: transform 0.2s var(--ed-ease);
+    }
+    .ed-main-pop--out {
+      transform: translateX(100%);
+    }
+  }
+
+  /* Safe-area strips follow the visible screen (#432, TG-style): the chats LIST is an
+     --ed-surface pane, but the strips were painted by .ed-root's --ed-bg — visibly lighter
+     above/below the list (user report, iPhone). With a chat open `main` drops its `hidden`
+     class and the root's own --ed-bg already matches the pane. */
+  @media (max-width: 767px) {
+    .ed-root:has(> main.hidden) {
+      background: var(--ed-surface);
     }
   }
 

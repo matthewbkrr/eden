@@ -2913,11 +2913,67 @@ defmodule EdenWeb.ChatLive do
           maybeStart(e) {
             // Primary click only — modified clicks (open-in-new-tab etc.) don't patch.
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+            // Mobile thread close (#432) — a BUTTON, so checked before the anchor gate below:
+            // the sheet slides off to the right, then the real close event fires. Capture-phase
+            // stopPropagation keeps LiveView's own phx-click from closing it instantly mid-slide.
+            const closer = e.target.closest?.('[phx-click="close_thread"], [phx-click="close_threads"]')
+            if (closer && window.matchMedia("(max-width: 767px)").matches) {
+              if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+              const sheet = closer.closest(".ed-thread")
+              if (!sheet) return
+              e.preventDefault()
+              e.stopPropagation()
+              const evt = closer.getAttribute("phx-click")
+              let sent = false
+              const fire = () => {
+                if (sent) return
+                sent = true
+                this.pushEvent(evt, {})
+              }
+              sheet.addEventListener("transitionend", fire, { once: true })
+              setTimeout(fire, 300)
+              sheet.classList.add("ed-thread--out")
+              return
+            }
             const anchor = e.target.closest && e.target.closest("a")
             if (!anchor) return
             // Logging out wipes the at-rest cache BEFORE navigating away (shared-machine privacy).
             if (anchor.getAttribute("href") === "/users/log_out") {
               if (this.cache) this.cache.clearAll()
+              return
+            }
+            // Mobile back (chat → list, #432): both screens are already local DOM — reveal the
+            // list, slide the chat pane off to the right over it, THEN run the real patch (the
+            // re-click below carries a bypass flag). Desktop / reduced-motion falls through to
+            // the plain instant patch.
+            if (anchor.hasAttribute("data-nav-back")) {
+              if (
+                this._backing ||
+                window.matchMedia("(min-width: 768px)").matches ||
+                window.matchMedia("(prefers-reduced-motion: reduce)").matches
+              ) {
+                return
+              }
+              const main = document.getElementById("chat-dropzone")
+              const aside = document.querySelector(".ed-root > aside")
+              if (!main || !aside) return
+              e.preventDefault()
+              e.stopPropagation()
+              // Same task: lift main into a fixed layer FIRST, then un-hide the list — no
+              // intermediate frame where both share the flex row at 50/50.
+              main.classList.add("ed-main-pop")
+              aside.classList.remove("hidden")
+              requestAnimationFrame(() => {
+                main.classList.add("ed-main-pop--out")
+                const go = () => {
+                  if (this._backing) return
+                  this._backing = true
+                  anchor.click() // real patch; morphdom then normalizes every class
+                  setTimeout(() => (this._backing = false), 1000)
+                }
+                main.addEventListener("transitionend", go, { once: true })
+                setTimeout(go, 350) // fallback if transitionend never fires
+              })
               return
             }
             if (!anchor.classList.contains("ed-convo")) return
@@ -3103,14 +3159,28 @@ defmodule EdenWeb.ChatLive do
             const ov = this.overlay
             this.overlay = null
             if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { ov.remove(); return }
-            // Fade out on the next frame so the opacity transition actually runs.
-            requestAnimationFrame(() => {
-              ov.classList.add("ed-nav-skel--out")
-              let done = false
-              const fin = () => { if (!done) { done = true; ov.remove() } }
-              ov.addEventListener("transitionend", fin, { once: true })
-              setTimeout(fin, 400) // fallback if transitionend never fires
-            })
+            const fade = () => {
+              // Fade out on the next frame so the opacity transition actually runs.
+              requestAnimationFrame(() => {
+                ov.classList.add("ed-nav-skel--out")
+                let done = false
+                const fin = () => { if (!done) { done = true; ov.remove() } }
+                ov.addEventListener("transitionend", fin, { once: true })
+                setTimeout(fin, 400) // fallback if transitionend never fires
+              })
+            }
+            // A fast server can land the real stream before the TG-push entrance finishes —
+            // fading a half-slid card looks broken. Let the slide complete, then fade (#432).
+            const push = ov.getAnimations?.().find((a) => a.animationName === "ed-nav-push")
+            if (push && push.playState === "running") {
+              let went = false
+              const go = () => { if (!went) { went = true; fade() } }
+              push.addEventListener?.("finish", go, { once: true })
+              push.finished?.then(go).catch(go)
+              setTimeout(go, 350)
+            } else {
+              fade()
+            }
           },
           remove() {
             clearTimeout(this.timer)
@@ -3573,6 +3643,7 @@ defmodule EdenWeb.ChatLive do
               patch={if @channel, do: ~p"/channels/#{@channel.id}", else: ~p"/app"}
               class="ed-btn--icon md:hidden"
               aria-label={gettext("Back")}
+              data-nav-back
             >
               <.icon name="hero-arrow-left-mini" class="size-5" />
             </.link>
