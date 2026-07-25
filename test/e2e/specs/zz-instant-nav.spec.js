@@ -352,6 +352,63 @@ test.describe("instant navigation skeleton", () => {
     ).toBeVisible()
   })
 
+  test("edge swipe-back: far drag commits and patches to the list", async ({ alice, seed }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "touch recognizer is mobile-only")
+    const page = alice
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    // Synthetic touch drag from the left edge well past the 35%-width threshold.
+    // (Playwright composes the Touch objects — WebKit has no `new Touch()`.)
+    const tp = (x, y) => ({ identifier: 1, clientX: x, clientY: y })
+    const ev = (type, x, y) => ({
+      touches: type === "touchend" ? [] : [tp(x, y)],
+      changedTouches: [tp(x, y)],
+      bubbles: true,
+      cancelable: true,
+    })
+    await page.dispatchEvent("body", "touchstart", ev("touchstart", 10, 400))
+    await page.dispatchEvent("body", "touchmove", ev("touchmove", 40, 402))
+    await page.dispatchEvent("body", "touchmove", ev("touchmove", 180, 404))
+    await page.dispatchEvent("body", "touchmove", ev("touchmove", 300, 404))
+    await page.dispatchEvent("body", "touchend", ev("touchend", 300, 404))
+    await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
+    await expect(page.locator("#conversations")).toBeVisible()
+  })
+
+  test("edge swipe-back: short slow drag cancels and restores the chat", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    test.skip(!testInfo.project.name.startsWith("mobile"), "touch recognizer is mobile-only")
+    const page = alice
+    await page.goto(`/app/c/${seed.dm_id}`)
+    await connected(page)
+    const tp = (x, y) => ({ identifier: 1, clientX: x, clientY: y })
+    const ev = (type, x, y) => ({
+      touches: type === "touchend" ? [] : [tp(x, y)],
+      changedTouches: [tp(x, y)],
+      bubbles: true,
+      cancelable: true,
+    })
+    // Spread the events over real time so the release is neither far nor fast → cancel.
+    await page.dispatchEvent("body", "touchstart", ev("touchstart", 10, 400))
+    await page.waitForTimeout(80)
+    await page.dispatchEvent("body", "touchmove", ev("touchmove", 35, 401))
+    await page.waitForTimeout(250)
+    await page.dispatchEvent("body", "touchmove", ev("touchmove", 60, 402))
+    await page.waitForTimeout(250)
+    await page.dispatchEvent("body", "touchend", ev("touchend", 60, 402))
+    // Glide-home + cleanup: the pane un-lifts, the list re-hides, the URL never changed.
+    await page.waitForTimeout(700)
+    const state = await page.evaluate(() => ({
+      popped: document.getElementById("chat-dropzone").classList.contains("ed-main-pop"),
+      asideHidden: document.querySelector(".ed-root > aside").classList.contains("hidden"),
+    }))
+    expect(state.popped, "pane restored after cancel").toBe(false)
+    expect(state.asideHidden, "list re-hidden after cancel").toBe(true)
+    expect(page.url()).toContain(`/app/c/${seed.dm_id}`)
+  })
+
   test("mobile back with reduced motion: plain instant patch, no slide classes", async ({
     alice,
     seed,

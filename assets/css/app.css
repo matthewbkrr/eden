@@ -3264,6 +3264,11 @@ html {
     .ed-main-pop--out {
       transform: translateX(100%);
     }
+    /* Finger-tracked drag (edge swipe-back): the transform follows the touch directly,
+       so the transition is off until release. */
+    .ed-main-pop--drag {
+      transition: none;
+    }
   }
 
   /* Safe-area strips follow the visible screen (#432, TG-style): the chats LIST is an
