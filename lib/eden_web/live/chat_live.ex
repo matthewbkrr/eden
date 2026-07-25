@@ -5104,6 +5104,20 @@ defmodule EdenWeb.ChatLive do
               // Which optimistic-node container this scroller owns (#142): the main
               // pane uses #pending-messages; the thread panel passes data-pending-id.
               const pendingId = this.el.dataset.pendingId || "pending-messages"
+              // A conversation switch / older-page load streams DOZENS of rows in one patch —
+              // that's history materializing, not messages arriving; rising-in the whole list
+              // makes the entry twitch. Worst over the instant-nav cache: the SAME rows are
+              // already on screen, so the handoff visibly re-animates identical content (#427
+              // polish). Count the batch first — bulk keeps the twin-swap work below but skips
+              // the enter animation; live single arrivals still rise in.
+              let batch = 0
+              for (const mut of muts) {
+                for (const node of mut.addedNodes) {
+                  if (node.nodeType !== 1) continue
+                  if (node.matches?.(".ed-msg, .ed-flat") || node.querySelector?.(".ed-msg, .ed-flat")) batch++
+                }
+              }
+              const bulk = batch >= 4
               for (const mut of muts) {
                 for (const node of mut.addedNodes) {
                   if (node.nodeType !== 1) continue
@@ -5162,8 +5176,10 @@ defmodule EdenWeb.ChatLive do
                       continue
                     }
                   }
-                  row.classList.add("ed-msg--enter")
-                  setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
+                  if (!bulk) {
+                    row.classList.add("ed-msg--enter")
+                    setTimeout(() => row.classList.remove("ed-msg--enter"), 200)
+                  }
                 }
               }
             })

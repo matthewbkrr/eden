@@ -5,7 +5,7 @@
 // The overlay window is tiny on localhost, so instead of racing a screenshot we instrument
 // the DOM: a MutationObserver records the overlay's add (with its painted name) and remove,
 // and a listener counts ed:conv-shown. That proves the whole handshake deterministically.
-const { test, expect, shot } = require("../helpers/fixtures")
+const { test, expect, shot, send } = require("../helpers/fixtures")
 
 async function instrument(page) {
   await page.evaluate(() => {
@@ -166,6 +166,56 @@ test.describe("instant navigation skeleton", () => {
     const skel = await page.evaluate(() => window.__skel)
     expect(skel.full, "mobile overlay covers the full screen").toBe(true)
     expect(skel.hasFoot, "full-screen overlay draws the composer skeleton").toBe(true)
+  })
+
+  test("history loads don't rise-in; a live message still does", async ({ alice, bob, seed }, testInfo) => {
+    test.skip(testInfo.project.name.startsWith("mobile"), "drives the sidebar with a chat open")
+    const page = alice
+    await page.goto(`/app/c/${seed.group_id}`)
+    await connected(page)
+    // Record every row that ever GAINS ed-msg--enter (the rise-in class) from here on.
+    await page.evaluate(() => {
+      window.__risen = 0
+      const mo = new MutationObserver((muts) => {
+        for (const m of muts) {
+          if (m.type === "attributes" && m.target.classList?.contains("ed-msg--enter")) {
+            window.__risen++
+          }
+        }
+      })
+      mo.observe(document.getElementById("chat-dropzone"), {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class"],
+      })
+    })
+
+    // Switching conversations streams the whole history in one patch — bulk, no animation
+    // (over the instant-nav cache the same rows are already on screen; re-animating them
+    // was the "рвано при входе" report).
+    await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`).click()
+    await expect(
+      page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
+    ).toBeVisible()
+    await expect(page.locator("#messages .ed-msg").first()).toBeVisible()
+    // Precondition: the bulk gate needs >= 4 rows in the patch — if the seed ever shrinks
+    // below that, fail HERE with a clear message instead of a confusing risen>0 below.
+    expect(
+      await page.locator("#messages .ed-msg").count(),
+      "seed DM must hold >= 4 messages for the bulk-suppression path",
+    ).toBeGreaterThanOrEqual(4)
+    expect(
+      await page.evaluate(() => window.__risen),
+      "a bulk history load must not rise-in",
+    ).toBe(0)
+
+    // A LIVE incoming message is a single-row batch and still animates.
+    await bob.goto(`/app/c/${seed.dm_id}`)
+    await connected(bob)
+    await send(bob, `rise-${Date.now()}`)
+    await expect
+      .poll(() => page.evaluate(() => window.__risen), { timeout: 8_000 })
+      .toBeGreaterThan(0)
   })
 
   test("tapping the already-open chat paints no overlay", async ({ alice, seed }, testInfo) => {
