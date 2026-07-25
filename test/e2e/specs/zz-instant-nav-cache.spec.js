@@ -5,9 +5,13 @@
 const { test, expect, shot, send } = require("../helpers/fixtures")
 
 async function connected(page) {
-  await page.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
-    timeout: 10_000,
-  })
+  // Socket connected AND the InstantNav hook mounted (its beacon) — the sync click-probes
+  // below race hook attachment otherwise (intermittent "ov is null").
+  await page.waitForFunction(
+    () => window.liveSocket && window.liveSocket.isConnected() && window.__edInstantNavReady,
+    null,
+    { timeout: 10_000 },
+  )
 }
 
 test.describe("instant navigation cache", () => {

@@ -2909,6 +2909,10 @@ defmodule EdenWeb.ChatLive do
               if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
+            // Readiness beacon: the e2e sync-probes (click + read the overlay in one task) must
+            // not race this listener's attachment — connected() alone doesn't guarantee hooks
+            // have mounted yet.
+            window.__edInstantNavReady = true
           },
           maybeStart(e) {
             // Primary click only — modified clicks (open-in-new-tab etc.) don't patch.
@@ -2971,9 +2975,13 @@ defmodule EdenWeb.ChatLive do
               e.preventDefault()
               e.stopPropagation()
               // Same task: lift main into a fixed layer FIRST, then un-hide the list — no
-              // intermediate frame where both share the flex row at 50/50.
+              // intermediate frame where both share the flex row at 50/50. The channel RAIL is
+              // hidden by the same @selected-driven class as the aside — reveal it too, or the
+              // slide exposes a rail-less list and the rail pops in a round-trip later,
+              // squeezing the list (user report).
               main.classList.add("ed-main-pop")
               aside.classList.remove("hidden")
+              document.querySelector("nav.ed-rail")?.classList.remove("hidden")
               requestAnimationFrame(() => {
                 main.classList.add("ed-main-pop--out")
                 let done = false
@@ -3213,6 +3221,7 @@ defmodule EdenWeb.ChatLive do
             this.overlay = null
           },
           destroyed() {
+            window.__edInstantNavReady = false
             document.removeEventListener("click", this.onClick, true)
             window.removeEventListener("ed:conv-shown", this.onShown)
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)

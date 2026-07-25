@@ -34,9 +34,13 @@ async function instrument(page) {
 }
 
 async function connected(page) {
-  await page.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
-    timeout: 10_000,
-  })
+  // Socket connected AND the InstantNav hook mounted (its beacon) — the sync click-probes
+  // below race hook attachment otherwise (intermittent "ov is null").
+  await page.waitForFunction(
+    () => window.liveSocket && window.liveSocket.isConnected() && window.__edInstantNavReady,
+    null,
+    { timeout: 10_000 },
+  )
 }
 
 test.describe("instant navigation skeleton", () => {
@@ -197,21 +201,31 @@ test.describe("instant navigation skeleton", () => {
     await page.goto(`/app/c/${seed.dm_id}`)
     await connected(page)
     await page.evaluate(() => {
-      window.__back = { popped: false, asideShown: false }
+      window.__back = { popped: false, asideShown: false, railShown: false }
       const main = document.getElementById("chat-dropzone")
       const aside = document.querySelector(".ed-root > aside")
+      const rail = document.querySelector("nav.ed-rail")
       new MutationObserver(() => {
         if (main.classList.contains("ed-main-pop")) window.__back.popped = true
       }).observe(main, { attributes: true, attributeFilter: ["class"] })
       new MutationObserver(() => {
         if (!aside.classList.contains("hidden")) window.__back.asideShown = true
       }).observe(aside, { attributes: true, attributeFilter: ["class"] })
+      // The channel rail hides via the same @selected class — it must be revealed WITH the
+      // aside, not a round-trip later (it popped in and squeezed the list; user report).
+      new MutationObserver(() => {
+        if (!rail.classList.contains("hidden")) window.__back.railShown = true
+      }).observe(rail, { attributes: true, attributeFilter: ["class"] })
     })
     await page.locator("[data-nav-back]").click()
     await expect.poll(() => page.evaluate(() => window.__back.popped)).toBe(true)
     expect(await page.evaluate(() => window.__back.asideShown), "list revealed for the slide").toBe(
       true,
     )
+    expect(
+      await page.evaluate(() => window.__back.railShown),
+      "channel rail revealed together with the list",
+    ).toBe(true)
     // The real patch fires after the slide — we land on the list.
     await expect.poll(() => page.url(), { timeout: 8_000 }).toMatch(/\/app$/)
     await expect(page.locator("#conversations")).toBeVisible()
