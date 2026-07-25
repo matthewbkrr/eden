@@ -3036,6 +3036,10 @@ html {
   }
   .ed-nav-skel--full {
     inset: 0;
+    /* The real app sits below the notch/status bar via .ed-root's safe-area padding; a raw
+       inset:0 overlay jammed the fake header under the iOS status bar, so the whole shell sat
+       ~a notch too high and visibly dropped at the handoff (user report, iPhone). Mirror it. */
+    padding-top: env(safe-area-inset-top);
   }
   /* Once the real stream has landed the overlay only fades — let taps fall through to the
      now-interactive chat underneath instead of being swallowed during the ~180ms fade. */
