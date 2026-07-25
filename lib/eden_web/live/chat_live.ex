@@ -2942,7 +2942,7 @@ defmodule EdenWeb.ChatLive do
                 if (ev.target === sheet && ev.propertyName === "transform") fire()
               }
               sheet.addEventListener("transitionend", onEnd)
-              setTimeout(fire, 300)
+              setTimeout(fire, 400)
               sheet.classList.add("ed-thread--out")
               return
             }
@@ -2982,24 +2982,27 @@ defmodule EdenWeb.ChatLive do
               main.classList.add("ed-main-pop")
               aside.classList.remove("hidden")
               document.querySelector("nav.ed-rail")?.classList.remove("hidden")
-              requestAnimationFrame(() => {
-                main.classList.add("ed-main-pop--out")
-                let done = false
-                const go = () => {
-                  if (done) return
-                  done = true
-                  main.removeEventListener("transitionend", onEnd)
-                  anchor.click() // real patch; morphdom then normalizes every class
-                  setTimeout(() => (this._backing = false), 1000)
-                }
-                // transitionend BUBBLES — a child's transition (the tapped back button's own
-                // background fade) would fire early; filter for the pane's own transform.
-                const onEnd = (ev) => {
-                  if (ev.target === main && ev.propertyName === "transform") go()
-                }
-                main.addEventListener("transitionend", onEnd)
-                setTimeout(go, 350) // fallback if the filtered event never fires
-              })
+              // Force a style flush between the start and end states: a rAF does NOT guarantee
+              // an intervening recalc, so the browser sometimes saw only the final transform and
+              // skipped the transition entirely (the "back animation is gone" report — a timing
+              // lottery, not a logic change). Reading offsetWidth commits translateX(0) first.
+              void main.offsetWidth
+              main.classList.add("ed-main-pop--out")
+              let done = false
+              const go = () => {
+                if (done) return
+                done = true
+                main.removeEventListener("transitionend", onEnd)
+                anchor.click() // real patch; morphdom then normalizes every class
+                setTimeout(() => (this._backing = false), 1000)
+              }
+              // transitionend BUBBLES — a child's transition (the tapped back button's own
+              // background fade) would fire early; filter for the pane's own transform.
+              const onEnd = (ev) => {
+                if (ev.target === main && ev.propertyName === "transform") go()
+              }
+              main.addEventListener("transitionend", onEnd)
+              setTimeout(go, 450) // fallback if the filtered event never fires
               return
             }
             if (!anchor.classList.contains("ed-convo")) return
@@ -3010,6 +3013,16 @@ defmodule EdenWeb.ChatLive do
             const wrap = link.closest(".ed-convo-wrap")
             const id = wrap && wrap.dataset.id
             if (!id) return
+            // A repeat tap on the SAME chat while its transition is still in flight (laggy
+            // link, no visual response yet) must be a NO-OP, TG-style: without this every tap
+            // queued another identical patch + history entry, and once the network caught up
+            // the stale queue re-opened the chat after each "back" (user report: "открылось
+            // 3 чата, пришлось жать 3 раза выйти"). Swallow it entirely.
+            if (this.overlay && this.target != null && String(this.target) === String(id)) {
+              e.preventDefault()
+              e.stopPropagation()
+              return
+            }
             const isRoom = wrap.classList.contains("ed-room-wrap")
             // The name span nests badge spans whose sr-only text ("Muted"/"Favorite") would ride
             // along in textContent — strip them on a clone so a muted chat's overlay header reads
@@ -3207,7 +3220,7 @@ defmodule EdenWeb.ChatLive do
               const go = () => { if (!went) { went = true; fade() } }
               push.addEventListener?.("finish", go, { once: true })
               push.finished?.then(go).catch(go)
-              setTimeout(go, 350)
+              setTimeout(go, 450)
             } else {
               fade()
             }
