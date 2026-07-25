@@ -31,6 +31,7 @@ async function scrollBurst(page) {
       () =>
         new Promise((resolve) => {
           const el = document.getElementById("message-scroll")
+          if (!el) return resolve()
           let step = 0
           const tick = () => {
             step++
@@ -58,6 +59,8 @@ test("smoothness matrix: core flows", async ({ alice, seed }, testInfo) => {
 
   await page.goto("/app")
   await connected(page)
+  // Throttling lives and dies with this page's context — the fixtures create a fresh
+  // browser context per test, so it can't leak into other tests' timings.
   const throttled = await throttleCPU(page, 4)
 
   const dmSel = `#conversations a.ed-convo[href$="/app/c/${seed.dm_id}"]`
