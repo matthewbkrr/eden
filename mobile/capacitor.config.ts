@@ -30,6 +30,9 @@ const config: CapacitorConfig = {
     url: server.url,
     cleartext: server.cleartext,
   },
+  // First-paint seam (#439): the WKWebView shows this color between the launch screen and
+  // the page's own CSS — the default white read as a flash after the splash. --ed-bg (light).
+  backgroundColor: '#fdfdfe',
   plugins: {
     Keyboard: {
       // Shrink the WKWebView frame when the keyboard opens (#417): the page
