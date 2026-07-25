@@ -198,6 +198,12 @@ test.describe("instant navigation skeleton", () => {
       page.locator(`#message-scroll[data-conversation-id="${seed.dm_id}"]`),
     ).toBeVisible()
     await expect(page.locator("#messages .ed-msg").first()).toBeVisible()
+    // Precondition: the bulk gate needs >= 4 rows in the patch — if the seed ever shrinks
+    // below that, fail HERE with a clear message instead of a confusing risen>0 below.
+    expect(
+      await page.locator("#messages .ed-msg").count(),
+      "seed DM must hold >= 4 messages for the bulk-suppression path",
+    ).toBeGreaterThanOrEqual(4)
     expect(
       await page.evaluate(() => window.__risen),
       "a bulk history load must not rise-in",
