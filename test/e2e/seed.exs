@@ -119,6 +119,22 @@ general_room_id =
       from(c in Conversation, where: c.channel_id == ^channel_id and c.is_general, limit: 1)
     ).id
 
+# A chat folder for alice holding the DM (#445 wave 3: instant folder-tab tests need
+# at least one real tab next to the virtual "All Chats"). Matched by name on re-runs.
+alice_scope = %Scope{user: alice}
+
+folder =
+  Enum.find(Chat.list_folders(alice_scope), &(&1.name == "Work")) ||
+    (
+      {:ok, f} = Chat.create_folder(alice_scope, %{name: "Work"})
+      f
+    )
+
+in_folder? =
+  Enum.any?(Chat.list_conversations(alice_scope, folder.id), &(&1.id == dm.id))
+
+unless in_folder?, do: {:ok, _} = Chat.toggle_conversation_folder(alice_scope, dm.id, folder.id)
+
 out = %{
   base_url: "http://localhost:4001",
   password: password,
@@ -131,7 +147,8 @@ out = %{
   dm_id: dm.id,
   group_id: group.id,
   channel_id: channel_id,
-  room_id: room_id
+  room_id: room_id,
+  folder_id: folder.id
 }
 
 path = Path.join([File.cwd!(), "test", "e2e", ".seed.json"])
