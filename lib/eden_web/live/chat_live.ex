@@ -5565,9 +5565,18 @@ defmodule EdenWeb.ChatLive do
             // server truth matches `pending` clears it. 10s cap: a dead event must not
             // pin a lie.
             if (this.pending != null) {
+              // Ack detection (#448 review): LiveView keeps phx-click-loading on the
+              // clicked button until ITS reply lands (and preserves it through unrelated
+              // patches) — once it's gone, the server has answered and its truth stands
+              // even when it differs (a rejected/no-op select_folder must not be
+              // re-asserted for the 10s cap).
+              const btn = Array.from(this.el.querySelectorAll("button.ed-folder-tab")).find(
+                (b) => (b.getAttribute("phx-value-id") || "") === this.pending
+              )
+              const acked = !btn || !btn.classList.contains("phx-click-loading")
               const active = this.el.querySelector(".ed-folder-tab--active")
               const truth = active ? active.getAttribute("phx-value-id") || "" : null
-              if (truth === this.pending || Date.now() - this.pendingAt > 10000) {
+              if (acked || truth === this.pending || Date.now() - this.pendingAt > 10000) {
                 this.pending = null
               } else {
                 this.apply(this.pending)
