@@ -2865,6 +2865,7 @@ defmodule EdenWeb.ChatLive do
         id="instant-nav"
         phx-hook=".InstantNav"
         data-user-id={@current_scope.user.id}
+        data-composer-placeholder={gettext("Message")}
         hidden
       >
       </div>
@@ -3270,6 +3271,8 @@ defmodule EdenWeb.ChatLive do
             // avatar/glyph as a cloned node — so nothing user-controlled is ever parsed as HTML.
             ov.innerHTML = this.shellMarkup(isRoom, needFoot, full)
             ov.querySelector(".ed-nav-skel__name").textContent = name
+            const ph = ov.querySelector(".ed-nav-skel__ph")
+            if (ph) ph.textContent = this.el.dataset.composerPlaceholder || ""
             // Before the title (not head-prepend): the mobile variant's back placeholder must
             // stay leftmost, icon between it and the title — mirroring the real header order.
             if (iconNode) ov.querySelector(".ed-nav-skel__title").before(iconNode)
@@ -3347,9 +3350,12 @@ defmodule EdenWeb.ChatLive do
                 rows += `<div class="ed-nav-skel__row ${me ? "ed-nav-skel__row--me" : ""}"><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
               }
             }
-            // A composer skeleton (input pill + send disc) when no real composer shows beneath.
+            // The composer is static chrome — nothing about it "loads", so it must NOT look
+            // like a preloader (user report: the shimmer pill was shorter than the real bar,
+            // so the handoff jumped). A pixel replica out of the REAL composer's classes:
+            // same paperclip / input / emoji / send, same paddings → same height, zero jump.
             const foot = withFoot
-              ? `<div class="ed-nav-skel__foot"><span class="ed-nav-skel__input ed-skel-shimmer"></span><span class="ed-nav-skel__send ed-skel-shimmer"></span></div>`
+              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border);"><div class="flex items-center gap-2"><span class="ed-btn--icon"><span class="hero-paper-clip-micro size-5"></span></span><span class="ed-input ed-nav-skel__ph"></span><span class="ed-btn--icon"><span class="hero-face-smile-micro size-5"></span></span><span class="ed-btn ed-btn--primary ed-btn--send"><span class="hero-paper-airplane-micro size-4"></span></span></div></div>`
               : ""
             // The real mobile header leads with a back arrow (md:hidden) — mirror it on the
             // full-screen variant so the avatar/name don't shift right at the handoff.
@@ -6379,6 +6385,19 @@ defmodule EdenWeb.ChatLive do
           mounted() {
             this.connected = true
             this.convId = this.el.dataset.conversationId
+            // Tapping Send must NOT collapse the keyboard (#439, TG behavior): a button tap
+            // steals focus from the input → blur → keyboard drops. Desktop: preventDefault on
+            // mousedown keeps focus while the click still submits. Touch: preventDefault on
+            // touchend suppresses BOTH the focus steal and the synthesized click, so we submit
+            // the form ourselves — one submission, input keeps focus, keyboard stays up.
+            const sendBtn = this.el.querySelector('button[type="submit"]')
+            if (sendBtn) {
+              sendBtn.addEventListener("mousedown", (e) => e.preventDefault())
+              sendBtn.addEventListener("touchend", (e) => {
+                e.preventDefault()
+                this.el.requestSubmit()
+              })
+            }
             // Edit (#164): the server pre-fills (start) / clears (cancel|save) the chat input
             // directly — setting value= via render fights LiveView's controlled input.
             this.handleEvent("set_composer_body", ({ body }) => {

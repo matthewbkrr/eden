@@ -3184,27 +3184,21 @@ html {
       transition: none;
     }
   }
-  /* Composer skeleton (input pill + send disc): shown only when no real composer is visible
-     beneath the overlay — mobile opens from the list full-screen, desktop from the empty
-     state — so the shell reads complete instead of ending in blank space. */
+  /* Composer replica: shown only when no real composer is visible beneath the overlay
+     (mobile opens from the list full-screen; desktop from the empty state). The composer is
+     static chrome — it must NOT read as a preloader, and it reuses the REAL bar's classes
+     (paperclip / ed-input / emoji / ed-btn--send, p-3 border-t) so its height matches the
+     real thing exactly and the handoff can't jump (user report). Only the bottom safe-area
+     inset is added on top of p-3 — the real bar gets it from .ed-root's padding. */
   .ed-nav-skel__foot {
-    flex-shrink: 0;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+  }
+  .ed-nav-skel__ph {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 1rem calc(0.5rem + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--ed-border);
-  }
-  .ed-nav-skel__input {
     flex: 1;
-    height: 2.5rem;
-    border-radius: var(--ed-radius-full);
-  }
-  .ed-nav-skel__send {
-    flex: none;
-    width: 2.5rem;
-    height: 2.5rem;
-    border-radius: var(--ed-radius-full);
+    min-width: 0;
+    color: var(--ed-muted);
   }
   .ed-nav-skel__row {
     display: flex;
