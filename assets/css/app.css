@@ -2293,6 +2293,14 @@ html {
      there: a neutral --ed-surface-2 hover, and a cobalt wash for the selected chat
      — a clearer, on-brand selected identity than another flat gray step. */
   .ed-convo:hover { background: var(--ed-surface-2); }
+  /* Pressed feedback (#445 wave 3): rows/rail/tabs answer the FINGER, not the server —
+     :active paints on touchstart, so a tap never reads dead while the patch flies.
+     (Tailwind's preflight clears the WebKit tap highlight, so this is the only press
+     signal on touch.) */
+  .ed-convo:active { background: var(--ed-surface-2); }
+  .ed-convo--active:active {
+    background: color-mix(in oklab, var(--ed-primary) 22%, transparent);
+  }
   .ed-convo--active { background: color-mix(in oklab, var(--ed-primary) 16%, transparent); }
   .ed-convo--active:hover { background: color-mix(in oklab, var(--ed-primary) 22%, transparent); }
   .ed-convo__body { min-width: 0; flex: 1; }
@@ -3614,7 +3622,8 @@ html {
       background 0.18s var(--ed-ease),
       color 0.18s var(--ed-ease);
   }
-  .ed-rail__btn:hover {
+  .ed-rail__btn:hover,
+  .ed-rail__btn:active {
     border-radius: 30%;
     background: var(--ed-primary);
     color: var(--ed-on-primary);
@@ -3818,7 +3827,8 @@ html {
     font: 600 0.8125rem/1 var(--ed-font);
     transition: color 0.16s var(--ed-ease);
   }
-  .ed-folder-tab:hover {
+  .ed-folder-tab:hover,
+  .ed-folder-tab:active {
     color: var(--ed-ink);
   }
   /* The active oval is the sliding indicator now — keep only the ink color. */
