@@ -17,6 +17,27 @@ export function initNativeShell() {
   wireBackButton();
   wireStatusBar();
   wirePush();
+  wireKeyboard();
+}
+
+// Keyboard lift v2 (#439): with Keyboard resize: 'none' the WebView frame never
+// changes — the page pads itself above the overlay keyboard instead, and the CSS
+// transition on that padding glides the composer up/down alongside the keyboard
+// (the native frame resize was an instant jump). iOS only: Android's WebView
+// still resizes natively (adjustResize), so the pad would double-compensate.
+// The callback writes an idempotent style property, so a stacked registration
+// after a reload is harmless (unlike wirePush's POSTs).
+function wireKeyboard() {
+  if (cap.getPlatform?.() !== "ios") return;
+  const kb = cap.Plugins?.Keyboard;
+  if (!kb?.addListener) return;
+  kb.addListener("keyboardWillShow", (info) => {
+    const h = Math.max(0, Math.round(info?.keyboardHeight || 0));
+    document.documentElement.style.setProperty("--ed-kb", `${h}px`);
+  });
+  kb.addListener("keyboardWillHide", () => {
+    document.documentElement.style.setProperty("--ed-kb", "0px");
+  });
 }
 
 // Android hardware/gesture back: navigate the WebView history like a browser

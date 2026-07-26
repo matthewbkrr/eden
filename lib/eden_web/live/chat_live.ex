@@ -2898,6 +2898,7 @@ defmodule EdenWeb.ChatLive do
             this.onShown = (e) => {
               this.snapshot(e.detail.id)
               if (this.target != null && String(e.detail.id) === String(this.target)) this.dismiss()
+              this.rehydrateDraft(e.detail.id)
             }
             window.addEventListener("ed:conv-shown", this.onShown)
             // A patch can settle WITHOUT the target stream ever mounting — tap a room whose
@@ -2907,6 +2908,10 @@ defmodule EdenWeb.ChatLive do
             // overlay. (A rapid A→B mid-flight keeps its pane — A's id ≠ B's — so this never
             // dismisses a still-loading transition.)
             this.onLoadStop = () => {
+              // A reconnect cycle fires loading-stop with the pane absent — that's not a
+              // settled navigation, it's the socket coming back (#439: the eject killed the
+              // overlay + typed draft seconds before the chat landed).
+              if (!window.liveSocket?.isConnected?.()) return
               if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
@@ -3233,10 +3238,19 @@ defmodule EdenWeb.ChatLive do
           // own transform, with a timeout fallback.
           backFinish(main, anchor) {
             let done = false
+            // Superseded-navigation stamp (#439, the zz-nav-races repro): if the user taps
+            // INTO another chat mid-slide, begin() bumps the generation — firing the delayed
+            // back-patch then would land AFTER that chat's patch and yank them to the list
+            // ("на 2-3 клике чат не открывается"). The forward patch owns cleanup instead.
+            const gen = (this._navGen = (this._navGen || 0) + 1)
             const go = () => {
               if (done) return
               done = true
               main.removeEventListener("transitionend", onEnd)
+              if (this._navGen !== gen) {
+                this._backing = false
+                return
+              }
               anchor.click() // real patch; morphdom then normalizes every class
               setTimeout(() => (this._backing = false), 1000)
             }
@@ -3250,6 +3264,8 @@ defmodule EdenWeb.ChatLive do
           // snapshot the conversation being left, kick the async IDB fill. Shared by the tap
           // path (maybeStart) and history traversal (onPop — the native swipe-back/forward).
           begin(link, id, isRoom) {
+            // Any forward navigation supersedes a pending back-patch (see backFinish).
+            this._navGen = (this._navGen || 0) + 1
             // The name span nests badge spans whose sr-only text ("Muted"/"Favorite") would ride
             // along in textContent — strip them on a clone so a muted chat's overlay header reads
             // "Вася", not "Вася Без звука".
@@ -3338,7 +3354,22 @@ defmodule EdenWeb.ChatLive do
             ov.innerHTML = this.shellMarkup(isRoom, needFoot, full)
             ov.querySelector(".ed-nav-skel__name").textContent = name
             const ph = ov.querySelector(".ed-nav-skel__ph")
-            if (ph) ph.textContent = this.el.dataset.composerPlaceholder || ""
+            if (ph) {
+              ph.placeholder = this.el.dataset.composerPlaceholder || ""
+              // Persist keystrokes: a long-stalled socket makes LiveView fall back to a
+              // FULL page load for the pending navigation (window.location) — the overlay
+              // and any in-memory draft die with the document. The stash survives; the
+              // next conv-shown for this chat rehydrates it (rehydrateDraft).
+              const draftFor = String(this.target)
+              ph.addEventListener("input", () => {
+                try {
+                  sessionStorage.setItem(
+                    "ed:navdraft",
+                    JSON.stringify({ id: draftFor, text: ph.value, at: Date.now() })
+                  )
+                } catch (_e) {}
+              })
+            }
             // Before the title (not head-prepend): the mobile variant's back placeholder must
             // stay leftmost, icon between it and the title — mirroring the real header order.
             if (iconNode) ov.querySelector(".ed-nav-skel__title").before(iconNode)
@@ -3346,7 +3377,10 @@ defmodule EdenWeb.ChatLive do
             this.overlay = ov
             if (cachedHTML) this.fillCache(cachedHTML)
             // Safety net: if the nav errors and nothing ever announces, don't strand it.
-            this.timer = setTimeout(() => this.dismiss(), 6000)
+            // Generous on purpose (#439): at 6s this EJECTED every slow load back onto the
+            // list ("чат вылетает") — a suspended/resumed WebView or a cross-border rejoin
+            // takes longer. onLoadStop already handles a patch that settles without a pane.
+            this.timer = setTimeout(() => this.dismiss(), 15000)
           },
           // Replace the skeleton body with a cached render of the thread (display-only). The source
           // is the app's OWN prior server render (HEEx-escaped), parsed via <template> and shown
@@ -3420,11 +3454,12 @@ defmodule EdenWeb.ChatLive do
             // like a preloader (user report: the shimmer pill was shorter than the real bar,
             // so the handoff jumped). A pixel replica out of the REAL composer's classes:
             // same paperclip / input / emoji / send, same paddings → same height, zero jump.
-            // Inline padding-bottom (#442 review): the p-3 utility sits in Tailwind's
-            // utilities layer, which cascades AFTER our components layer — a component rule
-            // could never win the safe-area bottom back. Inline style beats layers.
+            // The safe-area / keyboard bottom padding lives on the overlay CONTAINER
+            // (.ed-nav-skel--full, keyboard-lift v2) — not here, or the two would stack.
+            // The input is REAL (#439): you can type while the chat loads; dismiss() hands
+            // the draft + focus into the mounting composer.
             const foot = withFoot
-              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));"><div class="flex items-center gap-2"><span class="ed-btn--icon"><span class="hero-paper-clip-micro size-5"></span></span><span class="ed-input ed-nav-skel__ph"></span><span class="ed-btn--icon"><span class="hero-face-smile-micro size-5"></span></span><span class="ed-btn ed-btn--primary ed-btn--send"><span class="hero-paper-airplane-micro size-4"></span></span></div></div>`
+              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border);"><div class="flex items-center gap-2"><span class="ed-btn--icon"><span class="hero-paper-clip-micro size-5"></span></span><input type="text" enterkeyhint="send" class="ed-input ed-nav-skel__ph"><span class="ed-btn--icon"><span class="hero-face-smile-micro size-5"></span></span><span class="ed-btn ed-btn--primary ed-btn--send"><span class="hero-paper-airplane-micro size-4"></span></span></div></div>`
               : ""
             // The real mobile header leads with a back arrow (md:hidden) — mirror it on the
             // full-screen variant so the avatar/name don't shift right at the handoff.
@@ -3433,6 +3468,22 @@ defmodule EdenWeb.ChatLive do
               : ""
             return `<div class="ed-nav-skel__head">${back}<div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>${foot}`
           },
+          // The crash net for the replica draft: after a full-load fallback the direct
+          // handoff in dismiss() never ran (the document died) — pick the stash up when
+          // the chat finally shows. One-shot, 60s expiry, never clobbers an existing draft.
+          rehydrateDraft(convId) {
+            let d = null
+            try { d = JSON.parse(sessionStorage.getItem("ed:navdraft")) } catch (_e) {}
+            if (!d) return
+            try { sessionStorage.removeItem("ed:navdraft") } catch (_e) {}
+            if (String(d.id) !== String(convId) || !d.text) return
+            if (Date.now() - (d.at || 0) > 60000) return
+            const real = document.getElementById("composer-body")
+            if (real && !real.value) {
+              real.value = d.text
+              real.dispatchEvent(new Event("input", { bubbles: true }))
+            }
+          },
           dismiss() {
             if (!this.overlay) { this.target = null; return }
             clearTimeout(this.timer)
@@ -3440,6 +3491,18 @@ defmodule EdenWeb.ChatLive do
             this.target = null
             const ov = this.overlay
             this.overlay = null
+            // The replica composer is a REAL input while the chat loads (#439) — carry the
+            // typed draft and focus into the just-mounted composer so nothing is lost at
+            // the handoff. Never clobber an existing draft (edit banners, rehydrated text).
+            const ph = ov.querySelector("input.ed-nav-skel__ph")
+            const real = ph && document.getElementById("composer-body")
+            if (real) {
+              if (ph.value && !real.value) {
+                real.value = ph.value
+                real.dispatchEvent(new Event("input", { bubbles: true }))
+              }
+              if (document.activeElement === ph) real.focus()
+            }
             if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) { ov.remove(); return }
             const fade = () => {
               // Fade out on the next frame so the opacity transition actually runs.

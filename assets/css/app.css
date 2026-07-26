@@ -258,6 +258,26 @@ html {
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
+  /* Keyboard lift v2 (#439, native app only): the WebView never resizes for the
+     keyboard (Keyboard resize: 'none') — the shell pads itself above the overlay
+     keyboard and GLIDES there, matching the keyboard's own animation (the native
+     frame resize was an instant jump). --ed-kb is set by native.js from the
+     Capacitor keyboardWillShow/Hide events; max() because the keyboard covers the
+     home-indicator zone, so the two insets never stack. The full-screen layers
+     that live OUTSIDE .ed-root's padding (thread sheet, nav overlay) lift too. */
+  html.ed-native .ed-root,
+  html.ed-native .ed-thread,
+  html.ed-native .ed-nav-skel--full {
+    padding-bottom: max(env(safe-area-inset-bottom), var(--ed-kb, 0px));
+    transition: padding-bottom 0.32s cubic-bezier(0.36, 0.66, 0.04, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html.ed-native .ed-root,
+    html.ed-native .ed-thread,
+    html.ed-native .ed-nav-skel--full {
+      transition: none;
+    }
+  }
   /* Inside the Capacitor shells (html.ed-native, set by initNativeShell) the
      page must feel like an app, not a web page: no rubber-band overscroll or
      accidental pull-to-refresh tugging the chat list (#417). Browsers keep
