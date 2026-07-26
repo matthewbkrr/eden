@@ -12672,7 +12672,7 @@ defmodule EdenWeb.ChatLive do
             <p style="color: var(--ed-muted); font-size:0.875rem;">
               {gettext("You don't have any folders yet.")}
             </p>
-            <.link navigate={~p"/settings"} class="ed-btn ed-btn--primary inline-flex">
+            <.link navigate={~p"/app/settings"} class="ed-btn ed-btn--primary inline-flex">
               <.icon name="hero-cog-6-tooth-micro" class="size-4" /> {gettext("Manage folders")}
             </.link>
           </div>

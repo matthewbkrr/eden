@@ -81,6 +81,14 @@ defmodule EdenWeb.Router do
       live "/channels/:channel_id/r/:id/m/:message_id", ChatLive
       # Post-registration onboarding (#306): offer to enroll two-factor before the app.
       live "/welcome/two-factor", WelcomeTotpLive
+      # Authed alias of Settings (#445 wave 2): the SAME LiveView as /settings, but in
+      # THIS live_session — so the gear tap from the app is a live navigation (one
+      # round-trip over the open socket) instead of the full page load a cross-session
+      # navigate forces. The bare /settings stays in :default for its signed-out
+      # device-prefs duty (and the LocaleController fallback); authed in-app links all
+      # point here.
+      live "/app/settings", SettingsLive, :index
+      live "/app/settings/:section", SettingsLive, :section
     end
 
     # Admin panel (#174) — gated to platform admins/super_admins by :require_admin

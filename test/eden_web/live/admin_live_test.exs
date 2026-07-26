@@ -367,7 +367,7 @@ defmodule EdenWeb.AdminLiveTest do
       # mount, so a mid-session demotion wouldn't otherwise remove access until navigation.
       send(view.pid, {:user_updated, %{boss | role: "member"}})
 
-      assert_redirect(view, ~p"/settings")
+      assert_redirect(view, ~p"/app/settings")
     end
   end
 

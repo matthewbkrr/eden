@@ -3071,6 +3071,41 @@ html {
      shimmers. The .InstantNav hook fades it out when .ScrollBottom announces the real
      stream landed (ed:conv-shown). It lives in a body-level overlay and never touches
      #messages / morphdom. */
+  /* Page cover for cross-LiveView hops (#445 wave 2, app <-> settings): a pixel
+     replica of the target page's last render (or a neutral shell) over the whole
+     viewport while the remount round-trips. */
+  .ed-page-skel {
+    position: fixed;
+    inset: 0;
+    z-index: 45; /* above every in-page overlay (<=40), below modals/toasts (50+) */
+    background: var(--ed-bg);
+    overflow: hidden;
+    opacity: 1;
+    transition: opacity 150ms var(--ed-ease);
+    pointer-events: none;
+  }
+  .ed-page-skel--out {
+    opacity: 0;
+  }
+  .ed-page-skel__shell {
+    padding: calc(env(safe-area-inset-top) + 1rem) 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 40rem;
+    margin: 0 auto;
+  }
+  .ed-page-skel__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    height: 3rem;
+  }
+  .ed-page-skel__row {
+    display: flex;
+    align-items: center;
+    height: 2.25rem;
+  }
   /* Sidebar overlay for rail hops (#445): pixel-cover of the aside while the patch
      lands — the cached prior render of the target list (display-only) or a shimmer
      skeleton. Fixed + rect-matched by the hook, like the pane overlay. */

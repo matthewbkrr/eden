@@ -45,6 +45,8 @@ if (!document.getElementById("notifier")) {
 // Capacitor shells only (#417) — a complete no-op in browsers.
 import {initNativeShell} from "./native"
 initNativeShell()
+import {initInstantPages} from "./instant_pages"
+initInstantPages()
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 
