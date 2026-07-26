@@ -3475,9 +3475,15 @@ defmodule EdenWeb.ChatLive do
             let d = null
             try { d = JSON.parse(sessionStorage.getItem("ed:navdraft")) } catch (_e) {}
             if (!d) return
-            try { sessionStorage.removeItem("ed:navdraft") } catch (_e) {}
+            // Consume-or-expire, never clear on a mere mismatch (#444 review): a conv-shown
+            // for a DIFFERENT chat (deep link, quick detour) must not kill a draft typed for
+            // this one — it stays claimable by its own chat until the 60s expiry.
+            if (Date.now() - (d.at || 0) > 60000) {
+              try { sessionStorage.removeItem("ed:navdraft") } catch (_e) {}
+              return
+            }
             if (String(d.id) !== String(convId) || !d.text) return
-            if (Date.now() - (d.at || 0) > 60000) return
+            try { sessionStorage.removeItem("ed:navdraft") } catch (_e) {}
             const real = document.getElementById("composer-body")
             if (real && !real.value) {
               real.value = d.text
