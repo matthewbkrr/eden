@@ -3071,6 +3071,40 @@ html {
      shimmers. The .InstantNav hook fades it out when .ScrollBottom announces the real
      stream landed (ed:conv-shown). It lives in a body-level overlay and never touches
      #messages / morphdom. */
+  /* Sidebar overlay for rail hops (#445): pixel-cover of the aside while the patch
+     lands — the cached prior render of the target list (display-only) or a shimmer
+     skeleton. Fixed + rect-matched by the hook, like the pane overlay. */
+  .ed-aside-skel {
+    position: fixed;
+    z-index: 35; /* above pane content (<=30), below the chat nav overlay (40) */
+    background: var(--ed-surface);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    opacity: 1;
+    transition: opacity 150ms var(--ed-ease);
+    pointer-events: none; /* rows are a still frame — taps land after the handoff */
+  }
+  .ed-aside-skel--out {
+    opacity: 0;
+  }
+  .ed-aside-skel__head {
+    display: flex;
+    align-items: center;
+    height: 3.5rem;
+    padding: 0 1rem;
+    flex-shrink: 0;
+  }
+  .ed-aside-skel__title {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    color: var(--ed-ink);
+  }
+  .ed-aside-skel__body {
+    flex: 1;
+    overflow: hidden;
+    padding: 0.25rem 0.5rem;
+  }
   .ed-nav-skel {
     position: fixed;
     z-index: 40; /* above pane content (≤30), below modals/toasts (50+) */
