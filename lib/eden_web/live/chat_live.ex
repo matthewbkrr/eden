@@ -2912,6 +2912,11 @@ defmodule EdenWeb.ChatLive do
               // settled navigation, it's the socket coming back (#439: the eject killed the
               // overlay + typed draft seconds before the chat landed).
               if (!window.liveSocket?.isConnected?.()) return
+              // A settled live nav re-rendered the aside — drop the rail overlay (#445) and
+              // keep the sidebar snapshot warm for the NEXT hop (idle: off the settle frame).
+              if (this.asideOv) this.asideDismiss()
+              const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200))
+              idle(() => this.stashAside())
               if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
@@ -3210,6 +3215,71 @@ defmodule EdenWeb.ChatLive do
               this.backFinish(main, anchor)
               return
             }
+            // Rail navigation (#445 wave 1): a channel/home tap answers ON-SCREEN in one
+            // frame — the active dot moves, the sidebar paints its cached list (or a
+            // skeleton), and on desktop the entry room opens through the normal chat
+            // overlay. The patch then normalizes everything. Settings/logout fall through.
+            if (anchor.classList.contains("ed-rail__btn")) {
+              const href = anchor.getAttribute("href") || ""
+              const chan = href.match(/^\/channels\/([^\/]+)(?:\/r\/([^\/]+))?$/)
+              const home = href === "/app"
+              if (!home && !chan) return
+              const railKey = home ? "m" : "c:" + chan[1]
+              // Repeat tap on the same in-flight rail target — swallow entirely (the
+              // ed-convo lesson: queued duplicate patches re-open after every back).
+              if (this.asideOv && this._railKey === railKey) {
+                e.preventDefault()
+                e.stopPropagation()
+                return
+              }
+              // Already there (incl. our own optimistic activation): the patch is a no-op.
+              if (anchor.classList.contains("ed-rail__btn--active")) return
+              this._navGen = (this._navGen || 0) + 1
+              this._railKey = railKey
+              this.stashAside()
+              document
+                .querySelectorAll(".ed-rail__btn--active")
+                .forEach((b) => b.classList.remove("ed-rail__btn--active"))
+              const slot = anchor.closest(".ed-rail__slot")
+              ;(slot ? slot.querySelectorAll(".ed-rail__btn:not(.ed-rail__btn--me)") : [anchor]).forEach(
+                (b) => b.classList.add("ed-rail__btn--active")
+              )
+              this.asidePaint(railKey, anchor.getAttribute("title") || "")
+              // Desktop: the entry room opens in the main pane — full instant treatment
+              // with the room's cached thread; the name rides the cache meta (#445),
+              // falling back to the channel's (corrected by the patch if they differ).
+              const roomId = chan && chan[2]
+              if (roomId && window.matchMedia("(min-width: 768px)").matches) {
+                // Freshness: snapshot whatever conversation is being left (same as begin).
+                const leaving = document.getElementById("message-scroll")
+                const leavingMsgs = leaving && document.getElementById("messages")
+                if (leaving && leavingMsgs && this.cache && this.userId && leaving.dataset.conversationId) {
+                  this.cache.put(this.userId, leaving.dataset.conversationId, leavingMsgs.innerHTML, this.paneTitle())
+                }
+                this.target = roomId
+                const cached = this.cache && this.userId ? this.cache.peek(this.userId, roomId) : null
+                const glyph = document.createElement("span")
+                glyph.className = "ed-room__hash ed-room__hash--lg"
+                glyph.textContent = "#"
+                this.paint({
+                  name: (cached && cached.name) || anchor.getAttribute("title") || "",
+                  iconNode: glyph,
+                  isRoom: true,
+                  cachedHTML: cached && cached.html,
+                })
+                if (!cached && this.cache && this.userId) {
+                  this.cache.get(this.userId, roomId).then((hit) => {
+                    if (!hit || this.target !== roomId || !this.overlay) return
+                    this.fillCache(hit.html)
+                    // A cross-reload hit also carries the room's real name (meta) — the
+                    // paint above could only guess the channel's.
+                    const nameEl = hit.name && this.overlay.querySelector(".ed-nav-skel__name")
+                    if (nameEl) nameEl.textContent = hit.name
+                  })
+                }
+              }
+              return // no preventDefault — the patch link must still fire
+            }
             if (!anchor.classList.contains("ed-convo")) return
             const link = anchor
             // The tapped row is already open? The patch is a no-op, so nothing will ever
@@ -3296,7 +3366,7 @@ defmodule EdenWeb.ChatLive do
             const leaving = document.getElementById("message-scroll")
             const leavingMsgs = leaving && document.getElementById("messages")
             if (leaving && leavingMsgs && this.cache && this.userId && leaving.dataset.conversationId) {
-              this.cache.put(this.userId, leaving.dataset.conversationId, leavingMsgs.innerHTML)
+              this.cache.put(this.userId, leaving.dataset.conversationId, leavingMsgs.innerHTML, this.paneTitle())
             }
             // No in-memory hit (a cross-reload first open): try IndexedDB and swap in if it lands
             // before the real stream — else the skeleton just stays until the real stream does.
@@ -3432,7 +3502,7 @@ defmodule EdenWeb.ChatLive do
               const scroll = document.getElementById("message-scroll")
               if (!scroll || scroll.dataset.conversationId !== String(convId)) return
               const msgs = document.getElementById("messages")
-              if (msgs) this.cache.put(this.userId, convId, msgs.innerHTML)
+              if (msgs) this.cache.put(this.userId, convId, msgs.innerHTML, this.paneTitle())
             }
             if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 2000 })
             else setTimeout(run, 200)
@@ -3467,6 +3537,108 @@ defmodule EdenWeb.ChatLive do
               ? `<span class="ed-nav-skel__back"><span class="hero-arrow-left-mini size-5"></span></span>`
               : ""
             return `<div class="ed-nav-skel__head">${back}<div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>${foot}`
+          },
+          // The open pane's header title — snapshot meta for the cache (#445). Best-effort:
+          // rooms/groups render it as the header's semibold truncate; a miss just means the
+          // rail overlay falls back to the channel name for a round-trip.
+          paneTitle() {
+            const el = document.querySelector("#chat-dropzone header .font-semibold.truncate")
+            return el ? el.textContent.trim() : undefined
+          },
+          // Sidebar snapshots (#445): the aside's rendered HTML per rail target — "m"
+          // (messenger) or "c:<channel id>". Kept on window so a settings round-trip
+          // (LiveView remount) doesn't lose them. Display-only, same trust model as the
+          // message cache: our own prior server render, sanitized on adoption.
+          asideKey() {
+            const m = location.pathname.match(/^\/channels\/([^\/]+)/)
+            return m ? "c:" + m[1] : "m"
+          },
+          stashAside() {
+            const aside = document.querySelector(".ed-root > aside")
+            if (!aside) return
+            const store = (window.__edAsideCache = window.__edAsideCache || new Map())
+            // LRU, capped (#446 review): one aside render per rail target is small (tens
+            // of KB), but "per visited channel, forever" needs a bound like MsgCache's.
+            const k = this.asideKey()
+            store.delete(k)
+            store.set(k, aside.outerHTML)
+            while (store.size > 12) store.delete(store.keys().next().value)
+          },
+          asidePaint(key, title) {
+            this.asideRemove()
+            const aside = document.querySelector(".ed-root > aside")
+            // Mobile inside a chat the aside is hidden and the rail with it — nothing to cover.
+            if (!aside || aside.offsetParent === null) return
+            const r = aside.getBoundingClientRect()
+            let ov = null
+            const store = window.__edAsideCache
+            const cached = store && store.get(key)
+            if (cached) {
+              try {
+                // The snapshot is the aside ELEMENT (outerHTML) so its own layout classes
+                // ride along; ids are stripped against duplicate-id collisions with the
+                // real aside underneath, scripts defensively (template parsing never runs
+                // them, adoption would).
+                const tpl = document.createElement("template")
+                tpl.innerHTML = cached
+                const node = tpl.content.firstElementChild
+                node.querySelectorAll("script").forEach((n) => n.remove())
+                node.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"))
+                node.removeAttribute("id")
+                node.classList.remove("hidden")
+                ov = node
+              } catch (_e) {
+                ov = null
+              }
+            }
+            if (!ov) {
+              ov = document.createElement("div")
+              let rows = ""
+              for (const w of [64, 48, 72, 40, 56, 66, 36, 58]) {
+                rows += `<div class="ed-nav-skel__row"><span class="ed-nav-skel__av ed-skel-shimmer"></span><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
+              }
+              ov.innerHTML = `<div class="ed-aside-skel__head"><span class="ed-aside-skel__title"></span></div><div class="ed-aside-skel__body">${rows}</div>`
+              ov.querySelector(".ed-aside-skel__title").textContent = title
+            }
+            ov.classList.add("ed-aside-skel")
+            ov.setAttribute("aria-hidden", "true")
+            ov.style.left = r.left + "px"
+            ov.style.top = r.top + "px"
+            ov.style.width = r.width + "px"
+            ov.style.height = r.height + "px"
+            document.body.appendChild(ov)
+            this.asideOv = ov
+            this.asideTimer = setTimeout(() => this.asideDismiss(), 15000)
+          },
+          asideDismiss() {
+            const ov = this.asideOv
+            if (!ov) return
+            clearTimeout(this.asideTimer)
+            this.asideOv = null
+            this._railKey = null
+            if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+              ov.remove()
+              return
+            }
+            ov.classList.add("ed-aside-skel--out")
+            let done = false
+            const fin = () => {
+              if (!done) {
+                done = true
+                ov.remove()
+              }
+            }
+            ov.addEventListener("transitionend", (ev) => {
+              if (ev.target === ov && ev.propertyName === "opacity") fin()
+            })
+            setTimeout(fin, 300)
+          },
+          asideRemove() {
+            clearTimeout(this.asideTimer)
+            if (this.asideOv) {
+              this.asideOv.remove()
+              this.asideOv = null
+            }
           },
           // The crash net for the replica draft: after a full-load fallback the direct
           // handoff in dismiss() never ran (the document died) — pick the stash up when
@@ -3548,6 +3720,7 @@ defmodule EdenWeb.ChatLive do
           destroyed() {
             window.__edInstantNavReady = false
             document.removeEventListener("click", this.onClick, true)
+            this.asideRemove()
             window.removeEventListener("ed:conv-shown", this.onShown)
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
             window.removeEventListener("popstate", this.onPop)

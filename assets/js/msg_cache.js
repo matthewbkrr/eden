@@ -175,12 +175,23 @@ export const MsgCache = {
 
   // Cache the current render of a conversation. Skips oversized snapshots (media-heavy rooms) so
   // one huge thread can't dominate the store. Best-effort persistence; never throws.
-  async put(userId, convId, html) {
+  // `name` (optional) is the pane header title at snapshot time — the rail's instant
+  // room-open (#445) has no sidebar row to read a title from, so the cache carries it.
+  async put(userId, convId, html, name) {
     // Blob([html]).size is the real UTF-8 byte length (html.length counts UTF-16 code units, which
     // undercounts Cyrillic ~2×); this keeps the store bound honest for a RU app.
     if (!userId || !convId || typeof html !== "string" || new Blob([html]).size > MAX_BYTES) return;
     const rec = { id: key(userId, convId), html, updatedAt: Date.now() };
-    this._memSet(rec.id, { html: rec.html, updatedAt: rec.updatedAt });
+    if (typeof name === "string" && name) rec.name = name.slice(0, 200);
+    // A nameless refresh (paneTitle missed mid-transition) must not erase a previously
+    // captured name — the record is replaced wholesale (#446 review). Memory-first,
+    // best-effort: a cross-reload nameless put can still drop it, and the overlay just
+    // falls back to the channel name for a round-trip.
+    if (!rec.name) {
+      const prior = this._mem.get(rec.id);
+      if (prior && prior.name) rec.name = prior.name;
+    }
+    this._memSet(rec.id, { html: rec.html, name: rec.name, updatedAt: rec.updatedAt });
     const db = await this.db();
     if (!db) return;
     try {
