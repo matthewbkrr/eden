@@ -8,12 +8,25 @@ import UIKit
 // iPhone). The JS recognizer drives the exact deterministic choreography the header
 // back button uses: one history entry, one navigation, finger-followed. Keep the native
 // gesture explicitly OFF (when on, it also steals edge touches from the web content).
+//
+// Keyboard architecture v2 (#439 wave 4): the WebView frame NEVER changes for the
+// keyboard (Keyboard resize: 'none' in capacitor.config). The v1 frame resize — ours at
+// WillShow or the plugin's delayed one — always produced one visible artifact or
+// another: the instant shrink read as a harsh jump, and WebKit's own focused-input
+// reveal panned the native scrollView down/up around it (the header dip; the Keyboard
+// plugin fights the same pan with its resetScrollView calls at every keyboard event and
+// a contentOffset-zeroing scroll delegate behind its disableScroll option). Instead the
+// PAGE lifts its own composer with a CSS transition driven by the keyboardWillShow/Hide
+// events (native.js), gliding alongside the keyboard. Here we only pin the scrollView
+// so WebKit's native pan can never move the page: config scrollEnabled=false stops user
+// scrolling of the outer scrollView, and the KVO below reverts programmatic offsets
+// (setContentOffset works even with isScrollEnabled=false, so the config alone is not
+// enough).
 class BridgeViewController: CAPBridgeViewController {
+    private var edOffsetPin: NSKeyValueObservation?
+
     override open func capacitorDidLoad() {
         webView?.allowsBackForwardNavigationGestures = false
-        // Belt for keyboard dismissal: engages only when the native scrollView actually
-        // scrolls (rare with the h-screen layout); the JS swipe-down blur is the primary.
-        webView?.scrollView.keyboardDismissMode = .interactive
 
         // Everything behind the WebView/keyboard defaults to BLACK (UIWindow) — it peeked
         // through the iOS 26 keyboard's rounded top corners as dark triangles, and through
@@ -27,43 +40,20 @@ class BridgeViewController: CAPBridgeViewController {
         view.backgroundColor = appBg
         webView?.superview?.backgroundColor = appBg
 
-        // Capacitor's Keyboard plugin (resize: native) shrinks the WebView only AFTER the
-        // keyboard animation finishes (+0.2s grace, see the plugin's
-        // `setKeyboardHeight:delay:`) — so the keyboard slid OVER the composer, then the
-        // page snapped up (#439, user recording). Resize at WillShow/WillHide instead; the
-        // plugin's delayed same-frame set becomes a no-op.
-        let nc = NotificationCenter.default
-        nc.addObserver(self, selector: #selector(edKeyboardWillShow(_:)),
-                       name: UIResponder.keyboardWillShowNotification, object: nil)
-        nc.addObserver(self, selector: #selector(edKeyboardWillHide(_:)),
-                       name: UIResponder.keyboardWillHideNotification, object: nil)
+        // The h-screen layout never overflows the outer scrollView, so any non-zero
+        // offset is WebKit's focused-input reveal shoving the page around (#439: the
+        // header dipped down and snapped back on keyboard focus). Revert it in place.
+        if let sv = webView?.scrollView {
+            edOffsetPin = sv.observe(\.contentOffset, options: [.new]) { scrollView, _ in
+                if scrollView.contentOffset != .zero {
+                    scrollView.setContentOffset(.zero, animated: false)
+                }
+            }
+        }
     }
 
     override open func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         view.window?.backgroundColor = view.backgroundColor
-    }
-
-    @objc private func edKeyboardWillShow(_ note: Notification) {
-        guard let webView = self.webView, let superview = webView.superview,
-              let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-        else { return }
-        // A detached hardware-keyboard bar reports a tiny height — leave those to the
-        // plugin's own QuickType handling rather than shrinking for a sliver.
-        if end.height < 100 { return }
-        // The keyboard frame arrives in SCREEN coordinates; convert into the webView's
-        // superview space so an offset container (Split View / safe-area wrapper) can't
-        // skew the math (#442 review).
-        let kbTop = superview.convert(end, from: nil).origin.y
-        var f = webView.frame
-        f.size.height = kbTop - f.origin.y
-        webView.frame = f
-    }
-
-    @objc private func edKeyboardWillHide(_ note: Notification) {
-        guard let webView = self.webView, let window = view.window else { return }
-        var f = webView.frame
-        f.size.height = window.bounds.height - f.origin.y
-        webView.frame = f
     }
 }

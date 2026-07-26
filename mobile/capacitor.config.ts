@@ -33,13 +33,22 @@ const config: CapacitorConfig = {
   // First-paint seam (#439): the WKWebView shows this color between the launch screen and
   // the page's own CSS — the default white read as a flash after the splash. --ed-bg (light).
   backgroundColor: '#fdfdfe',
+  ios: {
+    // The native scrollView never needs to scroll (h-screen layout) — but WebKit used it
+    // to "reveal" the focused input, bouncing the whole page down/up on keyboard focus
+    // (#439: "шапка съезжает и возвращается"). Off = no native pans, ever.
+    scrollEnabled: false,
+  },
   plugins: {
     Keyboard: {
       // Shrink the WKWebView frame when the keyboard opens (#417): the page
       // re-lays out (h-screen tracks the shrunken viewport), so the chat header
       // stays put and the composer rides above the keyboard — instead of
       // WebKit panning the whole page up under the status bar.
-      resize: 'native',
+      // v2 (#439): 'none' — the WebView frame never changes; the page lifts the composer
+      // itself via a CSS transition on the Capacitor keyboardWillShow/Hide events, matching
+      // the keyboard's own glide (the instant frame resize read as a harsh jump).
+      resize: 'none',
     },
     PushNotifications: {
       // No OS banner while the app is FOREGROUND (#419): the in-app Web
