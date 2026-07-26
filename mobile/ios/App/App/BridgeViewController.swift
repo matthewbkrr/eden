@@ -42,14 +42,18 @@ class BridgeViewController: CAPBridgeViewController {
     }
 
     @objc private func edKeyboardWillShow(_ note: Notification) {
-        guard let webView = self.webView, let window = view.window,
+        guard let webView = self.webView, let superview = webView.superview,
               let end = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
         else { return }
         // A detached hardware-keyboard bar reports a tiny height — leave those to the
         // plugin's own QuickType handling rather than shrinking for a sliver.
         if end.height < 100 { return }
+        // The keyboard frame arrives in SCREEN coordinates; convert into the webView's
+        // superview space so an offset container (Split View / safe-area wrapper) can't
+        // skew the math (#442 review).
+        let kbTop = superview.convert(end, from: nil).origin.y
         var f = webView.frame
-        f.size.height = (window.bounds.height - end.height) - f.origin.y
+        f.size.height = kbTop - f.origin.y
         webView.frame = f
     }
 

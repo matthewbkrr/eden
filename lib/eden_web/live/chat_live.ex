@@ -3354,8 +3354,11 @@ defmodule EdenWeb.ChatLive do
             // like a preloader (user report: the shimmer pill was shorter than the real bar,
             // so the handoff jumped). A pixel replica out of the REAL composer's classes:
             // same paperclip / input / emoji / send, same paddings → same height, zero jump.
+            // Inline padding-bottom (#442 review): the p-3 utility sits in Tailwind's
+            // utilities layer, which cascades AFTER our components layer — a component rule
+            // could never win the safe-area bottom back. Inline style beats layers.
             const foot = withFoot
-              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border);"><div class="flex items-center gap-2"><span class="ed-btn--icon"><span class="hero-paper-clip-micro size-5"></span></span><span class="ed-input ed-nav-skel__ph"></span><span class="ed-btn--icon"><span class="hero-face-smile-micro size-5"></span></span><span class="ed-btn ed-btn--primary ed-btn--send"><span class="hero-paper-airplane-micro size-4"></span></span></div></div>`
+              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border); padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));"><div class="flex items-center gap-2"><span class="ed-btn--icon"><span class="hero-paper-clip-micro size-5"></span></span><span class="ed-input ed-nav-skel__ph"></span><span class="ed-btn--icon"><span class="hero-face-smile-micro size-5"></span></span><span class="ed-btn ed-btn--primary ed-btn--send"><span class="hero-paper-airplane-micro size-4"></span></span></div></div>`
               : ""
             // The real mobile header leads with a back arrow (md:hidden) — mirror it on the
             // full-screen variant so the avatar/name don't shift right at the handoff.

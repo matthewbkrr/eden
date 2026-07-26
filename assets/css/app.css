@@ -3190,9 +3190,8 @@ html {
      (paperclip / ed-input / emoji / ed-btn--send, p-3 border-t) so its height matches the
      real thing exactly and the handoff can't jump (user report). Only the bottom safe-area
      inset is added on top of p-3 — the real bar gets it from .ed-root's padding. */
-  .ed-nav-skel__foot {
-    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
-  }
+  /* (The foot's safe-area padding-bottom lives INLINE in the hook markup: the p-3 utility
+     cascades after this components layer and would override any rule written here.) */
   .ed-nav-skel__ph {
     display: flex;
     align-items: center;
