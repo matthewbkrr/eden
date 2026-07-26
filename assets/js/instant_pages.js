@@ -18,6 +18,12 @@ const CAP = 4; // pages worth keeping (app, settings — headroom for future tar
 
 const store = () => (window.__edPageCache = window.__edPageCache || new Map());
 
+// The page class currently ON SCREEN. Kept explicitly (#447 review): popstate fires
+// for every in-app history traversal (chat -> chat back), where location alone can't
+// tell a cross-world hop from a same-world one — guessing inverted `from` and stashed
+// the chat DOM under the settings key, corrupting that cache.
+let current = null;
+
 // Page class for a pathname: the two remount-separated worlds we cover today.
 function pageKey(path) {
   // Settings first: the authed alias lives UNDER /app (#445) — same page class.
@@ -123,6 +129,10 @@ export function initInstantPages() {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const a = e.target.closest && e.target.closest("a[href]");
       if (!a) return;
+      // Links that don't replace THIS document must not strand a cover (#447 review).
+      if (e.defaultPrevented) return;
+      if (a.target && a.target !== "_self") return;
+      if (a.hasAttribute("download")) return;
       const from = pageKey(location.pathname);
       const to = pageKey(a.getAttribute("href"));
       // Only CROSS-page hops (a remount) — in-page navigation is the LiveView
@@ -135,19 +145,21 @@ export function initInstantPages() {
     true,
   );
 
+  current = pageKey(location.pathname);
+
   // Browser/Android back between the two worlds gets the same instant answer.
+  // Same-world traversals (chat -> chat back is a popstate too) pass through
+  // untouched — that's the in-LiveView hook's territory (#447 review).
   window.addEventListener("popstate", () => {
     const to = pageKey(location.pathname);
-    const painted = cover != null;
-    if (!to || painted) return;
-    const from = to === "settings" ? "app" : "settings";
-    // Heuristic: we only know where we LANDED; stash what's still on screen under
-    // the other key before the round-trip repaints it.
-    stash(from);
+    if (!to || cover != null || to === current) return;
+    // The DOM still shows the page we're LEAVING — stash it under its own key.
+    stash(current);
     if (store().has(to)) paint(to);
   });
 
   window.addEventListener("phx:page-loading-stop", () => {
+    current = pageKey(location.pathname);
     if (!cover) return;
     dismiss();
     // Keep the fresh render warm for the next hop (idle: off the settle frame).
