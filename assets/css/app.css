@@ -3199,6 +3199,28 @@ html {
     min-width: 0;
     color: var(--ed-muted);
   }
+  @media (pointer: coarse) {
+    .ed-nav-skel__ph {
+      /* The REAL input is bumped to 16px by the anti-auto-zoom rule (#417, inputs only);
+         without matching, the replica's 15px placeholder read thinner for the overlay's
+         lifetime (#439: "жирность меньше... после прогрузки"). */
+      font-size: max(1rem, 1em);
+    }
+  }
+
+  /* iOS rubber-band for SHORT lists (#439): WebKit only bounces a scroller whose content
+     overflows, so lists that fit read as dead — native iOS (and TG) bounces always. Force a
+     1px overflow on the CONTENT of every primary scroller. Guarded by :has where an
+     empty-state sibling would otherwise be pushed below the fold. */
+  #conversations:has(.ed-convo-wrap) {
+    min-height: calc(100% + 1px);
+  }
+  #messages:has([id^="messages-"]) {
+    min-height: calc(100% + 1px);
+  }
+  .ed-bounce-wrap {
+    min-height: calc(100% + 1px);
+  }
   .ed-nav-skel__row {
     display: flex;
     align-items: flex-end;

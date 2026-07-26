@@ -2942,6 +2942,8 @@ defmodule EdenWeb.ChatLive do
               } else {
                 // Back to the list: both screens are local DOM — swap them in the same task
                 // the history commits, so the settled gesture never shows the stale chat.
+                document.activeElement?.blur?.()
+                document.querySelectorAll(".ed-convo--active").forEach((n) => n.classList.remove("ed-convo--active"))
                 main.classList.add("hidden")
                 aside.classList.remove("hidden")
                 document.querySelector("nav.ed-rail")?.classList.remove("hidden")
@@ -2976,13 +2978,19 @@ defmodule EdenWeb.ChatLive do
               if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
               const t = e.touches[0]
               if (t.clientX > 24) return
-              // Only on an open chat (its header carries the back link); the thread sheet has
-              // its own back affordance — don't fight it.
-              if (!document.querySelector("[data-nav-back]") || document.querySelector(".ed-thread")) return
+              // Mid-load (the instant-nav overlay is up): the swipe drags the OVERLAY and
+              // cancels the pending navigation — before, the gesture was dead until the patch
+              // landed (#439: "зашли в чат — функционал выхода не работает, пока грузится").
+              const loadingOv = this.overlay && this.target != null ? this.overlay : null
+              if (!loadingOv) {
+                // Only on an open chat (its header carries the back link); the thread sheet
+                // has its own back affordance — don't fight it.
+                if (!document.querySelector("[data-nav-back]") || document.querySelector(".ed-thread")) return
+              }
               const main = document.getElementById("chat-dropzone")
               const aside = document.querySelector(".ed-root > aside")
-              if (!main || !aside) return
-              this._swipe = { x: t.clientX, y: t.clientY, t0: e.timeStamp, main, aside, armed: false, dx: 0 }
+              if (!loadingOv && (!main || !aside)) return
+              this._swipe = { x: t.clientX, y: t.clientY, t0: e.timeStamp, main, aside, armed: false, dx: 0, ov: loadingOv }
               this._trackSwipe()
             }
             this.onTouchMove = (e) => {
@@ -3001,13 +3009,16 @@ defmodule EdenWeb.ChatLive do
                 if (dx < 8) return
                 s.armed = true
                 s.gen = ++this._swipeGen
-                // Lift the pane and reveal the list + rail beneath, exactly like the button path.
-                s.main.classList.add("ed-main-pop", "ed-main-pop--drag")
-                s.aside.classList.remove("hidden")
-                document.querySelector("nav.ed-rail")?.classList.remove("hidden")
+                if (!s.ov) {
+                  // Lift the pane and reveal the list + rail beneath, exactly like the button path.
+                  s.main.classList.add("ed-main-pop", "ed-main-pop--drag")
+                  s.aside.classList.remove("hidden")
+                  document.querySelector("nav.ed-rail")?.classList.remove("hidden")
+                  document.querySelectorAll(".ed-convo--active").forEach((n) => n.classList.remove("ed-convo--active"))
+                }
               }
               s.dx = Math.max(0, dx)
-              s.main.style.transform = "translateX(" + s.dx + "px)"
+              ;(s.ov || s.main).style.transform = "translateX(" + s.dx + "px)"
               e.preventDefault() // the pane is following the finger — no scroll/selection
             }
             this.onTouchEnd = (e) => {
@@ -3015,6 +3026,28 @@ defmodule EdenWeb.ChatLive do
               this._swipe = null
               this._untrackSwipe()
               if (!s || !s.armed) return
+              if (s.ov) {
+                // Mid-load: the overlay was the dragged screen.
+                const el = s.ov
+                const w0 = el.offsetWidth || window.innerWidth
+                const dt0 = Math.max(1, e.timeStamp - s.t0)
+                if (s.dx > w0 * 0.35 || s.dx / dt0 > 0.35) {
+                  document.activeElement?.blur?.()
+                  clearTimeout(this.timer)
+                  this.timer = null
+                  this.overlay = null
+                  this.target = null
+                  el.style.transition = "transform 0.25s var(--ed-ease)"
+                  el.style.transform = "translateX(100%)"
+                  setTimeout(() => el.remove(), 300)
+                  history.back() // undo the optimistic pushPatch; popstate reveals the list
+                } else {
+                  el.style.transition = "transform 0.2s var(--ed-ease)"
+                  el.style.transform = ""
+                  setTimeout(() => (el.style.transition = ""), 250)
+                }
+                return
+              }
               const w = s.main.offsetWidth || window.innerWidth
               const dt = Math.max(1, e.timeStamp - s.t0)
               const commit = s.dx > w * 0.35 || s.dx / dt > 0.35 // far enough, or a flick
@@ -3022,6 +3055,7 @@ defmodule EdenWeb.ChatLive do
               void s.main.offsetWidth
               if (commit) {
                 this._backing = true
+                document.activeElement?.blur?.() // keyboard drops with the slide (#439)
                 s.main.style.transform = ""
                 s.main.classList.add("ed-main-pop--out")
                 const anchor = document.querySelector("[data-nav-back]")
@@ -3057,6 +3091,28 @@ defmodule EdenWeb.ChatLive do
               }
             }
             document.addEventListener("touchstart", this.onTouchStart, { passive: true })
+            // Swipe DOWN over the chat dismisses the keyboard (#439, TG behavior). The
+            // h-screen layout keeps the native scrollView unscrollable, so iOS's interactive
+            // dismiss never engages — a decisive downward drag blurs instead. Passive.
+            this.onKbStart = (e) => {
+              const a = document.activeElement
+              this._kbDrag =
+                a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")
+                  ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
+                  : null
+            }
+            this.onKbMove = (e) => {
+              const d = this._kbDrag
+              if (!d) return
+              const dy = e.touches[0].clientY - d.y
+              const dx = Math.abs(e.touches[0].clientX - d.x)
+              if (dy > 28 && dy > dx * 1.5) {
+                this._kbDrag = null
+                document.activeElement?.blur?.()
+              }
+            }
+            document.addEventListener("touchstart", this.onKbStart, { passive: true })
+            document.addEventListener("touchmove", this.onKbMove, { passive: true })
             // Readiness beacon: the e2e sync-probes (click + read the overlay in one task) must
             // not race this listener's attachment — connected() alone doesn't guarantee hooks
             // have mounted yet.
@@ -3122,6 +3178,9 @@ defmodule EdenWeb.ChatLive do
               this._backing = true
               e.preventDefault()
               e.stopPropagation()
+              // Leaving the chat dismisses the keyboard WITH the slide (#439: it hung over the
+              // list for a beat — the focused input left the DOM and WebKit noticed late).
+              document.activeElement?.blur?.()
               // Same task: lift main into a fixed layer FIRST, then un-hide the list — no
               // intermediate frame where both share the flex row at 50/50. The channel RAIL is
               // hidden by the same @selected-driven class as the aside — reveal it too, or the
@@ -3130,6 +3189,10 @@ defmodule EdenWeb.ChatLive do
               main.classList.add("ed-main-pop")
               aside.classList.remove("hidden")
               document.querySelector("nav.ed-rail")?.classList.remove("hidden")
+              // The just-left chat's row still carries the server-rendered --active wash until
+              // the patch lands — it read as a stuck blue row for a round-trip (#439). Clear it
+              // client-side; the patch re-renders the truth either way.
+              document.querySelectorAll(".ed-convo--active").forEach((n) => n.classList.remove("ed-convo--active"))
               // Force a style flush between the start and end states: a rAF does NOT guarantee
               // an intervening recalc, so the browser sometimes saw only the final transform and
               // skipped the transition entirely (the "back animation is gone" report — a timing
@@ -3417,6 +3480,8 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
             window.removeEventListener("popstate", this.onPop)
             document.removeEventListener("touchstart", this.onTouchStart)
+            document.removeEventListener("touchstart", this.onKbStart)
+            document.removeEventListener("touchmove", this.onKbMove)
             this._untrackSwipe() // move/end may still be attached mid-gesture
             this.remove()
           },
@@ -3630,46 +3695,48 @@ defmodule EdenWeb.ChatLive do
           phx-hook=".RoomSortable"
           data-admin={to_string(@channel.role in ~w(owner admin))}
         >
-          <%!-- Favorites float on top (per-user); the header appears only when
+          <div class="ed-bounce-wrap space-y-0.5">
+            <%!-- Favorites float on top (per-user); the header appears only when
                 any exist. list_rooms already orders favorites-first. --%>
-          <p :if={Enum.any?(@rooms, & &1.favorite)} class="ed-rooms__group">
-            {gettext("Favorites")}
-          </p>
-          <.room_item
-            :for={room <- Enum.filter(@rooms, & &1.favorite)}
-            id={"room-#{room.id}"}
-            room={room}
-            channel={@channel}
-            active={@selected && @selected.id == room.id}
-            admin={@channel.role in ~w(owner admin)}
-          />
-          <p :if={Enum.any?(@rooms, & &1.favorite)} class="ed-rooms__group">
-            {gettext("Rooms")}
-          </p>
-          <.room_item
-            :for={room <- Enum.reject(@rooms, & &1.favorite)}
-            id={"room-#{room.id}"}
-            room={room}
-            channel={@channel}
-            active={@selected && @selected.id == room.id}
-            admin={@channel.role in ~w(owner admin)}
-          />
-          <button
-            :if={@channel.role in ~w(owner admin)}
-            type="button"
-            class="ed-convo ed-room ed-room--new"
-            phx-click="open_new_room"
-          >
-            <span class="ed-room__hash"><.icon name="hero-plus-micro" class="size-4" /></span>
-            <span class="ed-convo__name">{gettext("New room")}</span>
-          </button>
-          <p
-            :if={@rooms == [] and @channel.role not in ~w(owner admin)}
-            class="text-center py-8"
-            style="color: var(--ed-muted); font-size:0.875rem;"
-          >
-            {gettext("No rooms yet.")}
-          </p>
+            <p :if={Enum.any?(@rooms, & &1.favorite)} class="ed-rooms__group">
+              {gettext("Favorites")}
+            </p>
+            <.room_item
+              :for={room <- Enum.filter(@rooms, & &1.favorite)}
+              id={"room-#{room.id}"}
+              room={room}
+              channel={@channel}
+              active={@selected && @selected.id == room.id}
+              admin={@channel.role in ~w(owner admin)}
+            />
+            <p :if={Enum.any?(@rooms, & &1.favorite)} class="ed-rooms__group">
+              {gettext("Rooms")}
+            </p>
+            <.room_item
+              :for={room <- Enum.reject(@rooms, & &1.favorite)}
+              id={"room-#{room.id}"}
+              room={room}
+              channel={@channel}
+              active={@selected && @selected.id == room.id}
+              admin={@channel.role in ~w(owner admin)}
+            />
+            <button
+              :if={@channel.role in ~w(owner admin)}
+              type="button"
+              class="ed-convo ed-room ed-room--new"
+              phx-click="open_new_room"
+            >
+              <span class="ed-room__hash"><.icon name="hero-plus-micro" class="size-4" /></span>
+              <span class="ed-convo__name">{gettext("New room")}</span>
+            </button>
+            <p
+              :if={@rooms == [] and @channel.role not in ~w(owner admin)}
+              class="text-center py-8"
+              style="color: var(--ed-muted); font-size:0.875rem;"
+            >
+              {gettext("No rooms yet.")}
+            </p>
+          </div>
         </div>
       </aside>
 
@@ -4571,45 +4638,47 @@ defmodule EdenWeb.ChatLive do
           phx-hook=".ScrollBottom"
           data-pending-id="thread-pending"
         >
-          <%!-- in_thread: the "N replies" separator right below makes the
+          <div class="ed-bounce-wrap">
+            <%!-- in_thread: the "N replies" separator right below makes the
                 root's own footer pill redundant. --%>
-          <.flat_message
-            id={"thread-root-#{@thread_root.id}"}
-            message={%{@thread_root | compact: false}}
-            conversation_id={@selected.id}
-            mine={@thread_root.sender_id == @current_scope.user.id}
-            me={@current_scope.user.id}
-            menu={false}
-            in_thread
-            statuses={@statuses}
-          />
-          <div class="ed-thread__sep">
-            {ngettext("%{count} reply", "%{count} replies", @thread_root.reply_count)}
-          </div>
-          <div
-            class={[
-              "flex flex-col ed-flat-list",
-              (@selection != nil and @select_surface == :thread) && "ed-selecting"
-            ]}
-            id="thread-replies"
-            phx-update="stream"
-          >
             <.flat_message
-              :for={{dom_id, reply} <- @streams.thread}
-              id={dom_id}
-              message={reply}
+              id={"thread-root-#{@thread_root.id}"}
+              message={%{@thread_root | compact: false}}
               conversation_id={@selected.id}
-              mine={reply.sender_id == @current_scope.user.id}
+              mine={@thread_root.sender_id == @current_scope.user.id}
               me={@current_scope.user.id}
-              quick={@my_quick}
+              menu={false}
               in_thread
               statuses={@statuses}
             />
-          </div>
-          <%!-- Optimistic "not delivered" thread replies live here (#142, JS-managed by
+            <div class="ed-thread__sep">
+              {ngettext("%{count} reply", "%{count} replies", @thread_root.reply_count)}
+            </div>
+            <div
+              class={[
+                "flex flex-col ed-flat-list",
+                (@selection != nil and @select_surface == :thread) && "ed-selecting"
+              ]}
+              id="thread-replies"
+              phx-update="stream"
+            >
+              <.flat_message
+                :for={{dom_id, reply} <- @streams.thread}
+                id={dom_id}
+                message={reply}
+                conversation_id={@selected.id}
+                mine={reply.sender_id == @current_scope.user.id}
+                me={@current_scope.user.id}
+                quick={@my_quick}
+                in_thread
+                statuses={@statuses}
+              />
+            </div>
+            <%!-- Optimistic "not delivered" thread replies live here (#142, JS-managed by
                 .ThreadSendQueue). The .ScrollBottom riser (data-pending-id above) drops a
                 node from here when its real reply streams into #thread-replies. --%>
-          <div class="flex flex-col ed-flat-list" id="thread-pending" phx-update="ignore"></div>
+            <div class="flex flex-col ed-flat-list" id="thread-pending" phx-update="ignore"></div>
+          </div>
         </div>
 
         <%!-- Thread typing indicator (#103): only peers typing IN THIS thread. --%>
@@ -4814,27 +4883,29 @@ defmodule EdenWeb.ChatLive do
         </header>
 
         <div class="flex-1 overflow-y-auto py-1">
-          <button
-            :for={{root, unread} <- @thread_list}
-            type="button"
-            class="ed-thread-row"
-            phx-click="open_thread"
-            phx-value-id={root.id}
-          >
-            <.avatar name={reply_author(root)} src={avatar_src(root.sender)} size={:sm} />
-            <div class="min-w-0 flex-1">
-              <div class="flex items-center gap-2">
-                <span class="ed-thread-row__name">{reply_author(root)}</span>
-                <span :if={root.last_reply_at} class="ed-thread-row__time">
-                  <.local_time at={root.last_reply_at} />
-                </span>
+          <div class="ed-bounce-wrap">
+            <button
+              :for={{root, unread} <- @thread_list}
+              type="button"
+              class="ed-thread-row"
+              phx-click="open_thread"
+              phx-value-id={root.id}
+            >
+              <.avatar name={reply_author(root)} src={avatar_src(root.sender)} size={:sm} />
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="ed-thread-row__name">{reply_author(root)}</span>
+                  <span :if={root.last_reply_at} class="ed-thread-row__time">
+                    <.local_time at={root.last_reply_at} />
+                  </span>
+                </div>
+                <div class="ed-thread-row__preview">{reply_snippet(root)}</div>
               </div>
-              <div class="ed-thread-row__preview">{reply_snippet(root)}</div>
+              <span :if={unread > 0} class="ed-thread-badge ed-thread-badge--inline">{unread}</span>
+            </button>
+            <div :if={@thread_list == []} class="ed-thread-empty">
+              {gettext("No followed threads yet. Reply to one to follow it.")}
             </div>
-            <span :if={unread > 0} class="ed-thread-badge ed-thread-badge--inline">{unread}</span>
-          </button>
-          <div :if={@thread_list == []} class="ed-thread-empty">
-            {gettext("No followed threads yet. Reply to one to follow it.")}
           </div>
         </div>
       </aside>

@@ -11,6 +11,9 @@ import UIKit
 class BridgeViewController: CAPBridgeViewController {
     override open func capacitorDidLoad() {
         webView?.allowsBackForwardNavigationGestures = false
+        // Belt for keyboard dismissal: engages only when the native scrollView actually
+        // scrolls (rare with the h-screen layout); the JS swipe-down blur is the primary.
+        webView?.scrollView.keyboardDismissMode = .interactive
 
         // Everything behind the WebView/keyboard defaults to BLACK (UIWindow) — it peeked
         // through the iOS 26 keyboard's rounded top corners as dark triangles, and through
