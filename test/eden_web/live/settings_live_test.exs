@@ -42,6 +42,34 @@ defmodule EdenWeb.SettingsLiveTest do
     assert Process.alive?(view.pid)
   end
 
+  describe "authed alias /app/settings (#445)" do
+    # The alias lives in the :authenticated live_session (same as ChatLive), so the
+    # in-app gear tap is a live navigation instead of a cross-session full page load.
+    test "mounts the same settings page for a signed-in user", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, _view, html} = live(conn, ~p"/app/settings")
+
+      assert html =~ "Profile"
+      assert html =~ "Appearance"
+    end
+
+    test "section links stay on the mounted base — no cross-session hop", %{conn: conn} do
+      conn = log_in_user(conn, user_fixture())
+      {:ok, view, _html} = live(conn, ~p"/app/settings")
+
+      assert has_element?(view, ~s(a[href="/app/settings/appearance"]))
+      refute has_element?(view, ~s(a[href="/settings/appearance"]))
+
+      # And the bare mount keeps its own base for the signed-out world.
+      {:ok, bare, _html} = live(build_conn(), ~p"/settings")
+      assert has_element?(bare, ~s(a[href="/settings/appearance"]))
+    end
+
+    test "signed-out visitors are bounced to log-in, not served device prefs", %{conn: conn} do
+      assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/app/settings")
+    end
+  end
+
   describe "section navigation (#282)" do
     test "signed-out visitors see only the device-pref sections", %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/settings")

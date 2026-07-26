@@ -264,7 +264,7 @@ defmodule EdenWeb.AdminLive do
       {:noreply,
        socket
        |> put_flash(:error, gettext("Your admin access was removed."))
-       |> push_navigate(to: ~p"/settings")}
+       |> push_navigate(to: ~p"/app/settings")}
     end
   end
 

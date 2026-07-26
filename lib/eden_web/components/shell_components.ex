@@ -181,7 +181,7 @@ defmodule EdenWeb.ShellComponents do
               </div>
             </div>
 
-            <.link navigate={~p"/settings/profile"} class="ed-menu__item" role="menuitem">
+            <.link navigate={~p"/app/settings/profile"} class="ed-menu__item" role="menuitem">
               <.icon name="hero-pencil-square-micro" class="size-4" />
               <span class="flex-1">{gettext("Edit profile")}</span>
             </.link>
@@ -234,7 +234,7 @@ defmodule EdenWeb.ShellComponents do
           </div>
         </span>
         <.link
-          navigate={~p"/settings"}
+          navigate={~p"/app/settings"}
           class="ed-rail__btn ed-rail__btn--ghost"
           title={gettext("Settings")}
           aria-label={gettext("Settings")}

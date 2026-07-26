@@ -469,7 +469,7 @@ defmodule EdenWeb.ChatLiveTest do
 
       # Discord-style card: @tag, an Edit-profile deep-link, and the status list.
       assert has_element?(view, "#status-menu", "@#{ctx.alice.username}")
-      assert has_element?(view, ~s(#status-menu a[href="/settings/profile"]), "Edit profile")
+      assert has_element?(view, ~s(#status-menu a[href="/app/settings/profile"]), "Edit profile")
 
       for status <- ~w(auto away dnd invisible) do
         assert has_element?(view, ~s(#status-menu button[phx-value-status="#{status}"]))

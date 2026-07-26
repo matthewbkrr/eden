@@ -44,13 +44,20 @@ defmodule EdenWeb.SettingsLive do
   # the first available one; `drilled_in?` (a section named in the URL) drives
   # the mobile menu<->content drill-in.
   @impl true
-  def handle_params(params, _uri, socket) do
+  def handle_params(params, uri, socket) do
     ids = section_ids(socket.assigns)
     requested = params["section"]
     section = if requested in ids, do: requested, else: hd(ids)
 
+    # Which face of the dual-mounted page this is (#445): /app/settings (the authed,
+    # same-live_session-as-ChatLive alias) or the bare signed-out-capable /settings.
+    # Internal patches must stay on the mounted base, or a section tap would hop
+    # sessions and force the very full-page load the alias exists to avoid.
+    app_base? = String.starts_with?(URI.parse(uri).path || "", "/app/settings")
+
     socket =
       socket
+      |> assign(app_base?: app_base?)
       |> assign(section: section, drilled_in?: Map.has_key?(params, "section"))
       |> assign(page_title: gettext("Settings") <> " \u00b7 " <> section_label(section))
 
@@ -60,11 +67,18 @@ defmodule EdenWeb.SettingsLive do
     # push_patch only lands on the connected render; the dead render already
     # shows the consistent fallback pane, just under the stale URL for a beat.
     if requested && requested != section && connected?(socket) do
-      {:noreply, push_patch(socket, to: ~p"/settings/#{section}", replace: true)}
+      {:noreply,
+       push_patch(socket, to: settings_path(socket.assigns.app_base?, section), replace: true)}
     else
       {:noreply, socket}
     end
   end
+
+  # Base-aware settings paths (#445): ~p on every branch keeps route verification.
+  defp settings_path(true, nil), do: ~p"/app/settings"
+  defp settings_path(false, nil), do: ~p"/settings"
+  defp settings_path(true, section), do: ~p"/app/settings/#{section}"
+  defp settings_path(false, section), do: ~p"/settings/#{section}"
 
   # Which sections this visitor can reach, in menu order. Device prefs
   # (appearance/language) are always available; the rest need an account. The
@@ -233,7 +247,7 @@ defmodule EdenWeb.SettingsLive do
               </.link>
               <.link
                 :for={id <- @sections}
-                patch={~p"/settings/#{id}"}
+                patch={settings_path(@app_base?, id)}
                 class={["ed-settings-nav__item", @section == id && "is-active"]}
                 aria-current={@section == id && "page"}
               >
@@ -250,7 +264,11 @@ defmodule EdenWeb.SettingsLive do
           <%!-- Right content: hidden on mobile until drilled in; always on desktop. --%>
           <div class={["min-w-0 md:block", !@drilled_in? && "hidden"]}>
             <header class="flex items-center gap-2 mb-6 md:mb-5">
-              <.link patch={~p"/settings"} class="ed-btn--icon md:hidden" aria-label={gettext("Back")}>
+              <.link
+                patch={settings_path(@app_base?, nil)}
+                class="ed-btn--icon md:hidden"
+                aria-label={gettext("Back")}
+              >
                 <.icon name="hero-arrow-left-mini" class="size-5" />
               </.link>
               <%!-- The section name is the page's h1: on mobile the aside (with the
@@ -805,7 +823,11 @@ defmodule EdenWeb.SettingsLive do
                       name="_csrf_token"
                       value={Plug.CSRFProtection.get_csrf_token()}
                     />
-                    <input type="hidden" name="return_to" value={~p"/settings/language"} />
+                    <input
+                      type="hidden"
+                      name="return_to"
+                      value={settings_path(@app_base?, "language")}
+                    />
                     <span style="font-size:0.875rem;">{gettext("Interface language")}</span>
                     <div class="ed-seg" role="group" aria-label={gettext("Language")}>
                       <button
