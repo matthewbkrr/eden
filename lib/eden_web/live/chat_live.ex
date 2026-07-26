@@ -3096,8 +3096,11 @@ defmodule EdenWeb.ChatLive do
             // dismiss never engages — a decisive downward drag blurs instead. Passive.
             this.onKbStart = (e) => {
               const a = document.activeElement
+              // Scoped to the message panes (#443 review): a downward drag inside a modal /
+              // caption textarea must not drop the keyboard mid-edit.
+              const overPane = e.target.closest?.("#message-scroll, #thread-scroll")
               this._kbDrag =
-                a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")
+                overPane && a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA")
                   ? { x: e.touches[0].clientX, y: e.touches[0].clientY }
                   : null
             }
@@ -5185,7 +5188,10 @@ defmodule EdenWeb.ChatLive do
                 const last = rows[rows.length - 1]
                 if (last) last.after(this.dragging)
               } else {
-                this.el.insertBefore(this.dragging, after)
+                // Rows live inside the .ed-bounce-wrap wrapper now (#443 review, a REAL P0
+                // catch): insertBefore on this.el (the scroller) with a wrapper-child
+                // reference throws NotFoundError. Insert via the rows' actual parent.
+                after.parentElement.insertBefore(this.dragging, after)
               }
             })
           },
