@@ -183,6 +183,14 @@ export const MsgCache = {
     if (!userId || !convId || typeof html !== "string" || new Blob([html]).size > MAX_BYTES) return;
     const rec = { id: key(userId, convId), html, updatedAt: Date.now() };
     if (typeof name === "string" && name) rec.name = name.slice(0, 200);
+    // A nameless refresh (paneTitle missed mid-transition) must not erase a previously
+    // captured name — the record is replaced wholesale (#446 review). Memory-first,
+    // best-effort: a cross-reload nameless put can still drop it, and the overlay just
+    // falls back to the channel name for a round-trip.
+    if (!rec.name) {
+      const prior = this._mem.get(rec.id);
+      if (prior && prior.name) rec.name = prior.name;
+    }
     this._memSet(rec.id, { html: rec.html, name: rec.name, updatedAt: rec.updatedAt });
     const db = await this.db();
     if (!db) return;

@@ -3557,7 +3557,12 @@ defmodule EdenWeb.ChatLive do
             const aside = document.querySelector(".ed-root > aside")
             if (!aside) return
             const store = (window.__edAsideCache = window.__edAsideCache || new Map())
-            store.set(this.asideKey(), aside.outerHTML)
+            // LRU, capped (#446 review): one aside render per rail target is small (tens
+            // of KB), but "per visited channel, forever" needs a bound like MsgCache's.
+            const k = this.asideKey()
+            store.delete(k)
+            store.set(k, aside.outerHTML)
+            while (store.size > 12) store.delete(store.keys().next().value)
           },
           asidePaint(key, title) {
             this.asideRemove()
