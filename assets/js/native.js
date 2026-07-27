@@ -43,7 +43,10 @@ function wireFileViewer() {
       fetch(`/files/${m[1]}/link`, { headers: { accept: "application/json" } })
         .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
         .then(({ url }) => browser.open({ url: location.origin + url }))
-        .catch(() => {});
+        // The default action IS the trap, so it stays prevented — but a failed mint
+        // (network blip, expired session) must not read as a dead tap (#468 review).
+        // System alert; RU-fixed like the push copy (native.js has no gettext).
+        .catch(() => alert("Не удалось открыть файл. Проверьте соединение."));
     },
     true,
   );

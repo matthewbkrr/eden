@@ -72,15 +72,8 @@ defmodule EdenWeb.FileControllerTest do
       body = @png_signature <> "other-body"
       path = image_path(body)
 
-      {:ok, msg2} =
-        Chat.create_attachment_message(
-          scope(bob),
-          attachment.message_id
-          |> then(fn _ ->
-            Eden.Repo.get!(Eden.Chat.Message, attachment.message_id).conversation_id
-          end),
-          %{path: path}
-        )
+      conv_id = Eden.Repo.get!(Eden.Chat.Message, attachment.message_id).conversation_id
+      {:ok, msg2} = Chat.create_attachment_message(scope(bob), conv_id, %{path: path})
 
       other = hd(msg2.attachments)
 
