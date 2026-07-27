@@ -44,7 +44,7 @@ test("an optimistic send sits flush under the run, clock ticking, rising in", as
   //    280ms; the geometry below is measured after it settles, since a mid-flight
   //    translateY(12px) rides into getBoundingClientRect).
   const entry = await pendingRow.evaluate((el) => getComputedStyle(el).animationName)
-  expect(entry).toBe("ed-msg-send-in")
+  expect(["ed-msg-send-in", "ed-msg-send-in-touch"]).toContain(entry)
   await page.waitForTimeout(400)
 
   // 2. Flush placement: the optimistic row's gap to the last real row EQUALS the
