@@ -6210,7 +6210,7 @@ defmodule EdenWeb.ChatLive do
             // Touch: long-press opens the menu; a horizontal LEFT-swipe on a
             // message row quote-replies (#71). A move cancels the long-press
             // (it's a scroll/swipe/select).
-            let timer, sx, sy, dx, swiping
+            let sx, sy, dx, swiping
             const SWIPE = 56 // px of leftward travel past which a swipe quote-replies
             const ENGAGE = 12 // px before a mouse drag counts as a swipe (vs a click)
             const CLAMP = 90 // px the row follows the gesture 1:1 before the elastic tail
@@ -6248,16 +6248,20 @@ defmodule EdenWeb.ChatLive do
               this.recentTouch = true
               clearTimeout(this._touchGuard)
               this._touchGuard = setTimeout(() => { this.recentTouch = false }, 700)
-              timer = setTimeout(() => {
-                // A nav transition is in flight (#439): the "hold" is almost always a
-                // delayed touchend behind cache-parse/morph work, not an intentional
-                // long-press — opening the row menu mid-switch read as a misfire.
+              // Instance state, not a closure (#439 THE actual long-press leak): rapid
+              // switching re-streams the sidebar, morphdom REPLACES the row mid-touch,
+              // the hook dies — and with it the touchend cancel — while a closure timer
+              // survived and opened the menu on the detached hook ~150ms after the nav
+              // settled (which is why the __edNavBusy guard alone missed it). destroyed()
+              // now owns the timer, and the callback refuses on a disconnected element.
+              this._lpTimer = setTimeout(() => {
                 if (window.__edNavBusy) return
+                if (!this.el.isConnected) return
                 this.open(sx, sy)
                 this.longPressed = true
               }, 450)
             }, { passive: true })
-            const cancel = () => clearTimeout(timer)
+            const cancel = () => clearTimeout(this._lpTimer)
             this.el.addEventListener("touchmove", (e) => {
               const t = e.touches[0]
               dx = t.clientX - sx
@@ -6272,6 +6276,13 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("touchend", () => {
               cancel()
               if (swiping && dx <= -SWIPE) fireReply()
+              if (swiping) reset()
+            })
+            // iOS hands the touch to a system gesture (edge swipe, notification pull):
+            // touchend never comes — only touchcancel. Without this the armed timer
+            // popped the menu seconds into an unrelated gesture (#439).
+            this.el.addEventListener("touchcancel", () => {
+              cancel()
               if (swiping) reset()
             })
             // Desktop swipe-to-reply (#110) — DM/group BUBBLES only (rooms use flat
@@ -6385,6 +6396,7 @@ defmodule EdenWeb.ChatLive do
             if (this._dragMove) document.removeEventListener("mousemove", this._dragMove)
             if (this._dragUp) document.removeEventListener("mouseup", this._dragUp)
             clearTimeout(this._touchGuard)
+            clearTimeout(this._lpTimer)
             clearTimeout(this._wheelTimer)
             clearTimeout(this._wheelSnap)
           },
