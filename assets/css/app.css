@@ -1358,11 +1358,28 @@ html {
      "sending" indicator; the swap then resolves it to full opacity. */
   .ed-msg--sent {
     animation: ed-msg-send-in 0.28s var(--ed-ease);
+    transform-origin: center bottom;
   }
   @keyframes ed-msg-send-in {
     from {
       opacity: 0;
       transform: translateY(12px);
+    }
+  }
+  /* Touch: the just-sent row rests at the scroller's bottom edge, so a pure
+     translate mostly plays CLIPPED below the fold — the float-up read as a bare
+     fast fade on the phone (user report). A bottom-origin scale component stays
+     inside the clip, and a touch more time reads TG-calm. (The ack-swap handoff
+     carries the whole transform matrix, so scale is safe mid-swap now.) */
+  @media (pointer: coarse) {
+    .ed-msg--sent {
+      animation: ed-msg-send-in-touch 0.34s var(--ed-ease);
+    }
+  }
+  @keyframes ed-msg-send-in-touch {
+    from {
+      opacity: 0;
+      transform: translateY(14px) scale(0.96);
     }
   }
   /* #pending-messages carries NO container gap/margin (#351) — optimistic rows use their OWN margin
@@ -2710,15 +2727,22 @@ html {
      edge" between zones). Cobalt wash + inset dashed frame (the conventional "drop here"
      affordance); the label rides a lifted surface card so it stays legible over any chat
      content. The overlay is built lazily + toggled by the .DropZone hook. */
-  /* NOT on the thread sheet (#439): .ed-dropzone sits LATER in this layer than
-     .ed-thread, so its position silently replaced the sheet's fixed/inset-0 when
-     #348 made the thread a drop target — on the phone the "full-screen" sheet
-     became an in-flow column (doubled env bands, keyboard pushing it around, the
-     room reflowing into a squeezed mess while the close slide ran). A fixed box
-     is already a positioning context for the absolute drop overlay, so the sheet
-     never needed relative. */
-  .ed-dropzone:not(.ed-thread) {
+  .ed-dropzone {
     position: relative;
+  }
+  /* The thread sheet keeps its fixed/inset-0 against the rule above (#439):
+     .ed-dropzone sits LATER in this layer than .ed-thread, so plain relative
+     silently un-fixed the sheet when #348 made the thread a drop target (doubled
+     env bands, the keyboard shoving a non-fullscreen element, the room reflowing
+     into a squeezed mess during the close slide). Two classes out-rank the plain
+     rule WITHOUT :not() — a :not(.ed-thread) bump was tried first and its 0-2-0
+     specificity also beat .ed-main-pop's fixed, freezing the swipe-back pane IN
+     FLOW beside the list (the post-deploy "узкий список + белая пустота" report).
+     Mobile-scoped: the desktop thread is a docked in-flow column by design. */
+  @media (max-width: 767px) {
+    .ed-thread.ed-dropzone {
+      position: fixed;
+    }
   }
   .ed-dropzone__overlay {
     position: absolute;
