@@ -2312,6 +2312,39 @@ html {
      there: a neutral --ed-surface-2 hover, and a cobalt wash for the selected chat
      — a clearer, on-brand selected identity than another flat gray step. */
   .ed-convo:hover { background: var(--ed-surface-2); }
+  /* Long-press surfaces vs the system text selection (#439): holding a message to
+     open OUR context menu also started iOS selection + the Copy/LookUp/Translate
+     callout — two menus fighting on screen (user screenshots). TG model on touch:
+     bubbles are not drag-selectable, copying is the menu's own action ("Скопировать
+     текст"). Inputs/textareas stay fully selectable. Pointer-coarse only — desktop
+     keeps normal mouse selection. */
+  @media (pointer: coarse) {
+    #messages,
+    #pending-messages,
+    .ed-thread,
+    #conversations,
+    #rooms-list,
+    #folder-tabs,
+    .ed-rail {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    #messages input,
+    #messages textarea,
+    #pending-messages input,
+    #pending-messages textarea,
+    .ed-thread input,
+    .ed-thread textarea,
+    #conversations input,
+    #conversations textarea,
+    #rooms-list input,
+    #rooms-list textarea {
+      -webkit-user-select: text;
+      user-select: text;
+    }
+  }
+
   /* Pressed feedback (#445 wave 3): rows/rail/tabs answer the FINGER, not the server —
      :active paints on touchstart, so a tap never reads dead while the patch flies.
      (Tailwind's preflight clears the WebKit tap highlight, so this is the only press
@@ -2677,7 +2710,14 @@ html {
      edge" between zones). Cobalt wash + inset dashed frame (the conventional "drop here"
      affordance); the label rides a lifted surface card so it stays legible over any chat
      content. The overlay is built lazily + toggled by the .DropZone hook. */
-  .ed-dropzone {
+  /* NOT on the thread sheet (#439): .ed-dropzone sits LATER in this layer than
+     .ed-thread, so its position silently replaced the sheet's fixed/inset-0 when
+     #348 made the thread a drop target — on the phone the "full-screen" sheet
+     became an in-flow column (doubled env bands, keyboard pushing it around, the
+     room reflowing into a squeezed mess while the close slide ran). A fixed box
+     is already a positioning context for the absolute drop overlay, so the sheet
+     never needed relative. */
+  .ed-dropzone:not(.ed-thread) {
     position: relative;
   }
   .ed-dropzone__overlay {

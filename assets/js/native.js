@@ -31,12 +31,18 @@ function wireKeyboard() {
   if (cap.getPlatform?.() !== "ios") return;
   const kb = cap.Plugins?.Keyboard;
   if (!kb?.addListener) return;
-  kb.addListener("keyboardWillShow", (info) => {
-    const h = Math.max(0, Math.round(info?.keyboardHeight || 0));
-    document.documentElement.style.setProperty("--ed-kb", `${h}px`);
-  });
-  kb.addListener("keyboardWillHide", () => {
-    document.documentElement.style.setProperty("--ed-kb", "0px");
+  const setKb = (h) =>
+    document.documentElement.style.setProperty("--ed-kb", `${Math.max(0, Math.round(h))}px`);
+  const fromEvent = (info) => setKb(info?.keyboardHeight || 0);
+  // Will + Did on both edges (#439): a missed Will (interactive dismiss races,
+  // resumed WebViews) must not leave the shell padded by a phantom keyboard.
+  kb.addListener("keyboardWillShow", fromEvent);
+  kb.addListener("keyboardDidShow", fromEvent);
+  kb.addListener("keyboardWillHide", () => setKb(0));
+  kb.addListener("keyboardDidHide", () => setKb(0));
+  // Backgrounding drops the keyboard without always emitting Hide — reset on leave.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") setKb(0);
   });
 }
 
