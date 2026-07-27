@@ -2911,10 +2911,11 @@ defmodule EdenWeb.ChatLive do
               // A reconnect cycle fires loading-stop with the pane absent — that's not a
               // settled navigation, it's the socket coming back (#439: the eject killed the
               // overlay + typed draft seconds before the chat landed).
-              if (!window.liveSocket?.isConnected?.()) return
               // Belt: a settled nav means taps are meaningful again even if dismiss()
-              // hasn't run yet (#439 long-press guard must never stick).
+              // hasn't run yet — and it must run BEFORE the disconnected bail below, or
+              // a reconnect-cycle settle leaves the long-press guard stuck (#461 review).
               if (this.target == null) window.__edNavBusy = false
+              if (!window.liveSocket?.isConnected?.()) return
               // A settled live nav re-rendered the aside — drop the rail overlay (#445) and
               // keep the sidebar snapshot warm for the NEXT hop (idle: off the settle frame).
               if (this.asideOv) this.asideDismiss()
@@ -7539,13 +7540,18 @@ defmodule EdenWeb.ChatLive do
             // from its first visible frame. The ack handoff reads computed transform/
             // opacity either way, so a fast swap stays seamless.
             row.style.opacity = "0"
-            requestAnimationFrame(() =>
-              requestAnimationFrame(() => {
-                row.style.opacity = ""
-                row.classList.add("ed-msg--sent")
-                setTimeout(() => row.classList.remove("ed-msg--sent"), 420)
-              })
-            )
+            let entered = false
+            const enter = () => {
+              if (entered) return
+              entered = true
+              row.style.opacity = ""
+              row.classList.add("ed-msg--sent")
+              setTimeout(() => row.classList.remove("ed-msg--sent"), 420)
+            }
+            requestAnimationFrame(() => requestAnimationFrame(enter))
+            // rAF is frozen in a backgrounded tab (#461 review) — the timeout twin makes
+            // sure a send-then-background can never leave the row invisible.
+            setTimeout(enter, 300)
             // The MAIN pane's send-scroll is owned by ScrollBottom's onAfterSend (pins synchronously
             // in this same tick — #351), so no scroll here; a smooth scrollTo only fought that instant
             // pin (the real-row swap cut it off mid-glide — the visible jerk). A THREAD send (#348) has
