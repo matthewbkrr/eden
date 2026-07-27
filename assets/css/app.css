@@ -2727,6 +2727,12 @@ html {
      edge" between zones). Cobalt wash + inset dashed frame (the conventional "drop here"
      affordance); the label rides a lifted surface card so it stays legible over any chat
      content. The overlay is built lazily + toggled by the .DropZone hook. */
+  /* ORDER-SENSITIVE (#459 review): .ed-main-pop / .ed-thread.ed-dropzone override
+     this position and the swipe-back + thread-sheet choreography DEPENDS on them
+     winning. Same 0-1-0 tier as .ed-main-pop — the winner is source order, so this
+     rule must stay ABOVE .ed-main-pop's block; do NOT "fix" a conflict by raising
+     specificity here (:not() already caused the #458 squeezed-swipe regression).
+     zz-swipe-back-layout.spec.js locks both invariants. */
   .ed-dropzone {
     position: relative;
   }
