@@ -29,6 +29,81 @@ defmodule EdenWeb.FileControllerTest do
     %{alice: alice, bob: bob, attachment: hd(message.attachments), png: body}
   end
 
+  describe "signed links (#464)" do
+    test "a member mints a link and the tokened URL serves WITHOUT a session", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment,
+      png: png
+    } do
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}/link")
+      assert %{"url" => url} = json_response(conn, 200)
+      assert url =~ "/files/#{attachment.id}/t/"
+
+      # A FRESH conn — no cookies at all (the SafariVC cookie-store situation).
+      anon = build_conn() |> get(url)
+      assert response(anon, 200) == png
+      assert get_resp_header(anon, "content-type") == ["image/png"]
+    end
+
+    test "a non-member cannot mint a link", %{conn: conn, attachment: attachment} do
+      mallory = user_fixture(%{username: "mallory"})
+      conn = conn |> log_in_user(mallory) |> get(~p"/files/#{attachment.id}/link")
+      assert response(conn, 404)
+    end
+
+    test "minting requires a session at all", %{conn: conn, attachment: attachment} do
+      conn = get(conn, ~p"/files/#{attachment.id}/link")
+      assert redirected_to(conn) == ~p"/login"
+    end
+
+    test "a garbage token is a 404", %{conn: conn, attachment: attachment} do
+      conn = get(conn, ~p"/files/#{attachment.id}/t/not-a-token")
+      assert response(conn, 404)
+    end
+
+    test "a token minted for one attachment does not serve another", %{
+      conn: conn,
+      alice: alice,
+      bob: bob,
+      attachment: attachment
+    } do
+      # A second attachment in a conversation mallory-free: reuse the same conv.
+      body = @png_signature <> "other-body"
+      path = image_path(body)
+
+      {:ok, msg2} =
+        Chat.create_attachment_message(
+          scope(bob),
+          attachment.message_id
+          |> then(fn _ ->
+            Eden.Repo.get!(Eden.Chat.Message, attachment.message_id).conversation_id
+          end),
+          %{path: path}
+        )
+
+      other = hd(msg2.attachments)
+
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}/link")
+      %{"url" => url} = json_response(conn, 200)
+      token = url |> String.split("/t/") |> List.last()
+
+      cross = build_conn() |> get(~p"/files/#{other.id}/t/#{token}")
+      assert response(cross, 404)
+    end
+
+    test "an expired token is a 404", %{conn: conn, alice: alice, attachment: attachment} do
+      # Sign with a timestamp older than the max age instead of sleeping.
+      old =
+        Phoenix.Token.sign(EdenWeb.Endpoint, "file-link", attachment.id,
+          signed_at: System.system_time(:second) - 301
+        )
+
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}/t/#{old}")
+      assert response(conn, 404)
+    end
+  end
+
   describe "GET /files/:id" do
     test "serves the bytes to a conversation member", %{
       conn: conn,
