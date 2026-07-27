@@ -4353,84 +4353,86 @@ defmodule EdenWeb.ChatLive do
                   ScrollBottom hook preserves the scroll position across the prepend.
                   This spinner only comes into view at the very top — i.e. exactly
                   when a page is loading. --%>
-            <div
-              :if={@has_more}
-              class="flex justify-center py-2"
-              style="color: var(--ed-muted);"
-              aria-hidden="true"
-            >
-              <.icon name="hero-arrow-path" class="size-5 motion-safe:animate-spin" />
-            </div>
-            <%!-- Date separators + sticky day chip (#83): the .DateRail hook reconciles
+            <div class="ed-msgs-flow">
+              <div
+                :if={@has_more}
+                class="flex justify-center py-2"
+                style="color: var(--ed-muted);"
+                aria-hidden="true"
+              >
+                <.icon name="hero-arrow-path" class="size-5 motion-safe:animate-spin" />
+              </div>
+              <%!-- Date separators + sticky day chip (#83): the .DateRail hook reconciles
                   a centered chip before each day-change row (client-side, in the viewer's
                   local TZ, robust to streamed inserts + "load older"). Labels via
                   Intl(locale) + gettext Today/Yesterday — gettext is unreachable in the
                   hook, so they ride as data-*. --%>
-            <div
-              class={[
-                "flex flex-col",
-                (@selected.channel_id && "ed-flat-list") || "gap-2",
-                (@selection != nil and @select_surface == :main) && "ed-selecting"
-              ]}
-              id="messages"
-              phx-update="stream"
-              phx-hook=".DateRail"
-              data-locale={Gettext.get_locale()}
-              data-today={gettext("Today")}
-              data-yesterday={gettext("Yesterday")}
-            >
-              <%= for {dom_id, message} <- @streams.messages do %>
-                <%= if @selected.channel_id do %>
-                  <.flat_message
-                    id={dom_id}
-                    message={message}
-                    conversation_id={@selected.id}
-                    mine={message.sender_id == @current_scope.user.id}
-                    me={@current_scope.user.id}
-                    quick={@my_quick}
-                    participants={Map.get(@thread_participants, message.id, [])}
-                    thread_unread={Map.get(@thread_unreads, message.id, 0)}
-                    admin={@channel && @channel.role in ~w(owner admin)}
-                    statuses={@statuses}
-                  />
-                <% else %>
-                  <.message_bubble
-                    id={dom_id}
-                    message={message}
-                    conversation_id={@selected.id}
-                    mine={message.sender_id == @current_scope.user.id}
-                    me={@current_scope.user.id}
-                    quick={@my_quick}
-                    group={@selected.is_group}
-                    read={read?(message, @other_read_at)}
-                  />
+              <div
+                class={[
+                  "flex flex-col",
+                  (@selected.channel_id && "ed-flat-list") || "gap-2",
+                  (@selection != nil and @select_surface == :main) && "ed-selecting"
+                ]}
+                id="messages"
+                phx-update="stream"
+                phx-hook=".DateRail"
+                data-locale={Gettext.get_locale()}
+                data-today={gettext("Today")}
+                data-yesterday={gettext("Yesterday")}
+              >
+                <%= for {dom_id, message} <- @streams.messages do %>
+                  <%= if @selected.channel_id do %>
+                    <.flat_message
+                      id={dom_id}
+                      message={message}
+                      conversation_id={@selected.id}
+                      mine={message.sender_id == @current_scope.user.id}
+                      me={@current_scope.user.id}
+                      quick={@my_quick}
+                      participants={Map.get(@thread_participants, message.id, [])}
+                      thread_unread={Map.get(@thread_unreads, message.id, 0)}
+                      admin={@channel && @channel.role in ~w(owner admin)}
+                      statuses={@statuses}
+                    />
+                  <% else %>
+                    <.message_bubble
+                      id={dom_id}
+                      message={message}
+                      conversation_id={@selected.id}
+                      mine={message.sender_id == @current_scope.user.id}
+                      me={@current_scope.user.id}
+                      quick={@my_quick}
+                      group={@selected.is_group}
+                      read={read?(message, @other_read_at)}
+                    />
+                  <% end %>
                 <% end %>
-              <% end %>
-            </div>
-            <%!-- Empty-state (#154, #355 R060), shown while #messages holds no streamed rows. It
+              </div>
+              <%!-- Empty-state (#154, #355 R060), shown while #messages holds no streamed rows. It
                   MUST live OUTSIDE the stream container (CSS :has() on the sibling reveals it): a
                   non-stream child inside #messages breaks LiveView's append anchoring — with
                   .DateRail's ds-* separators present, appended messages land at the TOP of the
                   list instead of the bottom (the "forward/message only shows after refresh" bug).
                   Rendered for EVERY conversation (rooms + DMs + groups) — a freshly-created DM/group
                   used to open with a bare empty pane; the sub-copy adapts to the surface. --%>
-            <div id="messages-empty" role="status" class="ed-room-empty">
-              <div class="ed-room-empty__medallion" aria-hidden="true">
-                <.icon name="hero-chat-bubble-left-right" class="size-7" />
+              <div id="messages-empty" role="status" class="ed-room-empty">
+                <div class="ed-room-empty__medallion" aria-hidden="true">
+                  <.icon name="hero-chat-bubble-left-right" class="size-7" />
+                </div>
+                <p class="ed-room-empty__title">{gettext("No messages yet")}</p>
+                <p class="ed-room-empty__sub">{empty_state_sub(@selected, @current_scope.user)}</p>
               </div>
-              <p class="ed-room-empty__title">{gettext("No messages yet")}</p>
-              <p class="ed-room-empty__sub">{empty_state_sub(@selected, @current_scope.user)}</p>
-            </div>
-            <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
-            <%!-- No container gap/margin (#351): optimistic rows carry their OWN natural margin
+              <%!-- Optimistic, not-yet-acked sends live here (JS-managed; LiveView leaves it alone). --%>
+              <%!-- No container gap/margin (#351): optimistic rows carry their OWN natural margin
                   (bubbles + flat, compact-aware) so they sit EXACTLY where the real row will land in
                   the stream — a fixed container gap couldn't match the variable stream spacing
                   (compact rows are tight) and made the message jump on swap. --%>
-            <div class="flex flex-col" id="pending-messages" phx-update="ignore"></div>
-            <%!-- Rubber-band tail (#439): grows to keep the scroller's content over 100%
+              <div class="flex flex-col" id="pending-messages" phx-update="ignore"></div>
+              <%!-- Rubber-band tail (#439): grows to keep the scroller's content over 100%
                   so iOS always bounces, WITHOUT stretching #messages (that pushed the
                   optimistic bubble to the bottom of short chats — the send "jump"). --%>
-            <div class="ed-msgs-tail" aria-hidden="true"></div>
+              <div class="ed-msgs-tail" aria-hidden="true"></div>
+            </div>
           </div>
           <%!-- Live presence for the flat message list (#102): the rows live in a
                 `phx-update="stream"` container, so a server re-render never reaches
@@ -5847,7 +5849,8 @@ defmodule EdenWeb.ChatLive do
                       // opacity onto the real row and glide them out, so rapid sends each
                       // finish their own motion seamlessly across the swap.
                       const cs = getComputedStyle(twin)
-                      if (cs.transform !== "none" || parseFloat(cs.opacity) < 1) {
+                      const noMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                      if (!noMotion && (cs.transform !== "none" || parseFloat(cs.opacity) < 1)) {
                         row.style.transform = cs.transform === "none" ? "" : cs.transform
                         row.style.opacity = cs.opacity
                         row.style.transition = "transform 0.18s var(--ed-ease), opacity 0.18s var(--ed-ease)"

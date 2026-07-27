@@ -3331,12 +3331,15 @@ html {
   #conversations:has(.ed-convo-wrap) {
     min-height: calc(100% + 1px);
   }
-  /* The pane scroller becomes a flex column once real rows exist: content flows from
-     the top (short chats stay top-aligned, #pending-messages sits FLUSH under the last
-     message — stretching #messages itself shoved the optimistic bubble to the bottom
-     and it "jumped up" on ack), and the .ed-msgs-tail spacer grows to keep the total
-     ≥ 100% + 1px so iOS always has something to rubber-band. */
-  #message-scroll:has([id^="messages-"]) {
+  /* The pane's flow wrapper (#456 review): min-height 100%+1px guarantees the iOS
+     rubber-band for ANY content length (flex-grow alone tops out at exactly 100% —
+     grow only distributes free space, so short chats lost the bounce), while the
+     flex column keeps content at the top: short chats stay top-aligned and
+     #pending-messages sits FLUSH under the last message (stretching #messages itself
+     shoved the optimistic bubble to the bottom and it "jumped up" on ack). The
+     .ed-msgs-tail spacer absorbs the leftover height inside the wrapper. */
+  .ed-msgs-flow {
+    min-height: calc(100% + 1px);
     display: flex;
     flex-direction: column;
   }

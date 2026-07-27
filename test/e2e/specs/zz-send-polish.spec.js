@@ -68,20 +68,28 @@ test("an optimistic send sits flush under the run, clock ticking, rising in", as
   const anim = await clock.evaluate((el) => getComputedStyle(el).animationName)
   expect(anim).toBe("ed-clock-spin")
 
-  // 4. The rubber-band tail exists and #messages itself is no longer stretched —
-  //    the tail (not the stream) absorbs the leftover height.
+  // 4. The rubber-band flow wrapper: its computed min-height is the scroller's
+  //    client height + 1px, so the content overflows for the iOS bounce no matter
+  //    how SHORT the chat is (#456 review: flex-grow alone tops out at exactly 100%).
   const layout = await page.evaluate(() => {
-    const tail = document.querySelector("#message-scroll .ed-msgs-tail")
+    const flow = document.querySelector("#message-scroll .ed-msgs-flow")
     const scroll = document.getElementById("message-scroll")
     return {
-      tail: !!tail,
-      flex: getComputedStyle(scroll).display,
-      content: scroll.scrollHeight > scroll.clientHeight,
+      tail: !!flow?.querySelector(".ed-msgs-tail"),
+      // WebKit reports the unresolved calc() string, Firefox resolves to px —
+      // accept either as proof the rule is attached; layout math is the engine's.
+      minH: flow ? getComputedStyle(flow).minHeight : null,
+      clientH: scroll.clientHeight,
+      overflows: scroll.scrollHeight > scroll.clientHeight,
     }
   })
   expect(layout.tail).toBe(true)
-  expect(layout.flex).toBe("flex")
-  expect(layout.content, "scroller still overflows for the iOS bounce").toBe(true)
+  const resolved = Math.round(parseFloat(layout.minH))
+  expect(
+    layout.minH === "calc(100% + 1px)" || resolved === layout.clientH + 1,
+    `wrapper guarantees 100% + 1px (got ${layout.minH})`,
+  ).toBe(true)
+  expect(layout.overflows, "scroller overflows for the iOS bounce").toBe(true)
 
   // Recover the socket for the next test's login state.
   await page.evaluate(() => {
