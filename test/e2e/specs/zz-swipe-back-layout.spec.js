@@ -50,7 +50,9 @@ test("the thread sheet still computes fixed on mobile", async ({ alice, seed }, 
   const page = alice
   await page.goto(`/channels/${seed.channel_id}/r/${seed.general_room_id}`)
   await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
-  await page.locator('[phx-click="open_thread"]').first().tap()
+  // The footer pill is the always-visible opener (the toolbar "Reply in thread"
+  // button is hover-only and matches the same phx-click).
+  await page.locator(".ed-thread-footer").first().tap()
   await page.waitForSelector(".ed-thread", { timeout: 10_000 })
   const th = await page.evaluate(() => {
     const el = document.querySelector(".ed-thread")
