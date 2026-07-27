@@ -6254,6 +6254,8 @@ defmodule EdenWeb.ChatLive do
               // survived and opened the menu on the detached hook ~150ms after the nav
               // settled (which is why the __edNavBusy guard alone missed it). destroyed()
               // now owns the timer, and the callback refuses on a disconnected element.
+              // A second finger's touchstart must not orphan the first timer (#462 review).
+              clearTimeout(this._lpTimer)
               this._lpTimer = setTimeout(() => {
                 if (window.__edNavBusy) return
                 if (!this.el.isConnected) return
