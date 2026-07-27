@@ -1357,11 +1357,12 @@ html {
      shift the box, so the optimistic→real swap is seamless. The faded bubble (0.55) is the
      "sending" indicator; the swap then resolves it to full opacity. */
   .ed-msg--sent {
-    animation: ed-msg-fade 0.12s var(--ed-ease);
+    animation: ed-msg-send-in 0.28s var(--ed-ease);
   }
-  @keyframes ed-msg-fade {
+  @keyframes ed-msg-send-in {
     from {
       opacity: 0;
+      transform: translateY(12px);
     }
   }
   /* #pending-messages carries NO container gap/margin (#351) — optimistic rows use their OWN margin
@@ -1379,6 +1380,24 @@ html {
      load already-fused, matching Telegram. */
   #pending-messages > .ed-msg--grp-cont {
     margin-top: 0;
+  }
+
+  /* Pending-send clock (#439): the hands actually run — minute hand one turn per
+     1.6s, hour hand at 1/12 of that, both around the dial center (transform-box:
+     view-box makes 50%/50% the VIEWBOX center, not each line's own box). */
+  .ed-clock__h,
+  .ed-clock__m {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    animation: ed-clock-spin 1.6s linear infinite;
+  }
+  .ed-clock__h {
+    animation-duration: 19.2s;
+  }
+  @keyframes ed-clock-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* "Not delivered" marker (#142): a tappable red ●! in the message's status slot
@@ -3312,8 +3331,17 @@ html {
   #conversations:has(.ed-convo-wrap) {
     min-height: calc(100% + 1px);
   }
-  #messages:has([id^="messages-"]) {
-    min-height: calc(100% + 1px);
+  /* The pane scroller becomes a flex column once real rows exist: content flows from
+     the top (short chats stay top-aligned, #pending-messages sits FLUSH under the last
+     message — stretching #messages itself shoved the optimistic bubble to the bottom
+     and it "jumped up" on ack), and the .ed-msgs-tail spacer grows to keep the total
+     ≥ 100% + 1px so iOS always has something to rubber-band. */
+  #message-scroll:has([id^="messages-"]) {
+    display: flex;
+    flex-direction: column;
+  }
+  .ed-msgs-tail {
+    flex: 1 0 1px;
   }
   .ed-bounce-wrap {
     min-height: calc(100% + 1px);
@@ -3716,7 +3744,10 @@ html {
       transition: none;
     }
     .ed-rail__btn--active::before,
-    .ed-msg--enter {
+    .ed-msg--enter,
+    .ed-msg--sent,
+    .ed-clock__h,
+    .ed-clock__m {
       animation: none;
     }
   }

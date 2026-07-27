@@ -16,7 +16,7 @@ async function watch(alice) {
           if (n.nodeType !== 1 || !n.dataset || !n.dataset.clientId || window.__opt) continue
           window.__opt = {
             cls: n.className,
-            hasClock: !!n.querySelector(".hero-clock-micro"),
+            hasClock: !!n.querySelector(".hero-clock-micro, .ed-clock__m"),
             hasSent: n.classList.contains("ed-msg--sent"),
             hasEnter: n.classList.contains("ed-msg--enter"),
             isFlat: n.classList.contains("ed-flat"),
@@ -67,6 +67,6 @@ test("DM text send still shows the sending clock (#351)", async ({ alice, seed }
   const opt = await sendText(alice, `/app/c/${seed.dm_id}`)
   expect(opt, `optimistic node seen (got ${JSON.stringify(opt)})`).toBeTruthy()
   expect(opt.hasClock, "DM optimistic keeps the sending clock").toBeTruthy()
-  expect(opt.hasSent, "uses ed-msg--sent (instant, no rise → no swap jump)").toBeTruthy()
+  expect(opt.hasSent, "uses ed-msg--sent (rise-in; the twin swap hands motion off)").toBeTruthy()
   expect(alice.__diag.pageErrors).toEqual([])
 })

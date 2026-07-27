@@ -4427,6 +4427,10 @@ defmodule EdenWeb.ChatLive do
                   the stream — a fixed container gap couldn't match the variable stream spacing
                   (compact rows are tight) and made the message jump on swap. --%>
             <div class="flex flex-col" id="pending-messages" phx-update="ignore"></div>
+            <%!-- Rubber-band tail (#439): grows to keep the scroller's content over 100%
+                  so iOS always bounces, WITHOUT stretching #messages (that pushed the
+                  optimistic bubble to the bottom of short chats — the send "jump"). --%>
+            <div class="ed-msgs-tail" aria-hidden="true"></div>
           </div>
           <%!-- Live presence for the flat message list (#102): the rows live in a
                 `phx-update="stream"` container, so a server re-render never reaches
@@ -5836,6 +5840,27 @@ defmodule EdenWeb.ChatLive do
                       // A twin left a merged file group — re-fuse the remaining optimistic rows so
                       // the shrinking in-flight bubble stays one bubble (its owner is the SendQueue
                       // hook, which listens for this).
+                      // Motion handoff (#439): the twin may be mid rise-in (the 0.28s
+                      // ed-msg--sent float-up) when the ack lands — dropping it and showing
+                      // the real row at rest popped the bubble to its final spot (the very
+                      // jerk that once forced a bare fade). Carry the CURRENT transform +
+                      // opacity onto the real row and glide them out, so rapid sends each
+                      // finish their own motion seamlessly across the swap.
+                      const cs = getComputedStyle(twin)
+                      if (cs.transform !== "none" || parseFloat(cs.opacity) < 1) {
+                        row.style.transform = cs.transform === "none" ? "" : cs.transform
+                        row.style.opacity = cs.opacity
+                        row.style.transition = "transform 0.18s var(--ed-ease), opacity 0.18s var(--ed-ease)"
+                        requestAnimationFrame(() => {
+                          row.style.transform = "translateY(0)"
+                          row.style.opacity = "1"
+                        })
+                        setTimeout(() => {
+                          row.style.transform = ""
+                          row.style.opacity = ""
+                          row.style.transition = ""
+                        }, 220)
+                      }
                       const gid = twin.dataset.groupId
                       twin.remove()
                       if (gid) window.dispatchEvent(new CustomEvent("ed:regroup", { detail: { groupId: gid } }))
@@ -7464,7 +7489,11 @@ defmodule EdenWeb.ChatLive do
                 isGroup
                   ? ""
                   : '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                    '<span class="hero-clock-micro size-3.5"></span></span>'
+                    '<svg class="size-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+                    '<circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5"/>' +
+                    '<line class="ed-clock__h" x1="8" y1="8" x2="8" y2="5.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+                    '<line class="ed-clock__m" x1="8" y1="8" x2="8" y2="4.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+                    '</svg></span>'
               bubble.innerHTML =
                 '<div class="ed-bubble__cap">' +
                 '<span class="break-words"></span>' +
