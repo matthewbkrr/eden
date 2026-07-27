@@ -2313,8 +2313,14 @@ html {
     }
     #messages input,
     #messages textarea,
+    #pending-messages input,
+    #pending-messages textarea,
     .ed-thread input,
-    .ed-thread textarea {
+    .ed-thread textarea,
+    #conversations input,
+    #conversations textarea,
+    #rooms-list input,
+    #rooms-list textarea {
       -webkit-user-select: text;
       user-select: text;
     }
