@@ -40,12 +40,20 @@ test("an optimistic send sits flush under the run, clock ticking, rising in", as
   const pendingRow = page.locator("#pending-messages .ed-msg")
   await expect(pendingRow).toBeVisible()
 
-  // 1. The row entered with the send float-up (checked FIRST — it's only live for
-  //    280ms; the geometry below is measured after it settles, since a mid-flight
-  //    translateY(12px) rides into getBoundingClientRect).
-  const entry = await pendingRow.evaluate((el) => getComputedStyle(el).animationName)
-  expect(["ed-msg-send-in", "ed-msg-send-in-touch"]).toContain(entry)
-  await page.waitForTimeout(400)
+  // 1. The row entered with the send float-up. The class lands two rAFs after the
+  //    insert (paint-aligned start, #439) and lives ~420ms — poll for it, then let
+  //    it finish before measuring geometry (a mid-flight translateY rides into
+  //    getBoundingClientRect).
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector("#pending-messages .ed-msg")
+      const n = el && getComputedStyle(el).animationName
+      return n === "ed-msg-send-in" || n === "ed-msg-send-in-touch"
+    },
+    null,
+    { timeout: 3000 },
+  )
+  await page.waitForTimeout(500)
 
   // 2. Flush placement: the optimistic row's gap to the last real row EQUALS the
   //    stream's own row gap — the exact spot the real row will land on ack (#351

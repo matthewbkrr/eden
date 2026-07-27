@@ -2912,6 +2912,9 @@ defmodule EdenWeb.ChatLive do
               // settled navigation, it's the socket coming back (#439: the eject killed the
               // overlay + typed draft seconds before the chat landed).
               if (!window.liveSocket?.isConnected?.()) return
+              // Belt: a settled nav means taps are meaningful again even if dismiss()
+              // hasn't run yet (#439 long-press guard must never stick).
+              if (this.target == null) window.__edNavBusy = false
               // A settled live nav re-rendered the aside — drop the rail overlay (#445) and
               // keep the sidebar snapshot warm for the NEXT hop (idle: off the settle frame).
               if (this.asideOv) this.asideDismiss()
@@ -3336,6 +3339,11 @@ defmodule EdenWeb.ChatLive do
           begin(link, id, isRoom) {
             // Any forward navigation supersedes a pending back-patch (see backFinish).
             this._navGen = (this._navGen || 0) + 1
+            // In-flight beacon (#439): rapid chat switching keeps the main thread busy
+            // (cache parse + morphs), delaying touchend past the 450ms long-press
+            // threshold — the row context menu popped on plain taps. ContextMenu checks
+            // this before opening.
+            window.__edNavBusy = true
             // The name span nests badge spans whose sr-only text ("Muted"/"Favorite") would ride
             // along in textContent — strip them on a clone so a muted chat's overlay header reads
             // "Вася", not "Вася Без звука".
@@ -3663,6 +3671,7 @@ defmodule EdenWeb.ChatLive do
             }
           },
           dismiss() {
+            window.__edNavBusy = false
             if (!this.overlay) { this.target = null; return }
             clearTimeout(this.timer)
             this.timer = null
@@ -3720,6 +3729,7 @@ defmodule EdenWeb.ChatLive do
           destroyed() {
             window.__edInstantNavReady = false
             document.removeEventListener("click", this.onClick, true)
+            window.__edNavBusy = false
             this.asideRemove()
             window.removeEventListener("ed:conv-shown", this.onShown)
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
@@ -6237,7 +6247,14 @@ defmodule EdenWeb.ChatLive do
               this.recentTouch = true
               clearTimeout(this._touchGuard)
               this._touchGuard = setTimeout(() => { this.recentTouch = false }, 700)
-              timer = setTimeout(() => { this.open(sx, sy); this.longPressed = true }, 450)
+              timer = setTimeout(() => {
+                // A nav transition is in flight (#439): the "hold" is almost always a
+                // delayed touchend behind cache-parse/morph work, not an intentional
+                // long-press — opening the row menu mid-switch read as a misfire.
+                if (window.__edNavBusy) return
+                this.open(sx, sy)
+                this.longPressed = true
+              }, 450)
             }, { passive: true })
             const cancel = () => clearTimeout(timer)
             this.el.addEventListener("touchmove", (e) => {
@@ -7511,12 +7528,24 @@ defmodule EdenWeb.ChatLive do
             // in #thread-pending; the main send leaves it null (→ this.pending).
             const pend = (this._sendTarget && this._sendTarget.pending) || this.pending
             pend.appendChild(row)
-            // Fade the optimistic node in WITHOUT a rise (#351): a transform-free opacity fade so the
-            // real row swapping in mid-animation can't pop the layout (the old ed-msg--enter grew from
-            // the bottom → ~2px upward jump on a slow link). The faded bubble is the "sending"
-            // indicator; the swap resolves it to full opacity.
-            row.classList.add("ed-msg--sent")
-            setTimeout(() => row.classList.remove("ed-msg--sent"), 150)
+            // Entrance (#456 float-up, #439 timing forensics). Two bugs lived here:
+            // (1) the cleanup timeout was still the old fade-era 150ms — REMOVING the
+            // class mid-animation cancels it and the row SNAPPED to rest ("резкая");
+            // it must outlive the longest variant (340ms touch). (2) the class rode the
+            // initial insert, so the animation clock started at style-resolution — on
+            // the phone the post-send main-thread work ate the first 100-200ms before
+            // anything painted and only the tail showed. Two rAFs = the row has PAINTED
+            // (held invisible by inline opacity, no flash), then the full run plays
+            // from its first visible frame. The ack handoff reads computed transform/
+            // opacity either way, so a fast swap stays seamless.
+            row.style.opacity = "0"
+            requestAnimationFrame(() =>
+              requestAnimationFrame(() => {
+                row.style.opacity = ""
+                row.classList.add("ed-msg--sent")
+                setTimeout(() => row.classList.remove("ed-msg--sent"), 420)
+              })
+            )
             // The MAIN pane's send-scroll is owned by ScrollBottom's onAfterSend (pins synchronously
             // in this same tick — #351), so no scroll here; a smooth scrollTo only fought that instant
             // pin (the real-row swap cut it off mid-glide — the visible jerk). A THREAD send (#348) has

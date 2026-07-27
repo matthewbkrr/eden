@@ -18,6 +18,13 @@ async function watch(alice) {
             cls: n.className,
             hasClock: !!n.querySelector(".hero-clock-micro, .ed-clock__m"),
             hasSent: n.classList.contains("ed-msg--sent"),
+          }
+          // The entrance class lands two rAFs after the insert (paint-aligned start,
+          // #439) — re-sample once it can exist, so hasSent reflects the real entrance.
+          setTimeout(() => {
+            if (window.__opt && n.isConnected) window.__opt.hasSent = n.classList.contains("ed-msg--sent")
+          }, 120)
+          Object.assign(window.__opt, {
             hasEnter: n.classList.contains("ed-msg--enter"),
             isFlat: n.classList.contains("ed-flat"),
             bubbleOpacity: (() => {
@@ -26,7 +33,7 @@ async function watch(alice) {
               const el = b || body
               return el ? getComputedStyle(el).opacity : (n.style.opacity || null)
             })(),
-          }
+          })
         }
     }).observe(pend, { childList: true })
   })
@@ -40,6 +47,9 @@ async function sendText(alice, url, bodySel = "#composer-body", formSel = "#comp
   await alice.locator(bodySel).fill(`opt-probe ${Date.now()}`)
   await alice.locator(formSel).evaluate((f) => f.requestSubmit())
   await alice.waitForFunction(() => window.__opt, { timeout: 6000 })
+  // Entrance class lands two rAFs after the insert and the helper re-samples at
+  // 120ms (#439 paint-aligned start) — let that pass before reading.
+  await alice.waitForTimeout(250)
   return read(alice)
 }
 
