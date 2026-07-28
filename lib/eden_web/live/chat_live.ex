@@ -3019,6 +3019,7 @@ defmodule EdenWeb.ChatLive do
                 // push another list entry on top of the state that had just been popped —
                 // silently growing the stack that #476 exists to keep flat.
                 this._navGen = (this._navGen || 0) + 1
+                this.announceNav()
                 this.revealList(main, aside)
               }
             }
@@ -3134,6 +3135,7 @@ defmodule EdenWeb.ChatLive do
               void s.main.offsetWidth
               if (commit) {
                 this._backing = true
+                this.announceNav()
                 document.activeElement?.blur?.() // keyboard drops with the slide (#439)
                 s.main.style.transform = ""
                 s.main.classList.add("ed-main-pop--out")
@@ -3258,6 +3260,7 @@ defmodule EdenWeb.ChatLive do
               // through to the plain instant patch above instead of re-running the slide, and
               // the programmatic re-click below passes through to LiveView the same way.
               this._backing = true
+              this.announceNav()
               e.preventDefault()
               e.stopPropagation()
               // Leaving the chat dismisses the keyboard WITH the slide (#439: it hung over the
@@ -3443,6 +3446,18 @@ defmodule EdenWeb.ChatLive do
             main.addEventListener("transitionend", onEnd)
             setTimeout(go, 450) // fallback if the filtered event never fires
           },
+          // One signal for "the app is navigating", broadcast from every entry point: a chat
+          // tap (begin), the header back branch, a committed edge swipe, and history traversal.
+          // The ContextMenu hook listens while a menu is open, because NOTHING else closes one
+          // on navigation (#478): close() is reachable only from an outside click, Escape, a
+          // scroll or destroyed(), and the back path stopPropagations its own tap in capture so
+          // the outside-click listener never sees it. A menu left open then rides the screen it
+          // belongs to — visible over the list for the whole ~450ms slide, and on mobile still
+          // OPEN (hidden=false, `active` pointing at it) inside a pane that was merely given
+          // class="hidden", ready to reappear the moment that pane is shown again.
+          announceNav() {
+            window.dispatchEvent(new Event("ed:nav"))
+          },
           // Put the LIST on screen right now, client-side. Both screens are local DOM, so
           // the swap happens in the same task as the gesture that asked for it and the
           // settled gesture never flashes the chat it just left; the patch then normalizes
@@ -3512,6 +3527,7 @@ defmodule EdenWeb.ChatLive do
             // threshold — the row context menu popped on plain taps. ContextMenu checks
             // this before opening.
             window.__edNavBusy = true
+            this.announceNav()
             // The name span nests badge spans whose sr-only text ("Muted"/"Favorite") would ride
             // along in textContent — strip them on a clone so a muted chat's overlay header reads
             // "Вася", not "Вася Без звука".
@@ -6367,6 +6383,15 @@ defmodule EdenWeb.ChatLive do
             // but NOT the menu's own scrollable emoji grid (#67), which would slam
             // the menu shut the moment you tried to browse the full picker.
             this.onScroll = (e) => { if (!(this.menu && this.menu.contains(e.target))) this.close() }
+            // Navigating closes the menu (#478). Nothing else did: close() is reachable only
+            // from an outside click, Escape, a scroll or destroyed(), and the header-back path
+            // stopPropagations its own tap in CAPTURE, so the outside-click listener never saw
+            // it — the menu stayed open over the list for the whole ~450ms slide, until
+            // backFinish's programmatic re-click finally bubbled. Worse on mobile, where the
+            // pane is merely given class="hidden": the menu goes invisible while staying OPEN
+            // (hidden=false, `active` still pointing here, isConnected still true) and returns
+            // the moment that pane is shown again.
+            this.onNav = () => this.close()
             this.wire()
 
             // Desktop: right-click the host. A keyboard context-menu (Shift+F10 /
@@ -6587,6 +6612,16 @@ defmodule EdenWeb.ChatLive do
           updated() {
             this.wire()
             if (active === this) {
+              // Belt (#478): a host that is not RENDERED must not own the active menu —
+              // re-asserting hidden=false on one is precisely what armed a menu to reappear
+              // together with the pane it lives in, which navigation merely gives
+              // class="hidden" rather than removing.
+              //
+              // getClientRects(), not offsetParent (#488 review): offsetParent is also null
+              // for position:fixed and for detached nodes, so it would close menus it has no
+              // business closing. A box that generates no client rects is exactly "display:none
+              // somewhere up the tree", and a visible fixed element still reports rects.
+              if (this.el.getClientRects().length === 0) return this.close()
               this.menu.hidden = false
               this.position(this.x, this.y)
             }
@@ -6690,6 +6725,7 @@ defmodule EdenWeb.ChatLive do
             first && first.focus()
             // Defer the outside-click listener so the same gesture doesn't close it.
             setTimeout(() => document.addEventListener("click", this.onDoc), 0)
+            window.addEventListener("ed:nav", this.onNav)
             document.addEventListener("keydown", this.onKey)
             document.addEventListener("scroll", this.onScroll, { capture: true, passive: true })
           },
@@ -6700,6 +6736,7 @@ defmodule EdenWeb.ChatLive do
             if (trigger) trigger.setAttribute("aria-expanded", "false")
             // removeEventListener is a no-op if not attached — safe to call always.
             document.removeEventListener("click", this.onDoc)
+            window.removeEventListener("ed:nav", this.onNav)
             document.removeEventListener("keydown", this.onKey)
             document.removeEventListener("scroll", this.onScroll, { capture: true })
           },

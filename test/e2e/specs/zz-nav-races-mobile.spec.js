@@ -656,4 +656,133 @@ test.describe("mobile nav races (stress)", () => {
       `a context menu opened without a long-press (${bad.length}/${rows.length}) — see ${file}`,
     ).toEqual([])
   })
+
+  // (C) is the OTHER half of the ghost menu, and (A) structurally cannot see it: (A) only
+  // ever asks "did a menu open by itself", never "did a menu I opened ON PURPOSE outlive the
+  // screen it belongs to". Nothing in the ContextMenu hook closes on navigation — close()
+  // is reachable only from an outside click, Escape, a scroll, or destroyed() — and on mobile
+  // the sidebar is not removed on navigation, it gets class="hidden". A menu inside it is then
+  // display:none but still OPEN (`hidden` attribute false, module-scoped `active` still
+  // pointing at that hook, this.el.isConnected true), and updated() actively re-asserts
+  // hidden=false on every sidebar re-render. Reveal the list again and the menu is simply
+  // back — which is exactly the "a modal appears as if I long-pressed a chat" report.
+  //
+  // Driven through popstate on purpose: a history traversal produces NO click, so onDoc —
+  // the one listener that would have closed it — never fires. That is the deterministic
+  // shape of the bug; the header-back path reaches the same state but self-heals ~450ms
+  // later when backFinish's programmatic re-click finally bubbles.
+  test("(C) a context menu never survives a navigation", async ({ alice }, testInfo) => {
+    test.setTimeout(120_000)
+    const page = alice
+    const drv = touchDriver(page)
+    await instrument(page)
+    await page.goto("/app")
+    await connected(page)
+    await drv.init()
+    const ids = await sidebarIds(page, 2)
+
+    // A forward history entry to traverse into, without clicking anything later.
+    await tapRow(page, drv, ids[0])
+    await page.waitForTimeout(SETTLE)
+    await page.evaluate(() => history.back())
+    await page.waitForTimeout(SETTLE)
+
+    // A REAL long-press on a sidebar row: 700ms, no movement, well past the 450ms threshold.
+    // This menu is the feature working correctly — the bug is what happens to it next.
+    const box = await page.locator(`.ed-convo-wrap[data-id="${ids[0]}"] a.ed-convo`).boundingBox()
+    const sel = `.ed-convo-wrap[data-id="${ids[0]}"] a.ed-convo`
+    const x = Math.round(box.x + box.width / 2)
+    const y = Math.round(box.y + box.height / 2)
+    await drv.down(x, y, sel)
+    await page.waitForTimeout(700)
+    await drv.up(x, y, sel)
+    await page.waitForTimeout(200)
+
+    const openedOnPurpose = await page.locator("[data-menu]:not([hidden])").count()
+    expect(openedOnPurpose, "a 700ms long-press must open the row menu — otherwise this test proves nothing").toBe(1)
+
+    // Traverse INTO the chat. No click anywhere, so nothing incidental can close the menu.
+    await page.evaluate(() => {
+      window.__mark("C: history.forward into chat")
+      history.forward()
+    })
+    await page.waitForTimeout(SETTLE)
+    const openAfterNav = await page.locator("[data-menu]:not([hidden])").count()
+
+    // …and back to the list, where a menu still holding `hidden=false` becomes VISIBLE again.
+    await page.evaluate(() => {
+      window.__mark("C: history.back to list")
+      history.back()
+    })
+    await page.waitForTimeout(SETTLE)
+    // count(), not isVisible() (#488 review): isVisible() is strict-mode and THROWS on more
+    // than one match, which a resurfacing regression would produce — and the catch would then
+    // swallow it into a pass, masking the exact bug this assertion exists for.
+    const visibleOnReturn = (await page.locator("[data-menu]:not([hidden])").count()) > 0
+
+    // Phase 2 — the header-back path, which reaches the same state by a different route and
+    // is the one the user actually performs. maybeStart's back branch stopPropagations the
+    // tap in CAPTURE, so onDoc never sees it; the list is revealed at the same moment. If a
+    // menu is open in the chat pane, it is on screen over the list until backFinish's
+    // programmatic re-click finally bubbles ~450ms later. Sample DURING that window, not
+    // after it, or the flash is invisible to the assertion.
+    await tapRow(page, drv, ids[0])
+    await page.waitForTimeout(SETTLE)
+    const msg = page.locator("#messages [data-message-id]").last()
+    const flash = { opened: 0, duringBack: 0 }
+    if (await msg.count()) {
+      const mb = await msg.boundingBox().catch(() => null)
+      if (mb) {
+        const msel = "#messages [data-message-id]:last-child"
+        const mx = Math.round(mb.x + mb.width / 2)
+        const my = Math.round(mb.y + mb.height / 2)
+        await drv.down(mx, my, msel)
+        await page.waitForTimeout(700)
+        await drv.up(mx, my, msel)
+        await page.waitForTimeout(200)
+        flash.opened = await page.locator("[data-menu]:not([hidden])").count()
+        await backStep(page, drv, "button")
+        // SAMPLE the whole slide instead of betting on one timestamp (#488 review): a single
+        // 180ms probe is at the mercy of machine speed and of whether the handler happened to
+        // run synchronously. Poll across the window and keep the WORST reading — the menu was
+        // over the list if it was open at any point before the re-click lands.
+        for (let t = 0; t < 420; t += 30) {
+          await page.waitForTimeout(30)
+          const n = await page.locator("[data-menu]:not([hidden])").count()
+          if (n > flash.duringBack) flash.duringBack = n
+        }
+        await page.waitForTimeout(SETTLE)
+      }
+    }
+
+    const summary =
+      `[C] sidebar row + popstate\n` +
+      `      menu open after long-press: ${openedOnPurpose}\n` +
+      `      still open after navigating away: ${openAfterNav}  (must be 0)\n` +
+      `      VISIBLE again after returning to the list: ${visibleOnReturn}  (must be false)\n` +
+      `    message row + header back\n` +
+      (flash.opened
+        ? `      menu open after long-press: ${flash.opened}\n` +
+          `      worst reading across the back slide: ${flash.duringBack}  (must be 0)\n`
+        : `      NOT EXERCISED — the long-press opened no menu on this engine, so the\n` +
+          `      assertion below passes vacuously (WebKit dispatches synthetic touches by\n` +
+          `      selector and they do not always reach a message row). This phase is only\n` +
+          `      meaningful where it reports a menu opened.\n`)
+    console.log("\n" + summary)
+    const { file } = await dump(page, testInfo, "navlog-C.txt", summary + "\n")
+
+    expect(openAfterNav, `the menu outlived the navigation — see ${file}`).toBe(0)
+    expect(visibleOnReturn, `the menu came back with the list — see ${file}`).toBe(false)
+    // Assert phase 2 ONLY where it actually ran (#488 review). Where the synthetic long-press
+    // opened no menu the assertion would pass without exercising anything, and a vacuous green
+    // on the path the user actually performs is worse than an honest gap — annotate instead.
+    if (flash.opened) {
+      expect(flash.duringBack, `the menu was still open over the list mid-back — see ${file}`).toBe(0)
+    } else {
+      testInfo.annotations.push({
+        type: "not-exercised",
+        description: "(C) phase 2: the long-press opened no menu on this engine — header-back path unverified here",
+      })
+    }
+  })
 })
