@@ -785,4 +785,102 @@ test.describe("mobile nav races (stress)", () => {
       })
     }
   })
+
+  // (D) The orphaned long-press timer, driven at its exact mechanism rather than by stress.
+  //
+  // The cancels (touchend / touchcancel / a >10px touchmove) are bound to the ROW,
+  // .ed-convo-wrap, and reach it only by BUBBLING from whatever leaf the finger actually
+  // landed on. A touch target is fixed at touchstart and never re-targeted, so if morphdom
+  // discards that leaf mid-gesture the event fires on a node with no ancestors, never reaches
+  // the row, and nothing clears _lpTimer. Both guards added in #462 still pass — the ROW
+  // survives, so destroyed() does not run and isConnected is true — and the menu opens ~450ms
+  // in, on a plain tap.
+  //
+  // The leaf is chosen deliberately: <time class="ed-convo__time"> is rendered with
+  // id={"t-#{System.unique_integer}"}, a NEW id on every render, so morphdom's getNodeKey can
+  // never match and it is forced to discard+add the node on EVERY sidebar patch. It sits at
+  // the top-right of the row, where a thumb reaching for a chat lands often. Bob messaging the
+  // DM is what triggers that patch, under the finger.
+  test("(D) a re-render under the finger cannot orphan the long-press timer", async ({
+    alice,
+    bob,
+    seed,
+  }, testInfo) => {
+    test.setTimeout(120_000)
+    const page = alice
+    const drv = touchDriver(page)
+    await instrument(page)
+    await page.goto("/app")
+    await connected(page)
+    await drv.init()
+    await bob.goto(`/app/c/${seed.dm_id}`)
+    await connected(bob)
+
+    const sel = `.ed-convo-wrap[data-id="${seed.dm_id}"] .ed-convo__time`
+    const previewSel = `.ed-convo-wrap[data-id="${seed.dm_id}"] .ed-convo__preview`
+    const rows = []
+    let reRendered = 0
+
+    for (let i = 0; i < 6; i++) {
+      const box = await page.locator(sel).boundingBox().catch(() => null)
+      if (!box) break
+      const x = Math.round(box.x + box.width / 2)
+      const y = Math.round(box.y + box.height / 2)
+      const before = await state(page)
+      await page.evaluate((n) => window.__mark(n), `── (D) iter ${i}: finger down on <time>`)
+
+      const previewBefore = await page.locator(previewSel).textContent().catch(() => null)
+      await drv.down(x, y, sel)
+      // Re-render the row WHILE the finger is on that node. The <time> is discarded and
+      // replaced, taking the touch target out of the tree. NOT swallowed (#489 review): a
+      // trigger that silently fails would leave the loop asserting on a race it never ran.
+      await send(bob, `orphan-${i}`)
+      await page.waitForTimeout(260)
+      const previewAfter = await page.locator(previewSel).textContent().catch(() => null)
+      if (previewAfter && previewAfter !== previewBefore) reRendered++
+      // A short, still tap: ~320ms total, well under the 450ms long-press threshold, and it
+      // never moves. A menu after this is never the feature.
+      await drv.up(x, y, sel)
+      await page.waitForTimeout(600) // past the 450ms timer
+
+      const after = await state(page)
+      const opened = after.menus - before.menus
+      const stuck = await page.locator("[data-menu]:not([hidden])").count()
+      rows.push({ i, opened, stuck })
+      if (opened || stuck) await page.keyboard.press("Escape").catch(() => {})
+      // Leave the list open for the next iteration if the tap navigated.
+      if (convId(after.path)) {
+        await page.evaluate(() => history.back())
+        await page.waitForTimeout(SETTLE)
+      }
+    }
+
+    const touchLog = await page.evaluate(() => window.__touchLog || [])
+    const starts = touchLog.filter((e) => e.type === "touchstart" && e.row).length
+    const ends = touchLog.filter(
+      (e) => (e.type === "touchend" || e.type === "touchcancel") && e.row,
+    ).length
+    const bad = rows.filter((r) => r.opened > 0 || r.stuck > 0)
+    const summary =
+      `[D] touch=${drv.real ? "CDP (real)" : "synthetic"} iterations=${rows.length}\n` +
+      `    GHOST MENUS: ${bad.length}/${rows.length}\n` +
+      `    row touchstart=${starts}  row touchend/cancel=${ends}` +
+      (drv.missed ? `  (${drv.missed} synthetic dispatches dropped — harness, not app)\n` : `\n`) +
+      `    row re-rendered under the finger: ${reRendered}/${rows.length}\n` +
+      rows.map((r) => `    #${r.i} opened=${r.opened} stuck=${r.stuck}`).join("\n")
+    console.log("\n" + summary + "\n")
+    const { file } = await dump(page, testInfo, "navlog-D.txt", summary + "\n\n")
+
+    expect(rows.length, "the <time> node was never found — the test drove nothing").toBeGreaterThan(0)
+    // Prove the race was actually staged (#489 review): if the row never re-rendered while the
+    // finger was down, a green result says nothing about the bug this test exists for.
+    expect(
+      reRendered,
+      `the row never re-rendered under the finger — the trigger did not fire, so a pass is meaningless (see ${file})`,
+    ).toBeGreaterThan(0)
+    expect(
+      bad,
+      `a menu opened from a ~320ms tap whose target was re-rendered away (${bad.length}/${rows.length}) — see ${file}`,
+    ).toEqual([])
+  })
 })
