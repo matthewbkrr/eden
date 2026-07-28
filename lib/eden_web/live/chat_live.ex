@@ -9739,12 +9739,13 @@ defmodule EdenWeb.ChatLive do
                 // the photo library (#465; a one-tap native save needs Filesystem+Share,
                 // filed as a follow-up). Browsers get the ordinary download.
                 const url = box.__src
-                if (window.Capacitor?.isNativePlatform?.()) {
+                const browser = window.Capacitor?.isNativePlatform?.()
+                  ? window.Capacitor.Plugins?.Browser
+                  : null
+                if (browser?.open) {
                   fetch(`${url}/link`, { headers: { accept: "application/json" } })
                     .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-                    .then(({ url: signed }) =>
-                      window.Capacitor.Plugins.Browser.open({ url: location.origin + signed })
-                    )
+                    .then(({ url: signed }) => browser.open({ url: location.origin + signed }))
                     .catch(() => {})
                 } else {
                   const a = document.createElement("a")
@@ -9813,8 +9814,11 @@ defmodule EdenWeb.ChatLive do
                 return
               }
               if (!menu.hidden && !e.target.closest(".ed-lightbox__menu")) return closeMenu()
-              if (e.target.closest(".ed-lightbox__bar")) return
+              // The back arrow FIRST (#472 review): it lives inside the bar, so the
+              // "clicks on the bar don't close the viewer" guard below was swallowing
+              // the primary close affordance.
               if (e.target.closest(".ed-lightbox__close")) return close()
+              if (e.target.closest(".ed-lightbox__bar")) return
               const nav = e.target.closest(".ed-lightbox__nav")
               if (nav) {
                 e.stopPropagation()
@@ -12811,7 +12815,9 @@ defmodule EdenWeb.ChatLive do
 
   defp lightbox_meta(_assigns), do: %{}
 
-  defp sender_name(%{sender: %{} = s}), do: s.display_name || s.username
+  # Match the STRUCT, not any map (#472 review): %Ecto.Association.NotLoaded{} is a
+  # struct too, so a bare %{} pattern would take this clause and raise KeyError.
+  defp sender_name(%{sender: %Accounts.User{} = s}), do: s.display_name || s.username
   defp sender_name(_), do: nil
 
   # Flip a strip photo to as_file at RENDER time (no DB change) so the file-card path draws it;

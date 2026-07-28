@@ -136,6 +136,31 @@ test("chrome: who/when/counter render and the menu offers the message actions", 
   await page.keyboard.press("Escape")
 })
 
+test("the back arrow closes the viewer (the bar guard must not swallow it)", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
+  const page = alice
+  await openAlbum(page, seed)
+  // #472 review caught this dead: the "clicks on the bar don't close" guard ran
+  // BEFORE the back-arrow check, and no spec had ever clicked the arrow.
+  await page.locator(".ed-lightbox__close").click()
+  await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(0, { timeout: 3000 })
+})
+
+test("a click on the bar's empty space does NOT close the viewer", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
+  const page = alice
+  await openAlbum(page, seed)
+  await page.locator(".ed-lightbox__title").click()
+  await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(1)
+  await page.keyboard.press("Escape")
+})
+
 test("menu action reaches the server: Reply opens the reply bar", async ({
   alice,
   seed,
