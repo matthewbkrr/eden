@@ -27,6 +27,21 @@ defmodule EdenWeb.Router do
   end
 
   # Protected controller routes (not LiveView).
+  # Cookie-session JSON endpoints (#468 fix): the :browser pipeline declares
+  # `accepts ["html"]`, so a client that asks for application/json — as the native
+  # shell's file-link fetch does — is answered 406 Not Acceptable before the
+  # controller ever runs (the in-app document viewer showed "не удалось открыть
+  # файл"). These endpoints ride the same session cookie but negotiate json.
+  # No CSRF/layout/CSP plugs: they answer data, not documents, and are GET-only.
+  pipeline :browser_json do
+    plug :accepts, ["json", "html"]
+    plug :fetch_session
+    # require_authenticated_user puts a flash before redirecting a signed-out
+    # visitor, so the flash must be fetched here too.
+    plug :fetch_live_flash
+    plug :fetch_current_scope_for_user
+  end
+
   pipeline :require_authenticated do
     plug :require_authenticated_user
   end
@@ -60,7 +75,6 @@ defmodule EdenWeb.Router do
     scope "/" do
       pipe_through :require_authenticated
       get "/files/:id", FileController, :show
-      get "/files/:id/link", FileController, :link
       get "/files/:id/thumb", FileController, :thumb
       get "/users/:id/avatar", AvatarController, :show
       get "/channels/:id/avatar", ChannelAvatarController, :show
@@ -116,6 +130,14 @@ defmodule EdenWeb.Router do
       live "/settings/:section", SettingsLive, :section
       live "/reset/:token", ResetLive
     end
+  end
+
+  # The mint half of the signed-link pair (#468 fix): session-authorized, answers
+  # json — hence :browser_json, not :browser (whose accepts ["html"] 406'd the
+  # native shell's file-link fetch before the controller ran).
+  scope "/", EdenWeb do
+    pipe_through [:browser_json, :require_authenticated]
+    get "/files/:id/link", FileController, :link
   end
 
   # Signed-out flows: already-authenticated users are bounced to the app, both
