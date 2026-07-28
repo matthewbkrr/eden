@@ -47,7 +47,7 @@
 // touchend re-targets by SELECTOR, which is more forgiving than a finger.
 //
 // Env knobs:
-//   NAV_ITER=24          iterations per test
+//   NAV_ITER=24          iterations for (B); (A) costs ~3x per iteration and caps at 10
 //   NAV_DELAYS=0,30,...  mid-flight delay sweep (ms), cycled per iteration
 //   NAV_LATENCY=200      simulated RTT (ms), 0 to disable
 //   NAV_NOISE=1          bob messages into the loop (live sidebar re-render + stream
@@ -393,7 +393,7 @@ test.describe("mobile nav races (stress)", () => {
     const real = await drv.init()
     const ids = await sidebarIds(page, 5)
     expect(ids.length, "seed must give at least 3 sidebar chats").toBeGreaterThanOrEqual(3)
-    if (LATENCY) await page.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
+    if (LATENCY) await page.evaluate((ms) => window.liveSocket?.enableLatencySim?.(ms), LATENCY)
 
     // Prime: open a chat so the first iteration has a back gesture to make.
     await tapRow(page, drv, ids[0])
@@ -471,7 +471,7 @@ test.describe("mobile nav races (stress)", () => {
     console.log("\n" + summary + "\n")
     const { file } = await dump(page, testInfo, "navlog-B.txt", summary + "\n\n")
     console.log("    navLog: " + file + "\n")
-    if (LATENCY) await page.evaluate(() => window.liveSocket.disableLatencySim())
+    if (LATENCY) await page.evaluate(() => window.liveSocket?.disableLatencySim?.())
 
     expect(
       bad,
@@ -484,7 +484,12 @@ test.describe("mobile nav races (stress)", () => {
     bob,
     seed,
   }, testInfo) => {
-    test.setTimeout(180_000 + ITER * 3 * (SETTLE + 6_000))
+    // (A) is ~3x the cost of (B) per iteration — four gesture variants plus live noise,
+    // each waiting out a simulated RTT — so it gets its OWN, smaller budget instead of
+    // (B)'s. At NAV_ITER=24 the file blew a 756s timeout while the oracle ("did ANY menu
+    // open") had long since been exercised; that count buys nothing here.
+    const A_ITER = Math.min(ITER, 10)
+    test.setTimeout(180_000 + A_ITER * 3 * (SETTLE + 9_000))
     const page = alice
     const drv = touchDriver(page)
     await instrument(page)
@@ -492,7 +497,7 @@ test.describe("mobile nav races (stress)", () => {
     await connected(page)
     const real = await drv.init()
     const ids = await sidebarIds(page, 5)
-    if (LATENCY) await page.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
+    if (LATENCY) await page.evaluate((ms) => window.liveSocket?.enableLatencySim?.(ms), LATENCY)
 
     // Live noise: bob messaging the DM re-renders alice's sidebar (preview + badge) AND
     // re-orders the stream — morphdom churning rows UNDER a live finger, which is the
@@ -507,7 +512,7 @@ test.describe("mobile nav races (stress)", () => {
     await page.waitForTimeout(SETTLE)
 
     const rows = []
-    for (let i = 0; i < ITER; i++) {
+    for (let i = 0; i < A_ITER; i++) {
       const delay = DELAYS[i % DELAYS.length]
       const variant = i % 4
       const target = ids[(i + 1) % ids.length]
@@ -593,7 +598,7 @@ test.describe("mobile nav races (stress)", () => {
     // but the swept delay between them, so patches, slides and touches interleave.
     await page.evaluate(() => window.__mark("── BURST (no settle)"))
     const burstBefore = (await state(page)).menus
-    for (let i = 0; i < ITER * 2; i++) {
+    for (let i = 0; i < A_ITER * 2; i++) {
       const delay = DELAYS[i % DELAYS.length]
       const target = ids[(i + 1) % ids.length]
       await backStep(page, drv, i % 2 ? "swipe" : "button")
@@ -613,7 +618,7 @@ test.describe("mobile nav races (stress)", () => {
       (e) => (e.type === "touchend" || e.type === "touchcancel") && e.row,
     ).length
     const summary =
-      `[A] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms noise=${NOISE} iterations=${ITER}\n` +
+      `[A] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms noise=${NOISE} iterations=${A_ITER}\n` +
       `    GHOST MENUS: ${bad.length}/${rows.length}\n` +
       `    row touchstart=${starts}  row touchend/cancel=${ends}  (a gap = a gesture whose row was morphed away mid-touch)\n` +
       rows
@@ -625,7 +630,7 @@ test.describe("mobile nav races (stress)", () => {
     console.log("\n" + summary + "\n")
     const { file } = await dump(page, testInfo, "navlog-A.txt", summary + "\n\n")
     console.log("    navLog: " + file + "\n")
-    if (LATENCY) await page.evaluate(() => window.liveSocket.disableLatencySim())
+    if (LATENCY) await page.evaluate(() => window.liveSocket?.disableLatencySim?.())
 
     expect(
       bad,
