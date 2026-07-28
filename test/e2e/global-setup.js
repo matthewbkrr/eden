@@ -16,7 +16,21 @@ module.exports = async () => {
 
   const browser = await chromium.launch()
   try {
+    // Reuse a recent session instead of logging in every run. The signed-out credential POST
+    // is rate limited (#236: 10 per 5 minutes per IP) and this loop spends three of them per
+    // run, so a few runs in a row started failing at login — the harness was throttling
+    // itself. Session tokens outlive this window by a wide margin; E2E_FRESH_AUTH=1 forces
+    // the old behaviour when a test genuinely needs a brand-new session.
+    const MAX_AGE_MS = 60 * 60 * 1000
     for (const key of Object.keys(seed.users)) {
+      const statePath = path.join(authDir, `${key}.json`)
+      if (
+        process.env.E2E_FRESH_AUTH !== "1" &&
+        fs.existsSync(statePath) &&
+        Date.now() - fs.statSync(statePath).mtimeMs < MAX_AGE_MS
+      ) {
+        continue
+      }
       const user = seed.users[key]
       const ctx = await browser.newContext()
       const page = await ctx.newPage()

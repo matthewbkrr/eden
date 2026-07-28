@@ -2941,7 +2941,23 @@ defmodule EdenWeb.ChatLive do
             // conversation we're transitioning to, drop the overlay.
             this.onShown = (e) => {
               this.snapshot(e.detail.id)
-              if (this.target != null && String(e.detail.id) === String(this.target)) this.dismiss()
+              // Dismiss on the WINNING arrival, not merely on a matching id (#482). Every
+              // tap in a burst sends its own live_patch and the server renders all of them —
+              // LiveView gates only history on linkRef, never the diff — so an A → B → A
+              // burst mounts three streams. Matching on id alone meant A's own first
+              // arrival matched the (re-selected) target A and tore the overlay down; B then
+              // painted into the bare pane, and the user watched it flip through a chat they
+              // had already tapped away from. Measured: 1 superseded stream mounting
+              // uncovered per burst.
+              //
+              // The URL is the discriminator: commitPendingLink only lets the LAST patch
+              // write history, so a superseded diff always arrives while location still
+              // points elsewhere.
+              if (
+                this.target != null &&
+                String(e.detail.id) === String(this.target) &&
+                String(this.urlConvId()) === String(this.target)
+              ) this.dismiss()
               this.rehydrateDraft(e.detail.id)
             }
             window.addEventListener("ed:conv-shown", this.onShown)
@@ -2978,7 +2994,19 @@ defmodule EdenWeb.ChatLive do
               if (this.asideOv) this.asideDismiss()
               const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200))
               idle(() => this.stashAside())
-              if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
+              // A settled navigation whose URL has COMMITTED to the target drops the overlay.
+              // One condition covers both cases that need it (#499 review — the separate
+              // "settled but no pane" branch this replaced was strictly subsumed by it):
+              //   • the pane mounted, but its conv-shown arrived before commitPendingLink ran,
+              //     so onShown's URL check had not yet passed;
+              //   • no pane will EVER mount — a room whose membership was revoked mid-open
+              //     renders the knock window instead — which must not sit under a shimmer for
+              //     the full 15s strand timeout.
+              // The URL is what separates those from an intermediate settle in a burst: a
+              // superseded patch never commits one, so its arrival leaves the overlay up
+              // (#482, measured: overlay gone at t=1468 while streams mounted at 1545/1587/1610,
+              // leaving all three to paint bare).
+              if (this.target != null && String(this.urlConvId()) === String(this.target)) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
             // History traversal (the native WKWebView swipe-back, Android system back, browser
@@ -3564,6 +3592,18 @@ defmodule EdenWeb.ChatLive do
             s.main.addEventListener("transitionend", onEnd)
             setTimeout(once, 450)
             s.main.style.transform = "translateX(0px)"
+          },
+          // The conversation the URL currently commits to, or null. Both patterns are
+          // deliberately UNANCHORED at the end (#499 review asked where the /m/:id branch is —
+          // there is none, and none is needed): /app/c/34/m/99 and /channels/13/r/36/m/7 match
+          // the same expressions and yield 34 and 36. The onPop patterns anchor with $ because
+          // they decide whether a URL is a chat screen at all; this one only has to name the
+          // conversation, so the permalink suffix is simply ignored.
+          urlConvId() {
+            const m =
+              location.pathname.match(/^\/app\/c\/([^\/]+)/) ||
+              location.pathname.match(/^\/channels\/[^\/]+\/r\/([^\/]+)/)
+            return m ? m[1] : null
           },
           // Put the LIST on screen right now, client-side. Both screens are local DOM, so
           // the swap happens in the same task as the gesture that asked for it and the

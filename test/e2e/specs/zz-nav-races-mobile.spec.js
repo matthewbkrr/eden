@@ -994,3 +994,128 @@ test.describe("mobile nav races (stress)", () => {
     ).toEqual([])
   })
 })
+
+// The supersede scenario lives in its own describe because the one above is gated to mobile
+// projects — and this bug is the opposite: it exists ONLY in the desktop layout. On mobile
+// .ed-nav-skel--full is inset:0, opaque and still pointer-events-enabled while a transition
+// is in flight, so the sidebar cannot be reached and the burst is unperformable. It shares
+// this file for the instrumentation above rather than duplicating it.
+test.describe("nav supersede (desktop layout)", () => {
+  // (F) The pane must never show a chat that was already superseded.
+  //
+  // Every tap sends its own live_patch and the server renders ALL of them — LiveView's
+  // linkRef gates only history, never the diff, and view.js applies pending updates
+  // unconditionally. So an A → B → A burst produces three full window re-streams that the
+  // client paints in order. The instant-nav overlay is supposed to cover that, but it is
+  // dropped on the FIRST ed:conv-shown whose id matches this.target — and in A → B → A the
+  // first arrival (A) matches the current target (A again). The overlay goes away, and the
+  // bare pane then repaints B before settling back on A: the user watches it flip through a
+  // chat they tapped and tapped away from.
+  test("(F) the pane never flips through a chat that was already superseded", async ({
+    alice,
+  }, testInfo) => {
+    test.setTimeout(120_000)
+    const page = alice
+    // DESKTOP only, and that is itself the finding. On mobile .ed-nav-skel--full is inset:0,
+    // opaque and pointer-events-enabled until it fades, so the sidebar is unreachable while a
+    // transition is in flight and the burst simply cannot be performed. On desktop the overlay
+    // covers the PANE only, the sidebar stays live, and three taps inside one RTT are ordinary.
+    // Force the desktop layout rather than depending on which project runs this: the bug only
+    // exists there, and the test should stage its own conditions.
+    await page.setViewportSize({ width: 1280, height: 880 })
+    await instrument(page)
+    await page.goto("/app")
+    await connected(page)
+    await page.evaluate((ms) => window.liveSocket?.enableLatencySim?.(ms), 250)
+
+    const ids = await sidebarIds(page, 3)
+    const [a, b] = ids
+    // Record IN-PAGE, not by polling from Node: the offending frame can last well under one
+    // round-trip and a 60ms evaluate() loop simply steps over it. A MutationObserver on the
+    // pane's conversation id catches every transition, with the overlay state at that instant.
+    await page.evaluate(() => {
+      window.__paneLog = []
+      const snap = () => {
+        const pane = document.getElementById("message-scroll")?.dataset.conversationId ?? null
+        const covered = document.querySelectorAll(".ed-nav-skel").length > 0
+        const last = window.__paneLog[window.__paneLog.length - 1]
+        if (!last || last.pane !== pane || last.covered !== covered) {
+          window.__paneLog.push({ t: Math.round(performance.now()), pane, covered })
+        }
+      }
+      snap()
+      window.__ovLog = []
+      const tick = () => {
+        const n = document.querySelectorAll('.ed-nav-skel').length
+        const last = window.__ovLog[window.__ovLog.length - 1]
+        if (!last || last.n !== n) window.__ovLog.push({ t: Math.round(performance.now()), n, ready: !!window.__edInstantNavReady })
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+      // Decisive, batching-proof signal: .ScrollBottom fires this once per conversation
+      // stream that actually mounts. A MutationObserver can coalesce a mount+unmount
+      // inside one microtask batch; this cannot.
+      window.__shownLog = []
+      window.addEventListener("ed:conv-shown", (e) =>
+        window.__shownLog.push({
+          t: Math.round(performance.now()),
+          id: String(e.detail.id),
+          // Only an overlay that is NOT already fading counts as cover: dismiss() adds
+          // --out and lets a 180ms opacity transition run, and a superseded stream that
+          // paints under a fading overlay is visible through it.
+          covered: !!document.querySelector(".ed-nav-skel:not(.ed-nav-skel--out)"),
+          overlays: [...document.querySelectorAll(".ed-nav-skel")].map((n) => n.className),
+          url: location.pathname,
+        }),
+      )
+      new MutationObserver(snap).observe(document.body, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["data-conversation-id", "class"],
+      })
+    })
+
+
+    const clickRow = (id) =>
+      page.locator(`.ed-convo-wrap[data-id="${id}"] a.ed-convo`).click({ force: true })
+    await page.evaluate((n) => window.__mark(n), `── (F) burst ${a} → ${b} → ${a}`)
+    await clickRow(a)
+    await page.waitForTimeout(320)
+    await clickRow(b)
+    await page.waitForTimeout(320)
+    await clickRow(a)
+    await page.waitForTimeout(4000)
+    await page.evaluate(() => window.liveSocket?.disableLatencySim?.())
+    const samples = await page.evaluate(() => window.__paneLog || [])
+    const shown = await page.evaluate(() => window.__shownLog || [])
+    const ovLog = await page.evaluate(() => window.__ovLog || [])
+
+    // The offence: the pane showing a NON-final conversation while nothing covers it.
+    // The offence, measured where it is actually observable: a SUPERSEDED conversation
+    // mounting into the pane with nothing covering it. Derived from ed:conv-shown rather
+    // than from DOM samples — a MutationObserver coalesces a mount+unmount that happens
+    // inside one microtask batch, and that is exactly the frame in question.
+    const exposed = shown.filter((x) => !x.covered && x.id !== String(a))
+    const seen = [...new Set(samples.map((s) => `${s.covered ? "cover" : "bare"}:${s.pane ?? "—"}`))]
+    const summary =
+      `[F] burst ${a} → ${b} → ${a} under a 250ms simulated RTT\n` +
+      `    superseded streams that mounted UNCOVERED: ${exposed.length}/${shown.length}\n` +
+      `    states seen: ${seen.join("  ")}\n` +
+      `    conversation streams that actually mounted: ${shown.map((x) => x.id).join(" → ") || "none"}\n` +
+      (exposed.length ? `    first offence at t=${exposed[0].t} showing ${exposed[0].id}\n` : "") +
+      `    shown detail: ${JSON.stringify(shown)}\n` +
+      `    overlay history: ${JSON.stringify(ovLog)}\n`
+    console.log("\n" + summary)
+    const { file } = await dump(page, testInfo, "navlog-F.txt", summary + "\n")
+
+    expect(
+      shown.some((x) => x.id === String(a)),
+      `the burst never settled on the last-tapped chat at all — see ${file}`,
+    ).toBe(true)
+    expect(
+      exposed.length,
+      `the pane was left showing a superseded chat with no overlay over it — see ${file}`,
+    ).toBe(0)
+  })
+})
