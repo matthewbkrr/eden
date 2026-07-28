@@ -4357,6 +4357,14 @@ defmodule EdenWeb.ChatLive do
             data-lb-next={gettext("Next")}
             data-lb-of={gettext("of")}
             data-lb-viewer={gettext("Photo viewer")}
+            data-lb-menu={gettext("Photo actions")}
+            data-lb-show={gettext("Show in chat")}
+            data-lb-save={gettext("Save")}
+            data-lb-reply={gettext("Reply")}
+            data-lb-forward={gettext("Forward")}
+            data-lb-del-me={gettext("Delete for me")}
+            data-lb-del-all={gettext("Delete for everyone")}
+            data-lb-del-confirm={gettext("Delete this message for everyone?")}
           >
             <%!-- Floating day chip (#83): server-rendered so a re-render never drops it;
                   the .DateRail hook sets its label to the topmost visible day + toggles
@@ -9500,10 +9508,27 @@ defmodule EdenWeb.ChatLive do
             let i = Math.max(0, tiles.indexOf(this.el))
 
             const box = this.box()
+            // The box is a singleton shared by every tile hook — the one that opened it
+            // owns the action pushes for as long as it's up (#465).
+            box.__hook = this
             const img = box.querySelector(".ed-lightbox__img")
             const count = box.querySelector(".ed-lightbox__count")
-            const show = (n) => {
+            const show = (n, dir) => {
+              const prev = i
               i = (n + tiles.length) % tiles.length
+              // Slide the outgoing frame out and the incoming one in (#465: paging was a
+              // bare src swap — nothing moved, so an album read as a still). Direction
+              // follows the gesture/arrow; opening (dir undefined) doesn't slide.
+              if (dir && prev !== i && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                img.style.transition = "none"
+                img.style.transform = `translateX(${dir > 0 ? -18 : 18}px)`
+                img.style.opacity = "0"
+                requestAnimationFrame(() => {
+                  img.style.transition = "transform 0.22s var(--ed-ease), opacity 0.22s var(--ed-ease)"
+                  img.style.transform = ""
+                  img.style.opacity = ""
+                })
+              }
               // Paging resets the zoom — carrying a 2.5x pan onto a different photo
               // would disorient (#469).
               box.__zoomReset()
@@ -9513,6 +9538,7 @@ defmodule EdenWeb.ChatLive do
               img.style.visibility = "hidden"
               img.onload = reveal
               img.src = tiles[i].dataset.full
+              box.__src = tiles[i].dataset.full
               // A screen reader hears WHICH photo, not an empty string (audit P1):
               // the tile's aria-label is already localized ("Photo").
               img.alt = tiles[i].getAttribute("aria-label") || ""
@@ -9520,12 +9546,16 @@ defmodule EdenWeb.ChatLive do
               // without a counter an album is indistinguishable from a lone photo.
               count.textContent =
                 tiles.length > 1 ? `${i + 1} ${box.__of} ${tiles.length}` : ""
+              // Chrome for THIS photo: who sent it and when, plus the action set the
+              // menu offers (own messages add "delete for everyone").
+              box.__meta = { ...tiles[i].dataset }
+              box.__renderChrome()
               // Reopening the same photo sets an unchanged src, which fires no
               // load event in some browsers — reveal immediately when cached.
               if (img.complete) reveal()
             }
             box.__show = show
-            box.__step = (d) => show(i + d)
+            box.__step = (d) => show(i + d, d)
             box.classList.toggle("ed-lightbox--gallery", tiles.length > 1)
             show(i)
 
@@ -9565,13 +9595,76 @@ defmodule EdenWeb.ChatLive do
             box.__of = lbl.lbOf || "/"
             // The dialog's accessible name — a screen reader announces the modal (audit P1).
             box.setAttribute("aria-label", lbl.lbViewer || "Photo")
+            const dots = "M10 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"
+            // TG-style chrome (#465): a back arrow + who/when + an actions menu, all in a
+            // top bar that respects the safe area — the lone floating X sat under the notch
+            // and read as an afterthought (user report + audit).
             box.innerHTML =
-              `<button class="ed-lightbox__close" aria-label="${lbl.lbClose || "Close"}">${chevron(xmark)}</button>` +
+              '<div class="ed-lightbox__bar">' +
+              `<button class="ed-lightbox__btn ed-lightbox__close" aria-label="${lbl.lbClose || "Close"}">${chevron(left)}</button>` +
+              '<div class="ed-lightbox__title"><span class="ed-lightbox__who"></span>' +
+              '<span class="ed-lightbox__when"></span></div>' +
               '<div class="ed-lightbox__count" aria-live="polite"></div>' +
+              `<button class="ed-lightbox__btn ed-lightbox__more" aria-label="${lbl.lbMenu || "Actions"}" aria-haspopup="menu" aria-expanded="false">${chevron(dots)}</button>` +
+              '</div>' +
+              '<div class="ed-lightbox__menu" role="menu" hidden>' +
+              `<button class="ed-lightbox__item" role="menuitem" data-act="show">${lbl.lbShow || "Show in chat"}</button>` +
+              `<button class="ed-lightbox__item" role="menuitem" data-act="save">${lbl.lbSave || "Save"}</button>` +
+              `<button class="ed-lightbox__item" role="menuitem" data-act="reply">${lbl.lbReply || "Reply"}</button>` +
+              `<button class="ed-lightbox__item" role="menuitem" data-act="forward">${lbl.lbForward || "Forward"}</button>` +
+              `<button class="ed-lightbox__item" role="menuitem" data-act="del-me">${lbl.lbDelMe || "Delete for me"}</button>` +
+              `<button class="ed-lightbox__item ed-lightbox__item--danger" role="menuitem" data-act="del-all">${lbl.lbDelAll || "Delete for everyone"}</button>` +
+              '</div>' +
               `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="${lbl.lbPrev || "Previous"}">${chevron(left)}</button>` +
               '<img class="ed-lightbox__img" alt="">' +
               `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="${lbl.lbNext || "Next"}">${chevron(right)}</button>`
             const img = box.querySelector(".ed-lightbox__img")
+            const menu = box.querySelector(".ed-lightbox__menu")
+            const more = box.querySelector(".ed-lightbox__more")
+
+            // Chrome is data-driven: each shown photo pushes its own meta (#465).
+            box.__renderChrome = () => {
+              const m = box.__meta || {}
+              box.querySelector(".ed-lightbox__who").textContent = m.who || ""
+              const when = box.querySelector(".ed-lightbox__when")
+              when.textContent = m.at ? fmtWhen(m.at) : ""
+              // No message context (the profile gallery) → no actions to offer.
+              more.hidden = !m.msg
+              box.querySelector('[data-act="del-all"]').hidden = m.mine !== "1"
+              closeMenu()
+            }
+            // The viewer's own locale/zone, like the date rail (gettext can't reach here).
+            const fmtWhen = (iso) => {
+              try {
+                const d = new Date(iso)
+                const loc = document.getElementById("message-scroll")?.dataset.locale || undefined
+                return d.toLocaleString(loc, {
+                  day: "numeric",
+                  month: "short",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              } catch (_e) {
+                return ""
+              }
+            }
+            const closeMenu = () => {
+              menu.hidden = true
+              more.setAttribute("aria-expanded", "false")
+            }
+            box.__closeMenu = closeMenu
+            more.addEventListener("click", (e) => {
+              e.stopPropagation()
+              menu.hidden = !menu.hidden
+              more.setAttribute("aria-expanded", String(!menu.hidden))
+            })
+            menu.addEventListener("click", (e) => {
+              const item = e.target.closest("[data-act]")
+              if (!item) return
+              e.stopPropagation()
+              closeMenu()
+              box.__act(item.dataset.act)
+            })
 
             // ---- zoom (#469, audit P1): pinch / wheel / double-tap+dblclick, with pan.
             // Transforms only (translate+scale around the viewport center); page/close
@@ -9620,9 +9713,76 @@ defmodule EdenWeb.ChatLive do
               { passive: false }
             )
 
+            // Menu actions (#465). Reply/Forward/Delete reuse the message context-menu's
+            // own server events; "Show in chat" and "Save" are client-side.
+            box.__act = (act) => {
+              const m = box.__meta || {}
+              const id = m.msg
+              if (!id) return
+              const push = (ev, payload) => box.__hook?.pushEvent(ev, payload)
+              if (act === "show") {
+                // The message is already in the stream behind the viewer — close and
+                // land on it with the permalink highlight the jump flow uses.
+                close()
+                setTimeout(() => {
+                  const row = document.getElementById(`messages-${id}`)
+                  if (!row) return
+                  row.scrollIntoView({ block: "center", behavior: "smooth" })
+                  row.classList.add("ed-msg--focus")
+                  setTimeout(() => row.classList.remove("ed-msg--focus"), 1600)
+                }, 180)
+                return
+              }
+              if (act === "save") {
+                // Native: the in-app viewer (SFSafariViewController) is where iOS offers
+                // "Add to Photos" / the system share — the WebView itself can't write to
+                // the photo library (#465; a one-tap native save needs Filesystem+Share,
+                // filed as a follow-up). Browsers get the ordinary download.
+                const url = box.__src
+                const browser = window.Capacitor?.isNativePlatform?.()
+                  ? window.Capacitor.Plugins?.Browser
+                  : null
+                if (browser?.open) {
+                  fetch(`${url}/link`, { headers: { accept: "application/json" } })
+                    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+                    .then(({ url: signed }) => browser.open({ url: location.origin + signed }))
+                    .catch(() => {})
+                } else {
+                  const a = document.createElement("a")
+                  a.href = url
+                  a.download = ""
+                  document.body.appendChild(a)
+                  a.click()
+                  a.remove()
+                }
+                return
+              }
+              if (act === "reply") {
+                close()
+                push("reply", { id })
+                return
+              }
+              if (act === "forward") {
+                close()
+                push("forward_prompt", { id, surface: "main" })
+                return
+              }
+              if (act === "del-me") {
+                close()
+                push("delete_for_me", { id })
+                return
+              }
+              if (act === "del-all") {
+                if (!window.confirm(lbl.lbDelConfirm || "Delete this message for everyone?")) return
+                close()
+                push("delete_for_both", { id })
+              }
+            }
+
             const close = () => {
               if (box.__closing || !box.open) return
               box.__closing = true
+              closeMenu()
               const fin = () => {
                 box.classList.remove("ed-lightbox--out")
                 box.__closing = false
@@ -9653,7 +9813,12 @@ defmodule EdenWeb.ChatLive do
                 box.__swiped = false
                 return
               }
+              if (!menu.hidden && !e.target.closest(".ed-lightbox__menu")) return closeMenu()
+              // The back arrow FIRST (#472 review): it lives inside the bar, so the
+              // "clicks on the bar don't close the viewer" guard below was swallowing
+              // the primary close affordance.
               if (e.target.closest(".ed-lightbox__close")) return close()
+              if (e.target.closest(".ed-lightbox__bar")) return
               const nav = e.target.closest(".ed-lightbox__nav")
               if (nav) {
                 e.stopPropagation()
@@ -11893,6 +12058,8 @@ defmodule EdenWeb.ChatLive do
           :if={@message.attachments != []}
           attachments={@message.attachments}
           message_id={@message.id}
+          msg={@message}
+          mine={@mine}
         />
         <div :if={@message.body != ""} class="break-words ed-flat__body">
           {Markup.to_iodata(@message.body)}
@@ -12070,7 +12237,12 @@ defmodule EdenWeb.ChatLive do
               </span>
             </div>
             <div class="ed-media">
-              <.album_view attachments={@message.attachments} message_id={@message.id} />
+              <.album_view
+                attachments={@message.attachments}
+                message_id={@message.id}
+                msg={@message}
+                mine={@mine}
+              />
               <%!-- Time overlays the photo only when there's NO caption; with a caption it
                     rides in the caption line below (Telegram-style). --%>
               <span :if={@message.body == ""} class="ed-media-time">
@@ -12112,6 +12284,8 @@ defmodule EdenWeb.ChatLive do
               :if={@message.attachments != []}
               attachments={@message.attachments}
               message_id={@message.id}
+              msg={@message}
+              mine={@mine}
             />
             <%!-- Caption + meta share a flow-root block so a long caption can't stretch
                   a media bubble wider than the photo (#135-twin): the wrap is constrained
@@ -12561,15 +12735,22 @@ defmodule EdenWeb.ChatLive do
 
   attr :attachments, :list, required: true
   attr :message_id, :any, required: true
+  # The owning message + own-message flag (#465): album_view builds the lightbox
+  # chrome's meta (sender, time, permalink, mine) once and hands it to every tile.
+  attr :msg, :map, default: nil
+  attr :mine, :boolean, default: false
 
   # A message's attachments (#58). One renders exactly as before; several render
   # as a media grid (images as lightbox tiles, sharing a gallery so the lightbox
   # can page through them) followed by any videos/files stacked as full items.
   defp album_view(%{attachments: [single]} = assigns) do
-    assigns = assign(assigns, :attachment, as_file_if_strip(single))
+    assigns =
+      assigns
+      |> assign(:attachment, as_file_if_strip(single))
+      |> assign(:meta, lightbox_meta(assigns))
 
     ~H"""
-    <.attachment_view attachment={@attachment} />
+    <.attachment_view attachment={@attachment} meta={@meta} />
     """
   end
 
@@ -12589,6 +12770,7 @@ defmodule EdenWeb.ChatLive do
       |> assign(:rows, AlbumLayout.rows(media))
       |> assign(:rest, rest)
       |> assign(:gallery, "album-#{assigns.message_id}")
+      |> assign(:meta, lightbox_meta(assigns))
 
     ~H"""
     <%!-- Telegram-style justified mosaic (#…): the media split into rows, each row a flex
@@ -12609,6 +12791,7 @@ defmodule EdenWeb.ChatLive do
           dom_id={"att-#{item.id}"}
           class="ed-album__tile"
           gallery={@gallery}
+          meta={@meta}
           style={"flex:#{aspect} 1 0;#{tile_radius(ri, length(@rows), ti, length(row))}"}
         />
       </div>
@@ -12616,6 +12799,26 @@ defmodule EdenWeb.ChatLive do
     <.attachment_view :for={attachment <- @rest} attachment={attachment} />
     """
   end
+
+  # Everything the lightbox chrome needs about the owning message. `at` is an ISO
+  # timestamp formatted client-side in the viewer's locale/zone (the DateRail
+  # precedent — gettext and the TZ are unreachable inside the hook).
+  defp lightbox_meta(%{msg: %{} = msg} = assigns) do
+    %{
+      id: msg.id,
+      who: sender_name(msg),
+      at: DateTime.to_iso8601(msg.inserted_at),
+      link: ~p"/app/c/#{msg.conversation_id}/m/#{msg.id}",
+      mine: (assigns[:mine] && "1") || nil
+    }
+  end
+
+  defp lightbox_meta(_assigns), do: %{}
+
+  # Match the STRUCT, not any map (#472 review): %Ecto.Association.NotLoaded{} is a
+  # struct too, so a bare %{} pattern would take this clause and raise KeyError.
+  defp sender_name(%{sender: %Accounts.User{} = s}), do: s.display_name || s.username
+  defp sender_name(_), do: nil
 
   # Flip a strip photo to as_file at RENDER time (no DB change) so the file-card path draws it;
   # the strip/layout math itself lives in AlbumLayout (and is unit-tested there).
@@ -12663,6 +12866,7 @@ defmodule EdenWeb.ChatLive do
 
   attr :attachment, :map, required: true
   attr :gallery, :string, default: nil
+  attr :meta, :map, default: %{}
 
   # Renders an attachment by kind: a lightbox-able image, an in-app video player,
   # or a download card for a generic file.
@@ -12701,6 +12905,11 @@ defmodule EdenWeb.ChatLive do
       phx-hook=".Lightbox"
       data-full={~p"/files/#{@attachment.id}"}
       data-gallery={@gallery}
+      data-msg={@meta[:id]}
+      data-who={@meta[:who]}
+      data-at={@meta[:at]}
+      data-link={@meta[:link]}
+      data-mine={@meta[:mine]}
       href={~p"/files/#{@attachment.id}"}
       target="_blank"
       rel="noopener"
@@ -13509,6 +13718,10 @@ defmodule EdenWeb.ChatLive do
   # Optional inline style — the album mosaic passes `flex:<aspect> 1 0` so the tile takes
   # width proportional to its aspect ratio; the square profile gallery leaves it nil.
   attr :style, :string, default: nil
+  # Message context for the lightbox chrome (#465): sender, time, permalink and the
+  # own-message flag drive the title bar and the action menu. The profile gallery
+  # passes none — its lightbox opens chrome-less.
+  attr :meta, :map, default: %{}
 
   # Shared media grid tile (#136): an image opens the lightbox (paging its `gallery`); a video
   # is a poster with a play badge. Used by the message album (album_view) AND the profile
@@ -13522,6 +13735,11 @@ defmodule EdenWeb.ChatLive do
       data-full={~p"/files/#{@item.id}"}
       data-gallery={@gallery}
       data-ts={DateTime.to_unix(@item.inserted_at)}
+      data-msg={@meta[:id]}
+      data-who={@meta[:who]}
+      data-at={@meta[:at]}
+      data-link={@meta[:link]}
+      data-mine={@meta[:mine]}
       href={~p"/files/#{@item.id}"}
       target="_blank"
       rel="noopener"

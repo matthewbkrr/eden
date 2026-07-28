@@ -2881,3 +2881,12 @@ msgstr "из"
 #, elixir-autogen, elixir-format
 msgid "Photo viewer"
 msgstr "Просмотр фото"
+
+#, elixir-autogen, elixir-format
+msgid "Photo actions"
+msgstr "Действия с фото"
+
+#, elixir-autogen, elixir-format
+msgid "Show in chat"
+msgstr "Показать в чате"
+
