@@ -3104,13 +3104,18 @@ defmodule EdenWeb.ChatLive do
               ;(s.ov || s.main).style.transform = "translateX(" + s.dx + "px)"
               e.preventDefault() // the pane is following the finger — no scroll/selection
             }
-            // touchcancel is NOT a release (#481). The OS took the touch away — Android's own
-            // edge-back detector claiming the gesture it was still forwarding us, an iOS
-            // notification pull, an incoming-call banner, Control Center. Routing it into
-            // onTouchEnd made the commit test read whatever travel had accumulated, and a
-            // system-claimed edge gesture is exactly a fast flick (40px in 60ms = 0.67, well
-            // over the 0.35 threshold) — so it COMMITTED a back the user never performed. On
-            // Android that fires alongside the OS's own back: one gesture, two navigations.
+            // touchcancel is NOT a release (#481). The OS took the touch away, and routing it
+            // into onTouchEnd made the commit test read whatever travel had accumulated — a
+            // system-claimed gesture is exactly a fast flick (40px in 60ms = 0.67, well over
+            // the 0.35 threshold), so it COMMITTED a back the user never performed.
+            //
+            // The LIVE case is iOS, where this recognizer IS the back gesture and the system
+            // still interrupts it: a notification-shade pull, an incoming-call banner, Control
+            // Center. Android's edge-back detector produces the same shape, but the platform
+            // gate in onTouchStart means we never arm there any more (#490 review) — so that
+            // path is closed upstream, and this handler is correct on its own terms rather
+            // than leaning on the gate staying in place.
+            //
             // The same class was already recognised and fixed for the long-press timer in
             // #462; the swipe recognizer never got the same treatment.
             this.onTouchCancel = () => {
