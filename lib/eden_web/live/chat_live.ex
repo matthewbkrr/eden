@@ -3000,13 +3000,7 @@ defmodule EdenWeb.ChatLive do
               } else {
                 // Back to the list: both screens are local DOM — swap them in the same task
                 // the history commits, so the settled gesture never shows the stale chat.
-                document.activeElement?.blur?.()
-                document.querySelectorAll(".ed-convo--active").forEach((n) => n.classList.remove("ed-convo--active"))
-                main.classList.add("hidden")
-                aside.classList.remove("hidden")
-                document.querySelector("nav.ed-rail")?.classList.remove("hidden")
-                // A full-screen thread sheet would keep covering the list until the patch.
-                document.querySelector(".ed-thread")?.classList.add("hidden")
+                this.revealList(main, aside)
               }
             }
             window.addEventListener("popstate", this.onPop)
@@ -3048,7 +3042,11 @@ defmodule EdenWeb.ChatLive do
               const main = document.getElementById("chat-dropzone")
               const aside = document.querySelector(".ed-root > aside")
               if (!loadingOv && (!main || !aside)) return
-              this._swipe = { x: t.clientX, y: t.clientY, t0: e.timeStamp, main, aside, armed: false, dx: 0, ov: loadingOv }
+              // href at ARM time (#477): the mid-load cancel below must know whether the
+              // pending patch pushed a history entry while the finger was down. It normally
+              // has not — this branch can only arm before the patch acks — so the URL is
+              // still the screen we came from, and popping would take a REAL earlier entry.
+              this._swipe = { x: t.clientX, y: t.clientY, t0: e.timeStamp, main, aside, armed: false, dx: 0, ov: loadingOv, href: location.href }
               this._trackSwipe()
             }
             this.onTouchMove = (e) => {
@@ -3098,7 +3096,11 @@ defmodule EdenWeb.ChatLive do
                   el.style.transition = "transform 0.25s var(--ed-ease)"
                   el.style.transform = "translateX(100%)"
                   setTimeout(() => el.remove(), 300)
-                  history.back() // undo the optimistic pushPatch; popstate reveals the list
+                  // The overlay covered the whole screen; the DOM underneath is still the
+                  // conversation we were LEAVING (or the list, if we came from there). Swap
+                  // to the list in this task so the settled gesture never flashes it.
+                  this.revealList(document.getElementById("chat-dropzone"), document.querySelector(".ed-root > aside"))
+                  this.cancelPending(s.href)
                 } else {
                   el.style.transition = "transform 0.2s var(--ed-ease)"
                   el.style.transform = ""
@@ -3401,6 +3403,49 @@ defmodule EdenWeb.ChatLive do
             }
             main.addEventListener("transitionend", onEnd)
             setTimeout(go, 450) // fallback if the filtered event never fires
+          },
+          // Put the LIST on screen right now, client-side. Both screens are local DOM, so
+          // the swap happens in the same task as the gesture that asked for it and the
+          // settled gesture never flashes the chat it just left; the patch then normalizes
+          // every class. Shared by history traversal (onPop) and the mid-load cancel.
+          revealList(main, aside) {
+            if (!main || !aside) return
+            document.activeElement?.blur?.()
+            document.querySelectorAll(".ed-convo--active").forEach((n) => n.classList.remove("ed-convo--active"))
+            main.classList.add("hidden")
+            aside.classList.remove("hidden")
+            document.querySelector("nav.ed-rail")?.classList.remove("hidden")
+            // A full-screen thread sheet would keep covering the list until the patch.
+            document.querySelector(".ed-thread")?.classList.add("hidden")
+          },
+          // Undo a navigation the user swiped away while it was still in flight (#477).
+          //
+          // There is NO optimistic pushPatch to undo, despite what this code used to claim:
+          // LiveView pushes history state only in the server-reply callback (live_socket.js
+          // pushHistoryPatch -> view.js pushLinkPatch), and the mid-load branch can only arm
+          // WHILE that patch is unacked. So the old unconditional history.back() popped a
+          // real, unrelated entry every time — landing on the previously visited chat, or
+          // traversing out of the app entirely (first tap after login -> /login, a full page
+          // load), or, when the chat screen was history entry 0, doing nothing at all while
+          // the patch went on to ack and open the very chat the user had just cancelled.
+          //
+          // Pop only when the URL actually moved since the gesture armed — i.e. the patch
+          // DID ack mid-gesture and really pushed. Otherwise supersede FORWARD through the
+          // always-rendered list link: that bumps LiveView's linkRef, so the in-flight chat
+          // patch's historyPatch is dropped on arrival, and the app settles on the list with
+          // the history stack untouched. The link is `replace`, so the settle cannot add an
+          // entry of its own either.
+          cancelPending(armedHref) {
+            this._navGen = (this._navGen || 0) + 1
+            if (armedHref && location.href !== armedHref) {
+              history.back()
+              return
+            }
+            const list = document.querySelector("[data-nav-list]")
+            // The link rides the ChatLive root, so it is always present here; the pop is a
+            // belt for a DOM we don't own rather than a path we expect to take.
+            if (list) list.click()
+            else history.back()
           },
           // Start the instant transition INTO a chat: paint the overlay (cache or skeleton),
           // snapshot the conversation being left, kick the async IDB fill. Shared by the tap
@@ -4231,6 +4276,21 @@ defmodule EdenWeb.ChatLive do
           />
         </div>
       </aside>
+
+      <%!-- Cancel target for a navigation swiped away mid-flight (#477). The gesture needs a
+            way to settle the app back on the LIST without touching history, and it cannot
+            reuse the header back arrow: that one only exists while a chat is open (@selected),
+            which is exactly what is NOT true while one is still loading. Rendered always,
+            never focusable, and `replace` so the settle cannot add an entry of its own. --%>
+      <.link
+        patch={if @channel, do: ~p"/channels/#{@channel.id}", else: ~p"/app"}
+        replace
+        data-nav-list
+        class="hidden"
+        aria-hidden="true"
+        tabindex="-1"
+      >
+      </.link>
 
       <main
         id="chat-dropzone"
