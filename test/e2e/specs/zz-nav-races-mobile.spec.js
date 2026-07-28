@@ -715,7 +715,10 @@ test.describe("mobile nav races (stress)", () => {
       history.back()
     })
     await page.waitForTimeout(SETTLE)
-    const visibleOnReturn = await page.locator("[data-menu]:not([hidden])").isVisible().catch(() => false)
+    // count(), not isVisible() (#488 review): isVisible() is strict-mode and THROWS on more
+    // than one match, which a resurfacing regression would produce — and the catch would then
+    // swallow it into a pass, masking the exact bug this assertion exists for.
+    const visibleOnReturn = (await page.locator("[data-menu]:not([hidden])").count()) > 0
 
     // Phase 2 — the header-back path, which reaches the same state by a different route and
     // is the one the user actually performs. maybeStart's back branch stopPropagations the
@@ -739,8 +742,15 @@ test.describe("mobile nav races (stress)", () => {
         await page.waitForTimeout(200)
         flash.opened = await page.locator("[data-menu]:not([hidden])").count()
         await backStep(page, drv, "button")
-        await page.waitForTimeout(180) // inside the ~450ms slide, before the re-click
-        flash.duringBack = await page.locator("[data-menu]:not([hidden])").count()
+        // SAMPLE the whole slide instead of betting on one timestamp (#488 review): a single
+        // 180ms probe is at the mercy of machine speed and of whether the handler happened to
+        // run synchronously. Poll across the window and keep the WORST reading — the menu was
+        // over the list if it was open at any point before the re-click lands.
+        for (let t = 0; t < 420; t += 30) {
+          await page.waitForTimeout(30)
+          const n = await page.locator("[data-menu]:not([hidden])").count()
+          if (n > flash.duringBack) flash.duringBack = n
+        }
         await page.waitForTimeout(SETTLE)
       }
     }
@@ -753,7 +763,7 @@ test.describe("mobile nav races (stress)", () => {
       `    message row + header back\n` +
       (flash.opened
         ? `      menu open after long-press: ${flash.opened}\n` +
-          `      still open 180ms into the back slide: ${flash.duringBack}  (must be 0)\n`
+          `      worst reading across the back slide: ${flash.duringBack}  (must be 0)\n`
         : `      NOT EXERCISED — the long-press opened no menu on this engine, so the\n` +
           `      assertion below passes vacuously (WebKit dispatches synthetic touches by\n` +
           `      selector and they do not always reach a message row). This phase is only\n` +
@@ -763,6 +773,16 @@ test.describe("mobile nav races (stress)", () => {
 
     expect(openAfterNav, `the menu outlived the navigation — see ${file}`).toBe(0)
     expect(visibleOnReturn, `the menu came back with the list — see ${file}`).toBe(false)
-    expect(flash.duringBack, `the menu was still open over the list mid-back — see ${file}`).toBe(0)
+    // Assert phase 2 ONLY where it actually ran (#488 review). Where the synthetic long-press
+    // opened no menu the assertion would pass without exercising anything, and a vacuous green
+    // on the path the user actually performs is worse than an honest gap — annotate instead.
+    if (flash.opened) {
+      expect(flash.duringBack, `the menu was still open over the list mid-back — see ${file}`).toBe(0)
+    } else {
+      testInfo.annotations.push({
+        type: "not-exercised",
+        description: "(C) phase 2: the long-press opened no menu on this engine — header-back path unverified here",
+      })
+    }
   })
 })

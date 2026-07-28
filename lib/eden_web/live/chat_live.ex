@@ -6612,12 +6612,16 @@ defmodule EdenWeb.ChatLive do
           updated() {
             this.wire()
             if (active === this) {
-              // Belt (#478): .ed-convo-wrap is statically positioned, so a null offsetParent
-              // means an ancestor is display:none — the sidebar or chat pane this host lives
-              // in is off screen. Re-asserting hidden=false there is precisely what armed a
-              // menu to reappear together with its pane; a host that is not rendered has no
-              // business owning the active menu.
-              if (this.el.offsetParent === null) return this.close()
+              // Belt (#478): a host that is not RENDERED must not own the active menu —
+              // re-asserting hidden=false on one is precisely what armed a menu to reappear
+              // together with the pane it lives in, which navigation merely gives
+              // class="hidden" rather than removing.
+              //
+              // getClientRects(), not offsetParent (#488 review): offsetParent is also null
+              // for position:fixed and for detached nodes, so it would close menus it has no
+              // business closing. A box that generates no client rects is exactly "display:none
+              // somewhere up the tree", and a visible fixed element still reports rects.
+              if (this.el.getClientRects().length === 0) return this.close()
               this.menu.hidden = false
               this.position(this.x, this.y)
             }
