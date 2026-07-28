@@ -9469,7 +9469,7 @@ defmodule EdenWeb.ChatLive do
           window.__edOverlayNavGuard = true
           window.addEventListener("phx:page-loading-start", () => {
             const lb = document.getElementById("ed-lightbox")
-            if (lb && lb.classList.contains("ed-lightbox--open")) lb.__close && lb.__close()
+            if (lb && lb.open) lb.__close && lb.__close()
             const vm = document.getElementById("ed-video-modal")
             if (vm && vm.classList.contains("ed-video-modal--open")) vm.__close && vm.__close()
           })
@@ -9486,7 +9486,7 @@ defmodule EdenWeb.ChatLive do
               // wins. (A profile photo has no dbl-react, so it always opens on click.)
               if (inMsg && e.detail > 1) {
                 const box = document.getElementById("ed-lightbox")
-                if (box?.classList.contains("ed-lightbox--open")) box.__close?.()
+                if (box?.open) box.__close?.()
                 return
               }
               this.openLightbox()
@@ -9532,9 +9532,12 @@ defmodule EdenWeb.ChatLive do
             // Native <dialog> (audit P1): showModal() brings the top layer, focus
             // trap, Esc (via cancel) and focus RETURN to the opening tile for free —
             // the old div overlay was a phantom for keyboard and screen readers.
+            // Reopening during the 150ms close fade must CANCEL that close — its
+            // delayed teardown would fire box.close() on the fresh view (#470 review).
+            clearTimeout(box.__closeTimer)
+            box.__closing = false
             box.classList.remove("ed-lightbox--out")
             if (!box.open) box.showModal()
-            box.classList.add("ed-lightbox--open")
             // Start each open with a clean gesture flag — a stale `__swiped` from a
             // prior swipe would otherwise suppress the first tap (e.g. the X) (#96).
             box.__swiped = false
@@ -9621,7 +9624,7 @@ defmodule EdenWeb.ChatLive do
               if (box.__closing || !box.open) return
               box.__closing = true
               const fin = () => {
-                box.classList.remove("ed-lightbox--out", "ed-lightbox--open")
+                box.classList.remove("ed-lightbox--out")
                 box.__closing = false
                 try { box.close() } catch (_e) { /* already closed */ }
                 document.body.style.overflow = ""
@@ -9632,7 +9635,7 @@ defmodule EdenWeb.ChatLive do
               // close gesture off mid-motion); instant under reduced motion.
               if (matchMedia("(prefers-reduced-motion: reduce)").matches) return fin()
               box.classList.add("ed-lightbox--out")
-              setTimeout(fin, 150)
+              box.__closeTimer = setTimeout(fin, 150)
             }
             // Expose close so the global nav guard (#380/R187) can dismiss the overlay when a
             // server-driven navigation tears down the owning hook without firing Esc/backdrop close.
