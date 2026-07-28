@@ -2994,22 +2994,18 @@ defmodule EdenWeb.ChatLive do
               if (this.asideOv) this.asideDismiss()
               const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200))
               idle(() => this.stashAside())
-              // A patch that settles with no pane at all — a room whose membership was just
-              // revoked renders the knock window instead — must not sit under a shimmer for
-              // the full 15s strand timeout. But "no pane yet" is ALSO what every
-              // intermediate settle in a burst looks like, and tearing the overlay down
-              // there left all three superseded streams painting bare (#482, measured:
-              // overlay gone at t=1468, streams mounting at 1545/1587/1610). Require the URL
-              // to have committed to the target: for the knock it has, for a superseded
-              // patch it never will.
-              if (
-                this.target != null &&
-                !document.getElementById("message-scroll") &&
-                String(this.urlConvId()) === String(this.target)
-              ) this.dismiss()
-              // …and a settled nav whose URL has committed to the target drops it too: with the
-              // URL condition above, the winning conv-shown can arrive BEFORE commitPendingLink
-              // runs, and without this the overlay would hang on to the 15s strand timer (#482).
+              // A settled navigation whose URL has COMMITTED to the target drops the overlay.
+              // One condition covers both cases that need it (#499 review — the separate
+              // "settled but no pane" branch this replaced was strictly subsumed by it):
+              //   • the pane mounted, but its conv-shown arrived before commitPendingLink ran,
+              //     so onShown's URL check had not yet passed;
+              //   • no pane will EVER mount — a room whose membership was revoked mid-open
+              //     renders the knock window instead — which must not sit under a shimmer for
+              //     the full 15s strand timeout.
+              // The URL is what separates those from an intermediate settle in a burst: a
+              // superseded patch never commits one, so its arrival leaves the overlay up
+              // (#482, measured: overlay gone at t=1468 while streams mounted at 1545/1587/1610,
+              // leaving all three to paint bare).
               if (this.target != null && String(this.urlConvId()) === String(this.target)) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
@@ -3597,8 +3593,12 @@ defmodule EdenWeb.ChatLive do
             setTimeout(once, 450)
             s.main.style.transform = "translateX(0px)"
           },
-          // The conversation the URL currently commits to, or null. Tolerant of the permalink
-          // shapes (/m/:id) which the strict onPop patterns deliberately are not.
+          // The conversation the URL currently commits to, or null. Both patterns are
+          // deliberately UNANCHORED at the end (#499 review asked where the /m/:id branch is —
+          // there is none, and none is needed): /app/c/34/m/99 and /channels/13/r/36/m/7 match
+          // the same expressions and yield 34 and 36. The onPop patterns anchor with $ because
+          // they decide whether a URL is a chat screen at all; this one only has to name the
+          // conversation, so the permalink suffix is simply ignored.
           urlConvId() {
             const m =
               location.pathname.match(/^\/app\/c\/([^\/]+)/) ||
