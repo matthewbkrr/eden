@@ -2862,3 +2862,12 @@ msgstr "of"
 #, elixir-autogen, elixir-format
 msgid "Photo viewer"
 msgstr "Photo viewer"
+
+#, elixir-autogen, elixir-format
+msgid "Photo actions"
+msgstr "Photo actions"
+
+#, elixir-autogen, elixir-format
+msgid "Show in chat"
+msgstr "Show in chat"
+

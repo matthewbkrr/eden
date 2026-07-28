@@ -2002,25 +2002,119 @@ html {
       animation: none;
     }
   }
-  /* Album position (audit P1): the phone pages by swipe with no arrows — the quiet
-     counter is the only signal an album has more. Hidden for a lone photo. */
-  .ed-lightbox__count {
+  /* TG-style top bar (#465): back arrow · who/when · counter · actions — inside the
+     safe area, so nothing hides under the notch (the floating X did). */
+  .ed-lightbox__bar {
     position: fixed;
-    top: 1.35rem;
-    left: 50%;
-    transform: translateX(-50%);
-    display: none;
-    padding: 0.3rem 0.75rem;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: calc(env(safe-area-inset-top) + 0.6rem) 0.9rem 0.6rem;
+    color: oklch(0.99 0 0);
+    /* A soft top scrim keeps white chrome legible over a bright photo. */
+    background: linear-gradient(oklch(0 0 0 / 0.55), oklch(0 0 0 / 0));
+    cursor: default;
+  }
+  .ed-lightbox__btn {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.75rem;
+    height: 2.75rem;
     border-radius: var(--ed-radius-full);
     background: oklch(1 0 0 / 0.12);
     color: oklch(0.99 0 0);
+    cursor: pointer;
+    transition: background 0.16s var(--ed-ease);
+  }
+  .ed-lightbox__btn:hover {
+    background: oklch(1 0 0 / 0.22);
+  }
+  .ed-lightbox__btn svg {
+    width: 1.625rem;
+    height: 1.625rem;
+  }
+  .ed-lightbox__title {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.25;
+  }
+  .ed-lightbox__who {
+    font-weight: 600;
+    font-size: 0.9375rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ed-lightbox__when {
+    font-size: 0.75rem;
+    opacity: 0.72;
+  }
+  /* Album position: the phone pages by swipe with no arrows — the quiet counter is
+     the only signal an album has more. Hidden for a lone photo. */
+  .ed-lightbox__count {
+    display: none;
+    flex: none;
+    padding: 0.25rem 0.6rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(1 0 0 / 0.12);
     font-size: 0.8125rem;
     font-weight: 600;
     letter-spacing: 0.02em;
-    pointer-events: none;
   }
   .ed-lightbox--gallery .ed-lightbox__count {
     display: block;
+  }
+  .ed-lightbox__menu {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 3.9rem);
+    right: 0.9rem;
+    min-width: 13rem;
+    padding: 0.3rem;
+    border-radius: var(--ed-radius-lg);
+    background: var(--ed-surface);
+    border: 1px solid var(--ed-border);
+    box-shadow: var(--ed-shadow-lg, 0 12px 32px oklch(0 0 0 / 0.35));
+    z-index: 1;
+    animation: ed-lb-menu-in 0.14s var(--ed-ease);
+  }
+  .ed-lightbox__menu[hidden] {
+    display: none;
+  }
+  @keyframes ed-lb-menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+  }
+  .ed-lightbox__item {
+    display: block;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    border-radius: var(--ed-radius);
+    text-align: left;
+    font-size: 0.9375rem;
+    color: var(--ed-ink);
+    cursor: pointer;
+  }
+  .ed-lightbox__item:hover {
+    background: var(--ed-surface-2);
+  }
+  .ed-lightbox__item--danger {
+    color: var(--ed-danger-strong);
+  }
+  .ed-lightbox__item[hidden] {
+    display: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-lightbox__menu {
+      animation: none;
+    }
   }
   .ed-lightbox__img {
     /* Clamp against the viewport, not the (content-sized) grid track, so a large
@@ -2071,28 +2165,10 @@ html {
   .ed-lightbox__nav--next {
     right: 1rem;
   }
-  /* Always-visible close (#96): Esc has no mobile equivalent and tap-outside is
-     fiddly on a small viewport. Mirrors the nav buttons, pinned top-right. */
-  .ed-lightbox__close {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    display: grid;
-    place-items: center;
-    width: 2.75rem;
-    height: 2.75rem;
-    border-radius: var(--ed-radius-full);
-    background: oklch(1 0 0 / 0.12);
-    color: oklch(0.99 0 0);
-    cursor: pointer;
-    transition: background 0.16s var(--ed-ease);
-  }
-  .ed-lightbox__close svg {
-    width: 1.625rem;
-    height: 1.625rem;
-  }
-  .ed-lightbox__close:hover {
-    background: oklch(1 0 0 / 0.22);
+  /* The close affordance is the bar's back arrow now (#465) — styling rides
+     .ed-lightbox__btn; the tall photo must clear the bar. */
+  .ed-lightbox__img {
+    margin-top: calc(env(safe-area-inset-top) + 2.5rem);
   }
   /* Phone: no room for side arrows — swipe left/right pages instead (#96). */
   @media (max-width: 767px) {

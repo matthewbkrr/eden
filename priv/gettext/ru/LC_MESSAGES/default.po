@@ -435,9 +435,6 @@ msgstr "Профиль сохранён."
 #: lib/eden_web/live/chat_live.ex:10562
 #: lib/eden_web/live/settings_live.ex:385
 #: lib/eden_web/live/settings_live.ex:459
-#, elixir-autogen, elixir-format
-msgid "Save"
-msgstr "Сохранить"
 
 #: lib/eden_web/live/settings_live.ex:263
 #, elixir-autogen, elixir-format
@@ -2881,3 +2878,15 @@ msgstr "из"
 #, elixir-autogen, elixir-format
 msgid "Photo viewer"
 msgstr "Просмотр фото"
+
+#, elixir-autogen, elixir-format
+msgid "Photo actions"
+msgstr "Действия с фото"
+
+#, elixir-autogen, elixir-format
+msgid "Show in chat"
+msgstr "Показать в чате"
+
+#, elixir-autogen, elixir-format
+msgid "Save"
+msgstr "Сохранить"

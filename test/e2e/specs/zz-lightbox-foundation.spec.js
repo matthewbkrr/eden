@@ -102,3 +102,90 @@ test("mobile: counter is the album signal; swipe-down still closes", async ({
   await touch("touchend", 205, 420)
   await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(0, { timeout: 3000 })
 })
+
+// ---- Wave B chrome (#465): the TG-style bar, the action menu, paging motion.
+
+test("chrome: who/when/counter render and the menu offers the message actions", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
+  const page = alice
+  await openAlbum(page, seed)
+
+  await expect(page.locator(".ed-lightbox__who")).not.toBeEmpty()
+  await expect(page.locator(".ed-lightbox__when")).not.toBeEmpty()
+  await expect(page.locator(".ed-lightbox__count")).toBeVisible()
+  // The bar sits inside the safe area — the old floating X hid under the notch.
+  const barTop = await page.evaluate(
+    () => Math.round(document.querySelector(".ed-lightbox__bar").getBoundingClientRect().top),
+  )
+  expect(barTop).toBe(0)
+
+  await page.locator(".ed-lightbox__more").click()
+  const items = page.locator(".ed-lightbox__item:visible")
+  await expect(items).toHaveCount(6) // own photo → delete-for-everyone included
+  await expect(page.locator('[data-act="show"]')).toBeVisible()
+  await expect(page.locator('[data-act="save"]')).toBeVisible()
+  await expect(page.locator('[data-act="del-all"]')).toBeVisible()
+
+  // A click on the backdrop closes the MENU first, not the viewer.
+  await page.mouse.click(5, 400)
+  await expect(page.locator(".ed-lightbox__menu")).toBeHidden()
+  await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(1)
+  await page.keyboard.press("Escape")
+})
+
+test("menu action reaches the server: Reply opens the reply bar", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
+  const page = alice
+  await openAlbum(page, seed)
+  await page.locator(".ed-lightbox__more").click()
+  await page.locator('[data-act="reply"]').click()
+  await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(0, { timeout: 3000 })
+  // The composer's reply bar is the server's answer to the pushed event.
+  await expect(page.locator("#composer [data-reply-bar], #composer .ed-reply-bar")).toBeVisible({
+    timeout: 5000,
+  })
+})
+
+test("Show in chat closes the viewer and highlights the message", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
+  const page = alice
+  await openAlbum(page, seed)
+  const msgId = await page.evaluate(() => document.getElementById("ed-lightbox").__meta.msg)
+  await page.locator(".ed-lightbox__more").click()
+  await page.locator('[data-act="show"]').click()
+  await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(0, { timeout: 3000 })
+  await expect(page.locator(`#messages-${msgId}`)).toHaveClass(/ed-msg--focus/, { timeout: 3000 })
+})
+
+test("paging animates the frame instead of swapping it dead", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
+  const page = alice
+  await openAlbum(page, seed)
+  // Proof of MOTION, not of a style string: the frame must actually run a transform
+  // transition on page (the rAF hands the offset back home before any assertion
+  // round-trip could read the inline styles).
+  await page.evaluate(() => {
+    window.__moved = []
+    document
+      .querySelector(".ed-lightbox__img")
+      .addEventListener("transitionstart", (e) => window.__moved.push(e.propertyName))
+  })
+  await page.keyboard.press("ArrowLeft")
+  await page.waitForFunction(() => window.__moved?.includes("transform"), null, { timeout: 2000 })
+  await page.waitForTimeout(350)
+  const settled = await page.evaluate(() => document.querySelector(".ed-lightbox__img").style.transform)
+  expect(settled, "the frame settles at rest").toBe("")
+  await page.keyboard.press("Escape")
+})
