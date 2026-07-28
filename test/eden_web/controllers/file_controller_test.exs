@@ -46,6 +46,24 @@ defmodule EdenWeb.FileControllerTest do
       assert get_resp_header(anon, "content-type") == ["image/png"]
     end
 
+    test "mints for a client that ASKS for json (the native fetch, #468 fix)", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment
+    } do
+      # The :browser pipeline accepts html only — a request with this header was
+      # answered 406 before the controller ran, and the in-app viewer showed
+      # "не удалось открыть файл". The route rides :browser_json now.
+      conn =
+        conn
+        |> log_in_user(alice)
+        |> put_req_header("accept", "application/json")
+        |> get(~p"/files/#{attachment.id}/link")
+
+      assert %{"url" => url} = json_response(conn, 200)
+      assert url =~ "/files/#{attachment.id}/t/"
+    end
+
     test "a non-member cannot mint a link", %{conn: conn, attachment: attachment} do
       mallory = user_fixture(%{username: "mallory"})
       conn = conn |> log_in_user(mallory) |> get(~p"/files/#{attachment.id}/link")
