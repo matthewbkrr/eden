@@ -3190,8 +3190,30 @@ defmodule EdenWeb.ChatLive do
               const wrap = e.target.closest?.(".ed-convo-wrap")
               this._tapRow = wrap ? wrap.dataset.id : null
               this._tapAt = e.timeStamp
+              const t = e.touches[0]
+              this._tapXY = t ? { x: t.clientX, y: t.clientY } : null
+            }
+            // A gesture that turned into a SCROLL is no longer a tap on that row, so the
+            // remembered intent goes with it (#497 review). Without this it survived until the
+            // next touchstart and could steer an unrelated activation that arrived inside the
+            // 1500ms window — a keyboard Enter on a focused row, say. touchend is deliberately
+            // NOT a clearing point: the click being steered arrives after it.
+            this.onTapMove = (e) => {
+              const d = this._tapXY
+              const t = e.touches[0]
+              if (!d || !t) return
+              if (Math.abs(t.clientX - d.x) > 10 || Math.abs(t.clientY - d.y) > 10) {
+                this._tapRow = null
+                this._tapXY = null
+              }
+            }
+            this.onTapCancel = () => {
+              this._tapRow = null
+              this._tapXY = null
             }
             document.addEventListener("touchstart", this.onTapStart, { passive: true })
+            document.addEventListener("touchmove", this.onTapMove, { passive: true })
+            document.addEventListener("touchcancel", this.onTapCancel, { passive: true })
             // Swipe DOWN over the chat dismisses the keyboard (#439, TG behavior). The
             // h-screen layout keeps the native scrollView unscrollable, so iOS's interactive
             // dismiss never engages — a decisive downward drag blurs instead. Passive.
@@ -4005,6 +4027,8 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("popstate", this.onPop)
             document.removeEventListener("touchstart", this.onTouchStart)
             document.removeEventListener("touchstart", this.onTapStart)
+            document.removeEventListener("touchmove", this.onTapMove)
+            document.removeEventListener("touchcancel", this.onTapCancel)
             document.removeEventListener("touchstart", this.onKbStart)
             document.removeEventListener("touchmove", this.onKbMove)
             this._untrackSwipe() // move/end may still be attached mid-gesture
