@@ -3435,8 +3435,12 @@ defmodule EdenWeb.ChatLive do
           // patch's historyPatch is dropped on arrival, and the app settles on the list with
           // the history stack untouched. The link is `replace`, so the settle cannot add an
           // entry of its own either.
+          // Deliberately does NOT bump _navGen (#486 review): that generation supersedes a
+          // pending backFinish, and one can never be pending here — backFinish holds
+          // _backing for its whole choreography, and onTouchStart refuses to arm this
+          // gesture while _backing is set. The navigation actually superseded here is the
+          // in-flight chat PATCH, and the link click below is what does it, via linkRef.
           cancelPending(armedHref) {
-            this._navGen = (this._navGen || 0) + 1
             if (armedHref && location.href !== armedHref) {
               history.back()
               return
