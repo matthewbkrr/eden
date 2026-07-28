@@ -2959,6 +2959,16 @@ defmodule EdenWeb.ChatLive do
               // hasn't run yet — and it must run BEFORE the disconnected bail below, or
               // a reconnect-cycle settle leaves the long-press guard stuck (#461 review).
               if (this.target == null) window.__edNavBusy = false
+              // The back patch we fired has landed — re-arm the gesture NOW instead of
+              // waiting out the belt (#480). Gated on _backFired, which backFinish sets
+              // immediately before the real click: an unrelated settle DURING the ~450ms
+              // slide must not drop the guard mid-choreography, which is the double-tap
+              // hazard #433 introduced the guard for.
+              if (this._backFired) {
+                clearTimeout(this._backingBelt)
+                this._backFired = false
+                this._backing = false
+              }
               if (!window.liveSocket?.isConnected?.()) return
               // A settled live nav re-rendered the aside — drop the rail overlay (#445) and
               // keep the sidebar snapshot warm for the NEXT hop (idle: off the settle frame).
@@ -3000,6 +3010,12 @@ defmodule EdenWeb.ChatLive do
               } else {
                 // Back to the list: both screens are local DOM — swap them in the same task
                 // the history commits, so the settled gesture never shows the stale chat.
+                // A system back SUPERSEDES a pending backFinish (#480): _navGen was bumped
+                // by begin() and the rail path but never here, so a hardware/gesture back
+                // during the ~450ms slide still let the deferred anchor.click() fire and
+                // push another list entry on top of the state that had just been popped —
+                // silently growing the stack that #476 exists to keep flat.
+                this._navGen = (this._navGen || 0) + 1
                 this.revealList(main, aside)
               }
             }
@@ -3396,7 +3412,21 @@ defmodule EdenWeb.ChatLive do
                 return
               }
               anchor.click() // real patch; morphdom then normalizes every class
-              setTimeout(() => (this._backing = false), 1000)
+              // Release the guard on the SETTLE, not on a clock (#480). The fixed 1000ms
+              // ran from the click, i.e. up to ~1.45s from the gesture, while a normal RTT
+              // put the user inside the next screen in about a third of that — so the edge
+              // swipe out of THAT screen refused to arm (onTouchStart bails on _backing) and
+              // back was simply dead for the rest of the second. Fast switching made it
+              // worse, which is exactly when it was reported. The flag below marks that the
+              // real patch is in flight; onLoadStop clears both. The timeout stays as a belt
+              // for a patch that never settles (stalled socket), where the old behaviour —
+              // clearing while the patch is still pending — was also the safer one.
+              this._backFired = true
+              clearTimeout(this._backingBelt)
+              this._backingBelt = setTimeout(() => {
+                this._backFired = false
+                this._backing = false
+              }, 1000)
             }
             const onEnd = (ev) => {
               if (ev.target === main && ev.propertyName === "transform") go()
@@ -3457,6 +3487,14 @@ defmodule EdenWeb.ChatLive do
           begin(link, id, isRoom) {
             // Any forward navigation supersedes a pending back-patch (see backFinish).
             this._navGen = (this._navGen || 0) + 1
+            // …and the guard drops WITH it (#480). backFinish's go() also clears _backing on
+            // a superseded generation, but go() does not run until transitionend or its 450ms
+            // fallback — so for the rest of that window the back choreography was already dead
+            // while its guard was still up, and onTouchStart refused to arm the edge swipe out
+            // of the screen we are opening right now. Measured: the navlog shows the swipe
+            // marker followed by no history.back(), no popstate and no cancel click at all,
+            // which is what kept the tap→midloadSwipe plan red (and #477's fix unreachable).
+            this._backing = false
             // In-flight beacon (#439): rapid chat switching keeps the main thread busy
             // (cache parse + morphs), delaying touchend past the 450ms long-press
             // threshold — the row context menu popped on plain taps. ContextMenu checks
@@ -3856,6 +3894,7 @@ defmodule EdenWeb.ChatLive do
             document.removeEventListener("touchstart", this.onKbStart)
             document.removeEventListener("touchmove", this.onKbMove)
             this._untrackSwipe() // move/end may still be attached mid-gesture
+            clearTimeout(this._backingBelt)
             this.remove()
           },
         }
