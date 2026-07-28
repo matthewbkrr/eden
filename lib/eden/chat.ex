@@ -2049,7 +2049,7 @@ defmodule Eden.Chat do
   # single-kind pages client-side would break the `before` cursor.
   def list_conversation_media(%Scope{user: user} = scope, conversation_id, kinds, opts)
       when is_list(kinds) do
-    true = Enum.all?(kinds, &(&1 in ~w(image video file audio)))
+    validate_kinds!(kinds)
 
     if has_access?(scope, conversation_id) do
       limit = Keyword.get(opts, :limit, @default_page)
@@ -2090,6 +2090,8 @@ defmodule Eden.Chat do
   """
   def count_conversation_media(%Scope{user: user} = scope, conversation_id, kinds)
       when is_list(kinds) do
+    validate_kinds!(kinds)
+
     if has_access?(scope, conversation_id) do
       count =
         Attachment
@@ -2106,6 +2108,16 @@ defmodule Eden.Chat do
       {:ok, count}
     else
       {:error, :not_found}
+    end
+  end
+
+  # A bad kind is a caller bug: say so plainly (#474 review — a bare `true = ...`
+  # match raised an opaque MatchError where the old single-kind guard had at least
+  # named the function).
+  defp validate_kinds!(kinds) do
+    case Enum.reject(kinds, &(&1 in ~w(image video file audio))) do
+      [] -> :ok
+      bad -> raise ArgumentError, "unknown media kind(s): #{inspect(bad)}"
     end
   end
 

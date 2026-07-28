@@ -1025,16 +1025,24 @@ defmodule EdenWeb.ChatLive do
   def handle_event("lightbox_media", params, %{assigns: %{selected: %{id: conv_id}}} = socket) do
     before = params["before"]
 
-    case Chat.list_conversation_media(socket.assigns.current_scope, conv_id, ~w(image video),
+    # Photos only for now (#474 review): the viewer renders an <img>, so a video item
+    # would page into a frame the browser can't decode. Video slides need the player
+    # from the video overlay — tracked separately.
+    case Chat.list_conversation_media(socket.assigns.current_scope, conv_id, ~w(image),
            limit: @lightbox_page,
            before: before,
            with_message: true
          ) do
       {:ok, media} ->
         # The counter's denominator — the reel loads lazily backwards, so without the
-        # total the viewer could only ever say "60 of 60+" (#466).
-        {:ok, total} =
-          Chat.count_conversation_media(socket.assigns.current_scope, conv_id, ~w(image video))
+        # total the viewer could only ever say "60 of 60+" (#466). A membership lost
+        # between the two reads must not MatchError the LiveView down (#474 review):
+        # fall back to the page size, which only softens the counter.
+        total =
+          case Chat.count_conversation_media(socket.assigns.current_scope, conv_id, ~w(image)) do
+            {:ok, n} -> n
+            {:error, _} -> length(media)
+          end
 
         {:reply,
          %{
@@ -9823,11 +9831,6 @@ defmodule EdenWeb.ChatLive do
                       im.src = it.full
                     }
                     b.appendChild(im)
-                    if (it.kind === "video") {
-                      const badge = document.createElement("span")
-                      badge.className = "ed-lightbox__thumb-play"
-                      b.appendChild(badge)
-                    }
                     return b
                   })
                 )

@@ -21,6 +21,16 @@ defmodule ReelTest do
     assert att.message.sender.username == "reel_a"
   end
 
+  test "an unknown kind is a plain ArgumentError, not an opaque match error" do
+    alice = user_fixture(%{username: "reel_k"})
+    bob = user_fixture(%{username: "reel_l"})
+    {:ok, conv} = Chat.create_conversation(Scope.for_user(alice), [bob.id])
+
+    assert_raise ArgumentError, ~r/unknown media kind/, fn ->
+      Chat.list_conversation_media(Scope.for_user(alice), conv.id, ~w(image sticker))
+    end
+  end
+
   test "a non-member gets not_found for a kinds list too" do
     alice = user_fixture(%{username: "reel_c"})
     bob = user_fixture(%{username: "reel_d"})

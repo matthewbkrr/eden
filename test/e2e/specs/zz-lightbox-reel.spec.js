@@ -3,9 +3,25 @@
 // instead of closing (audit finding).
 const { test, expect } = require("../helpers/fixtures")
 
+// The seeded photos can sit far above the last page — earlier specs (and the stress
+// harness) flood the dialog with text. Page older messages in until one appears
+// instead of assuming the newest page holds media.
+async function ensurePhoto(page) {
+  for (let k = 0; k < 15; k++) {
+    if (await page.locator("#messages a.ed-photo").count()) return
+    await page.evaluate(() => {
+      const s = document.getElementById("message-scroll")
+      if (s) s.scrollTop = 0
+    })
+    await page.waitForTimeout(450)
+  }
+  throw new Error("no photo found in this conversation")
+}
+
 async function open(page, seed) {
   await page.goto(`/app/c/${seed.dm_id}`)
   await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await ensurePhoto(page)
   await page.locator("#messages a.ed-photo").last().click()
   await page.waitForSelector("dialog#ed-lightbox[open]")
   // The first server page widens the reel past the album it opened from.

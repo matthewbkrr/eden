@@ -1,63 +1,84 @@
 // Mobile navigation races — the STRESS harness for two intermittent field bugs the
-// user has never been able to catch by hand (see #439/#432/#462 for the earlier,
-// deterministic single-shot repros in zz-nav-races.spec.js):
+// user has never been able to catch by hand (the deterministic single-shot repros from
+// #439/#432/#462 live in zz-nav-races.spec.js; this file hunts what's left):
 //
-//   (B) "wrong chat"   — rapid switching lands on a chat that was NOT the last one
-//                        tapped (one never tapped, or one tapped earlier).
-//   (A) "ghost menu"   — an edge-swipe back / header back + rapid switching pops the
-//                        sidebar row's CONTEXT MENU as if it had been long-pressed.
+//   (B) "wrong chat"  — rapid switching lands on a DIFFERENT chat: one never tapped,
+//                       or one tapped earlier.
+//   (A) "ghost menu"  — edge-swipe back / header back + rapid switching pops a sidebar
+//                       row's CONTEXT MENU as if it had been long-pressed.
 //
-// Both are timing bugs, so this file is a LOOP, not a scenario: N iterations sweeping
-// a delay (0/30/60/120/250ms — deliberately landing mid-flight), rotating the back
-// gesture (header button / edge swipe / system back), under a simulated RTT.
+// Both are timing bugs, so this is a LOOP, not a scenario: N iterations over 4 gesture
+// PLANS, sweeping a delay (0/30/60/120/250ms — deliberately landing mid-flight) under a
+// simulated RTT.
 //
-// The oracle for (B) is not "the URL I expected" but "the LAST a.ed-convo click the
-// DOM actually saw" — recorded by a capture-phase listener installed before any hook.
-// That is exactly the user's complaint ("I tapped X and got Y"), and it can't produce
-// a false positive when a tap is swallowed by the sliding pane (those are counted
-// separately as `swallowed`).
+// ORACLE (B) — not "the URL I expected" but the last navigation INTENT the DOM actually
+// recorded, replayed from the log:
+//   • a row tap that produced a real a.ed-convo click  → that chat must be open;
+//   • a back gesture performed FROM a chat             → the list must be open.
+// A tap the sliding pane swallowed produces no click, so it can never be a false
+// positive (those are counted separately). This is exactly the user's complaint.
 //
-// The oracle for (A) is a MutationObserver on every [data-menu]'s `hidden` attribute:
-// a menu that opens and is closed again by the next tap would be invisible to polling.
-// Every synthesised touch here is < 250ms and/or moves > 10px, i.e. NEVER a legitimate
-// long-press (450ms) — so any recorded menu is a bug, not the feature.
+// ORACLE (A) — a MutationObserver on every [data-menu]'s `hidden` attribute: a menu that
+// opens and is closed again by the next tap is invisible to polling. Every synthesised
+// touch here is < 250ms and/or moves > 10px, i.e. NEVER a legitimate long-press (450ms),
+// so any recorded menu is a bug and not the feature.
 //
-// Instrumentation (dumped on failure — the log is the point):
-//   window.__navLog   every pushState / replaceState / popstate / a-click / test mark,
-//                     with location.pathname + history.length + a ms timestamp.
-//   window.__menuLog  every context-menu open (host id + path + t).
-//   window.__touchLog every touchstart/end/cancel that reached `document` — a
-//                     touchstart with no matching touchend is the smoking gun for a
-//                     row that was morphed out from under a live gesture.
+// Instrumentation (written to artifacts/<project>/navlog-*.txt and attached — the log is
+// as valuable as the assertion):
+//   window.__navLog    every pushState / replaceState / popstate / <a> click / mark, with
+//                      location.pathname + history.length + a ms timestamp.
+//   window.__menuLog   every context-menu open (host id + path + t).
+//   window.__touchLog  every touchstart/end/cancel that reached `document`. A touchstart
+//                      with no matching end is the smoking gun for a row morphed out from
+//                      under a live gesture (the #439 shape of the ghost menu).
 //
-// Latency injection: `liveSocket.enableLatencySim(ms)` — the LiveView built-in the
-// harness already uses (zz-instant-nav "skeleton visual", zz-instant-nav-cache). It
-// delays the channel in BOTH directions, which is what widens these races: a patch's
-// history.pushState only runs in the server-reply callback (live_socket.js
-// pushHistoryPatch → historyPatch), so a whole RTT passes with no history entry for
-// the chat the user is already looking at. NAV_LATENCY=0 disables it.
-// (CDP Network.emulateNetworkConditions was rejected: it does not throttle an already
-// open WebSocket's frames, so it cannot widen the LiveView round-trip.)
+// LATENCY: `liveSocket.enableLatencySim(ms)` — the LiveView built-in the harness already
+// uses (zz-instant-nav, zz-instant-nav-cache). It delays the channel in both directions,
+// which is what widens these races: a patch's history.pushState only runs in the server
+// reply callback (live_socket.js pushHistoryPatch → historyPatch), so a whole RTT passes
+// with NO history entry for the screen the user is already looking at. NAV_LATENCY=0 off.
+// (CDP Network.emulateNetworkConditions was rejected: it does not throttle frames on an
+// already-open WebSocket, so it cannot widen the LiveView round-trip.)
+//
+// TOUCH: Chromium (mobile-chrome / Pixel 7) drives CDP Input.dispatchTouchEvent — real
+// touches, so the browser owns hit-testing and retargeting (a row morphed out from under
+// the finger behaves exactly as on a phone). WebKit (mobile-safari) has no CDP: it falls
+// back to the synthetic TouchEvent dispatch the rest of the suite uses — note a synthetic
+// touchend re-targets by SELECTOR, which is more forgiving than a finger.
 //
 // Env knobs:
-//   NAV_ITER=20         iterations per test
-//   NAV_DELAYS=0,30,... the mid-flight delay sweep (ms), cycled per iteration
-//   NAV_LATENCY=200     simulated RTT (ms), 0 to disable
-//   NAV_NOISE=1         bob sends messages into the loop (live sidebar re-render /
-//                       stream reorder under the finger) — the (A) amplifier
-const { test, expect, send } = require("../helpers/fixtures")
+//   NAV_ITER=24          iterations per test
+//   NAV_DELAYS=0,30,...  mid-flight delay sweep (ms), cycled per iteration
+//   NAV_LATENCY=200      simulated RTT (ms), 0 to disable
+//   NAV_NOISE=1          bob messages into the loop (live sidebar re-render + stream
+//                        reorder under the finger) — the (A) amplifier
+const fs = require("fs")
+const path = require("path")
+const { test, expect, send, artifactsRoot } = require("../helpers/fixtures")
 
-const ITER = Number(process.env.NAV_ITER || 20)
+const ITER = Number(process.env.NAV_ITER || 24)
 const DELAYS = (process.env.NAV_DELAYS || "0,30,60,120,250").split(",").map(Number)
 const LATENCY = Number(process.env.NAV_LATENCY === undefined ? 200 : process.env.NAV_LATENCY)
 const NOISE = process.env.NAV_NOISE !== "0"
 const SETTLE = 1200 + 4 * LATENCY
 
+// Gesture plans, cycled per iteration. Each step is executed in order; `wait` is the
+// swept mid-flight delay.
+const PLANS = [
+  { name: "backBtn→tap", steps: ["back:button", "wait", "tap"] },
+  { name: "backSwipe→tap", steps: ["back:swipe", "wait", "tap"] },
+  { name: "sysBack→tap", steps: ["back:history", "wait", "tap"] },
+  // The mid-LOAD swipe: tap a chat, then edge-swipe while it is still loading. That path
+  // drags the instant-nav overlay and commits with a raw history.back() (chat_live.ex
+  // onTouchEnd, the `s.ov` branch) — the prime suspect for landing on an earlier chat.
+  { name: "tap→midloadSwipe", steps: ["back:button", "tap", "wait", "back:swipe"] },
+]
+
 // ---------------------------------------------------------------- instrumentation
 
 async function instrument(page) {
-  // addInitScript, not evaluate: a stalled socket makes LiveView fall back to a FULL
-  // page load, and the log has to survive that (it restarts, which the log records).
+  // addInitScript, not evaluate: a stalled socket makes LiveView fall back to a FULL page
+  // load, and the log has to survive that (it restarts, which the log itself records).
   await page.addInitScript(() => {
     const now = () => Math.round(performance.now())
     window.__navLog = []
@@ -67,7 +88,9 @@ async function instrument(page) {
       window.__navLog.push(
         Object.assign({ t: now(), type, path: location.pathname, len: history.length }, extra || {}),
       )
+    window.__rec = rec
     window.__mark = (note) => rec("mark", { note })
+    rec("document-load")
     const ps = history.pushState.bind(history)
     history.pushState = function (s, ti, u) {
       const r = ps(s, ti, u)
@@ -81,8 +104,23 @@ async function instrument(page) {
       return r
     }
     addEventListener("popstate", () => rec("popstate"))
-    // Capture phase on document, installed BEFORE any hook mounts, so it sees every
-    // click even when .InstantNav / .ContextMenu stop propagation or preventDefault.
+    // WHO asked to traverse? The app calls history.back() from exactly two places
+    // (chat_live.ex .InstantNav onTouchEnd, and native.js for the Android hardware
+    // back) — the stack frame tells them apart from a test-driven one.
+    const hb = history.back.bind(history)
+    history.back = function () {
+      rec("history.back()", {
+        note: (new Error().stack || "").split("\n").slice(1, 4).join(" | ").replace(/https?:\/\/[^\s)]*\//g, ""),
+      })
+      return hb()
+    }
+    const hg = history.go.bind(history)
+    history.go = function (d) {
+      rec("history.go()", { to: String(d) })
+      return hg(d)
+    }
+    // Capture phase on document, installed BEFORE any hook mounts, so it sees every click
+    // even when .InstantNav / .ContextMenu preventDefault or stopPropagation it.
     document.addEventListener(
       "click",
       (e) => {
@@ -102,7 +140,7 @@ async function instrument(page) {
       },
       true,
     )
-    for (const type of ["touchstart", "touchend", "touchcancel"]) {
+    for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"]) {
       document.addEventListener(
         type,
         (e) => {
@@ -147,31 +185,47 @@ async function connected(page) {
   )
 }
 
-const mark = (page, note) => page.evaluate((n) => window.__mark && window.__mark(n), note)
+const convId = (p) => {
+  const m = p.match(/^\/app\/c\/([^\/]+)$/) || p.match(/^\/channels\/[^\/]+\/r\/([^\/]+)$/)
+  return m ? m[1] : null
+}
 
 async function state(page) {
   return page.evaluate(() => {
-    const m =
-      location.pathname.match(/^\/app\/c\/([^\/]+)$/) ||
-      location.pathname.match(/^\/channels\/[^\/]+\/r\/([^\/]+)$/)
     const scroll = document.getElementById("message-scroll")
     const main = document.getElementById("chat-dropzone")
-    const convoClicks = window.__navLog.filter((e) => e.type === "click" && e.kind === "convo")
     return {
       path: location.pathname,
-      url: m ? m[1] : null,
       dom: scroll ? scroll.dataset.conversationId : null,
       overlay: document.querySelectorAll(".ed-nav-skel").length,
       mainHidden: main ? main.classList.contains("hidden") : null,
       len: history.length,
-      lastConvoClick: convoClicks.length ? convoClicks[convoClicks.length - 1].to : null,
-      convoClicks: convoClicks.length,
+      events: window.__navLog.length,
       menus: window.__menuLog.length,
     }
   })
 }
 
-async function dump(page, testInfo, name) {
+function render(logs) {
+  const nav = logs.nav.map(
+    (e) =>
+      `${String(e.t).padStart(7)}ms  ${e.type.padEnd(13)} len=${String(e.len).padEnd(3)} ${e.path}` +
+      (e.kind ? ` [${e.kind}]` : "") +
+      (e.to ? ` -> ${e.to}` : "") +
+      (e.note ? `  # ${e.note}` : ""),
+  )
+  const touch = logs.touch.map(
+    (e) =>
+      `${String(e.t).padStart(7)}ms  ${e.type.padEnd(11)} row=${e.row} <${e.tag}> connected=${e.connected}`,
+  )
+  return (
+    `=== __navLog (${logs.nav.length}) ===\n${nav.join("\n")}\n\n` +
+    `=== __menuLog (${logs.menu.length}) ===\n${JSON.stringify(logs.menu, null, 1)}\n\n` +
+    `=== __touchLog (${logs.touch.length}) ===\n${touch.join("\n")}\n`
+  )
+}
+
+async function dump(page, testInfo, name, extra = "") {
   const logs = await page
     .evaluate(() => ({
       nav: window.__navLog || [],
@@ -179,31 +233,17 @@ async function dump(page, testInfo, name) {
       touch: window.__touchLog || [],
     }))
     .catch(() => ({ nav: [], menu: [], touch: [] }))
-  const lines = logs.nav.map(
-    (e) =>
-      `${String(e.t).padStart(7)}ms  ${e.type.padEnd(12)} len=${String(e.len).padEnd(3)} ${e.path}` +
-      (e.to ? `  -> ${e.to}` : "") +
-      (e.kind ? ` [${e.kind}]` : "") +
-      (e.note ? `  # ${e.note}` : ""),
-  )
-  const touch = logs.touch.map(
-    (e) => `${String(e.t).padStart(7)}ms  ${e.type.padEnd(11)} row=${e.row} <${e.tag}> connected=${e.connected}`,
-  )
-  const body =
-    `=== __navLog (${logs.nav.length}) ===\n${lines.join("\n")}\n\n` +
-    `=== __menuLog (${logs.menu.length}) ===\n${JSON.stringify(logs.menu, null, 1)}\n\n` +
-    `=== __touchLog (${logs.touch.length}) ===\n${touch.join("\n")}\n`
+  const body = extra + render(logs)
+  const dir = path.join(artifactsRoot, testInfo.project.name)
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, name)
+  fs.writeFileSync(file, body)
   await testInfo.attach(name, { body, contentType: "text/plain" })
-  return { body, ...logs }
+  return { file, logs, body }
 }
 
 // ------------------------------------------------------------------ touch driver
-// Chromium (mobile-chrome / Pixel 7): CDP Input.dispatchTouchEvent — REAL touches, so
-// the browser owns hit-testing and retargeting (a row morphed out from under the
-// finger behaves exactly as it does on a phone). WebKit (mobile-safari) has no CDP:
-// fall back to the synthetic TouchEvent dispatch the rest of the suite uses
-// (zz-swipe-back-layout, zz-instant-nav) — note that a synthetic touchend is
-// re-targeted by SELECTOR, which is more forgiving than a finger.
+
 function touchDriver(page) {
   let s = null
   const pt = (x, y) => ({ identifier: 1, clientX: x, clientY: y, pageX: x, pageY: y })
@@ -242,18 +282,20 @@ function touchDriver(page) {
         ? s.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
         : synth(sel, "touchend", x, y)
     },
-    async tap(x, y, sel = "body") {
-      await this.down(x, y, sel)
-      await this.up(x, y, sel)
+    // A tap is always a REAL touch (page.touchscreen works on Chromium AND WebKit) —
+    // a synthetic TouchEvent pair is not turned into a click by the browser, so a
+    // dispatched "tap" would never navigate.
+    async tap(x, y, _sel) {
+      await page.touchscreen.tap(x, y)
     },
   }
 }
 
-// The edge-swipe recognizer (.InstantNav onTouchStart/Move/End): one touch starting at
-// clientX <= 24, armed at dx >= 8, committed on release past 35% of the width OR at
-// > 0.35 px/ms. `sel` is where a SYNTHETIC start is dispatched — "body" for a plain
-// edge swipe, a row selector for the "swipe starts on a chat row" case (which arms the
-// row's long-press timer at the same time).
+// The edge-swipe recognizer (.InstantNav onTouchStart/Move/End): ONE touch starting at
+// clientX <= 24, armed at dx >= 8, committed on release past 35% of the width OR faster
+// than 0.35 px/ms. `sel` is where a SYNTHETIC start is dispatched — "body" for a plain
+// edge swipe, a row selector for "the swipe starts on a chat row" (which arms that row's
+// long-press timer from the same touchstart).
 async function edgeSwipe(drv, page, { sel = "body", y = 420, step = 16 } = {}) {
   const w = page.viewportSize().width
   await drv.down(8, y, sel)
@@ -264,19 +306,40 @@ async function edgeSwipe(drv, page, { sel = "body", y = 420, step = 16 } = {}) {
   await drv.up(Math.round(w * 0.8), y + 1, sel)
 }
 
-async function goBack(page, drv, mode) {
-  if (mode === "swipe") return edgeSwipe(drv, page)
-  if (mode === "history") return page.evaluate(() => history.back())
-  const back = page.locator("a[data-nav-back]")
-  const box = await back.boundingBox().catch(() => null)
-  if (!box) return page.evaluate(() => history.back()) // no chat header (already on the list)
-  return drv.tap(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2), "a[data-nav-back]")
+// A back gesture is only issued when there is something to go back FROM (a chat, or a
+// chat still loading behind the instant-nav overlay). Returns the pre-gesture path so
+// the oracle can tell "this back should have landed on the list" from "no-op".
+async function backStep(page, drv, mode) {
+  const pre = await page.evaluate((m) => {
+    window.__mark(`back:${m}`)
+    return {
+      path: location.pathname,
+      overlay: document.querySelectorAll(".ed-nav-skel").length,
+      hasBack: !!document.querySelector("a[data-nav-back]"),
+    }
+  }, mode)
+  const inChat = !!convId(pre.path) || pre.overlay > 0
+  if (!inChat) return { did: false, from: pre.path }
+  if (mode === "swipe") {
+    await edgeSwipe(drv, page)
+  } else if (mode === "history") {
+    await page.evaluate(() => history.back())
+  } else {
+    const box = await page.locator("a[data-nav-back]").boundingBox().catch(() => null)
+    if (!box) return { did: false, from: pre.path }
+    await drv.tap(
+      Math.round(box.x + box.width / 2),
+      Math.round(box.y + box.height / 2),
+      "a[data-nav-back]",
+    )
+  }
+  return { did: true, from: pre.path }
 }
 
-// Tap a sidebar row near its TOP-LEFT: during the back slide the pane (fixed, full
-// width, translateX 0→100%) uncovers the left edge first, which is precisely where a
-// fast user's next tap lands. Returns false when the row isn't hit-testable (the pane
-// ate the tap) — counted, never asserted on.
+// Tap a sidebar row near its TOP-LEFT: during the back slide the pane (fixed, full width,
+// translateX 0→100%) uncovers the left edge first, which is exactly where a fast user's
+// next tap lands. Returns null when the row has no box (we're inside a chat — the mobile
+// sidebar is hidden); a tap the pane swallows simply records no click.
 async function tapRow(page, drv, id) {
   const box = await page
     .locator(`.ed-convo-wrap[data-id="${id}"] a.ed-convo`)
@@ -286,7 +349,7 @@ async function tapRow(page, drv, id) {
   const x = Math.round(box.x + 14)
   const y = Math.round(box.y + 10)
   await drv.tap(x, y, `.ed-convo-wrap[data-id="${id}"] a.ed-convo`)
-  return { x, y, box }
+  return { x, y }
 }
 
 async function sidebarIds(page, n) {
@@ -299,6 +362,17 @@ async function sidebarIds(page, n) {
   )
 }
 
+// Replay an iteration's log slice into the navigation INTENT it expressed:
+//   a real convo click → that chat id;  a back FROM a chat → null (the list).
+function expectedFrom(events) {
+  let expected
+  for (const e of events) {
+    if (e.type === "click" && e.kind === "convo") expected = e.to
+    else if (e.type === "mark" && e.note.startsWith("back:") && convId(e.path)) expected = null
+  }
+  return expected
+}
+
 // --------------------------------------------------------------------- the tests
 
 test.describe("mobile nav races (stress)", () => {
@@ -306,11 +380,11 @@ test.describe("mobile nav races (stress)", () => {
     test.skip(!testInfo.project.name.startsWith("mobile"), "mobile-only gestures")
   })
 
-  test("(B) rapid back+switch always lands on the LAST chat actually tapped", async ({
+  test("(B) rapid back+switch always lands on the LAST screen actually asked for", async ({
     alice,
     seed,
   }, testInfo) => {
-    test.setTimeout(60_000 + ITER * (SETTLE + 4_000))
+    test.setTimeout(120_000 + ITER * (SETTLE + 10_000))
     const page = alice
     const drv = touchDriver(page)
     await instrument(page)
@@ -321,78 +395,87 @@ test.describe("mobile nav races (stress)", () => {
     expect(ids.length, "seed must give at least 3 sidebar chats").toBeGreaterThanOrEqual(3)
     if (LATENCY) await page.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
 
-    // Prime: open the first chat so every iteration starts from "inside a chat".
+    // Prime: open a chat so the first iteration has a back gesture to make.
     await tapRow(page, drv, ids[0])
     await page.waitForTimeout(SETTLE)
 
     const rows = []
     for (let i = 0; i < ITER; i++) {
       const delay = DELAYS[i % DELAYS.length]
-      const mode = ["button", "swipe", "history"][i % 3]
+      const plan = PLANS[i % PLANS.length]
       const target = ids[(i + 1) % ids.length]
-      await mark(page, `iter ${i} delay=${delay} back=${mode} target=${target}`)
       const before = await state(page)
+      await page.evaluate(
+        (n) => window.__mark(n),
+        `── iter ${i}  plan=${plan.name}  delay=${delay}ms  target=${target}`,
+      )
 
-      await goBack(page, drv, mode)
-      await page.waitForTimeout(delay) // deliberately mid-flight
-      const hit = await tapRow(page, drv, target)
+      for (const step of plan.steps) {
+        if (step === "wait") await page.waitForTimeout(delay)
+        else if (step === "tap") await tapRow(page, drv, target)
+        else await backStep(page, drv, step.split(":")[1])
+      }
       await page.waitForTimeout(SETTLE)
 
       const after = await state(page)
-      const clicked = after.convoClicks > before.convoClicks
+      const events = await page.evaluate((n) => window.__navLog.slice(n), before.events)
+      const expected = expectedFrom(events)
+      const got = convId(after.path)
       const row = {
         i,
         delay,
-        mode,
+        plan: plan.name,
         target,
-        tapped: !!hit,
-        clicked,
-        lastClick: after.lastConvoClick,
-        url: after.url,
+        expected: expected === undefined ? "(nothing happened)" : expected === null ? "list" : expected,
+        got: got || "list",
         dom: after.dom,
-        path: after.path,
         len: after.len,
-        overlay: after.overlay,
       }
-      // Only assert when the DOM really saw a row click this iteration: a tap the
-      // sliding pane swallowed is not the bug (and is reported separately).
-      row.bad = clicked && (after.url !== after.lastConvoClick || after.dom !== after.lastConvoClick)
+      row.bad =
+        expected !== undefined &&
+        (got !== expected || (expected !== null && after.dom !== expected))
       rows.push(row)
       if (row.bad) {
-        console.log(`  ✗ iter ${i}: clicked=${after.lastConvoClick} but url=${after.url} dom=${after.dom} path=${after.path}`)
+        console.log(
+          `  ✗ iter ${i} [${plan.name} d=${delay}] asked for ${row.expected}, got ${row.got} (#message-scroll=${after.dom})`,
+        )
       }
-      // Recover into a chat so the next iteration has a back gesture to make.
-      if (!after.url) {
+      // Recover into a chat so the next iteration has something to back out of.
+      if (!convId(after.path)) {
         await tapRow(page, drv, target)
         await page.waitForTimeout(SETTLE)
       }
     }
 
     const bad = rows.filter((r) => r.bad)
-    const swallowed = rows.filter((r) => !r.clicked)
-    const byDelay = {}
+    const stats = {}
     for (const r of rows) {
-      byDelay[r.delay] = byDelay[r.delay] || { n: 0, bad: 0 }
-      byDelay[r.delay].n++
-      if (r.bad) byDelay[r.delay].bad++
+      const k = `${r.plan}@${r.delay}ms`
+      stats[k] = stats[k] || { n: 0, bad: 0 }
+      stats[k].n++
+      if (r.bad) stats[k].bad++
     }
-    console.log(
-      `\n[B] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms iterations=${ITER}\n` +
-        `    wrong-chat: ${bad.length}/${rows.length}   tap-swallowed-by-pane: ${swallowed.length}\n` +
-        `    by delay: ${JSON.stringify(byDelay)}\n` +
-        rows
-          .map(
-            (r) =>
-              `    #${String(r.i).padStart(2)} d=${String(r.delay).padStart(3)} ${r.mode.padEnd(7)} want=${r.target} click=${r.lastClick} url=${r.url} dom=${r.dom} len=${r.len}${r.bad ? "   <-- WRONG CHAT" : r.clicked ? "" : "   (tap swallowed)"}`,
-          )
-          .join("\n"),
-    )
-    await dump(page, testInfo, "navlog-B.txt")
+    const summary =
+      `[B] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms iterations=${ITER}\n` +
+      `    WRONG SCREEN: ${bad.length}/${rows.length}\n` +
+      Object.entries(stats)
+        .map(([k, v]) => `    ${k.padEnd(28)} ${v.bad}/${v.n}`)
+        .join("\n") +
+      "\n" +
+      rows
+        .map(
+          (r) =>
+            `    #${String(r.i).padStart(2)} d=${String(r.delay).padStart(3)} ${r.plan.padEnd(17)} want=${String(r.expected).padEnd(6)} got=${String(r.got).padEnd(6)} dom=${String(r.dom).padEnd(6)} len=${r.len}${r.bad ? "   <-- WRONG" : ""}`,
+        )
+        .join("\n")
+    console.log("\n" + summary + "\n")
+    const { file } = await dump(page, testInfo, "navlog-B.txt", summary + "\n\n")
+    console.log("    navLog: " + file + "\n")
     if (LATENCY) await page.evaluate(() => window.liveSocket.disableLatencySim())
 
     expect(
       bad,
-      `landed on a chat that was not the last one tapped (${bad.length}/${rows.length})`,
+      `landed on a screen that was not the last one asked for (${bad.length}/${rows.length}) — see ${file}`,
     ).toEqual([])
   })
 
@@ -401,7 +484,7 @@ test.describe("mobile nav races (stress)", () => {
     bob,
     seed,
   }, testInfo) => {
-    test.setTimeout(90_000 + ITER * (SETTLE + 5_000))
+    test.setTimeout(180_000 + ITER * 3 * (SETTLE + 6_000))
     const page = alice
     const drv = touchDriver(page)
     await instrument(page)
@@ -411,17 +494,14 @@ test.describe("mobile nav races (stress)", () => {
     const ids = await sidebarIds(page, 5)
     if (LATENCY) await page.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
 
-    // Live noise: bob messaging the DM re-renders alice's sidebar (preview, badge) AND
-    // re-orders the stream — i.e. morphdom churning rows UNDER a live finger, which is
-    // the #439 shape of this bug (the touch's target node stops receiving touchend).
+    // Live noise: bob messaging the DM re-renders alice's sidebar (preview + badge) AND
+    // re-orders the stream — morphdom churning rows UNDER a live finger, which is the
+    // #439 shape of this bug (the touch's target node stops receiving touchend).
     if (NOISE) {
       await bob.goto(`/app/c/${seed.dm_id}`)
       await connected(bob)
     }
-    const noise = async (i) => {
-      if (!NOISE) return
-      await send(bob, `race-${Date.now()}-${i}`).catch(() => {})
-    }
+    const noise = (i) => (NOISE ? send(bob, `race-${Date.now()}-${i}`).catch(() => {}) : null)
 
     await tapRow(page, drv, ids[0])
     await page.waitForTimeout(SETTLE)
@@ -432,54 +512,63 @@ test.describe("mobile nav races (stress)", () => {
       const variant = i % 4
       const target = ids[(i + 1) % ids.length]
       const before = await state(page)
-      await mark(page, `iter ${i} delay=${delay} variant=${variant} target=${target}`)
+      await page.evaluate(
+        (n) => window.__mark(n),
+        `── iter ${i}  variant=${variant}  delay=${delay}ms  target=${target}`,
+      )
 
       if (variant === 0) {
         // header back, then a fast tap mid-slide
-        await goBack(page, drv, "button")
+        await backStep(page, drv, "button")
         await page.waitForTimeout(delay)
         await tapRow(page, drv, target)
       } else if (variant === 1) {
-        // plain edge swipe from the pane, then a fast tap
-        await goBack(page, drv, "swipe")
+        // plain edge swipe out of the chat, then a fast tap mid-slide
+        await backStep(page, drv, "swipe")
         await page.waitForTimeout(delay)
         await tapRow(page, drv, target)
       } else if (variant === 2) {
-        // the swipe STARTS ON A CHAT ROW: on the list the row's long-press timer arms
-        // from the same touchstart that (with a nav in flight) drags the overlay.
-        await goBack(page, drv, "button")
+        // The swipe STARTS ON A CHAT ROW: the same touchstart arms that row's 450ms
+        // long-press timer AND (with a nav in flight) drags the instant-nav overlay.
+        await backStep(page, drv, "button")
+        await page.waitForTimeout(delay)
+        await tapRow(page, drv, target) // start the load…
         await page.waitForTimeout(delay)
         const box = await page
-          .locator(`.ed-convo-wrap[data-id="${target}"] a.ed-convo`)
+          .locator(`.ed-convo-wrap[data-id="${ids[0]}"] a.ed-convo`)
           .boundingBox()
           .catch(() => null)
         if (box) {
-          const y = Math.round(box.y + box.height / 2)
-          await noise(i) // sidebar re-orders while the finger is down
+          await noise(i) // …and re-order the sidebar under the finger
           await edgeSwipe(drv, page, {
-            sel: `.ed-convo-wrap[data-id="${target}"] a.ed-convo`,
-            y,
+            sel: `.ed-convo-wrap[data-id="${ids[0]}"] a.ed-convo`,
+            y: Math.round(box.y + box.height / 2),
             step: 14,
           })
         }
-        await tapRow(page, drv, target)
       } else {
-        // a navigation settles while a finger is DOWN on a row — held 220ms, well
-        // under the 450ms long-press, so a menu here is never the feature.
-        await goBack(page, drv, "history")
+        // A navigation settles while a finger is DOWN on a row — held 220ms, well under
+        // the 450ms long-press, so a menu here is never the feature. The finger JITTERS
+        // by a few px (a real one always does) but stays under the 10px cancel, and it
+        // sits on the row's right edge — the time / unread-badge corner, where nodes are
+        // ADDED AND REMOVED by a re-render (a discarded touch target gets no touchend).
+        await backStep(page, drv, "history")
         await page.waitForTimeout(delay)
         const box = await page
           .locator(`.ed-convo-wrap[data-id="${target}"] a.ed-convo`)
           .boundingBox()
           .catch(() => null)
         if (box) {
-          const x = Math.round(box.x + 40)
-          const y = Math.round(box.y + box.height / 2)
+          const x = Math.round(box.x + box.width - 26)
+          const y = Math.round(box.y + (i % 8 < 4 ? 14 : box.height - 16))
           const sel = `.ed-convo-wrap[data-id="${target}"] a.ed-convo`
           await drv.down(x, y, sel)
-          await noise(i) // the row is re-streamed under the finger
-          await page.waitForTimeout(220)
-          await drv.up(x, y, sel)
+          await noise(i) // the row is re-streamed / re-ordered under the finger
+          await page.waitForTimeout(110)
+          await drv.move(x + 3, y - 2, sel)
+          await page.waitForTimeout(110)
+          await drv.move(x + 1, y + 3, sel)
+          await drv.up(x + 1, y + 3, sel)
         }
         await tapRow(page, drv, target)
       }
@@ -487,37 +576,60 @@ test.describe("mobile nav races (stress)", () => {
       await page.waitForTimeout(SETTLE)
       const after = await state(page)
       const opened = after.menus - before.menus
-      rows.push({ i, delay, variant, opened, path: after.path })
-      if (opened) console.log(`  ✗ iter ${i} (variant ${variant}, delay ${delay}): ${opened} menu(s) opened`)
-      // No menu may survive into the next iteration either.
-      const visible = await page.locator("[data-menu]:not([hidden])").count()
-      if (visible) {
-        rows[rows.length - 1].stuck = visible
+      const stuck = await page.locator("[data-menu]:not([hidden])").count()
+      rows.push({ i, delay, variant, opened, stuck, path: after.path })
+      if (opened || stuck) {
+        console.log(`  ✗ iter ${i} [v${variant} d=${delay}] menus opened=${opened} stuck=${stuck}`)
         await page.keyboard.press("Escape").catch(() => {})
       }
-      if (!after.url) {
+      if (!convId(after.path)) {
         await tapRow(page, drv, target)
         await page.waitForTimeout(SETTLE)
       }
     }
 
-    const bad = rows.filter((r) => r.opened > 0 || r.stuck)
+    // BURST: the loop above settles between iterations, which a panicking user never
+    // does. Here the gestures overlap for real — back / tap / back / tap with nothing
+    // but the swept delay between them, so patches, slides and touches interleave.
+    await page.evaluate(() => window.__mark("── BURST (no settle)"))
+    const burstBefore = (await state(page)).menus
+    for (let i = 0; i < ITER * 2; i++) {
+      const delay = DELAYS[i % DELAYS.length]
+      const target = ids[(i + 1) % ids.length]
+      await backStep(page, drv, i % 2 ? "swipe" : "button")
+      await page.waitForTimeout(delay)
+      await tapRow(page, drv, target)
+      if (NOISE && i % 6 === 0) await noise(1000 + i)
+    }
+    await page.waitForTimeout(SETTLE)
+    const burstMenus = (await state(page)).menus - burstBefore
+    if (burstMenus) console.log(`  ✗ BURST: ${burstMenus} menu(s) opened`)
+    rows.push({ i: "burst", delay: "-", variant: "-", opened: burstMenus, stuck: 0 })
+
+    const bad = rows.filter((r) => r.opened > 0 || r.stuck > 0)
     const touchLog = await page.evaluate(() => window.__touchLog || [])
     const starts = touchLog.filter((e) => e.type === "touchstart" && e.row).length
-    const ends = touchLog.filter((e) => e.type !== "touchstart" && e.row).length
-    console.log(
-      `\n[A] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms noise=${NOISE} iterations=${ITER}\n` +
-        `    ghost menus: ${bad.length}/${rows.length}\n` +
-        `    row touchstart=${starts} row touchend/cancel=${ends} (a gap = a gesture whose row was morphed away)\n` +
-        rows
-          .map((r) => `    #${String(r.i).padStart(2)} d=${String(r.delay).padStart(3)} v${r.variant} menus=${r.opened}${r.stuck ? ` stuck=${r.stuck}` : ""}`)
-          .join("\n"),
-    )
-    await dump(page, testInfo, "navlog-A.txt")
+    const ends = touchLog.filter(
+      (e) => (e.type === "touchend" || e.type === "touchcancel") && e.row,
+    ).length
+    const summary =
+      `[A] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms noise=${NOISE} iterations=${ITER}\n` +
+      `    GHOST MENUS: ${bad.length}/${rows.length}\n` +
+      `    row touchstart=${starts}  row touchend/cancel=${ends}  (a gap = a gesture whose row was morphed away mid-touch)\n` +
+      rows
+        .map(
+          (r) =>
+            `    #${String(r.i).padStart(2)} d=${String(r.delay).padStart(3)} v${r.variant} opened=${r.opened} stuck=${r.stuck}`,
+        )
+        .join("\n")
+    console.log("\n" + summary + "\n")
+    const { file } = await dump(page, testInfo, "navlog-A.txt", summary + "\n\n")
+    console.log("    navLog: " + file + "\n")
     if (LATENCY) await page.evaluate(() => window.liveSocket.disableLatencySim())
 
-    expect(bad, `a context menu opened without a long-press (${bad.length}/${rows.length})`).toEqual(
-      [],
-    )
+    expect(
+      bad,
+      `a context menu opened without a long-press (${bad.length}/${rows.length}) — see ${file}`,
+    ).toEqual([])
   })
 })
