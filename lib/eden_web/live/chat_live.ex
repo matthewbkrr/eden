@@ -2941,7 +2941,23 @@ defmodule EdenWeb.ChatLive do
             // conversation we're transitioning to, drop the overlay.
             this.onShown = (e) => {
               this.snapshot(e.detail.id)
-              if (this.target != null && String(e.detail.id) === String(this.target)) this.dismiss()
+              // Dismiss on the WINNING arrival, not merely on a matching id (#482). Every
+              // tap in a burst sends its own live_patch and the server renders all of them —
+              // LiveView gates only history on linkRef, never the diff — so an A → B → A
+              // burst mounts three streams. Matching on id alone meant A's own first
+              // arrival matched the (re-selected) target A and tore the overlay down; B then
+              // painted into the bare pane, and the user watched it flip through a chat they
+              // had already tapped away from. Measured: 1 superseded stream mounting
+              // uncovered per burst.
+              //
+              // The URL is the discriminator: commitPendingLink only lets the LAST patch
+              // write history, so a superseded diff always arrives while location still
+              // points elsewhere.
+              if (
+                this.target != null &&
+                String(e.detail.id) === String(this.target) &&
+                String(this.urlConvId()) === String(this.target)
+              ) this.dismiss()
               this.rehydrateDraft(e.detail.id)
             }
             window.addEventListener("ed:conv-shown", this.onShown)
@@ -2978,7 +2994,23 @@ defmodule EdenWeb.ChatLive do
               if (this.asideOv) this.asideDismiss()
               const idle = window.requestIdleCallback || ((f) => setTimeout(f, 200))
               idle(() => this.stashAside())
-              if (this.target != null && !document.getElementById("message-scroll")) this.dismiss()
+              // A patch that settles with no pane at all — a room whose membership was just
+              // revoked renders the knock window instead — must not sit under a shimmer for
+              // the full 15s strand timeout. But "no pane yet" is ALSO what every
+              // intermediate settle in a burst looks like, and tearing the overlay down
+              // there left all three superseded streams painting bare (#482, measured:
+              // overlay gone at t=1468, streams mounting at 1545/1587/1610). Require the URL
+              // to have committed to the target: for the knock it has, for a superseded
+              // patch it never will.
+              if (
+                this.target != null &&
+                !document.getElementById("message-scroll") &&
+                String(this.urlConvId()) === String(this.target)
+              ) this.dismiss()
+              // …and a settled nav whose URL has committed to the target drops it too: with the
+              // URL condition above, the winning conv-shown can arrive BEFORE commitPendingLink
+              // runs, and without this the overlay would hang on to the 15s strand timer (#482).
+              if (this.target != null && String(this.urlConvId()) === String(this.target)) this.dismiss()
             }
             window.addEventListener("phx:page-loading-stop", this.onLoadStop)
             // History traversal (the native WKWebView swipe-back, Android system back, browser
@@ -3564,6 +3596,14 @@ defmodule EdenWeb.ChatLive do
             s.main.addEventListener("transitionend", onEnd)
             setTimeout(once, 450)
             s.main.style.transform = "translateX(0px)"
+          },
+          // The conversation the URL currently commits to, or null. Tolerant of the permalink
+          // shapes (/m/:id) which the strict onPop patterns deliberately are not.
+          urlConvId() {
+            const m =
+              location.pathname.match(/^\/app\/c\/([^\/]+)/) ||
+              location.pathname.match(/^\/channels\/[^\/]+\/r\/([^\/]+)/)
+            return m ? m[1] : null
           },
           // Put the LIST on screen right now, client-side. Both screens are local DOM, so
           // the swap happens in the same task as the gesture that asked for it and the
