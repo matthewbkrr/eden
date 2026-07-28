@@ -6756,7 +6756,12 @@ defmodule EdenWeb.ChatLive do
             // Closing ends the gesture too (#479): otherwise a menu dismissed without a click
             // on this row leaves longPressed set, and the hook survives sidebar re-renders, so
             // the flag would swallow a genuine tap later — the row simply would not open.
+            // DISARM as well (#489 review): a close arriving while a press is still counting —
+            // an outside click, a scroll, or the ed:nav of #478 — otherwise left the timer to
+            // fire anyway and re-open the menu 450ms later, right after it was dismissed.
             this.longPressed = false
+            clearTimeout(this._lpTimer)
+            this._lpTarget = null
             if (this.menu) this.menu.hidden = true
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "false")
@@ -14305,7 +14310,9 @@ defmodule EdenWeb.ChatLive do
   attr :id, :string, default: nil
 
   defp local_time(assigns) do
-    assigns = assign_new(assigns, :dom_id, fn -> assigns.id || "t-#{System.unique_integer([:positive])}" end)
+    # assign, not assign_new (#489 review): :dom_id is not an attr, so there is never an
+    # existing value to preserve and assign_new only read as if there were.
+    assigns = assign(assigns, :dom_id, assigns.id || "t-#{System.unique_integer([:positive])}")
 
     ~H"""
     <time

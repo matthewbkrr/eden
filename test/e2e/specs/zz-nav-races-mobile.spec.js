@@ -817,8 +817,9 @@ test.describe("mobile nav races (stress)", () => {
     await connected(bob)
 
     const sel = `.ed-convo-wrap[data-id="${seed.dm_id}"] .ed-convo__time`
-    const rowSel = `.ed-convo-wrap[data-id="${seed.dm_id}"] a.ed-convo`
+    const previewSel = `.ed-convo-wrap[data-id="${seed.dm_id}"] .ed-convo__preview`
     const rows = []
+    let reRendered = 0
 
     for (let i = 0; i < 6; i++) {
       const box = await page.locator(sel).boundingBox().catch(() => null)
@@ -828,11 +829,15 @@ test.describe("mobile nav races (stress)", () => {
       const before = await state(page)
       await page.evaluate((n) => window.__mark(n), `── (D) iter ${i}: finger down on <time>`)
 
+      const previewBefore = await page.locator(previewSel).textContent().catch(() => null)
       await drv.down(x, y, sel)
       // Re-render the row WHILE the finger is on that node. The <time> is discarded and
-      // replaced, taking the touch target out of the tree.
-      await send(bob, `orphan-${i}`).catch(() => {})
+      // replaced, taking the touch target out of the tree. NOT swallowed (#489 review): a
+      // trigger that silently fails would leave the loop asserting on a race it never ran.
+      await send(bob, `orphan-${i}`)
       await page.waitForTimeout(260)
+      const previewAfter = await page.locator(previewSel).textContent().catch(() => null)
+      if (previewAfter && previewAfter !== previewBefore) reRendered++
       // A short, still tap: ~320ms total, well under the 450ms long-press threshold, and it
       // never moves. A menu after this is never the feature.
       await drv.up(x, y, sel)
@@ -861,11 +866,18 @@ test.describe("mobile nav races (stress)", () => {
       `    GHOST MENUS: ${bad.length}/${rows.length}\n` +
       `    row touchstart=${starts}  row touchend/cancel=${ends}` +
       (drv.missed ? `  (${drv.missed} synthetic dispatches dropped — harness, not app)\n` : `\n`) +
+      `    row re-rendered under the finger: ${reRendered}/${rows.length}\n` +
       rows.map((r) => `    #${r.i} opened=${r.opened} stuck=${r.stuck}`).join("\n")
     console.log("\n" + summary + "\n")
     const { file } = await dump(page, testInfo, "navlog-D.txt", summary + "\n\n")
 
     expect(rows.length, "the <time> node was never found — the test drove nothing").toBeGreaterThan(0)
+    // Prove the race was actually staged (#489 review): if the row never re-rendered while the
+    // finger was down, a green result says nothing about the bug this test exists for.
+    expect(
+      reRendered,
+      `the row never re-rendered under the finger — the trigger did not fire, so a pass is meaningless (see ${file})`,
+    ).toBeGreaterThan(0)
     expect(
       bad,
       `a menu opened from a ~320ms tap whose target was re-rendered away (${bad.length}/${rows.length}) — see ${file}`,
