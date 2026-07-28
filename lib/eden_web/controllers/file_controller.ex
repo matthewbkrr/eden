@@ -19,6 +19,38 @@ defmodule EdenWeb.FileController do
   @doc "Serves the downscaled image thumbnail / video poster (404 until the worker produces it)."
   def thumb(conn, %{"id" => id}), do: serve(conn, id, :thumb)
 
+  # Signed-link pair (#464): the native app's in-app viewer (SFSafariViewController)
+  # has its own cookie store, so it can't ride the WebView session. A MEMBER mints a
+  # short-lived token over the authed session; the viewer then fetches through
+  # /files/:id/t/:token with the token as the sole authority. 5 minutes covers the
+  # tap-to-open window; the id is embedded, so one token serves exactly one file.
+  @link_salt "file-link"
+  @link_max_age 300
+
+  @doc "Mints a short-lived signed URL for the attachment (session-authorized)."
+  def link(conn, %{"id" => id}) do
+    with {int_id, ""} <- Integer.parse(id),
+         {:ok, _attachment} <- Chat.fetch_attachment(conn.assigns.current_scope, int_id) do
+      token = Phoenix.Token.sign(EdenWeb.Endpoint, @link_salt, int_id)
+      json(conn, %{url: ~p"/files/#{int_id}/t/#{token}"})
+    else
+      _ -> not_found(conn)
+    end
+  end
+
+  @doc "Serves the original through a signed link (no session — the token authorizes)."
+  def show_signed(conn, %{"id" => id, "token" => token}) do
+    with {int_id, ""} <- Integer.parse(id),
+         {:ok, ^int_id} <-
+           Phoenix.Token.verify(EdenWeb.Endpoint, @link_salt, token, max_age: @link_max_age),
+         {:ok, attachment} <- Chat.fetch_attachment_signed(int_id),
+         {:ok, key, content_type, disposition, total} <- variant_source(attachment, :original) do
+      deliver(conn, key, content_type, disposition, total)
+    else
+      _ -> not_found(conn)
+    end
+  end
+
   defp serve(conn, id, variant) do
     with {int_id, ""} <- Integer.parse(id),
          {:ok, attachment} <- Chat.fetch_attachment(conn.assigns.current_scope, int_id),

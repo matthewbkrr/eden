@@ -49,10 +49,18 @@ defmodule EdenWeb.Router do
     post "/locale", LocaleController, :update
     delete "/users/log_out", UserSessionController, :delete
 
+    # Signed file serving (#464): the native app opens documents in
+    # SFSafariViewController, which does NOT share the WebView's session cookies —
+    # so it fetches via a short-lived Phoenix.Token minted by /files/:id/link
+    # below (session-authorized). Deliberately OUTSIDE :require_authenticated:
+    # the token is the authorization.
+    get "/files/:id/t/:token", FileController, :show_signed
+
     # Serve uploaded attachments; the controller authorizes by conversation membership.
     scope "/" do
       pipe_through :require_authenticated
       get "/files/:id", FileController, :show
+      get "/files/:id/link", FileController, :link
       get "/files/:id/thumb", FileController, :thumb
       get "/users/:id/avatar", AvatarController, :show
       get "/channels/:id/avatar", ChannelAvatarController, :show

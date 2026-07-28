@@ -3808,6 +3808,21 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Fetches an attachment by bare id — NO scope. The ONLY caller is the signed-link
+  file serving path (#464): authorization already happened when a MEMBER minted the
+  short-lived Phoenix.Token embedding this exact id, so the token is the authority
+  here (the native in-app viewer opens files in SFSafariViewController, which does
+  not share the WebView's session cookies). Never use this from a request that
+  carries a %Scope{} — go through fetch_attachment/2.
+  """
+  def fetch_attachment_signed(id) do
+    case Repo.get(Attachment, id) do
+      nil -> {:error, :not_found}
+      attachment -> {:ok, attachment}
+    end
+  end
+
+  @doc """
   Fetches an attachment by id, but only if the scoped user belongs to the
   attachment's conversation. Authorizes file serving by membership.
   """

@@ -18,6 +18,38 @@ export function initNativeShell() {
   wireStatusBar();
   wirePush();
   wireKeyboard();
+  wireFileViewer();
+}
+
+// In-app document viewer (#464): WKWebView ignores the download attribute and
+// NAVIGATES into the file — a PDF with no chrome and no way back (native gestures
+// are off; the LiveView page and its JS die with the navigation). Intercept file-
+// card taps and open the document in SFSafariViewController instead (Capacitor
+// Browser): renders PDF/office formats, has a Done button and a system share.
+// SafariVC has its OWN cookie store, so the URL must be a short-lived signed link
+// minted over the WebView's session (GET /files/:id/link).
+function wireFileViewer() {
+  const browser = cap.Plugins?.Browser;
+  if (!browser?.open) return;
+  document.addEventListener(
+    "click",
+    (e) => {
+      const a = e.target.closest && e.target.closest('a[download][href^="/files/"]');
+      if (!a) return;
+      const m = a.getAttribute("href").match(/^\/files\/(\d+)/);
+      if (!m) return;
+      e.preventDefault();
+      e.stopPropagation();
+      fetch(`/files/${m[1]}/link`, { headers: { accept: "application/json" } })
+        .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+        .then(({ url }) => browser.open({ url: location.origin + url }))
+        // The default action IS the trap, so it stays prevented — but a failed mint
+        // (network blip, expired session) must not read as a dead tap (#468 review).
+        // System alert; RU-fixed like the push copy (native.js has no gettext).
+        .catch(() => alert("Не удалось открыть файл. Проверьте соединение."));
+    },
+    true,
+  );
 }
 
 // Keyboard lift v2 (#439): with Keyboard resize: 'none' the WebView frame never
