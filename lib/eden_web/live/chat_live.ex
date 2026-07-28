@@ -3347,6 +3347,30 @@ defmodule EdenWeb.ChatLive do
               return
             }
             const isRoom = wrap.classList.contains("ed-room-wrap")
+            // A tap that SUPERSEDES an in-flight back must REPLACE the chat's history entry
+            // instead of pushing on top of it (#476). LiveView pushes history state only in the
+            // server-reply callback (live_socket.js pushHistoryPatch -> view.js pushLinkPatch),
+            // so a back that backFinish cancels on _navGen (#439) — which is exactly what a fast
+            // "back then tap another chat" does — never pushes its list entry at all. The stack
+            // silently became chat -> chat -> chat, and the next system back (Android hardware,
+            // iOS history.back()) landed in a chat the user had opened earlier instead of the
+            // list. Replacing here compensates for the list entry that was cancelled.
+            //
+            // The condition is precise, not "while _backing": we must still be ON a chat URL,
+            // i.e. the back has not landed and owns no entry of its own. Once it HAS landed the
+            // URL is already the list, and replacing would EAT that list entry — back would then
+            // skip past the list to whatever preceded it (settings, another chat).
+            if (this._backing && /^\/(app\/c|channels\/[^\/]+\/r)\//.test(location.pathname)) {
+              const prev = link.getAttribute("data-phx-link-state")
+              link.setAttribute("data-phx-link-state", "replace")
+              // LiveView reads the attribute synchronously in its own click handler (window,
+              // bubble — always after this capture listener), so restoring on the next task is
+              // safe and keeps the row from replacing forever after.
+              setTimeout(() => {
+                if (prev == null) link.removeAttribute("data-phx-link-state")
+                else link.setAttribute("data-phx-link-state", prev)
+              }, 0)
+            }
             this.begin(link, id, isRoom)
             // Do NOT preventDefault — the <.link patch> navigation must still fire.
           },
@@ -4229,9 +4253,18 @@ defmodule EdenWeb.ChatLive do
             style="border-color: var(--ed-border);"
           >
             <%!-- patch, not navigate: same-LiveView mode switch, so an in-flight upload survives
-                  (see the rail note in shell_components). --%>
+                  (see the rail note in shell_components).
+                  REPLACE, not push (#476): LiveView pushes history state only in the server-reply
+                  callback, so a back rendered as a forward patch could never SHORTEN the stack —
+                  it grew it (`/app → /c/A → /app → /c/B`), and when rapid switching superseded the
+                  intermediate back-patch (backFinish's _navGen cancel, #439) the list entry was
+                  never pushed at all, leaving `chat → chat → chat`. Either way the next system
+                  back (Android hardware, iOS mid-load history.back()) walked into a chat the user
+                  had opened earlier instead of returning to the list. Replacing consumes the
+                  chat's entry, so no pop can land in an old chat. --%>
             <.link
               patch={if @channel, do: ~p"/channels/#{@channel.id}", else: ~p"/app"}
+              replace
               class="ed-btn--icon md:hidden"
               aria-label={gettext("Back")}
               data-nav-back
