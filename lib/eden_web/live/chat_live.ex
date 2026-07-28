@@ -22,6 +22,9 @@ defmodule EdenWeb.ChatLive do
   @page 50
   # Per-page size for the profile media gallery (#136); a "Load more" fetches the next page.
   @gallery_page 30
+  # Reel page for the lightbox (#466) — a swipe crosses it in a second, so it is
+  # wider than the profile gallery's grid page.
+  @lightbox_page 60
 
   # Typing indicator (#11): throttle outgoing "typing" broadcasts to at most one per the window
   # (Chat.typing_throttle_ms/0 — one source, shared with the thread composer); each received
@@ -1014,6 +1017,39 @@ defmodule EdenWeb.ChatLive do
 
   # Append the next page of the active gallery tab (#136 pagination).
   def handle_event("gallery_more", _params, socket), do: {:noreply, load_more_gallery(socket)}
+
+  # The lightbox's conversation reel (#466): a cursor page of photos+videos, newest
+  # first, so the viewer can swipe past the album it was opened from and through the
+  # whole dialog. Answered as a REPLY (not a broadcast push_event) so the response
+  # belongs to the requesting hook instance and nothing global has to be registered.
+  def handle_event("lightbox_media", params, %{assigns: %{selected: %{id: conv_id}}} = socket) do
+    before = params["before"]
+
+    case Chat.list_conversation_media(socket.assigns.current_scope, conv_id, ~w(image video),
+           limit: @lightbox_page,
+           before: before,
+           with_message: true
+         ) do
+      {:ok, media} ->
+        # The counter's denominator — the reel loads lazily backwards, so without the
+        # total the viewer could only ever say "60 of 60+" (#466).
+        {:ok, total} =
+          Chat.count_conversation_media(socket.assigns.current_scope, conv_id, ~w(image video))
+
+        {:reply,
+         %{
+           items: Enum.map(media, &lightbox_item(&1, socket)),
+           more: length(media) == @lightbox_page,
+           total: total
+         }, socket}
+
+      {:error, _} ->
+        {:reply, %{items: [], more: false, total: 0}, socket}
+    end
+  end
+
+  def handle_event("lightbox_media", _params, socket),
+    do: {:reply, %{items: [], more: false, total: 0}, socket}
 
   # The user picks a presence status (#102). Persist it; the per-user broadcast
   # feeds this tab (and any other) back through {:presence_status_changed, ...},
@@ -9505,6 +9541,20 @@ defmodule EdenWeb.ChatLive do
             const tiles = gallery
               ? [...document.querySelectorAll(`[data-gallery="${gallery}"]`)]
               : [this.el]
+            // The reel (#466): start with the album's own tiles so the viewer paints
+            // instantly, then widen to the WHOLE conversation when the server page
+            // lands (oldest→newest, matching the strip's reading order).
+            let items = tiles.map((t) => ({
+              id: Number((t.dataset.full || "").split("/").pop()),
+              kind: "image",
+              full: t.dataset.full,
+              thumb: t.querySelector("img")?.currentSrc || t.querySelector("img")?.src || t.dataset.full,
+              msg: t.dataset.msg,
+              who: t.dataset.who,
+              at: t.dataset.at,
+              link: t.dataset.link,
+              mine: t.dataset.mine,
+            }))
             let i = Math.max(0, tiles.indexOf(this.el))
 
             const box = this.box()
@@ -9515,7 +9565,11 @@ defmodule EdenWeb.ChatLive do
             const count = box.querySelector(".ed-lightbox__count")
             const show = (n, dir) => {
               const prev = i
-              i = (n + tiles.length) % tiles.length
+              // Modulo the REEL, not the album (#466): the reel widens to the whole
+              // conversation after the first page, and wrapping against the album's
+              // length threw the index back to the start on every paint — which then
+              // re-triggered the older-page fetch until the entire dialog was loaded.
+              i = (n + items.length) % items.length
               // Slide the outgoing frame out and the incoming one in (#465: paging was a
               // bare src swap — nothing moved, so an album read as a still). Direction
               // follows the gesture/arrow; opening (dir undefined) doesn't slide.
@@ -9537,26 +9591,90 @@ defmodule EdenWeb.ChatLive do
               const reveal = () => { img.style.visibility = "visible" }
               img.style.visibility = "hidden"
               img.onload = reveal
-              img.src = tiles[i].dataset.full
-              box.__src = tiles[i].dataset.full
-              // A screen reader hears WHICH photo, not an empty string (audit P1):
-              // the tile's aria-label is already localized ("Photo").
-              img.alt = tiles[i].getAttribute("aria-label") || ""
-              // Album position (audit P1): the phone pages by swipe with no arrows —
-              // without a counter an album is indistinguishable from a lone photo.
-              count.textContent =
-                tiles.length > 1 ? `${i + 1} ${box.__of} ${tiles.length}` : ""
+              const it = items[i]
+              img.src = it.full
+              box.__src = it.full
+              // A screen reader hears WHICH photo, not an empty string (audit P1).
+              img.alt = it.who ? `${box.__viewer} — ${it.who}` : box.__viewer
+              // Position in the reel (audit P1): the phone pages by swipe with no
+              // arrows — without this an album looks like a lone photo.
+              // Position in the WHOLE conversation once the reel is anchored at its
+              // newest end (the first page always is) — the reel loads lazily
+              // backwards, so without the server's total this could only say "60 of
+              // 60+". An album-only fallback counts locally. Hidden for a lone photo.
+              const total = (box.__anchored && box.__total) || items.length
+              const pos = box.__anchored && box.__total ? total - (items.length - 1 - i) : i + 1
+              count.textContent = total > 1 ? `${pos} ${box.__of} ${total}` : ""
               // Chrome for THIS photo: who sent it and when, plus the action set the
               // menu offers (own messages add "delete for everyone").
-              box.__meta = { ...tiles[i].dataset }
+              box.__meta = it
               box.__renderChrome()
+              box.__renderStrip(i)
+              // Neighbours decode ahead of the swipe (audit: a cross-border fetch made
+              // paging feel stalled).
+              for (const n of [i - 1, i + 1]) {
+                if (items[n]) new Image().src = items[n].full
+              }
+              // Approaching the older end pulls the next page in (the reel loads
+              // lazily backwards, TG-style).
+              if (i <= 2 && box.__more && !box.__loading) loadOlder()
               // Reopening the same photo sets an unchanged src, which fires no
               // load event in some browsers — reveal immediately when cached.
               if (img.complete) reveal()
             }
             box.__show = show
             box.__step = (d) => show(i + d, d)
-            box.classList.toggle("ed-lightbox--gallery", tiles.length > 1)
+            box.__goto = (n) => show(n, n > i ? 1 : -1)
+            box.__items = () => items
+            box.__index = () => i
+
+            // Pull one page of older conversation media and PREPEND it (the API answers
+            // newest-first; the reel reads oldest→newest).
+            const loadOlder = () => {
+              if (box.__loading || !box.__more) return
+              box.__loading = true
+              const before = items[0] && items[0].id
+              this.pushEvent("lightbox_media", { before }, (reply) => {
+                box.__loading = false
+                const page = (reply && reply.items) || []
+                box.__more = !!(reply && reply.more)
+                const known = new Set(items.map((x) => x.id))
+                const older = page.filter((x) => !known.has(x.id)).reverse()
+                if (!older.length) return
+                items = older.concat(items)
+                i += older.length
+                box.__renderStrip(i)
+                show(i)
+              })
+            }
+            box.__loadOlder = loadOlder
+
+            // The first page brings the newest slice of the conversation; the album the
+            // viewer opened from sits inside it, so the reel is spliced AROUND the
+            // current photo. Paging stays disabled until it lands — otherwise the very
+            // first show() fires a fetch against a leftover cursor from the previous
+            // open and two replies race to rewrite the reel (probe evidence).
+            box.__more = false
+            box.__loading = true
+            box.__anchored = false
+            box.__total = 0
+            this.pushEvent("lightbox_media", {}, (reply) => {
+              box.__loading = false
+              box.__more = !!(reply && reply.more)
+              const page = ((reply && reply.items) || []).slice().reverse()
+              const here = items[i] && items[i].id
+              const at = page.length ? page.findIndex((x) => x.id === here) : -1
+              // Opened photo older than this page → keep the album reel; older paging
+              // still works from its own cursor.
+              box.__total = reply && reply.total
+              if (at === -1) return
+              box.__anchored = true
+              items = page
+              i = at
+              box.classList.toggle("ed-lightbox--gallery", items.length > 1)
+              show(i)
+            })
+            box.classList.toggle("ed-lightbox--gallery", items.length > 1)
             show(i)
 
             // Native <dialog> (audit P1): showModal() brings the top layer, focus
@@ -9593,6 +9711,9 @@ defmodule EdenWeb.ChatLive do
             // Localized labels from #message-scroll (gettext is unreachable here).
             const lbl = document.getElementById("message-scroll")?.dataset || {}
             box.__of = lbl.lbOf || "/"
+            // openLightbox() lives in another scope than these labels — hand it the
+            // one string show() needs for the frame's accessible name.
+            box.__viewer = lbl.lbViewer || "Photo"
             // The dialog's accessible name — a screen reader announces the modal (audit P1).
             box.setAttribute("aria-label", lbl.lbViewer || "Photo")
             const dots = "M10 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"
@@ -9615,12 +9736,60 @@ defmodule EdenWeb.ChatLive do
               `<button class="ed-lightbox__item" role="menuitem" data-act="del-me">${lbl.lbDelMe || "Delete for me"}</button>` +
               `<button class="ed-lightbox__item ed-lightbox__item--danger" role="menuitem" data-act="del-all">${lbl.lbDelAll || "Delete for everyone"}</button>` +
               '</div>' +
-              `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="${lbl.lbPrev || "Previous"}">${chevron(left)}</button>` +
+              // Each arrow lives in a wide invisible zone (#466 audit): on a 1920px
+              // screen the buttons hugged the viewport edges — a long mouse trip, and a
+              // miss by a millimetre closed the viewer. The zone swallows those misses.
+              `<div class="ed-lightbox__zone ed-lightbox__zone--prev"><button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="${lbl.lbPrev || "Previous"}">${chevron(left)}</button></div>` +
               '<img class="ed-lightbox__img" alt="">' +
-              `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="${lbl.lbNext || "Next"}">${chevron(right)}</button>`
+              `<div class="ed-lightbox__zone ed-lightbox__zone--next"><button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="${lbl.lbNext || "Next"}">${chevron(right)}</button></div>` +
+              '<div class="ed-lightbox__strip" role="tablist"></div>'
             const img = box.querySelector(".ed-lightbox__img")
             const menu = box.querySelector(".ed-lightbox__menu")
             const more = box.querySelector(".ed-lightbox__more")
+
+            // The strip (#466): the conversation's media as tappable thumbnails, the
+            // current one lit and scrolled into view. Rebuilt only when the reel
+            // changes length; otherwise just the active marker moves.
+            const strip = box.querySelector(".ed-lightbox__strip")
+            // A window, not the whole reel: a long conversation has hundreds of photos
+            // and that many <img> nodes would cost more than the viewer itself.
+            const STRIP_SPAN = 24
+            box.__renderStrip = (idx) => {
+              const items = box.__items ? box.__items() : []
+              strip.hidden = items.length < 2
+              if (strip.hidden) return
+              const from = Math.max(0, idx - STRIP_SPAN)
+              const win = items.slice(from, idx + STRIP_SPAN + 1)
+              if (strip.dataset.from !== String(from) || strip.childElementCount !== win.length) {
+                strip.dataset.from = String(from)
+                strip.replaceChildren(
+                  ...win.map((it, k) => {
+                    const n = from + k
+                    const b = document.createElement("button")
+                    b.className = "ed-lightbox__thumb"
+                    b.dataset.i = String(n)
+                    b.setAttribute("role", "tab")
+                    const im = document.createElement("img")
+                    im.src = it.thumb
+                    im.alt = ""
+                    im.loading = "lazy"
+                    b.appendChild(im)
+                    if (it.kind === "video") {
+                      const badge = document.createElement("span")
+                      badge.className = "ed-lightbox__thumb-play"
+                      b.appendChild(badge)
+                    }
+                    return b
+                  })
+                )
+              }
+              ;[...strip.children].forEach((c) => {
+                const on = Number(c.dataset.i) === idx
+                c.classList.toggle("ed-lightbox__thumb--on", on)
+                c.setAttribute("aria-selected", String(on))
+                if (on) c.scrollIntoView({ block: "nearest", inline: "center" })
+              })
+            }
 
             // Chrome is data-driven: each shown photo pushes its own meta (#465).
             box.__renderChrome = () => {
@@ -9819,11 +9988,20 @@ defmodule EdenWeb.ChatLive do
               // the primary close affordance.
               if (e.target.closest(".ed-lightbox__close")) return close()
               if (e.target.closest(".ed-lightbox__bar")) return
-              const nav = e.target.closest(".ed-lightbox__nav")
-              if (nav) {
+              const thumb = e.target.closest(".ed-lightbox__thumb")
+              if (thumb) {
                 e.stopPropagation()
-                box.__step(nav.classList.contains("ed-lightbox__nav--next") ? 1 : -1)
-              } else if (!e.target.closest(".ed-lightbox__img")) {
+                return box.__goto(Number(thumb.dataset.i))
+              }
+              if (e.target.closest(".ed-lightbox__strip")) return
+              const zone = e.target.closest(".ed-lightbox__zone")
+              if (zone) {
+                e.stopPropagation()
+                // A click anywhere in the zone pages — a near-miss on the button is
+                // still an intent to page, never an intent to close (#466 audit).
+                return box.__step(zone.classList.contains("ed-lightbox__zone--next") ? 1 : -1)
+              }
+              if (!e.target.closest(".ed-lightbox__img")) {
                 close()
               }
             })
@@ -14865,6 +15043,26 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp load_more_gallery(socket), do: socket
+
+  # One reel item as the viewer needs it: the full source, a strip thumbnail, and the
+  # owning message's chrome data (sender/time/permalink/mine) — the same shape the
+  # rendered tiles carry, so paging into a not-yet-rendered photo shows full chrome.
+  defp lightbox_item(att, socket) do
+    msg = att.message
+    me = socket.assigns.current_scope.user
+
+    %{
+      id: att.id,
+      kind: att.kind,
+      full: ~p"/files/#{att.id}",
+      thumb: thumb_src(att),
+      msg: msg && msg.id,
+      who: msg && sender_name(%{sender: msg.sender}),
+      at: msg && DateTime.to_iso8601(msg.inserted_at),
+      link: msg && ~p"/app/c/#{msg.conversation_id}/m/#{msg.id}",
+      mine: (msg && me && msg.sender_id == me.id && "1") || nil
+    }
+  end
 
   defp fetch_gallery(scope, conv_id, kind, before) do
     opts = if before, do: [limit: @gallery_page, before: before], else: [limit: @gallery_page]

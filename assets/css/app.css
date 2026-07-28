@@ -2134,12 +2134,36 @@ html {
   .ed-lightbox--zoomed .ed-lightbox__img {
     cursor: grab;
   }
-  /* Album paging arrows: hidden for a lone image, shown for a gallery. */
-  .ed-lightbox__nav {
+  /* Paging zones (#466): a wide invisible column around each arrow — on a 1920px
+     screen the buttons hugged the viewport edges (a long mouse trip) and a miss by a
+     millimetre closed the viewer. The zone catches those misses and pages instead.
+     Hidden for a lone image, shown for a reel; touch pages by swipe. */
+  .ed-lightbox__zone {
     position: fixed;
-    top: 50%;
-    transform: translateY(-50%);
+    top: 0;
+    bottom: 0;
+    width: 7rem;
     display: none;
+    place-items: center;
+    cursor: pointer;
+  }
+  .ed-lightbox--gallery .ed-lightbox__zone {
+    display: grid;
+  }
+  /* Never further than this from the frame, so wide screens don't exile the arrows. */
+  .ed-lightbox__zone--prev {
+    left: max(0px, calc(50% - 34rem));
+  }
+  .ed-lightbox__zone--next {
+    right: max(0px, calc(50% - 34rem));
+  }
+  @media (max-width: 767px) {
+    .ed-lightbox__zone {
+      display: none !important; /* phones page by swipe; a zone would eat taps */
+    }
+  }
+  .ed-lightbox__nav {
+    display: grid;
     place-items: center;
     width: 2.75rem;
     height: 2.75rem;
@@ -2153,22 +2177,84 @@ html {
     width: 1.625rem;
     height: 1.625rem;
   }
-  .ed-lightbox--gallery .ed-lightbox__nav {
-    display: grid;
-  }
   .ed-lightbox__nav:hover {
     background: oklch(1 0 0 / 0.22);
   }
-  .ed-lightbox__nav--prev {
-    left: 1rem;
+  /* The reel strip: conversation media as thumbnails, the current one lit. */
+  .ed-lightbox__strip {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    gap: 0.375rem;
+    padding: 0.6rem 0.75rem calc(env(safe-area-inset-bottom) + 0.6rem);
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: linear-gradient(oklch(0 0 0 / 0), oklch(0 0 0 / 0.55));
+    cursor: default;
   }
-  .ed-lightbox__nav--next {
-    right: 1rem;
+  .ed-lightbox__strip::-webkit-scrollbar {
+    display: none;
+  }
+  .ed-lightbox__strip[hidden] {
+    display: none;
+  }
+  .ed-lightbox__thumb {
+    position: relative;
+    flex: none;
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: var(--ed-radius);
+    overflow: hidden;
+    opacity: 0.55;
+    cursor: pointer;
+    transition:
+      opacity 0.16s var(--ed-ease),
+      outline-color 0.16s var(--ed-ease);
+    outline: 2px solid transparent;
+    outline-offset: 1px;
+  }
+  .ed-lightbox__thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .ed-lightbox__thumb:hover {
+    opacity: 0.85;
+  }
+  .ed-lightbox__thumb--on {
+    opacity: 1;
+    outline-color: oklch(0.99 0 0);
+  }
+  .ed-lightbox__thumb-play {
+    position: absolute;
+    inset: 0;
+    background: oklch(0 0 0 / 0.35);
+  }
+  .ed-lightbox__thumb-play::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border-style: solid;
+    border-width: 0.3rem 0 0.3rem 0.5rem;
+    border-color: transparent transparent transparent oklch(0.99 0 0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-lightbox__thumb {
+      transition: none;
+    }
   }
   /* The close affordance is the bar's back arrow now (#465) — styling rides
      .ed-lightbox__btn; the tall photo must clear the bar. */
   .ed-lightbox__img {
     margin-top: calc(env(safe-area-inset-top) + 2.5rem);
+  }
+  .ed-lightbox--gallery .ed-lightbox__img {
+    /* Leave the strip its band so a tall photo never sits under the thumbnails. */
+    max-height: calc(100dvh - 3rem - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 6.5rem);
   }
   /* Phone: no room for side arrows — swipe left/right pages instead (#96). */
   @media (max-width: 767px) {

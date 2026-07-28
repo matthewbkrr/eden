@@ -2039,8 +2039,18 @@ defmodule Eden.Chat do
   cursor (rows strictly older than it); `opts[:limit]` sizes the page (default #{@default_page}).
   Returns `{:error, :not_found}` when the scoped user isn't a member.
   """
-  def list_conversation_media(%Scope{user: user} = scope, conversation_id, kind, opts \\ [])
-      when kind in ~w(image video file audio) do
+  def list_conversation_media(scope, conversation_id, kind_or_kinds, opts \\ [])
+
+  def list_conversation_media(scope, conversation_id, kind, opts) when is_binary(kind),
+    do: list_conversation_media(scope, conversation_id, [kind], opts)
+
+  # A LIST of kinds (#466): the lightbox pages photos AND videos as one conversation
+  # media reel, so it needs both in a single cursor-ordered page — merging two
+  # single-kind pages client-side would break the `before` cursor.
+  def list_conversation_media(%Scope{user: user} = scope, conversation_id, kinds, opts)
+      when is_list(kinds) do
+    true = Enum.all?(kinds, &(&1 in ~w(image video file audio)))
+
     if has_access?(scope, conversation_id) do
       limit = Keyword.get(opts, :limit, @default_page)
 
@@ -2054,15 +2064,46 @@ defmodule Eden.Chat do
           on: d.message_id == m.id and d.user_id == ^user.id
         )
         |> where([_a, _m, d], is_nil(d.id))
-        |> where([a], a.kind == ^kind)
+        |> where([a], a.kind in ^kinds)
         |> media_before(opts[:before])
         # Attachment ids are monotonic with message creation, so this is newest-media-first
         # and keeps the cursor stable even within an album.
         |> order_by([a], desc: a.id)
         |> limit(^limit)
+        |> media_preload(opts[:with_message])
         |> Repo.all()
 
       {:ok, attachments}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  # The lightbox reel needs each item's owning message (sender + time + permalink) for
+  # its chrome; the profile grid doesn't, so it stays a single-table read (#466).
+  defp media_preload(query, true), do: preload(query, message: :sender)
+  defp media_preload(query, _), do: query
+
+  @doc """
+  How many media items the conversation holds for `kinds` — the denominator of the
+  lightbox's "N of M" (#466). Same visibility rules as `list_conversation_media/4`.
+  """
+  def count_conversation_media(%Scope{user: user} = scope, conversation_id, kinds)
+      when is_list(kinds) do
+    if has_access?(scope, conversation_id) do
+      count =
+        Attachment
+        |> join(:inner, [a], m in Message, on: m.id == a.message_id)
+        |> where([a, m], m.conversation_id == ^conversation_id)
+        |> where([_a, m], is_nil(m.root_id) and is_nil(m.deleted_at))
+        |> join(:left, [a, m], d in MessageDeletion,
+          on: d.message_id == m.id and d.user_id == ^user.id
+        )
+        |> where([_a, _m, d], is_nil(d.id))
+        |> where([a], a.kind in ^kinds)
+        |> Repo.aggregate(:count)
+
+      {:ok, count}
     else
       {:error, :not_found}
     end
