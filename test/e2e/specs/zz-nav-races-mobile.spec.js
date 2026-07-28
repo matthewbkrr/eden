@@ -246,6 +246,15 @@ async function dump(page, testInfo, name, extra = "") {
 
 function touchDriver(page) {
   let s = null
+  // Swallowed synthetic dispatches, COUNTED rather than ignored (#485 review). On the
+  // WebKit path a dispatch is addressed BY SELECTOR, so when the row is morphed out of the
+  // DOM mid-gesture — the exact scenario under test — the selector stops resolving and the
+  // synthetic touchend simply never fires. That manufactures the very "row touchstart with
+  // no matching touchend" gap the (A) summary reports as the ghost-menu smoking gun. A
+  // silent catch would make a harness artifact indistinguishable from an app defect, so the
+  // summaries print this count and flag the gap as untrustworthy when it is non-zero.
+  // (A real finger keeps delivering to a detached target; only the selector path loses it.)
+  let missed = 0
   const pt = (x, y) => ({ identifier: 1, clientX: x, clientY: y, pageX: x, pageY: y })
   const synth = (sel, type, x, y) => {
     const empty = type === "touchend" || type === "touchcancel"
@@ -257,7 +266,9 @@ function touchDriver(page) {
         bubbles: true,
         cancelable: true,
       })
-      .catch(() => {})
+      .catch(() => {
+        missed++
+      })
   }
   return {
     async init() {
@@ -266,6 +277,9 @@ function touchDriver(page) {
     },
     get real() {
       return !!s
+    },
+    get missed() {
+      return missed
     },
     down(x, y, sel = "body") {
       return s
@@ -456,7 +470,9 @@ test.describe("mobile nav races (stress)", () => {
       if (r.bad) stats[k].bad++
     }
     const summary =
-      `[B] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms iterations=${ITER}\n` +
+      `[B] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms iterations=${ITER}` +
+      (drv.missed ? `  (${drv.missed} synthetic dispatches dropped — selector no longer resolved)` : "") +
+      `\n` +
       `    WRONG SCREEN: ${bad.length}/${rows.length}\n` +
       Object.entries(stats)
         .map(([k, v]) => `    ${k.padEnd(28)} ${v.bad}/${v.n}`)
@@ -620,7 +636,10 @@ test.describe("mobile nav races (stress)", () => {
     const summary =
       `[A] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms noise=${NOISE} iterations=${A_ITER}\n` +
       `    GHOST MENUS: ${bad.length}/${rows.length}\n` +
-      `    row touchstart=${starts}  row touchend/cancel=${ends}  (a gap = a gesture whose row was morphed away mid-touch)\n` +
+      `    row touchstart=${starts}  row touchend/cancel=${ends}  ` +
+      (drv.missed
+        ? `(GAP NOT DIAGNOSTIC: ${drv.missed} synthetic dispatches were dropped because their selector stopped resolving — harness, not app)\n`
+        : `(a gap = a gesture whose row was morphed away mid-touch)\n`) +
       rows
         .map(
           (r) =>
