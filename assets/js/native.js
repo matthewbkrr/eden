@@ -19,6 +19,25 @@ export function initNativeShell() {
   wirePush();
   wireKeyboard();
   wireFileViewer();
+  wireAppState();
+}
+
+// Broadcast one "the app is going away" beacon (#493). The web layer already listens for
+// visibilitychange, which a WKWebView does fire on background — but the native lifecycle is
+// the authoritative signal (and the only one on a hard suspend), so mirror it. Consumers
+// (the .InstantNav and .ContextMenu hooks) disarm in-flight gesture state on it: a 450ms
+// long-press or back-slide timer that survives a suspend and flushes on resume otherwise
+// pops a menu, or navigates, with no finger on the screen.
+function wireAppState() {
+  const app = cap.Plugins?.App;
+  if (!app?.addListener) return;
+  if (app.__edStateWired) return;
+  app.addListener("appStateChange", ({ isActive }) => {
+    if (!isActive) window.dispatchEvent(new Event("ed:suspend"));
+  });
+  // After registration, not before (#500 review): a bridge that throws here would otherwise
+  // latch the beacon out for the rest of the process.
+  app.__edStateWired = true;
 }
 
 // In-app document viewer (#464): WKWebView ignores the download attribute and
@@ -68,10 +87,21 @@ function wireKeyboard() {
   const fromEvent = (info) => setKb(info?.keyboardHeight || 0);
   // Will + Did on both edges (#439): a missed Will (interactive dismiss races,
   // resumed WebViews) must not leave the shell padded by a phantom keyboard.
-  kb.addListener("keyboardWillShow", fromEvent);
-  kb.addListener("keyboardDidShow", fromEvent);
-  kb.addListener("keyboardWillHide", () => setKb(0));
-  kb.addListener("keyboardDidHide", () => setKb(0));
+  //
+  // Latched per app PROCESS (#493), and scoped to these four alone: they live on the native
+  // Keyboard plugin and survive a document reload, while initNativeShell re-runs on every one
+  // (with server.url, each LiveView redirect is a full load). The callback is an idempotent
+  // style write, so stacking was wasteful rather than wrong, but the set grew without bound.
+  // The flag is set AFTER registration (#500 review) so a throwing bridge cannot latch the
+  // wiring out permanently — and it must NOT wrap the document listener below, which dies
+  // with its document and has to be re-registered on every load.
+  if (!kb.__edKbWired) {
+    kb.addListener("keyboardWillShow", fromEvent);
+    kb.addListener("keyboardDidShow", fromEvent);
+    kb.addListener("keyboardWillHide", () => setKb(0));
+    kb.addListener("keyboardDidHide", () => setKb(0));
+    kb.__edKbWired = true;
+  }
   // Backgrounding drops the keyboard without always emitting Hide — reset on leave.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") setKb(0);
@@ -95,7 +125,6 @@ function wireBackButton() {
   const app = cap.Plugins?.App;
   if (!app?.addListener) return;
   if (app.__edBackWired) return;
-  app.__edBackWired = true;
   app.addListener("backButton", ({ canGoBack }) => {
     if (canGoBack && window.history.length > 1) {
       window.history.back();
@@ -103,6 +132,9 @@ function wireBackButton() {
       Promise.resolve(app.minimizeApp?.()).catch(() => {});
     }
   });
+  // After registration (#500 review): #481 shipped this flag-first, so a throwing bridge
+  // would have left Android's back button unhandled for the life of the process.
+  app.__edBackWired = true;
 }
 
 // Native push (#419, ADR-0001): ask, register, hand the device token to the

@@ -884,6 +884,50 @@ test.describe("mobile nav races (stress)", () => {
     ).toEqual([])
   })
 
+  // (G) A suspend must disarm an in-flight long-press.
+  //
+  // A backgrounded WKWebView defers pending timers and can flush them on resume, so a
+  // 450ms long-press armed just before the app went away pops its menu afterwards with no
+  // finger on the screen. Nothing cleared gesture state on suspend: the exhaustive grep for
+  // visibility handling found only the keyboard reset, the focus heartbeat and idle
+  // presence. Driven through ed:suspend, which is exactly what native.js relays from
+  // Capacitor's appStateChange — visibilityState itself is read-only and cannot be faked
+  // without stubbing the getter, which would test the stub rather than the wiring.
+  test("(G) a suspend disarms an armed long-press", async ({ alice }, testInfo) => {
+    test.setTimeout(90_000)
+    const page = alice
+    const drv = touchDriver(page)
+    await instrument(page)
+    await page.goto("/app")
+    await connected(page)
+    await drv.init()
+    const ids = await sidebarIds(page, 2)
+    const sel = `.ed-convo-wrap[data-id="${ids[0]}"] a.ed-convo`
+    const box = await page.locator(sel).boundingBox()
+    const x = Math.round(box.x + box.width / 2)
+    const y = Math.round(box.y + box.height / 2)
+
+    await page.evaluate((n) => window.__mark(n), "── (G) finger down, then suspend")
+    await drv.down(x, y, sel)
+    await page.waitForTimeout(200) // inside the 450ms window, before it fires
+    await page.evaluate(() => window.dispatchEvent(new Event("ed:suspend")))
+    await page.waitForTimeout(600) // well past the threshold
+    const openedWhileHeld = await page.locator("[data-menu]:not([hidden])").count()
+    await drv.up(x, y, sel)
+    await page.waitForTimeout(300)
+    const openedAfter = await page.locator("[data-menu]:not([hidden])").count()
+
+    const summary =
+      `[G] suspend during an armed long-press\n` +
+      `    menus open while still held, 600ms past the threshold: ${openedWhileHeld}  (must be 0)\n` +
+      `    menus open after release: ${openedAfter}  (must be 0)\n`
+    console.log("\n" + summary)
+    const { file } = await dump(page, testInfo, "navlog-G.txt", summary + "\n")
+
+    expect(openedWhileHeld, `the long-press survived the suspend — see ${file}`).toBe(0)
+    expect(openedAfter, `a menu appeared after release — see ${file}`).toBe(0)
+  })
+
   // (E) The tap must open the chat the FINGER WENT DOWN ON.
   //
   // Any message in any conversation broadcasts {:conversation_activity}, and the sidebar

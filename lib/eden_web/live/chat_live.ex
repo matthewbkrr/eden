@@ -3270,6 +3270,31 @@ defmodule EdenWeb.ChatLive do
             // Readiness beacon: the e2e sync-probes (click + read the overlay in one task) must
             // not race this listener's attachment — connected() alone doesn't guarantee hooks
             // have mounted yet.
+            // Suspended mid-gesture, the app must not come back and finish it (#493). A
+            // WKWebView that is backgrounded defers pending timers and can flush them on
+            // resume: the 450ms long-press, backFinish's 450ms fallback, the swipe-cancel
+            // cleanup. Nothing in the app cleared any of that — the exhaustive grep for
+            // visibility handling found only the keyboard reset, the focus heartbeat and
+            // idle presence, none of which touch gesture state. Drop everything in flight;
+            // the overlay is deliberately left alone, since the navigation it covers may
+            // still land, and its own 15s strand timer already bounds it.
+            this.onSuspend = () => {
+              this._swipe = null
+              this._untrackSwipe()
+              this._backing = false
+              this._backFired = null
+              clearTimeout(this._backingBelt)
+              this._tapRow = null
+              this._tapXY = null
+              window.__edNavBusy = false
+            }
+            this.onVisibility = () => {
+              if (document.visibilityState !== "visible") this.onSuspend()
+            }
+            document.addEventListener("visibilitychange", this.onVisibility)
+            // Native lifecycle is the authoritative signal on a hard suspend (native.js
+            // relays appStateChange); visibilitychange covers browsers and most backgrounds.
+            window.addEventListener("ed:suspend", this.onSuspend)
             window.__edInstantNavReady = true
           },
           maybeStart(e) {
@@ -4073,6 +4098,8 @@ defmodule EdenWeb.ChatLive do
             document.removeEventListener("touchmove", this.onKbMove)
             this._untrackSwipe() // move/end may still be attached mid-gesture
             clearTimeout(this._backingBelt)
+            document.removeEventListener("visibilitychange", this.onVisibility)
+            window.removeEventListener("ed:suspend", this.onSuspend)
             this.remove()
           },
         }
@@ -6542,6 +6569,21 @@ defmodule EdenWeb.ChatLive do
             // (hidden=false, `active` still pointing here, isConnected still true) and returns
             // the moment that pane is shown again.
             this.onNav = () => this.close()
+            // Same rule for a suspend (#493): an armed long-press must not survive the app
+            // going away and pop a menu on resume with no finger on the screen, and an
+            // already-open menu is a transient affordance anchored to a viewport that may
+            // have changed while we were gone — close it, exactly as navigation does.
+            this.onSuspend = () => {
+              clearTimeout(this._lpTimer)
+              this._lpTarget = null
+              this.longPressed = false
+              this.close()
+            }
+            this.onVisibility = () => {
+              if (document.visibilityState !== "visible") this.onSuspend()
+            }
+            document.addEventListener("visibilitychange", this.onVisibility)
+            window.addEventListener("ed:suspend", this.onSuspend)
             this.wire()
 
             // Desktop: right-click the host. A keyboard context-menu (Shift+F10 /
@@ -6806,6 +6848,8 @@ defmodule EdenWeb.ChatLive do
             // detached node via a live listener/closure (#110 review M2/M3).
             if (this._dragMove) document.removeEventListener("mousemove", this._dragMove)
             if (this._dragUp) document.removeEventListener("mouseup", this._dragUp)
+            document.removeEventListener("visibilitychange", this.onVisibility)
+            window.removeEventListener("ed:suspend", this.onSuspend)
             clearTimeout(this._touchGuard)
             clearTimeout(this._lpTimer)
             clearTimeout(this._wheelTimer)
