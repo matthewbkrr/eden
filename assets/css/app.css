@@ -1945,18 +1945,82 @@ html {
   }
 
   /* In-app image lightbox (toggled by the .Lightbox hook) -------------- */
+  /* A native <dialog> in the top layer (#465 audit): the platform owns focus trap,
+     Esc and focus return; the scrim is the ::backdrop. z-index is irrelevant in the
+     top layer. */
   .ed-lightbox {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    width: 100dvw;
+    height: 100dvh;
+    max-width: 100dvw;
+    max-height: 100dvh;
     display: none;
     place-items: center;
     padding: 1.5rem;
-    background: oklch(0 0 0 / 0.85);
+    margin: 0;
+    border: none;
+    outline: none;
+    background: transparent;
     cursor: zoom-out;
+    overflow: hidden;
   }
-  .ed-lightbox--open {
+  .ed-lightbox[open] {
     display: grid;
+    animation: ed-lb-in 0.14s var(--ed-ease);
+  }
+  .ed-lightbox::backdrop {
+    background: oklch(0 0 0 / 0.85);
+  }
+  /* Light UI beneath ghosts through at 0.85 — a touch deeper reads calmer (audit). */
+  html[data-theme="light"] .ed-lightbox::backdrop {
+    background: oklch(0.05 0 0 / 0.88);
+  }
+  @media (prefers-color-scheme: light) {
+    html:not([data-theme="dark"]) .ed-lightbox::backdrop {
+      background: oklch(0.05 0 0 / 0.88);
+    }
+  }
+  .ed-lightbox--out,
+  .ed-lightbox--out::backdrop {
+    animation: ed-lb-out 0.15s var(--ed-ease) forwards;
+  }
+  @keyframes ed-lb-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes ed-lb-out {
+    to {
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-lightbox[open],
+    .ed-lightbox--out,
+    .ed-lightbox--out::backdrop {
+      animation: none;
+    }
+  }
+  /* Album position (audit P1): the phone pages by swipe with no arrows — the quiet
+     counter is the only signal an album has more. Hidden for a lone photo. */
+  .ed-lightbox__count {
+    position: fixed;
+    top: 1.35rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: none;
+    padding: 0.3rem 0.75rem;
+    border-radius: var(--ed-radius-full);
+    background: oklch(1 0 0 / 0.12);
+    color: oklch(0.99 0 0);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+  .ed-lightbox--gallery .ed-lightbox__count {
+    display: block;
   }
   .ed-lightbox__img {
     /* Clamp against the viewport, not the (content-sized) grid track, so a large
@@ -1969,7 +2033,12 @@ html {
     object-fit: contain;
     border-radius: var(--ed-radius);
     box-shadow: 0 10px 40px oklch(0 0 0 / 0.5);
-    cursor: default;
+    /* The cursor finishes the sentence the backdrop starts (audit): zoom-out around,
+       zoom-in on the photo, grab while zoomed. */
+    cursor: zoom-in;
+  }
+  .ed-lightbox--zoomed .ed-lightbox__img {
+    cursor: grab;
   }
   /* Album paging arrows: hidden for a lone image, shown for a gallery. */
   .ed-lightbox__nav {

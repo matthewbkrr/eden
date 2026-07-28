@@ -2854,3 +2854,11 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Off"
 msgstr ""
+
+#, elixir-autogen, elixir-format
+msgid "of"
+msgstr "of"
+
+#, elixir-autogen, elixir-format
+msgid "Photo viewer"
+msgstr "Photo viewer"
