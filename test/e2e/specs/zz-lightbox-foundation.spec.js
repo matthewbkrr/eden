@@ -65,11 +65,11 @@ test("zoom: dblclick toggles scale, paging resets it", async ({ alice, seed }, t
   test.skip(testInfo.project.name.startsWith("mobile"), "dblclick flow")
   const page = alice
   await openAlbum(page, seed)
-  const img = page.locator(".ed-lightbox__img")
+  const img = page.locator(".ed-lightbox__slide--cur img")
   await img.dblclick()
   await page.waitForTimeout(250)
   const zoomed = await page.evaluate(() => ({
-    tf: getComputedStyle(document.querySelector(".ed-lightbox__img")).transform,
+    tf: getComputedStyle(document.querySelector(".ed-lightbox__slide--cur img")).transform,
     cls: document.getElementById("ed-lightbox").className,
   }))
   expect(zoomed.tf, "transform applied").not.toBe("none")
@@ -78,7 +78,7 @@ test("zoom: dblclick toggles scale, paging resets it", async ({ alice, seed }, t
   await page.keyboard.press("ArrowRight")
   await page.waitForTimeout(150)
   const reset = await page.evaluate(
-    () => getComputedStyle(document.querySelector(".ed-lightbox__img")).transform,
+    () => getComputedStyle(document.querySelector(".ed-lightbox__slide--cur img")).transform,
   )
   expect(reset, "paging resets zoom").toBe("none")
   await page.keyboard.press("Escape")
@@ -198,19 +198,21 @@ test("paging animates the frame instead of swapping it dead", async ({
   test.skip(testInfo.project.name.startsWith("mobile"), "one project is enough")
   const page = alice
   await openAlbum(page, seed)
-  // Proof of MOTION, not of a style string: the frame must actually run a transform
-  // transition on page (the rAF hands the offset back home before any assertion
-  // round-trip could read the inline styles).
+  // Proof of MOTION, not of a style string: paging must travel the carousel TRACK.
+  // The first attempt animated the frame 18px behind the decode-hide — invisible in
+  // practice ("картинки резко меняются"), which a style-string assert never caught.
   await page.evaluate(() => {
     window.__moved = []
     document
-      .querySelector(".ed-lightbox__img")
+      .querySelector(".ed-lightbox__track")
       .addEventListener("transitionstart", (e) => window.__moved.push(e.propertyName))
   })
   await page.keyboard.press("ArrowLeft")
   await page.waitForFunction(() => window.__moved?.includes("transform"), null, { timeout: 2000 })
-  await page.waitForTimeout(350)
-  const settled = await page.evaluate(() => document.querySelector(".ed-lightbox__img").style.transform)
-  expect(settled, "the frame settles at rest").toBe("")
+  await page.waitForTimeout(420)
+  const settled = await page.evaluate(
+    () => document.querySelector(".ed-lightbox__track").style.transition,
+  )
+  expect(settled, "the track stops animating once it settles").toBe("none")
   await page.keyboard.press("Escape")
 })

@@ -9570,32 +9570,35 @@ defmodule EdenWeb.ChatLive do
               // length threw the index back to the start on every paint — which then
               // re-triggered the older-page fetch until the entire dialog was loaded.
               i = (n + items.length) % items.length
-              // Slide the outgoing frame out and the incoming one in (#465: paging was a
-              // bare src swap — nothing moved, so an album read as a still). Direction
-              // follows the gesture/arrow; opening (dir undefined) doesn't slide.
-              if (dir && prev !== i && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-                img.style.transition = "none"
-                img.style.transform = `translateX(${dir > 0 ? -18 : 18}px)`
-                img.style.opacity = "0"
-                requestAnimationFrame(() => {
-                  img.style.transition = "transform 0.22s var(--ed-ease), opacity 0.22s var(--ed-ease)"
-                  img.style.transform = ""
-                  img.style.opacity = ""
-                })
-              }
               // Paging resets the zoom — carrying a 2.5x pan onto a different photo
               // would disorient (#469).
               box.__zoomReset()
-              // Hide the frame until the new source decodes so paging into a
-              // different photo (or album) never flashes the previous image.
-              const reveal = () => { img.style.visibility = "visible" }
-              img.style.visibility = "hidden"
-              img.onload = reveal
+              // A key/arrow/thumb move GLIDES the track (a finger drag has already
+              // moved it and commits itself). The old micro-fade was invisible in
+              // practice: it raced the decode-hide and only travelled 18px, so paging
+              // read as a hard cut (user report).
+              const slide =
+                dir && prev !== i && !box.__dragging &&
+                !matchMedia("(prefers-reduced-motion: reduce)").matches
+              const paint = (k, it) => box.__paintSlot(k, it)
+              const settle = () => {
+                paint(0, items[i - 1])
+                paint(1, items[i])
+                paint(2, items[i + 1])
+                box.__trackTo(0, false)
+              }
+              if (slide) {
+                paint(1, items[prev])
+                paint(dir > 0 ? 2 : 0, items[i])
+                box.__trackTo(0, false)
+                const w = box.__stageW()
+                requestAnimationFrame(() => box.__trackTo(dir > 0 ? -w : w, true))
+                setTimeout(settle, 280)
+              } else {
+                settle()
+              }
               const it = items[i]
-              img.src = it.full
               box.__src = it.full
-              // A screen reader hears WHICH photo, not an empty string (audit P1).
-              img.alt = it.who ? `${box.__viewer} — ${it.who}` : box.__viewer
               // Position in the reel (audit P1): the phone pages by swipe with no
               // arrows — without this an album looks like a lone photo.
               // Position in the WHOLE conversation once the reel is anchored at its
@@ -9618,9 +9621,6 @@ defmodule EdenWeb.ChatLive do
               // Approaching the older end pulls the next page in (the reel loads
               // lazily backwards, TG-style).
               if (i <= 2 && box.__more && !box.__loading) loadOlder()
-              // Reopening the same photo sets an unchanged src, which fires no
-              // load event in some browsers — reveal immediately when cached.
-              if (img.complete) reveal()
             }
             box.__show = show
             box.__step = (d) => show(i + d, d)
@@ -9740,10 +9740,52 @@ defmodule EdenWeb.ChatLive do
               // screen the buttons hugged the viewport edges — a long mouse trip, and a
               // miss by a millimetre closed the viewer. The zone swallows those misses.
               `<div class="ed-lightbox__zone ed-lightbox__zone--prev"><button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="${lbl.lbPrev || "Previous"}">${chevron(left)}</button></div>` +
-              '<img class="ed-lightbox__img" alt="">' +
+              // A real carousel (#466): three slots — previous, current, next — on a
+              // track that follows the finger. A lone <img> could only cross-fade, and
+              // the fade competed with the decode-hide, so paging read as a hard cut.
+              '<div class="ed-lightbox__stage"><div class="ed-lightbox__track">' +
+              '<div class="ed-lightbox__slide"><img class="ed-lightbox__img" alt=""></div>' +
+              '<div class="ed-lightbox__slide ed-lightbox__slide--cur"><img class="ed-lightbox__img" alt=""></div>' +
+              '<div class="ed-lightbox__slide"><img class="ed-lightbox__img" alt=""></div>' +
+              '</div></div>' +
               `<div class="ed-lightbox__zone ed-lightbox__zone--next"><button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="${lbl.lbNext || "Next"}">${chevron(right)}</button></div>` +
               '<div class="ed-lightbox__strip" role="tablist"></div>'
-            const img = box.querySelector(".ed-lightbox__img")
+            const track = box.querySelector(".ed-lightbox__track")
+            const slots = [...box.querySelectorAll(".ed-lightbox__slide")]
+            const imgs = slots.map((sl) => sl.querySelector("img"))
+            // The centre slot is "the" photo: zoom, save and the a11y name all mean it.
+            const img = imgs[1]
+            box.__img = () => imgs[1]
+            // Track offset in px; -W is "centre slot centred".
+            const stageW = () => box.querySelector(".ed-lightbox__stage").clientWidth || window.innerWidth
+            const trackTo = (dx, animate) => {
+              track.style.transition =
+                animate && !matchMedia("(prefers-reduced-motion: reduce)").matches
+                  ? "transform 0.26s var(--ed-ease)"
+                  : "none"
+              track.style.transform = `translate3d(${-stageW() + dx}px,0,0)`
+            }
+            box.__trackTo = trackTo
+            box.__stageW = stageW
+            // Paint one slot: its source, its accessible name, and the decode-hide that
+            // keeps a half-loaded frame from flashing.
+            const paintSlot = (k, it) => {
+              const el = imgs[k]
+              if (!it) {
+                el.removeAttribute("src")
+                el.style.visibility = "hidden"
+                return
+              }
+              if (el.dataset.src === it.full) return
+              el.dataset.src = it.full
+              el.style.visibility = "hidden"
+              const reveal = () => (el.style.visibility = "visible")
+              el.onload = reveal
+              el.src = it.full
+              el.alt = it.who ? `${box.__viewer} — ${it.who}` : box.__viewer
+              if (el.complete) reveal()
+            }
+            box.__paintSlot = paintSlot
             const menu = box.querySelector(".ed-lightbox__menu")
             const more = box.querySelector(".ed-lightbox__more")
 
@@ -9773,6 +9815,13 @@ defmodule EdenWeb.ChatLive do
                     im.src = it.thumb
                     im.alt = ""
                     im.loading = "lazy"
+                    // A thumbnail the worker hasn't produced yet 404s — fall back to the
+                    // original once, then leave the neutral tile rather than a broken glyph.
+                    im.onerror = () => {
+                      if (im.dataset.fellBack) return im.remove()
+                      im.dataset.fellBack = "1"
+                      im.src = it.full
+                    }
                     b.appendChild(im)
                     if (it.kind === "video") {
                       const badge = document.createElement("span")
@@ -10021,6 +10070,7 @@ defmodule EdenWeb.ChatLive do
                 if (e.touches.length === 1) {
                   tx = e.touches[0].clientX
                   ty = e.touches[0].clientY
+                  box.__dragT0 = e.timeStamp
                   multi = false
                   pan = z > 1 ? { x: tx, y: ty, px, py } : null
                 } else if (e.touches.length === 2) {
@@ -10053,6 +10103,23 @@ defmodule EdenWeb.ChatLive do
                   py = pan.py + (e.touches[0].clientY - pan.y)
                   clampPan()
                   applyZoom(false)
+                } else if (e.touches.length === 1 && !multi) {
+                  // Carousel drag (#466): at 1x a mostly-horizontal finger CARRIES the
+                  // track, so the neighbouring photos come in from the edges exactly
+                  // like a phone gallery. Vertical intent is left to swipe-to-close.
+                  const dx = e.touches[0].clientX - tx
+                  const dy = e.touches[0].clientY - ty
+                  if (!box.__dragging && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+                    box.__dragging = true
+                  }
+                  if (box.__dragging) {
+                    e.preventDefault()
+                    // Rubber-band at the reel's ends so it never drags into a void.
+                    const idx = box.__index ? box.__index() : 0
+                    const len = box.__items ? box.__items().length : 1
+                    const atEnd = (dx > 0 && idx === 0) || (dx < 0 && idx === len - 1)
+                    trackTo(atEnd ? dx * 0.3 : dx, false)
+                  }
                 } else if (e.touches.length > 1) {
                   multi = true
                 }
@@ -10084,16 +10151,31 @@ defmodule EdenWeb.ChatLive do
                   if (moved > 10) box.__swiped = true
                   return // zoomed: drags pan, they never page/close
                 }
+                if (box.__dragging) {
+                  // Commit past a third of the stage (or on a flick), else spring home.
+                  box.__swiped = true
+                  const w = stageW()
+                  const fast =
+                    Math.abs(dx) / Math.max(1, e.timeStamp - (box.__dragT0 || e.timeStamp)) > 0.4
+                  const dir = dx < 0 ? 1 : -1
+                  const idx = box.__index ? box.__index() : 0
+                  const reel = box.__items ? box.__items() : []
+                  const target = idx + dir
+                  if ((Math.abs(dx) > w / 3 || fast) && reel[target]) {
+                    trackTo(dir > 0 ? -w : w, true)
+                    setTimeout(() => {
+                      box.__dragging = false
+                      box.__show(target)
+                    }, 270)
+                  } else {
+                    trackTo(0, true)
+                    setTimeout(() => (box.__dragging = false), 270)
+                  }
+                  return
+                }
                 if (dy > 70 && dy > Math.abs(dx)) {
                   box.__swiped = true
                   close()
-                } else if (
-                  Math.abs(dx) > 50 &&
-                  Math.abs(dx) > Math.abs(dy) &&
-                  box.classList.contains("ed-lightbox--gallery")
-                ) {
-                  box.__swiped = true
-                  box.__step(dx < 0 ? 1 : -1)
                 } else if (moved < 10) {
                   // Double-tap zoom (300ms window, near the same spot).
                   const now = e.timeStamp

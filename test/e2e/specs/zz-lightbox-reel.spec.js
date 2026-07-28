@@ -40,11 +40,11 @@ test("the strip renders, marks the current photo and jumps on tap", async ({
   await expect(strip).toBeVisible()
   await expect(page.locator(".ed-lightbox__thumb--on")).toHaveCount(1)
 
-  const before = await page.evaluate(() => document.querySelector(".ed-lightbox__img").src)
+  const before = await page.evaluate(() => document.querySelector(".ed-lightbox__slide--cur img").src)
   const thumbs = page.locator(".ed-lightbox__thumb")
   await thumbs.first().click()
   await expect
-    .poll(async () => page.evaluate(() => document.querySelector(".ed-lightbox__img").src))
+    .poll(async () => page.evaluate(() => document.querySelector(".ed-lightbox__slide--cur img").src))
     .not.toBe(before)
   // The viewer stayed open — the strip is chrome, not backdrop.
   await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(1)
@@ -58,15 +58,53 @@ test("a near-miss beside the arrow pages instead of closing", async ({
   test.skip(testInfo.project.name.startsWith("mobile"), "desktop zones")
   const page = alice
   await open(page, seed)
-  const before = await page.evaluate(() => document.querySelector(".ed-lightbox__img").src)
+  const before = await page.evaluate(() => document.querySelector(".ed-lightbox__slide--cur img").src)
   // Click inside the previous zone but NOT on the button itself.
   const zone = await page.locator(".ed-lightbox__zone--prev").boundingBox()
   await page.mouse.click(zone.x + 8, zone.y + 40)
   await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(1)
   await expect
-    .poll(async () => page.evaluate(() => document.querySelector(".ed-lightbox__img").src))
+    .poll(async () => page.evaluate(() => document.querySelector(".ed-lightbox__slide--cur img").src))
     .not.toBe(before)
   await page.keyboard.press("Escape")
+})
+
+test("touch: the track follows the finger and commits the neighbour", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("mobile"), "touch carousel")
+  const page = alice
+  await open(page, seed)
+  const touch = (type, x, y) =>
+    page.dispatchEvent("#ed-lightbox", type, {
+      touches: type === "touchend" ? [] : [{ identifier: 1, clientX: x, clientY: y }],
+      changedTouches: [{ identifier: 1, clientX: x, clientY: y }],
+      targetTouches: type === "touchend" ? [] : [{ identifier: 1, clientX: x, clientY: y }],
+    })
+  const src = () => page.evaluate(() => document.querySelector(".ed-lightbox__slide--cur img").src)
+  const before = await src()
+
+  // Drag toward the older end (the opened photo is the newest, so the other way
+  // would only rubber-band).
+  await touch("touchstart", 100, 400)
+  const offsets = []
+  for (const x of [130, 190, 250, 310]) {
+    await touch("touchmove", x, 402)
+    offsets.push(
+      await page.evaluate(() => {
+        const m = /translate3d\((-?\d+(?:\.\d+)?)px/.exec(
+          document.querySelector(".ed-lightbox__track").style.transform,
+        )
+        return m ? Number(m[1]) : null
+      }),
+    )
+  }
+  // The track TRACKS the finger — each move leaves it further right than the last.
+  expect(offsets.every((v, k) => k === 0 || v > offsets[k - 1]), `track follows: ${offsets}`).toBe(true)
+
+  await touch("touchend", 310, 402)
+  await expect.poll(async () => src()).not.toBe(before)
 })
 
 test("mobile: the strip is there, the desktop zones are not", async ({

@@ -1961,7 +1961,9 @@ html {
     margin: 0;
     border: none;
     outline: none;
-    background: transparent;
+    /* The scrim rides the dialog, not only ::backdrop: WebKit paints the backdrop
+       differently and the chat behind stayed legible through the chrome. */
+    background: oklch(0 0 0 / 0.85);
     cursor: zoom-out;
     overflow: hidden;
   }
@@ -1973,10 +1975,12 @@ html {
     background: oklch(0 0 0 / 0.85);
   }
   /* Light UI beneath ghosts through at 0.85 — a touch deeper reads calmer (audit). */
+  html[data-theme="light"] .ed-lightbox,
   html[data-theme="light"] .ed-lightbox::backdrop {
     background: oklch(0.05 0 0 / 0.88);
   }
   @media (prefers-color-scheme: light) {
+    html:not([data-theme="dark"]) .ed-lightbox,
     html:not([data-theme="dark"]) .ed-lightbox::backdrop {
       background: oklch(0.05 0 0 / 0.88);
     }
@@ -2116,12 +2120,37 @@ html {
       animation: none;
     }
   }
+  /* The carousel (#466): a clipped stage holding a 3-slot track that follows the
+     finger, so neighbouring photos enter from the edges like a phone gallery. */
+  .ed-lightbox__stage {
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: calc(env(safe-area-inset-top) + 3.6rem);
+    bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+  }
+  .ed-lightbox--gallery .ed-lightbox__stage {
+    /* Leave the strip its band. */
+    bottom: calc(env(safe-area-inset-bottom) + 4.6rem);
+  }
+  .ed-lightbox__track {
+    display: flex;
+    width: 300%;
+    height: 100%;
+    will-change: transform;
+  }
+  .ed-lightbox__slide {
+    flex: 0 0 33.3333%;
+    display: grid;
+    place-items: center;
+    padding: 0 0.75rem;
+  }
   .ed-lightbox__img {
-    /* Clamp against the viewport, not the (content-sized) grid track, so a large
-       original can't inflate the track and overflow. dvh/dvw track mobile chrome;
-       the 3rem accounts for the overlay's 1.5rem padding on each side. */
-    max-width: calc(100dvw - 3rem);
-    max-height: calc(100dvh - 3rem);
+    max-width: 100%;
+    max-height: 100%;
     width: auto;
     height: auto;
     object-fit: contain;
@@ -2202,6 +2231,7 @@ html {
   }
   .ed-lightbox__thumb {
     position: relative;
+    background: oklch(1 0 0 / 0.14);
     flex: none;
     width: 2.75rem;
     height: 2.75rem;
@@ -2249,13 +2279,7 @@ html {
   }
   /* The close affordance is the bar's back arrow now (#465) — styling rides
      .ed-lightbox__btn; the tall photo must clear the bar. */
-  .ed-lightbox__img {
-    margin-top: calc(env(safe-area-inset-top) + 2.5rem);
-  }
-  .ed-lightbox--gallery .ed-lightbox__img {
-    /* Leave the strip its band so a tall photo never sits under the thumbnails. */
-    max-height: calc(100dvh - 3rem - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 6.5rem);
-  }
+
   /* Phone: no room for side arrows — swipe left/right pages instead (#96). */
   @media (max-width: 767px) {
     .ed-lightbox--gallery .ed-lightbox__nav {
