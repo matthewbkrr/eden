@@ -40,6 +40,11 @@ defmodule EdenWeb.Router do
     # visitor, so the flash must be fetched here too.
     plug :fetch_live_flash
     plug :fetch_current_scope_for_user
+    # Same guarantees as :browser minus the document-only plugs (layout/CSP): the
+    # forgery check is a no-op on GET but keeps the pipeline honest if a POST is
+    # ever added here, and the secure headers cost nothing on a json body.
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
   end
 
   pipeline :require_authenticated do
