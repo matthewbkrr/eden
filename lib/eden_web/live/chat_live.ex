@@ -6475,6 +6475,11 @@ defmodule EdenWeb.ChatLive do
               this.recentTouch = true
               clearTimeout(this._touchGuard)
               this._touchGuard = setTimeout(() => { this.recentTouch = false }, 700)
+              // A stale swallow flag must not eat the NEXT real tap (#479): longPressed is
+              // otherwise cleared only by the click handler below, so a menu opened without a
+              // following click on this row (navigated away, opened another chat) left it set
+              // on a hook that survives every sidebar re-render.
+              this.longPressed = false
               // Instance state, not a closure (#439 THE actual long-press leak): rapid
               // switching re-streams the sidebar, morphdom REPLACES the row mid-touch,
               // the hook dies — and with it the touchend cancel — while a closure timer
@@ -6482,15 +6487,32 @@ defmodule EdenWeb.ChatLive do
               // settled (which is why the __edNavBusy guard alone missed it). destroyed()
               // now owns the timer, and the callback refuses on a disconnected element.
               // A second finger's touchstart must not orphan the first timer (#462 review).
+              //
+              // Remember the TOUCH TARGET, not just the row (#479). The cancels below sit on
+              // this.el and reach it only by bubbling from the leaf the finger actually landed
+              // on; a touch target is fixed at touchstart and never re-targeted. If morphdom
+              // discards that leaf mid-gesture — and the sidebar's <time> is discarded on
+              // EVERY patch, see local_time — the event fires on a node whose propagation path
+              // is just itself. It never reaches the row, and it would never reach `document`
+              // either, so no amount of listener placement can save this: the timer has to
+              // check at FIRE time. Both #462 guards still pass here (the row survives, so
+              // destroyed() never runs and isConnected is true), which is why a ~320ms still
+              // tap could open the menu.
+              this._lpTarget = e.target
               clearTimeout(this._lpTimer)
               this._lpTimer = setTimeout(() => {
                 if (window.__edNavBusy) return
                 if (!this.el.isConnected) return
+                // The finger's own node left the tree: its touchend can no longer be observed,
+                // so this timer cannot be trusted to represent a still-held finger.
+                if (this._lpTarget && !this._lpTarget.isConnected) return
+                // …and the host must actually be on screen (same predicate as updated(), #478).
+                if (this.el.getClientRects().length === 0) return
                 this.open(sx, sy)
                 this.longPressed = true
               }, 450)
             }, { passive: true })
-            const cancel = () => clearTimeout(this._lpTimer)
+            const cancel = () => { clearTimeout(this._lpTimer); this._lpTarget = null }
             this.el.addEventListener("touchmove", (e) => {
               const t = e.touches[0]
               dx = t.clientX - sx
@@ -6731,6 +6753,10 @@ defmodule EdenWeb.ChatLive do
           },
           close() {
             if (active === this) active = null
+            // Closing ends the gesture too (#479): otherwise a menu dismissed without a click
+            // on this row leaves longPressed set, and the hook survives sidebar re-renders, so
+            // the flag would swallow a genuine tap later — the row simply would not open.
+            this.longPressed = false
             if (this.menu) this.menu.hidden = true
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "false")
@@ -10712,6 +10738,7 @@ defmodule EdenWeb.ChatLive do
               :if={@conversation.last_message_at}
               at={@conversation.last_message_at}
               class="ed-convo__time"
+              id={"t-conv-#{@conversation.id}"}
             />
           </span>
           <span class="ed-convo__top">
@@ -14267,13 +14294,24 @@ defmodule EdenWeb.ChatLive do
   # server-rendered text is a UTC fallback shown before JS runs).
   attr :at, :any, required: true
   attr :class, :string, default: nil
+  # A STABLE id where the caller can supply one (#479). The fallback below mints a fresh
+  # id on every render, which means morphdom's getNodeKey can never match and it is forced
+  # to discard + re-add this node on EVERY patch of the surrounding row. That is invisible
+  # on desktop but not on touch: a touch target is fixed at touchstart, so a finger resting
+  # on this timestamp when its row re-renders is left holding a detached node, whose
+  # touchend then reaches nobody — the orphaned long-press timer of #479. It also costs a
+  # hook teardown + remount per row per patch. Callers inside a keyed row (sidebar chats,
+  # rooms) pass their own id and keep the node identity stable across renders.
+  attr :id, :string, default: nil
 
   defp local_time(assigns) do
+    assigns = assign_new(assigns, :dom_id, fn -> assigns.id || "t-#{System.unique_integer([:positive])}" end)
+
     ~H"""
     <time
       class={@class}
       phx-hook=".LocalTime"
-      id={"t-#{System.unique_integer([:positive])}"}
+      id={@dom_id}
       datetime={DateTime.to_iso8601(@at)}
     >
       {Calendar.strftime(@at, "%H:%M")}
