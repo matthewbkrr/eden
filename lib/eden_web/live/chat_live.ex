@@ -4355,6 +4355,8 @@ defmodule EdenWeb.ChatLive do
             data-lb-close={gettext("Close")}
             data-lb-prev={gettext("Previous")}
             data-lb-next={gettext("Next")}
+            data-lb-of={gettext("of")}
+            data-lb-viewer={gettext("Photo viewer")}
           >
             <%!-- Floating day chip (#83): server-rendered so a re-render never drops it;
                   the .DateRail hook sets its label to the topmost visible day + toggles
@@ -9467,7 +9469,7 @@ defmodule EdenWeb.ChatLive do
           window.__edOverlayNavGuard = true
           window.addEventListener("phx:page-loading-start", () => {
             const lb = document.getElementById("ed-lightbox")
-            if (lb && lb.classList.contains("ed-lightbox--open")) lb.__close && lb.__close()
+            if (lb && lb.open) lb.__close && lb.__close()
             const vm = document.getElementById("ed-video-modal")
             if (vm && vm.classList.contains("ed-video-modal--open")) vm.__close && vm.__close()
           })
@@ -9484,7 +9486,7 @@ defmodule EdenWeb.ChatLive do
               // wins. (A profile photo has no dbl-react, so it always opens on click.)
               if (inMsg && e.detail > 1) {
                 const box = document.getElementById("ed-lightbox")
-                if (box?.classList.contains("ed-lightbox--open")) box.__close?.()
+                if (box?.open) box.__close?.()
                 return
               }
               this.openLightbox()
@@ -9499,14 +9501,25 @@ defmodule EdenWeb.ChatLive do
 
             const box = this.box()
             const img = box.querySelector(".ed-lightbox__img")
+            const count = box.querySelector(".ed-lightbox__count")
             const show = (n) => {
               i = (n + tiles.length) % tiles.length
+              // Paging resets the zoom — carrying a 2.5x pan onto a different photo
+              // would disorient (#469).
+              box.__zoomReset()
               // Hide the frame until the new source decodes so paging into a
               // different photo (or album) never flashes the previous image.
               const reveal = () => { img.style.visibility = "visible" }
               img.style.visibility = "hidden"
               img.onload = reveal
               img.src = tiles[i].dataset.full
+              // A screen reader hears WHICH photo, not an empty string (audit P1):
+              // the tile's aria-label is already localized ("Photo").
+              img.alt = tiles[i].getAttribute("aria-label") || ""
+              // Album position (audit P1): the phone pages by swipe with no arrows —
+              // without a counter an album is indistinguishable from a lone photo.
+              count.textContent =
+                tiles.length > 1 ? `${i + 1} ${box.__of} ${tiles.length}` : ""
               // Reopening the same photo sets an unchanged src, which fires no
               // load event in some browsers — reveal immediately when cached.
               if (img.complete) reveal()
@@ -9516,7 +9529,15 @@ defmodule EdenWeb.ChatLive do
             box.classList.toggle("ed-lightbox--gallery", tiles.length > 1)
             show(i)
 
-            box.classList.add("ed-lightbox--open")
+            // Native <dialog> (audit P1): showModal() brings the top layer, focus
+            // trap, Esc (via cancel) and focus RETURN to the opening tile for free —
+            // the old div overlay was a phantom for keyboard and screen readers.
+            // Reopening during the 150ms close fade must CANCEL that close — its
+            // delayed teardown would fire box.close() on the fresh view (#470 review).
+            clearTimeout(box.__closeTimer)
+            box.__closing = false
+            box.classList.remove("ed-lightbox--out")
+            if (!box.open) box.showModal()
             // Start each open with a clean gesture flag — a stale `__swiped` from a
             // prior swipe would otherwise suppress the first tap (e.g. the X) (#96).
             box.__swiped = false
@@ -9527,7 +9548,9 @@ defmodule EdenWeb.ChatLive do
             let box = document.getElementById("ed-lightbox")
             if (box) return box
 
-            box = document.createElement("div")
+            // A native <dialog> (audit P1): top layer, focus trap, focus return and
+            // Esc semantics come from the platform instead of hand-rolled listeners.
+            box = document.createElement("dialog")
             box.id = "ed-lightbox"
             box.className = "ed-lightbox"
             // Heroicon chevrons (mini) sit dead-center in the round buttons —
@@ -9539,23 +9562,88 @@ defmodule EdenWeb.ChatLive do
             const xmark = "M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
             // Localized labels from #message-scroll (gettext is unreachable here).
             const lbl = document.getElementById("message-scroll")?.dataset || {}
+            box.__of = lbl.lbOf || "/"
+            // The dialog's accessible name — a screen reader announces the modal (audit P1).
+            box.setAttribute("aria-label", lbl.lbViewer || "Photo")
             box.innerHTML =
               `<button class="ed-lightbox__close" aria-label="${lbl.lbClose || "Close"}">${chevron(xmark)}</button>` +
+              '<div class="ed-lightbox__count" aria-live="polite"></div>' +
               `<button class="ed-lightbox__nav ed-lightbox__nav--prev" aria-label="${lbl.lbPrev || "Previous"}">${chevron(left)}</button>` +
               '<img class="ed-lightbox__img" alt="">' +
               `<button class="ed-lightbox__nav ed-lightbox__nav--next" aria-label="${lbl.lbNext || "Next"}">${chevron(right)}</button>`
+            const img = box.querySelector(".ed-lightbox__img")
+
+            // ---- zoom (#469, audit P1): pinch / wheel / double-tap+dblclick, with pan.
+            // Transforms only (translate+scale around the viewport center); page/close
+            // swipes are gated on z === 1 so a zoomed drag pans instead of paging.
+            let z = 1
+            let px = 0
+            let py = 0
+            const applyZoom = (animate) => {
+              img.style.transition =
+                animate && !matchMedia("(prefers-reduced-motion: reduce)").matches
+                  ? "transform 0.18s var(--ed-ease)"
+                  : "none"
+              img.style.transform = z > 1 ? `translate(${px}px, ${py}px) scale(${z})` : ""
+              box.classList.toggle("ed-lightbox--zoomed", z > 1)
+            }
+            const clampPan = () => {
+              const bx = Math.max(0, (img.offsetWidth * z - window.innerWidth) / 2 + 24)
+              const by = Math.max(0, (img.offsetHeight * z - window.innerHeight) / 2 + 24)
+              px = Math.min(bx, Math.max(-bx, px))
+              py = Math.min(by, Math.max(-by, py))
+            }
+            // Zoom about a viewport point f: the pixel under it must not move.
+            const zoomAt = (fx, fy, nz, animate) => {
+              const cz = Math.min(4, Math.max(1, nz))
+              const cx = window.innerWidth / 2
+              const cy = window.innerHeight / 2
+              px = fx - cx - ((fx - cx - px) * cz) / z
+              py = fy - cy - ((fy - cy - py) * cz) / z
+              z = cz
+              if (z === 1) { px = 0; py = 0 }
+              clampPan()
+              applyZoom(animate)
+            }
+            const zoomReset = () => { z = 1; px = 0; py = 0; applyZoom(false) }
+            box.__zoomReset = zoomReset
+            const toggleZoom = (fx, fy) => zoomAt(fx, fy, z > 1 ? 1 : 2.5, true)
+            img.addEventListener("dblclick", (e) => { e.stopPropagation(); toggleZoom(e.clientX, e.clientY) })
+            box.addEventListener(
+              "wheel",
+              (e) => {
+                // Trackpad/wheel zoom over the whole overlay (desktop). preventDefault
+                // keeps the (inert) page behind from scrolling.
+                e.preventDefault()
+                zoomAt(e.clientX, e.clientY, z * Math.exp(-e.deltaY * 0.0022), false)
+              },
+              { passive: false }
+            )
 
             const close = () => {
-              box.classList.remove("ed-lightbox--open")
-              document.body.style.overflow = ""
-              document.removeEventListener("keydown", box.__onKey)
+              if (box.__closing || !box.open) return
+              box.__closing = true
+              const fin = () => {
+                box.classList.remove("ed-lightbox--out")
+                box.__closing = false
+                try { box.close() } catch (_e) { /* already closed */ }
+                document.body.style.overflow = ""
+                document.removeEventListener("keydown", box.__onKey)
+                zoomReset()
+              }
+              // A 150ms fade out (audit P2: the instant display-flip cut the swipe-to-
+              // close gesture off mid-motion); instant under reduced motion.
+              if (matchMedia("(prefers-reduced-motion: reduce)").matches) return fin()
+              box.classList.add("ed-lightbox--out")
+              box.__closeTimer = setTimeout(fin, 150)
             }
             // Expose close so the global nav guard (#380/R187) can dismiss the overlay when a
             // server-driven navigation tears down the owning hook without firing Esc/backdrop close.
             box.__close = close
+            // Esc arrives as the dialog cancel event — reroute through the animated close.
+            box.addEventListener("cancel", (e) => { e.preventDefault(); close() })
             box.__onKey = (e) => {
-              if (e.key === "Escape") close()
-              else if (e.key === "ArrowLeft") box.__step(-1)
+              if (e.key === "ArrowLeft") box.__step(-1)
               else if (e.key === "ArrowRight") box.__step(1)
             }
             box.addEventListener("click", (e) => {
@@ -9574,14 +9662,16 @@ defmodule EdenWeb.ChatLive do
                 close()
               }
             })
-            // Touch (#96): no keyboard/arrows on a phone — swipe down to close,
-            // swipe left/right to page an album. A gesture must clear ~50-70px and
-            // be mostly on one axis to register (so a tap or tiny drift doesn't).
-            // `multi` ignores pinch-zoom: a 2-finger gesture must not be read as a
-            // swipe against a stale 1-finger origin (#95 review).
+            // Touch (#96 + #469): one finger swipes page/close at 1x and PANS when
+            // zoomed; two fingers pinch-zoom (preventDefault owns the gesture, or iOS
+            // pinches the page). Double-tap toggles 1x <-> 2.5x at the tap point.
             let tx = 0
             let ty = 0
             let multi = false
+            let pinch = null
+            let pan = null
+            let lastTap = { t: 0, x: 0, y: 0 }
+            const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
             box.addEventListener(
               "touchstart",
               (e) => {
@@ -9589,6 +9679,17 @@ defmodule EdenWeb.ChatLive do
                   tx = e.touches[0].clientX
                   ty = e.touches[0].clientY
                   multi = false
+                  pan = z > 1 ? { x: tx, y: ty, px, py } : null
+                } else if (e.touches.length === 2) {
+                  multi = true
+                  pan = null
+                  const [a, b] = e.touches
+                  pinch = {
+                    d0: dist(a, b),
+                    mx: (a.clientX + b.clientX) / 2,
+                    my: (a.clientY + b.clientY) / 2,
+                    z0: z,
+                  }
                 } else {
                   multi = true
                 }
@@ -9596,14 +9697,36 @@ defmodule EdenWeb.ChatLive do
               },
               { passive: true }
             )
-            box.addEventListener("touchmove", (e) => { if (e.touches.length > 1) multi = true }, {
-              passive: true,
-            })
+            box.addEventListener(
+              "touchmove",
+              (e) => {
+                if (e.touches.length === 2 && pinch) {
+                  e.preventDefault()
+                  const [a, b] = e.touches
+                  zoomAt(pinch.mx, pinch.my, pinch.z0 * (dist(a, b) / pinch.d0), false)
+                } else if (e.touches.length === 1 && pan) {
+                  e.preventDefault()
+                  px = pan.px + (e.touches[0].clientX - pan.x)
+                  py = pan.py + (e.touches[0].clientY - pan.y)
+                  clampPan()
+                  applyZoom(false)
+                } else if (e.touches.length > 1) {
+                  multi = true
+                }
+              },
+              { passive: false }
+            )
             box.addEventListener(
               "touchend",
               (e) => {
-                // Wait out a pinch — only act once every finger has lifted on a
-                // single-touch gesture.
+                if (pinch && e.touches.length < 2) {
+                  // Pinch released: snap a near-1x back to rest.
+                  if (z < 1.05) zoomReset()
+                  pinch = null
+                  if (e.touches.length === 0) multi = false
+                  box.__swiped = true // the gesture must not fall through to tap-to-close
+                  return
+                }
                 if (multi) {
                   if (e.touches.length === 0) multi = false
                   return
@@ -9612,6 +9735,12 @@ defmodule EdenWeb.ChatLive do
                 if (!t) return
                 const dx = t.clientX - tx
                 const dy = t.clientY - ty
+                const moved = Math.hypot(dx, dy)
+                if (pan) {
+                  pan = null
+                  if (moved > 10) box.__swiped = true
+                  return // zoomed: drags pan, they never page/close
+                }
                 if (dy > 70 && dy > Math.abs(dx)) {
                   box.__swiped = true
                   close()
@@ -9622,6 +9751,16 @@ defmodule EdenWeb.ChatLive do
                 ) {
                   box.__swiped = true
                   box.__step(dx < 0 ? 1 : -1)
+                } else if (moved < 10) {
+                  // Double-tap zoom (300ms window, near the same spot).
+                  const now = e.timeStamp
+                  if (now - lastTap.t < 300 && Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 40) {
+                    box.__swiped = true // suppress the synthetic click pair
+                    toggleZoom(t.clientX, t.clientY)
+                    lastTap = { t: 0, x: 0, y: 0 }
+                  } else {
+                    lastTap = { t: now, x: t.clientX, y: t.clientY }
+                  }
                 }
               },
               { passive: true }
