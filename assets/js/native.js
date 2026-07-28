@@ -84,9 +84,18 @@ function wireKeyboard() {
 // The backButton event never fires on iOS (no back button), and minimizeApp
 // is Android-only — the catch keeps a hypothetical rejection silent rather
 // than an unhandled-promise log (#423 review).
+// Bound ONCE per app process (#481). initNativeShell re-runs on every full document
+// load — and with server.url this app is a remote-origin WebView, so every LiveView
+// redirect is one — while the listener lives on the native plugin and survives the
+// reload. Without a latch they stack, and one press then traverses several entries.
+// The team documented exactly this hazard for wirePush (#425 review) and applied a
+// latch there; this one was missed. The flag rides the PLUGIN, not `window`: a full
+// load replaces the global object, which is precisely the event we need to survive.
 function wireBackButton() {
   const app = cap.Plugins?.App;
   if (!app?.addListener) return;
+  if (app.__edBackWired) return;
+  app.__edBackWired = true;
   app.addListener("backButton", ({ canGoBack }) => {
     if (canGoBack && window.history.length > 1) {
       window.history.back();

@@ -3037,14 +3037,21 @@ defmodule EdenWeb.ChatLive do
             this._trackSwipe = () => {
               document.addEventListener("touchmove", this.onTouchMove, { passive: false })
               document.addEventListener("touchend", this.onTouchEnd)
-              document.addEventListener("touchcancel", this.onTouchEnd)
+              document.addEventListener("touchcancel", this.onTouchCancel)
             }
             this._untrackSwipe = () => {
               document.removeEventListener("touchmove", this.onTouchMove)
               document.removeEventListener("touchend", this.onTouchEnd)
-              document.removeEventListener("touchcancel", this.onTouchEnd)
+              document.removeEventListener("touchcancel", this.onTouchCancel)
             }
+            // Android owns the back gesture and there is no way to give it up: the iOS
+            // half of #432 turned WKWebView's gesture off (BridgeViewController), but that is
+            // a WebView property with no Android counterpart — the system edge swipe is an OS
+            // gesture. So this recognizer, written to REPLACE a native gesture, was running
+            // alongside a live one there: one swipe, two navigations. Let the OS have it.
+            this._ownsBackGesture = !(window.Capacitor?.getPlatform?.() === "android")
             this.onTouchStart = (e) => {
+              if (!this._ownsBackGesture) return
               if (e.touches.length !== 1 || this._backing) return
               if (window.matchMedia("(min-width: 768px)").matches) return
               if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
@@ -3097,6 +3104,22 @@ defmodule EdenWeb.ChatLive do
               ;(s.ov || s.main).style.transform = "translateX(" + s.dx + "px)"
               e.preventDefault() // the pane is following the finger — no scroll/selection
             }
+            // touchcancel is NOT a release (#481). The OS took the touch away — Android's own
+            // edge-back detector claiming the gesture it was still forwarding us, an iOS
+            // notification pull, an incoming-call banner, Control Center. Routing it into
+            // onTouchEnd made the commit test read whatever travel had accumulated, and a
+            // system-claimed edge gesture is exactly a fast flick (40px in 60ms = 0.67, well
+            // over the 0.35 threshold) — so it COMMITTED a back the user never performed. On
+            // Android that fires alongside the OS's own back: one gesture, two navigations.
+            // The same class was already recognised and fixed for the long-press timer in
+            // #462; the swipe recognizer never got the same treatment.
+            this.onTouchCancel = () => {
+              const s = this._swipe
+              this._swipe = null
+              this._untrackSwipe()
+              if (!s || !s.armed) return
+              this.abortSwipe(s)
+            }
             this.onTouchEnd = (e) => {
               const s = this._swipe
               this._swipe = null
@@ -3122,9 +3145,7 @@ defmodule EdenWeb.ChatLive do
                   this.revealList(document.getElementById("chat-dropzone"), document.querySelector(".ed-root > aside"))
                   this.cancelPending(s.href)
                 } else {
-                  el.style.transition = "transform 0.2s var(--ed-ease)"
-                  el.style.transform = ""
-                  setTimeout(() => (el.style.transition = ""), 250)
+                  this.abortSwipe(s)
                 }
                 return
               }
@@ -3149,26 +3170,7 @@ defmodule EdenWeb.ChatLive do
                   setTimeout(() => (this._backing = false), 1000)
                 }
               } else {
-                // Cancelled: glide home, then restore the exact pre-gesture state (the server
-                // never heard about any of this). Generation-stamped (#438 review): if a NEW
-                // gesture armed during the ~450ms glide, this stale cleanup must not strip its
-                // classes / re-hide the list out from under it.
-                const fin = () => {
-                  s.main.removeEventListener("transitionend", onEnd)
-                  if (this._swipeGen !== s.gen) return
-                  s.main.classList.remove("ed-main-pop")
-                  s.main.style.transform = ""
-                  s.aside.classList.add("hidden")
-                  document.querySelector("nav.ed-rail")?.classList.add("hidden")
-                }
-                let done = false
-                const once = () => { if (!done) { done = true; fin() } }
-                const onEnd = (ev) => {
-                  if (ev.target === s.main && ev.propertyName === "transform") once()
-                }
-                s.main.addEventListener("transitionend", onEnd)
-                setTimeout(once, 450)
-                s.main.style.transform = "translateX(0px)"
+                this.abortSwipe(s)
               }
             }
             document.addEventListener("touchstart", this.onTouchStart, { passive: true })
@@ -3457,6 +3459,43 @@ defmodule EdenWeb.ChatLive do
           // class="hidden", ready to reappear the moment that pane is shown again.
           announceNav() {
             window.dispatchEvent(new Event("ed:nav"))
+          },
+          // Undo an edge swipe without navigating: glide the dragged screen home and restore
+          // the exact pre-gesture state (the server never heard about any of this). Shared by
+          // the "not far enough" release and by touchcancel, which must ALWAYS land here (#481).
+          // Generation-stamped (#438 review): if a NEW gesture armed during the ~450ms glide,
+          // this stale cleanup must not strip its classes / re-hide the list out from under it.
+          abortSwipe(s) {
+            if (s.ov) {
+              // Mid-load: the dragged screen was the loading overlay, and the pane beneath it
+              // was never touched — only the overlay has to come home.
+              s.ov.style.transition = "transform 0.2s var(--ed-ease)"
+              s.ov.style.transform = ""
+              setTimeout(() => (s.ov.style.transition = ""), 250)
+              return
+            }
+            // Idempotent for the release path (which already dropped it), required for the
+            // touchcancel path (which skips that code). The forced reflow commits the current
+            // transform before the class re-enables transitions, or the glide is skipped —
+            // same reason the commit branch reads offsetWidth (#436).
+            s.main.classList.remove("ed-main-pop--drag")
+            void s.main.offsetWidth
+            const fin = () => {
+              s.main.removeEventListener("transitionend", onEnd)
+              if (this._swipeGen !== s.gen) return
+              s.main.classList.remove("ed-main-pop")
+              s.main.style.transform = ""
+              s.aside.classList.add("hidden")
+              document.querySelector("nav.ed-rail")?.classList.add("hidden")
+            }
+            let done = false
+            const once = () => { if (!done) { done = true; fin() } }
+            const onEnd = (ev) => {
+              if (ev.target === s.main && ev.propertyName === "transform") once()
+            }
+            s.main.addEventListener("transitionend", onEnd)
+            setTimeout(once, 450)
+            s.main.style.transform = "translateX(0px)"
           },
           // Put the LIST on screen right now, client-side. Both screens are local DOM, so
           // the swap happens in the same task as the gesture that asked for it and the
