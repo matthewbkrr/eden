@@ -883,4 +883,114 @@ test.describe("mobile nav races (stress)", () => {
       `a menu opened from a ~320ms tap whose target was re-rendered away (${bad.length}/${rows.length}) — see ${file}`,
     ).toEqual([])
   })
+
+  // (E) The tap must open the chat the FINGER WENT DOWN ON.
+  //
+  // Any message in any conversation broadcasts {:conversation_activity}, and the sidebar
+  // answers with stream_delete_by_dom_id + stream_insert(at: 0) — that row genuinely jumps to
+  // the top and everything above it slides down a row height. The .SidebarReorder FLIP then
+  // animates the move for 320ms. A finger already resting on a row therefore ends up over a
+  // DIFFERENT conversation by the time it lifts, and the user opens a chat they never aimed
+  // at. This is the second half of the "wrong chat" report and it is independent of the
+  // history-shape bugs (#476/#477/#480), which are now fixed.
+  test("(E) a tap opens the row the finger went down on, not the one that slid under it", async ({
+    alice,
+    bob,
+    carol,
+    seed,
+  }, testInfo) => {
+    test.setTimeout(180_000)
+    const page = alice
+    const drv = touchDriver(page)
+    await instrument(page)
+    await page.goto("/app")
+    await connected(page)
+    const real = await drv.init()
+    // This scenario needs a HELD finger that still produces a click — the reorder has to land
+    // between press and release. Only the CDP path gives both: a synthetic TouchEvent pair is
+    // never turned into a click by the browser (see the TOUCH note at the top of this file),
+    // so on WebKit every tap here is swallowed and the test could only ever pass vacuously.
+    // Skip rather than assert nothing, and say so in the run.
+    if (!real) {
+      testInfo.annotations.push({
+        type: "not-exercised",
+        description: "(E) needs CDP touches — a synthetic touch pair produces no click, so no navigation can be observed",
+      })
+      test.skip()
+    }
+    // Two writers, in two different conversations. Carol lifts the GROUP to the top so the
+    // DM sinks below it; bob then lifts the DM back, which is what slides the group — the row
+    // under alice's finger — down a slot. With one writer the sidebar order never actually
+    // changes and the whole scenario passes without staging anything (measured: 0/6 moved).
+    await bob.goto(`/app/c/${seed.dm_id}`)
+    await connected(bob)
+    await carol.goto(`/app/c/${seed.group_id}`)
+    await connected(carol)
+
+    const rows = []
+    for (let i = 0; i < 6; i++) {
+      await send(carol, `lift-${i}`)
+      await page.waitForTimeout(SETTLE)
+      // Re-read every iteration: the order is exactly what this test perturbs.
+      const ids = await sidebarIds(page, 6)
+      const target = ids[0]
+      if (!target || String(target) === String(seed.dm_id)) break
+
+      const box = await page.locator(`.ed-convo-wrap[data-id="${target}"] a.ed-convo`).boundingBox()
+      const x = Math.round(box.x + box.width / 2)
+      const y = Math.round(box.y + box.height / 2)
+      const sel = `.ed-convo-wrap[data-id="${target}"] a.ed-convo`
+      await page.evaluate((n) => window.__mark(n), `── (E) iter ${i}: finger down on ${target}`)
+
+      const idxBefore = ids.indexOf(String(target))
+      await drv.down(x, y, sel)
+      // The reorder happens WHILE the finger is down. 260ms lands inside the 320ms FLIP.
+      await send(bob, `reorder-${i}`)
+      await page.waitForTimeout(260)
+      // Prove the perturbation actually happened before trusting the verdict (the #489
+      // lesson): if the aimed row never moved, a green result says nothing about this bug.
+      const idxAfter = (await sidebarIds(page, 6)).indexOf(String(target))
+      const moved = idxAfter !== -1 && idxAfter !== idxBefore
+      await drv.up(x, y, sel)
+      await page.waitForTimeout(SETTLE)
+
+      const after = await state(page)
+      const landed = convId(after.path)
+      // A tap the reorder swallowed entirely (no navigation) is a separate defect, counted but
+      // not asserted here — this test is about opening the WRONG chat, not about a dead tap.
+      rows.push({ i, aimed: String(target), landed: landed ? String(landed) : null, moved, idxBefore, idxAfter })
+
+      if (landed) {
+        await page.evaluate(() => history.back())
+        await page.waitForTimeout(SETTLE)
+      }
+    }
+
+    const navigated = rows.filter((r) => r.landed)
+    const wrong = navigated.filter((r) => r.landed !== r.aimed)
+    const moved = rows.filter((r) => r.moved)
+    const summary =
+      `[E] touch=${drv.real ? "CDP (real)" : "synthetic"} iterations=${rows.length}\n` +
+      `    WRONG CHAT: ${wrong.length}/${navigated.length} of the taps that navigated\n` +
+      `    row actually moved under the finger: ${moved.length}/${rows.length}\n` +
+      `    swallowed taps (no navigation at all): ${rows.length - navigated.length}\n` +
+      rows
+        .map((r) => `    #${r.i} aimed=${r.aimed} idx ${r.idxBefore}->${r.idxAfter} landed=${r.landed ?? "—"}${r.landed && r.landed !== r.aimed ? "   <-- WRONG" : ""}`)
+        .join("\n")
+    console.log("\n" + summary + "\n")
+    const { file } = await dump(page, testInfo, "navlog-E.txt", summary + "\n\n")
+
+    expect(
+      navigated.length,
+      `every tap was swallowed — the test never exercised a navigation (see ${file})`,
+    ).toBeGreaterThan(0)
+    expect(
+      moved.length,
+      `the aimed row never moved under the finger — the reorder was not staged, so a pass is meaningless (see ${file})`,
+    ).toBeGreaterThan(0)
+    expect(
+      wrong,
+      `a tap opened a chat the finger never aimed at (${wrong.length}/${navigated.length}) — see ${file}`,
+    ).toEqual([])
+  })
 })

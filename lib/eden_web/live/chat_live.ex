@@ -3179,6 +3179,41 @@ defmodule EdenWeb.ChatLive do
               }
             }
             document.addEventListener("touchstart", this.onTouchStart, { passive: true })
+            // Which row did the FINGER GO DOWN ON (#483)? The sidebar re-sorts by activity —
+            // any message in any conversation does stream_delete_by_dom_id + stream_insert(at:
+            // 0) — so a row can slide out from under a finger that is already resting on it,
+            // and the click the browser then dispatches belongs to whatever row took its place.
+            // Measured: the tap opened the arriving chat instead of the aimed one, 6 times out
+            // of 6. Recorded unconditionally (the swipe recognizer's own touchstart bails on
+            // desktop, Android and reduced motion, none of which apply to this).
+            this.onTapStart = (e) => {
+              const wrap = e.target.closest?.(".ed-convo-wrap")
+              this._tapRow = wrap ? wrap.dataset.id : null
+              this._tapAt = e.timeStamp
+              const t = e.touches[0]
+              this._tapXY = t ? { x: t.clientX, y: t.clientY } : null
+            }
+            // A gesture that turned into a SCROLL is no longer a tap on that row, so the
+            // remembered intent goes with it (#497 review). Without this it survived until the
+            // next touchstart and could steer an unrelated activation that arrived inside the
+            // 1500ms window — a keyboard Enter on a focused row, say. touchend is deliberately
+            // NOT a clearing point: the click being steered arrives after it.
+            this.onTapMove = (e) => {
+              const d = this._tapXY
+              const t = e.touches[0]
+              if (!d || !t) return
+              if (Math.abs(t.clientX - d.x) > 10 || Math.abs(t.clientY - d.y) > 10) {
+                this._tapRow = null
+                this._tapXY = null
+              }
+            }
+            this.onTapCancel = () => {
+              this._tapRow = null
+              this._tapXY = null
+            }
+            document.addEventListener("touchstart", this.onTapStart, { passive: true })
+            document.addEventListener("touchmove", this.onTapMove, { passive: true })
+            document.addEventListener("touchcancel", this.onTapCancel, { passive: true })
             // Swipe DOWN over the chat dismisses the keyboard (#439, TG behavior). The
             // h-screen layout keeps the native scrollView unscrollable, so iOS's interactive
             // dismiss never engages — a decisive downward drag blurs instead. Passive.
@@ -3360,7 +3395,35 @@ defmodule EdenWeb.ChatLive do
               return // no preventDefault — the patch link must still fire
             }
             if (!anchor.classList.contains("ed-convo")) return
-            const link = anchor
+            let link = anchor
+            // Honour the row the finger went down on (#483). The sidebar re-sorts on activity
+            // in ANY conversation, so a row can slide away under a resting finger and the
+            // browser then dispatches the click against whatever took its place — opening a
+            // chat the user never aimed at. The touch target is fixed at touchstart, so that
+            // is the intent; hit-testing at release is not.
+            //
+            // Only for a genuinely recent touch (a stale id must never steer a later mouse
+            // click), only when both rows are real, and never while a context menu is open —
+            // that click belongs to the menu, whose own capture handler runs after this one
+            // and would be robbed of it.
+            const aimed = this._tapRow
+            this._tapRow = null
+            if (
+              aimed &&
+              e.timeStamp - (this._tapAt || 0) < 1500 &&
+              String(aimed) !== String(anchor.closest(".ed-convo-wrap")?.dataset.id) &&
+              !document.querySelector("[data-menu]:not([hidden])")
+            ) {
+              const intended = document.querySelector(
+                `.ed-convo-wrap[data-id="${CSS.escape(aimed)}"] a.ed-convo`,
+              )
+              if (intended) {
+                e.preventDefault()
+                e.stopPropagation()
+                intended.click() // re-enters here with _tapRow cleared, so it just proceeds
+                return
+              }
+            }
             // The tapped row is already open? The patch is a no-op, so nothing will ever
             // announce — don't strand an overlay.
             if (link.classList.contains("ed-convo--active")) return
@@ -3963,6 +4026,9 @@ defmodule EdenWeb.ChatLive do
             window.removeEventListener("phx:page-loading-stop", this.onLoadStop)
             window.removeEventListener("popstate", this.onPop)
             document.removeEventListener("touchstart", this.onTouchStart)
+            document.removeEventListener("touchstart", this.onTapStart)
+            document.removeEventListener("touchmove", this.onTapMove)
+            document.removeEventListener("touchcancel", this.onTapCancel)
             document.removeEventListener("touchstart", this.onKbStart)
             document.removeEventListener("touchmove", this.onKbMove)
             this._untrackSwipe() // move/end may still be attached mid-gesture
