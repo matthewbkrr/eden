@@ -19,6 +19,23 @@ export function initNativeShell() {
   wirePush();
   wireKeyboard();
   wireFileViewer();
+  wireAppState();
+}
+
+// Broadcast one "the app is going away" beacon (#493). The web layer already listens for
+// visibilitychange, which a WKWebView does fire on background — but the native lifecycle is
+// the authoritative signal (and the only one on a hard suspend), so mirror it. Consumers
+// (the .InstantNav and .ContextMenu hooks) disarm in-flight gesture state on it: a 450ms
+// long-press or back-slide timer that survives a suspend and flushes on resume otherwise
+// pops a menu, or navigates, with no finger on the screen.
+function wireAppState() {
+  const app = cap.Plugins?.App;
+  if (!app?.addListener) return;
+  if (app.__edStateWired) return;
+  app.__edStateWired = true;
+  app.addListener("appStateChange", ({ isActive }) => {
+    if (!isActive) window.dispatchEvent(new Event("ed:suspend"));
+  });
 }
 
 // In-app document viewer (#464): WKWebView ignores the download attribute and
@@ -63,6 +80,13 @@ function wireKeyboard() {
   if (cap.getPlatform?.() !== "ios") return;
   const kb = cap.Plugins?.Keyboard;
   if (!kb?.addListener) return;
+  // Per-process latch, on the PLUGIN (#493). These four listeners live on the native
+  // Keyboard plugin and survive a document reload, while initNativeShell re-runs on every
+  // one — and with server.url each LiveView redirect is one. The callback is an idempotent
+  // style write, so stacking was harmless rather than wrong, but the set grew without bound
+  // for the life of the app process. Same shape as wireBackButton (#481).
+  if (kb.__edKbWired) return;
+  kb.__edKbWired = true;
   const setKb = (h) =>
     document.documentElement.style.setProperty("--ed-kb", `${Math.max(0, Math.round(h))}px`);
   const fromEvent = (info) => setKb(info?.keyboardHeight || 0);
