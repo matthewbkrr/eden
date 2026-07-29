@@ -321,6 +321,18 @@ defmodule Eden.Chat do
 
   @doc "Fetches a conversation the scoped user belongs to (members preloaded), or `{:error, :not_found}`."
   def get_conversation(%Scope{user: user}, id) do
+    # Normalize first (#494). This is the door route params come through, and the id lands in
+    # `where: c.id == ^id` — a non-numeric segment raised Ecto.Query.CastError, which killed
+    # the LiveView process and remounted the client. Every href in the app is server-built, so
+    # this was reachable only by editing the address bar, but the channel side has normalized
+    # since #41 (get_channel / auto_join) and this call site simply never caught up.
+    case Ids.normalize(id) do
+      :error -> {:error, :not_found}
+      id -> fetch_conversation(user, id)
+    end
+  end
+
+  defp fetch_conversation(user, id) do
     query =
       from c in Conversation,
         join: m in Membership,
