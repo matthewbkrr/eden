@@ -448,6 +448,13 @@ test.describe("mobile nav races (stress)", () => {
       row.bad =
         expected !== undefined &&
         (got !== expected || (expected !== null && after.dom !== expected))
+      // Did this iteration actually PERFORM its plan (#496)? A plan with a "tap" step whose
+      // tap produced no click was swallowed by the sliding pane — faithful to a real phone,
+      // where the lifted pane covers the sidebar too, but it means the plan degenerated to
+      // "back, back", ended on the list, and passed for a reason that has nothing to do with
+      // what it tests. Counted separately so a green run cannot hide zero coverage.
+      row.exercised =
+        !plan.steps.includes("tap") || events.some((e) => e.type === "click" && e.kind === "convo")
       rows.push(row)
       if (row.bad) {
         console.log(
@@ -462,20 +469,34 @@ test.describe("mobile nav races (stress)", () => {
     }
 
     const bad = rows.filter((r) => r.bad)
+    const unexercised = rows.filter((r) => !r.exercised)
+    const byPlan = {}
+    for (const r of rows) {
+      byPlan[r.plan] = byPlan[r.plan] || { n: 0, ex: 0 }
+      byPlan[r.plan].n++
+      if (r.exercised) byPlan[r.plan].ex++
+    }
     const stats = {}
     for (const r of rows) {
       const k = `${r.plan}@${r.delay}ms`
-      stats[k] = stats[k] || { n: 0, bad: 0 }
+      stats[k] = stats[k] || { n: 0, bad: 0, un: 0 }
       stats[k].n++
       if (r.bad) stats[k].bad++
+      if (!r.exercised) stats[k].un++
     }
     const summary =
       `[B] touch=${real ? "CDP (real)" : "synthetic"} latency=${LATENCY}ms iterations=${ITER}` +
       (drv.missed ? `  (${drv.missed} synthetic dispatches dropped — selector no longer resolved)` : "") +
       `\n` +
       `    WRONG SCREEN: ${bad.length}/${rows.length}\n` +
+      `    NOT EXERCISED (tap swallowed by the sliding pane): ${unexercised.length}/${rows.length}\n` +
       Object.entries(stats)
-        .map(([k, v]) => `    ${k.padEnd(28)} ${v.bad}/${v.n}`)
+        .map(([k, v]) => `    ${k.padEnd(28)} ${v.bad}/${v.n}${v.un ? `   (${v.un} not exercised)` : ""}`)
+        .join("\n") +
+      "\n" +
+      `    per plan, iterations that actually performed it:\n` +
+      Object.entries(byPlan)
+        .map(([k, v]) => `      ${k.padEnd(18)} ${v.ex}/${v.n}`)
         .join("\n") +
       "\n" +
       rows
@@ -493,6 +514,26 @@ test.describe("mobile nav races (stress)", () => {
       bad,
       `landed on a screen that was not the last one asked for (${bad.length}/${rows.length}) — see ${file}`,
     ).toEqual([])
+    // A plan that never once performed itself proves nothing, and a green run must not imply
+    // it did (#496) — this is what let tap→midloadSwipe read as covered on mobile-chrome
+    // while every one of its iterations had degenerated to "back, back" and ended on the list.
+    //
+    // Reported and ANNOTATED rather than failed, deliberately. The non-execution is faithful:
+    // the lifted pane covers the sidebar on a real phone too, so a tap aimed at a row during
+    // the back slide genuinely does not land. Failing here would assert on the harness's luck
+    // — measured, tap→midloadSwipe executes about 1 iteration in 6 on Chromium and 6 in 6 on
+    // WebKit, where the synthetic driver is more forgiving. The number is in the summary and
+    // in the run's annotations; treat a zero as "this run says nothing about that plan".
+    const never = Object.entries(byPlan)
+      .filter(([, v]) => v.ex === 0)
+      .map(([k]) => k)
+    if (never.length) {
+      testInfo.annotations.push({
+        type: "not-exercised",
+        description: `(B) plans never performed in this run: ${never.join(", ")} — every tap was swallowed by the sliding pane, so the run says nothing about them (see ${file})`,
+      })
+      console.log(`  ⚠ not exercised in this run: ${never.join(", ")}`)
+    }
   })
 
   test("(A) no context menu ever pops during back + rapid switching", async ({
