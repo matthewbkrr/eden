@@ -165,6 +165,33 @@ defmodule Eden.Channels do
     :ok
   end
 
+  @doc """
+  The room a rail tap on this channel should open, read fresh from the DB.
+
+  Same resolution as the `entry_room_id` that `list_channels/1` carries — the remembered
+  room if the user is still a member of it, else the channel's general — but for ONE
+  channel and at handling time. `list_channels/1` produces a snapshot that the rail then
+  renders into an href, and that href is stale for a round-trip after the user opens a
+  different room (#492); this exists so the target can be resolved when the tap is
+  handled instead.
+  """
+  def entry_room_id(%Scope{} = scope, channel_id) do
+    case Ids.normalize(channel_id) do
+      id when is_integer(id) ->
+        last =
+          Repo.one(
+            from m in Membership,
+              where: m.channel_id == ^id and m.user_id == ^scope.user.id,
+              select: m.last_room_id
+          )
+
+        scope |> Chat.entry_room_ids(%{id => last}) |> Map.get(id)
+
+      _ ->
+        nil
+    end
+  end
+
   @doc "Fetches a channel the scoped user belongs to (virtual `role` filled), or `{:error, :not_found}`."
   def get_channel(%Scope{user: user}, channel_id) do
     with id when is_integer(id) <- Ids.normalize(channel_id),

@@ -395,6 +395,9 @@ defmodule EdenWeb.ChatLive do
           %{"id" => room_id} ->
             open_room(socket, channel, room_id, nil)
 
+          _ when socket.assigns.live_action == :enter ->
+            enter_remembered_room(socket, channel)
+
           _ ->
             # No auto-open: /channels/:cid is the room list (mobile "back"
             # must land here, not bounce into the first room again).
@@ -523,6 +526,24 @@ defmodule EdenWeb.ChatLive do
   defp enter_room(socket, loaded) do
     Channels.record_last_room(socket.assigns.current_scope, loaded.channel_id, loaded.id)
     socket |> refresh_rooms() |> select_conversation(loaded)
+  end
+
+  # /channels/:cid/enter — the rail's desktop target (#492). Resolves the remembered room
+  # NOW, from the DB, instead of trusting an id the rail rendered a round-trip ago: that
+  # snapshot pointed at the PREVIOUS room right after a switch, and following it wrote the
+  # stale id back as the remembered one.
+  #
+  # The nil branch is a belt rather than a reachable state — entry_room_ids falls back to the
+  # channel's general room and general is undeletable by design (delete_room refuses it), so
+  # there is normally always something to open. That is also why it carries no test.
+  defp enter_remembered_room(socket, channel) do
+    case Channels.entry_room_id(socket.assigns.current_scope, channel.id) do
+      # Patch to the canonical room-list URL rather than settling on /enter (#502 review):
+      # /enter is a resolver, not a screen, so leaving the address bar there would make a
+      # reload or a bookmark re-run the resolution instead of naming what is on screen.
+      nil -> {:noreply, push_patch(socket, to: ~p"/channels/#{channel.id}")}
+      room_id -> {:noreply, push_patch(socket, to: ~p"/channels/#{channel.id}/r/#{room_id}")}
+    end
   end
 
   defp enter_channel(socket, channel) do

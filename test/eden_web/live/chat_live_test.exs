@@ -796,6 +796,45 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ "Be the first to write in this group."
     end
 
+    test "the rail's /enter resolves the remembered room at handling time, not from a stale render (#492)",
+         ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, channel} = Eden.Channels.create_channel(scope, %{"name" => "Entry492"})
+      {:ok, [general]} = Eden.Channels.list_rooms(scope, channel.id)
+      {:ok, second} = Eden.Channels.create_room(scope, channel.id, %{"name" => "second"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      # The real path: the rail is a patch link on an already-mounted view, so /enter is
+      # reached by handle_params without a remount.
+      {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}")
+      render_patch(view, ~p"/channels/#{channel.id}/enter")
+      # Nothing remembered yet → the channel's general room.
+      assert_patch(view, ~p"/channels/#{channel.id}/r/#{general.id}")
+
+      # Open the second room. This is precisely what a rendered href cannot know about for a
+      # round-trip: entry_room_id is a snapshot taken when the rail last rendered.
+      render_patch(view, ~p"/channels/#{channel.id}/r/#{second.id}")
+      assert render(view) =~ second.name
+
+      # /enter now resolves to the second room. A stale snapshot would still say general —
+      # and following it would write general back as the remembered room.
+      render_patch(view, ~p"/channels/#{channel.id}/enter")
+      assert_patch(view, ~p"/channels/#{channel.id}/r/#{second.id}")
+    end
+
+    test "/enter deep-linked directly still lands on the remembered room (#492)", ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, channel} = Eden.Channels.create_channel(scope, %{"name" => "Entry492c"})
+      {:ok, [general]} = Eden.Channels.list_rooms(scope, channel.id)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      # On a cold load the patch issued from mount surfaces as a live_redirect rather than a
+      # patch — a LiveViewTest distinction, not a behavioural one. Assert the destination.
+      assert {:error, {:live_redirect, %{to: to}}} = live(conn, ~p"/channels/#{channel.id}/enter")
+      assert to == "/channels/#{channel.id}/r/#{general.id}"
+    end
+
     test "a room still shows its own empty-state copy (#355 R060 regression)", ctx do
       {:ok, channel} =
         Eden.Channels.create_channel(Scope.for_user(ctx.alice), %{"name" => "Empty355"})
@@ -3233,9 +3272,13 @@ defmodule EdenWeb.ChatLiveTest do
       # Open the ops room — this records it as the channel's last room.
       {:ok, view, _html} = live(conn, ~p"/channels/#{channel.id}/r/#{ops.id}")
 
-      # The rail's channel button now navigates straight to ops, not the bare
-      # channel (which would show the "pick a room" empty state).
-      assert has_element?(view, ~s(a.ed-rail__btn[href="/channels/#{channel.id}/r/#{ops.id}"]))
+      # The rail's channel button reopens ops rather than the bare channel (which would show
+      # the "pick a room" empty state). Since #492 the href carries no room id — it points at
+      # /enter, which resolves the remembered room when the tap is handled — so assert the
+      # behaviour rather than the snapshot the href used to embed.
+      assert has_element?(view, ~s(a.ed-rail__btn[href="/channels/#{channel.id}/enter"]))
+      render_patch(view, ~p"/channels/#{channel.id}/enter")
+      assert_patch(view, ~p"/channels/#{channel.id}/r/#{ops.id}")
 
       entry =
         Scope.for_user(ctx.alice)

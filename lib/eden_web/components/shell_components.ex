@@ -78,11 +78,16 @@ defmodule EdenWeb.ShellComponents do
                 switching channels lands where you left off. On mobile that skips
                 the room-choice screen with no way back, so mobile goes to the bare
                 channel (its room list) instead (#92). Two links toggled by
-                viewport; with no entry room yet, both fall back to the bare
-                channel, so only the second link renders. --%>
+                viewport — the viewport is what carries that intent, since both
+                land on the same LiveView.
+                The desktop one no longer renders the room id (#492): entry_room_id
+                is a snapshot, so for a round-trip after switching rooms it pointed
+                at the PREVIOUS room, and following it wrote that stale id back as
+                the remembered one. /enter resolves the room when the tap is
+                handled, and needs no condition — it falls through to the room list
+                when there is nothing to reopen. --%>
           <.link
-            :if={channel.entry_room_id}
-            patch={~p"/channels/#{channel.id}/r/#{channel.entry_room_id}"}
+            patch={~p"/channels/#{channel.id}/enter"}
             class={[
               "ed-rail__btn hidden md:inline-flex",
               @active == channel.id && "ed-rail__btn--active"
@@ -96,8 +101,7 @@ defmodule EdenWeb.ShellComponents do
           <.link
             patch={~p"/channels/#{channel.id}"}
             class={[
-              "ed-rail__btn",
-              channel.entry_room_id && "md:hidden",
+              "ed-rail__btn md:hidden",
               @active == channel.id && "ed-rail__btn--active"
             ]}
             title={channel.name}
