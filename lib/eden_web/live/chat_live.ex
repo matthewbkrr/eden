@@ -4737,7 +4737,11 @@ defmodule EdenWeb.ChatLive do
                         {(message.sender && message.sender.display_name) ||
                           gettext("Deleted account")}
                       </span>
-                      <.local_time at={message.inserted_at} class="ed-convo__time" />
+                      <.local_time
+                        at={message.inserted_at}
+                        class="ed-convo__time"
+                        id={"t-dmsearch-#{message.id}"}
+                      />
                     </span>
                     <span class="ed-convo__preview">
                       <.highlighted text={snippet(message.body, @room_search)} query={@room_search} />
@@ -5299,7 +5303,11 @@ defmodule EdenWeb.ChatLive do
                       {(message.sender && message.sender.display_name) ||
                         gettext("Deleted account")}
                     </span>
-                    <.local_time at={message.inserted_at} class="ed-convo__time" />
+                    <.local_time
+                      at={message.inserted_at}
+                      class="ed-convo__time"
+                      id={"t-roomsearch-#{message.id}"}
+                    />
                   </span>
                   <span class="ed-convo__preview">
                     <.highlighted text={snippet(message.body, @thread_search)} query={@thread_search} />
@@ -11091,7 +11099,11 @@ defmodule EdenWeb.ChatLive do
           <span class="ed-convo__body">
             <span class="ed-convo__top">
               <span class="ed-convo__name">{title(message.conversation, @user)}</span>
-              <.local_time at={message.inserted_at} class="ed-convo__time" />
+              <.local_time
+                at={message.inserted_at}
+                class="ed-convo__time"
+                id={"t-searchres-#{message.id}"}
+              />
             </span>
             <span class="ed-convo__preview">
               <%!-- In a group the conversation title doesn't say who wrote it. --%>
@@ -11160,7 +11172,11 @@ defmodule EdenWeb.ChatLive do
               <span class="ed-convo__name flex items-center gap-1">
                 <.room_glyph room={message.conversation} /> {message.conversation.name}
               </span>
-              <.local_time at={message.inserted_at} class="ed-convo__time" />
+              <.local_time
+                at={message.inserted_at}
+                class="ed-convo__time"
+                id={"t-chansearch-#{message.id}"}
+              />
             </span>
             <span class="ed-convo__preview">
               <span :if={message.sender}>{message.sender.display_name}:</span>
@@ -14520,8 +14536,18 @@ defmodule EdenWeb.ChatLive do
   # on desktop but not on touch: a touch target is fixed at touchstart, so a finger resting
   # on this timestamp when its row re-renders is left holding a detached node, whose
   # touchend then reaches nobody — the orphaned long-press timer of #479. It also costs a
-  # hook teardown + remount per row per patch. Callers inside a keyed row (sidebar chats,
-  # rooms) pass their own id and keep the node identity stable across renders.
+  # hook teardown + remount per row per patch.
+  #
+  # Every caller that HAS a stable key now passes one (#495): sidebar chats, and the four
+  # search surfaces, each with its own prefix because two result panels can be mounted at
+  # once and duplicate DOM ids would break morphdom outright.
+  #
+  # The fallback stays for msg_meta, which renders the time for message bubbles and media
+  # pills but only receives `at` — giving it a stable id means threading the message id
+  # through that component and its two call sites, which is a wider change than this one and
+  # belongs with whatever next touches that seam. Those nodes sit inside message rows, whose
+  # long-press is already guarded at fire time by #479, so what remains there is cost, not a
+  # correctness gap.
   attr :id, :string, default: nil
 
   defp local_time(assigns) do
@@ -14551,7 +14577,7 @@ defmodule EdenWeb.ChatLive do
       {gettext("last seen")}
       <time
         phx-hook=".LastSeen"
-        id={"ls-#{System.unique_integer([:positive])}"}
+        id={"ls-peer-#{@peer.id}"}
         datetime={DateTime.to_iso8601(@peer.last_active_at)}
       >
         {Calendar.strftime(@peer.last_active_at, "%H:%M")}
