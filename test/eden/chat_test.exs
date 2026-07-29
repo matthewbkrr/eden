@@ -248,6 +248,24 @@ defmodule Eden.ChatTest do
     end
   end
 
+  describe "get_conversation/2 id normalization (#494)" do
+    test "a non-numeric id is :not_found, not a CastError", %{alice: alice} do
+      # The id arrives straight from the route and lands in `where: c.id == ^id`, so an
+      # unnormalized garbage segment raised Ecto.Query.CastError and took the LiveView down
+      # with it. Every href is server-built, so this needed the address bar — but the channel
+      # side has normalized since #41 and this door had not.
+      for bad <- ["abc", "12abc", "", "1.5", "-", "99999999999999999999999999"] do
+        assert {:error, :not_found} = Chat.get_conversation(scope(alice), bad)
+      end
+    end
+
+    test "a numeric string still resolves, so routes keep working", %{alice: alice, bob: bob} do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      assert {:ok, found} = Chat.get_conversation(scope(alice), to_string(conv.id))
+      assert found.id == conv.id
+    end
+  end
+
   describe "get_shared_user/2" do
     test "returns a user sharing a conversation, with profile fields", %{alice: alice, bob: bob} do
       {:ok, _conv} = Chat.create_conversation(scope(alice), [bob.id])
