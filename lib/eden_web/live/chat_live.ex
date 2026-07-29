@@ -538,7 +538,10 @@ defmodule EdenWeb.ChatLive do
   # there is normally always something to open. That is also why it carries no test.
   defp enter_remembered_room(socket, channel) do
     case Channels.entry_room_id(socket.assigns.current_scope, channel.id) do
-      nil -> {:noreply, socket |> unsubscribe() |> assign(selected: nil)}
+      # Patch to the canonical room-list URL rather than settling on /enter (#502 review):
+      # /enter is a resolver, not a screen, so leaving the address bar there would make a
+      # reload or a bookmark re-run the resolution instead of naming what is on screen.
+      nil -> {:noreply, push_patch(socket, to: ~p"/channels/#{channel.id}")}
       room_id -> {:noreply, push_patch(socket, to: ~p"/channels/#{channel.id}/r/#{room_id}")}
     end
   end
