@@ -45,11 +45,19 @@ defmodule EdenWeb.ChannelModeTest do
       slot = "#rail-channel-#{ctx.channel.id}"
 
       # Desktop link → reopen the channel's remembered room (#81 intact): hidden by
-      # default, shown at md+. entry room falls back to general (no last room yet).
+      # default, shown at md+. Since #492 the href carries no room id — it points at /enter,
+      # which resolves the remembered room when the tap is HANDLED, because the id the rail
+      # renders is a snapshot that is stale for a round-trip after switching rooms.
       assert has_element?(
                view,
-               ~s|#{slot} a[href="/channels/#{ctx.channel.id}/r/#{ctx.general.id}"][class*="hidden"][class*="md:inline-flex"]|
+               ~s|#{slot} a[href="/channels/#{ctx.channel.id}/enter"][class*="hidden"][class*="md:inline-flex"]|
              )
+
+      # …and following it lands on the entry room, which falls back to general with no last
+      # room recorded yet. That is the behaviour the href used to assert directly.
+      {:ok, chan_view, _html} = live(conn, ~p"/channels/#{ctx.channel.id}")
+      render_patch(chan_view, ~p"/channels/#{ctx.channel.id}/enter")
+      assert_patch(chan_view, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
 
       # Mobile link → bare channel (its room list), hidden at md+ (#92) so tapping a
       # channel on a phone lands on the room choice, not a forced last room.

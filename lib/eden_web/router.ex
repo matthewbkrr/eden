@@ -104,6 +104,13 @@ defmodule EdenWeb.Router do
       # Corporate layer: channel workspaces are ChatLive in channel mode — the
       # message pane (composer, attachments, menus, realtime) is shared as-is.
       live "/channels/:channel_id", ChatLive
+      # Rail entry point (#492): resolves the channel's remembered room AT HANDLING TIME
+      # and patches to it. The rail used to render that room id straight into its href,
+      # which is a snapshot — for a round-trip after switching rooms it pointed at the
+      # previous one, and following it wrote that stale id back as the remembered room.
+      # Distinct from the bare channel route above, which stays the room LIST on purpose
+      # (#92: mobile back must land there rather than bounce into a room).
+      live "/channels/:channel_id/enter", ChatLive, :enter
       live "/channels/:channel_id/r/:id", ChatLive
       live "/channels/:channel_id/r/:id/m/:message_id", ChatLive
       # Post-registration onboarding (#306): offer to enroll two-factor before the app.
