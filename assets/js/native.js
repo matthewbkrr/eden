@@ -32,12 +32,16 @@ function wireAppState() {
   const app = cap.Plugins?.App;
   if (!app?.addListener) return;
   if (app.__edStateWired) return;
-  app.addListener("appStateChange", ({ isActive }) => {
-    if (!isActive) window.dispatchEvent(new Event("ed:suspend"));
-  });
-  // After registration, not before (#500 review): a bridge that throws here would otherwise
-  // latch the beacon out for the rest of the process.
+  // Flag first, rolled back on failure — see the note in wirePush (#500 + #501 reviews).
   app.__edStateWired = true;
+  try {
+    app.addListener("appStateChange", ({ isActive }) => {
+      if (!isActive) window.dispatchEvent(new Event("ed:suspend"));
+    });
+  } catch (e) {
+    app.__edStateWired = false;
+    throw e;
+  }
 }
 
 // In-app document viewer (#464): WKWebView ignores the download attribute and
@@ -96,11 +100,17 @@ function wireKeyboard() {
   // wiring out permanently — and it must NOT wrap the document listener below, which dies
   // with its document and has to be re-registered on every load.
   if (!kb.__edKbWired) {
-    kb.addListener("keyboardWillShow", fromEvent);
-    kb.addListener("keyboardDidShow", fromEvent);
-    kb.addListener("keyboardWillHide", () => setKb(0));
-    kb.addListener("keyboardDidHide", () => setKb(0));
+    // Flag first, rolled back on failure — see the note in wirePush (#500 + #501 reviews).
     kb.__edKbWired = true;
+    try {
+      kb.addListener("keyboardWillShow", fromEvent);
+      kb.addListener("keyboardDidShow", fromEvent);
+      kb.addListener("keyboardWillHide", () => setKb(0));
+      kb.addListener("keyboardDidHide", () => setKb(0));
+    } catch (e) {
+      kb.__edKbWired = false;
+      throw e;
+    }
   }
   // Backgrounding drops the keyboard without always emitting Hide — reset on leave.
   document.addEventListener("visibilitychange", () => {
@@ -125,16 +135,20 @@ function wireBackButton() {
   const app = cap.Plugins?.App;
   if (!app?.addListener) return;
   if (app.__edBackWired) return;
-  app.addListener("backButton", ({ canGoBack }) => {
-    if (canGoBack && window.history.length > 1) {
-      window.history.back();
-    } else {
-      Promise.resolve(app.minimizeApp?.()).catch(() => {});
-    }
-  });
-  // After registration (#500 review): #481 shipped this flag-first, so a throwing bridge
-  // would have left Android's back button unhandled for the life of the process.
+  // Flag first, rolled back on failure — see the note in wirePush (#500 + #501 reviews).
   app.__edBackWired = true;
+  try {
+    app.addListener("backButton", ({ canGoBack }) => {
+      if (canGoBack && window.history.length > 1) {
+        window.history.back();
+      } else {
+        Promise.resolve(app.minimizeApp?.()).catch(() => {});
+      }
+    });
+  } catch (e) {
+    app.__edBackWired = false;
+    throw e;
+  }
 }
 
 // Native push (#419, ADR-0001): ask, register, hand the device token to the
@@ -162,6 +176,13 @@ function wirePush() {
   // Set AFTER registration (#500 review), so a bridge that throws cannot latch push out
   // for the rest of the process.
   if (!push.__edPushWired) {
+    // Set BEFORE registering and rolled back on failure (#501 review). Either order alone is
+    // wrong: flag-after lets a throw part-way through leave earlier listeners attached with
+    // the flag still clear, so the next load re-adds them and stacks the very duplicates this
+    // guards against; flag-before alone would latch push out for the process if the bridge
+    // throws (#500 review). Together: no stacking, and a failed attempt can be retried.
+    push.__edPushWired = true;
+    try {
     // Cold start (app launched by tapping a notification): Capacitor retains
     // the launch action and replays it once this listener binds, so a tap that
     // beats the async bind is still delivered, not dropped.
@@ -192,8 +213,10 @@ function wirePush() {
     // No Firebase config / no APNs entitlement yet → registration fails on that
     // platform; push is simply unavailable there, never an error surface.
     push.addListener("registrationError", () => {});
-
-    push.__edPushWired = true;
+    } catch (e) {
+      push.__edPushWired = false;
+      throw e;
+    }
   }
 
   // register() only on an authed page (#notifier rides every authed
