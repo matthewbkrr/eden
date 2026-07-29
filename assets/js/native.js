@@ -148,11 +148,20 @@ function wirePush() {
   // Listeners live on the native plugin and SURVIVE WebView reloads, while
   // initNativeShell re-runs on every full page load (login→app, the deep-link
   // assign below, a cold start). Bind them ONCE per app process or they stack:
-  // N navigations per tap, N token POSTs (#425 review). The window flag is the
-  // per-process latch (same pattern as the overlay nav guard).
-  if (!window.__edPushWired) {
-    window.__edPushWired = true;
-
+  // N navigations per tap, N token POSTs (#425 review).
+  //
+  // The latch rides the PLUGIN, not `window` (#484). #425 called a window flag a
+  // "per-process latch", but a full document load replaces the global object — and the
+  // tap handler below performs one itself, via location.assign. So the very navigation
+  // this latch protects was what reset it: the next load re-registered the listeners on
+  // a plugin that had kept the old ones, and from then on every tap fired N handlers and
+  // N location.assign calls, while Capacitor could replay a retained launch action into a
+  // stale one and land the app in a chat whose notification was tapped much earlier. The
+  // plugin object outlives the document, which is exactly the lifetime wanted here.
+  //
+  // Set AFTER registration (#500 review), so a bridge that throws cannot latch push out
+  // for the rest of the process.
+  if (!push.__edPushWired) {
     // Cold start (app launched by tapping a notification): Capacitor retains
     // the launch action and replays it once this listener binds, so a tap that
     // beats the async bind is still delivered, not dropped.
@@ -183,6 +192,8 @@ function wirePush() {
     // No Firebase config / no APNs entitlement yet → registration fails on that
     // platform; push is simply unavailable there, never an error surface.
     push.addListener("registrationError", () => {});
+
+    push.__edPushWired = true;
   }
 
   // register() only on an authed page (#notifier rides every authed
