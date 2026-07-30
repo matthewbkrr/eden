@@ -36,7 +36,10 @@ function wireAppState() {
   app.__edStateWired = true;
   try {
     app.addListener("appStateChange", ({ isActive }) => {
-      if (!isActive) window.dispatchEvent(new Event("ed:suspend"));
+      // Обе кромки (#507): suspend разоружает жесты (#493), resume форсирует переподключение.
+      // Возврат из фона — это ровно тот случай, когда сокет остаётся ПОЛУОТКРЫТЫМ:
+      // readyState всё ещё OPEN, поэтому ни phoenix.js, ни слушатель `online` этого не видят.
+      window.dispatchEvent(new Event(isActive ? "ed:resume" : "ed:suspend"));
     });
   } catch (e) {
     app.__edStateWired = false;

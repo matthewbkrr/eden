@@ -4620,6 +4620,64 @@ html {
   }
 
   /* Toasts -------------------------------------------------------------- */
+  /* Индикатор разрыва связи (#507). Показывается ТОЛЬКО по классам, которые LiveView сам
+     ставит на <html> — `phx-client-error` (сокет отвалился) и `phx-server-error` (упал
+     сервер). До #507 эти классы рантайм ставил, а оформления под них не существовало:
+     `@custom-variant phx-client-loading` был объявлен и не имел ни одного потребителя, а
+     сам блок разрыва жил в нерендерящемся скаффолде. Оффлайн выглядел как рабочий
+     интерфейс, в котором молча проваливается каждый тап.
+
+     position: fixed + top по safe-area — баннер обязан быть НАД полноэкранными слоями
+     (лайтбокс — z-index 50), потому что разрыв важнее того, что открыто. */
+  .ed-conn {
+    position: fixed;
+    top: calc(env(safe-area-inset-top) + 0.5rem);
+    left: 50%;
+    transform: translateX(-50%) translateY(-150%);
+    z-index: 60;
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: calc(100vw - 1.5rem);
+    padding: 0.5rem 0.875rem;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-surface);
+    border: 1px solid var(--ed-border);
+    color: var(--ed-ink);
+    box-shadow: var(--ed-shadow);
+    font: 500 0.8125rem/1.2 var(--ed-font);
+    transition: transform var(--ed-dur-move, 220ms) var(--ed-ease);
+  }
+
+  html.phx-client-error .ed-conn,
+  html.phx-server-error .ed-conn {
+    display: flex;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* Какой из двух текстов показать — решает класс на <html>, а не сервер: при разрыве
+     сокета серверу нас уже не переубедить. */
+  .ed-conn__text { display: none; }
+  html.phx-client-error .ed-conn__text--client { display: inline; }
+  html.phx-server-error .ed-conn__text--server { display: inline; }
+  /* Сервер упал — это тоже client-error по классам LiveView, поэтому server побеждает. */
+  html.phx-server-error .ed-conn__text--client { display: none; }
+
+  .ed-conn__sub { color: var(--ed-muted); }
+
+  .ed-conn__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    flex: none;
+    border-radius: var(--ed-radius-full);
+    background: var(--ed-danger);
+    animation: ed-conn-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes ed-conn-pulse {
+    50% { opacity: 0.35; }
+  }
+
   .ed-toast {
     display: flex;
     align-items: center;
@@ -4853,6 +4911,8 @@ html {
    own explicit reduced-motion fallbacks above, so functional spinners still run. This
    makes DESIGN.md's "every transition has a reduced-motion fallback" literally hold. */
 @media (prefers-reduced-motion: reduce) {
+  .ed-conn { transition: none !important; }
+  .ed-conn__dot { animation: none !important; }
   *,
   *::before,
   *::after {

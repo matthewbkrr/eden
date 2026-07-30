@@ -127,6 +127,29 @@ window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 
+// Восстановление связи (#507). Два разных случая, и лечатся они по-разному — на что
+// справедливо указало ревью PR #524: сначала я поставил обоим одну и ту же проверку
+// `!isConnected()`, хотя сам же в комментарии описал, почему для второго она бесполезна.
+//
+// 1. Сеть вернулась, сокет ЗАКРЫТ (вышли из метро, сменили Wi-Fi↔LTE). `isConnected()`
+//    честно отдаёт false, достаточно позвать connect. Без этого баннер разрыва висит до
+//    heartbeat-таймаута: интервал 15 с плюс столько же на обнаружение, то есть до ~30 с
+//    молча мёртвого приложения.
+window.addEventListener("online", () => {
+  if (!liveSocket.isConnected()) liveSocket.socket.connect()
+})
+
+// 2. Вернулись из фона, сокет ПОЛУОТКРЫТ. Это главный случай на iOS: WKWebView заморозили,
+//    соединение умерло на стороне сети, но `readyState` всё ещё OPEN — значит `isConnected()`
+//    отдаёт true, и ни проверка выше, ни собственный форс phoenix.js не срабатывают. Отличить
+//    живой сокет от мёртвого дешёвой проверкой нельзя, поэтому здесь снос БЕЗУСЛОВНЫЙ:
+//    `teardown` нужен именно чтобы полуоткрытое соединение не мешало новому коннекту.
+//    Цена — один re-join после возврата из фона, где он всё равно ожидаем; на здоровый сокет
+//    в обычной работе это не влияет, событие приходит только из нативной оболочки (native.js).
+window.addEventListener("ed:resume", () => {
+  liveSocket.socket.teardown(() => liveSocket.socket.connect())
+})
+
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()
 // >> liveSocket.enableLatencySim(1000)  // enabled for duration of browser session
