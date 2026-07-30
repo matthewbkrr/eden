@@ -74,9 +74,19 @@ function idbGet(db, k) {
   });
 }
 
+// Какому хендлу БД уже делали полный проход выселения. Проход по TTL нужен один раз за
+// сессию: он только освобождает диск, потому что просроченную запись всё равно не отдадут
+// наружу — TTL проверяется на ЧТЕНИИ (см. `peek`/`get`). Флаг привязан к хендлу, а не ко
+// времени: новый хендл = новый запуск приложения (или `clearAll`), что и есть естественный
+// момент для уборки.
+let sweptHandle = null;
+
 // Put a snapshot, then GC in the SAME transaction (no await between requests — WebKit auto-commits
 // an IndexedDB tx across await points): drop anything past TTL, then trim the oldest survivors down
 // to IDB_MAX. The cursor walks by_updated oldest-first, so the overflow to delete is at the front.
+// Выселение при этом идёт НЕ после каждой записи (#509) — условие ниже. Ни один запрос в этой
+// транзакции не ждёт await, иначе WebKit закоммитит её у нас под руками, как и предупреждает
+// строка выше.
 function idbPut(db, record) {
   return new Promise((resolve, reject) => {
     let tx;
@@ -88,22 +98,57 @@ function idbPut(db, record) {
     }
     const os = tx.objectStore(STORE);
     os.put(record);
-    const cutoff = Date.now() - TTL_MS;
-    const survivors = [];
-    os.index("by_updated").openCursor().onsuccess = (e) => {
-      const cur = e.target.result;
-      if (cur) {
-        if (cur.value.updatedAt < cutoff) cur.delete();
-        else survivors.push(cur.primaryKey);
-        cur.continue();
-      } else {
-        for (let i = 0; i < survivors.length - IDB_MAX; i++) os.delete(survivors[i]);
-      }
+    // GC УБРАН С ГОРЯЧЕГО ПУТИ (#509). Раньше полный обход хранилища шёл после КАЖДОЙ
+    // записи, а `put` вызывается дважды за навигацию — снимок покидаемого чата и
+    // пришедшего. Обходить есть смысл ровно в двух случаях: записей стало больше кэпа
+    // (надо выселять) или это первая запись на свежем хендле БД (разовая уборка по TTL).
+    // `count()` считает записи, не читая их, — в отличие от обхода он не зависит от того,
+    // сколько в них байт.
+    //
+    // Практика такая: за сессию человек переоткрывает один и тот же десяток чатов, то есть
+    // почти каждая запись — перезапись существующего ключа, и число записей не меняется.
+    // Обход теперь случается при кэшировании НОВОГО чата, а не при каждом обновлении снимка.
+    const firstOnHandle = sweptHandle !== db;
+    sweptHandle = db;
+    const countReq = os.count();
+    countReq.onsuccess = () => {
+      if (!firstOnHandle && countReq.result <= IDB_MAX) return;
+      sweep(os);
     };
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error("aborted"));
   });
+}
+
+// Выселение: просроченное по TTL плюс всё, что вылезло за кэп. Идёт в той же транзакции,
+// что и запись, поэтому атомарность прежняя.
+//
+// `openKeyCursor`, НЕ `openCursor`: у курсора по индексу `key` — это уже сам `updatedAt`, а
+// `primaryKey` — id, то есть всё нужное лежит в ключах. Обращение к `cur.value` заставило бы
+// движок делать structured-deserialize ПОЛНОЙ записи вместе с полем `html` (до MAX_BYTES =
+// 1 МБ) — на каждую из IDB_MAX записей. На Chromium и Firefox это снимает зависимость
+// стоимости обхода от объёма записей полностью; WebKit (а это WKWebView, то есть iOS)
+// материализует записи и на key-курсоре, поэтому там выигрыш даёт именно то, что обход
+// перестал случаться на каждой записи.
+function sweep(os) {
+  const cutoff = Date.now() - TTL_MS;
+  const expired = [];
+  const survivors = [];
+  os.index("by_updated").openKeyCursor().onsuccess = (e) => {
+    const cur = e.target.result;
+    if (cur) {
+      if (cur.key < cutoff) expired.push(cur.primaryKey);
+      else survivors.push(cur.primaryKey);
+      cur.continue();
+      return;
+    }
+    // Удаляем ПОСЛЕ обхода: `cur.delete()` на key-курсоре бросает InvalidStateError —
+    // спека разрешает удаление только курсору со значением. Курсор идёт по возрастанию
+    // `updatedAt`, поэтому лишние сверх кэпа — это начало `survivors`, самые старые.
+    for (const pk of expired) os.delete(pk);
+    for (let i = 0; i < survivors.length - IDB_MAX; i++) os.delete(survivors[i]);
+  };
 }
 
 export const MsgCache = {
@@ -216,6 +261,7 @@ export const MsgCache = {
     }
     this._db = null;
     this._broken = false; // the wipe resets the store; a fresh session may reopen cleanly
+    sweptHandle = null; // база удалена — следующий хендл снова заслуживает разовой уборки
     if (typeof indexedDB === "undefined") return;
     await new Promise((resolve) => {
       let req;
