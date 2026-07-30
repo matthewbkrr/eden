@@ -4734,6 +4734,38 @@ html {
   /* Зона выбора сообщения в мультивыборе. */
   .ed-select-hit:active { background: color-mix(in oklab, var(--ed-primary) 12%, transparent); }
 
+  /* Отклик обязан появляться в ПЕРВОМ кадре — а базовые правила десяти из этих
+     селекторов объявляют `transition: background 0.16s`, и переход применяется в том
+     числе к смене фона на `:active`. Подсветка проявлялась 160 мс, то есть ровно тот
+     лаг, против которого весь #512, только теперь в виде плавного проявления
+     (нашло ревью PR #526 — на одной строке, но затронуто десять).
+
+     Переход при ВХОДЕ в состояние берётся из правил самого состояния, поэтому `none`
+     здесь делает нажатие мгновенным, а отпускание оставляет плавным: его ведёт
+     базовое правило, которое снова начинает применяться после отпускания. Это и есть
+     нативное поведение — мгновенно вжать, мягко отпустить. */
+  .ed-btn:active,
+  .ed-btn--primary:active,
+  .ed-btn--secondary:active,
+  .ed-btn--danger:active,
+  .ed-btn--icon:active,
+  .ed-btn--ghost:active,
+  .ed-btn--affix:active,
+  .ed-menu__item:active,
+  .ed-react:active,
+  .ed-gallery-tab:active,
+  .ed-thread-row:active,
+  .ed-member-row:active,
+  .ed-room:active,
+  .ed-file:active,
+  .ed-lightbox__btn:active,
+  .ed-lightbox__nav:active,
+  .ed-lightbox__item:active,
+  .ed-select-hit:active,
+  .ed-seg__btn:active,
+  .ed-settings-nav__item:active,
+  .ed-admin-row:active { transition: none; }
+
   /* Пока патч в полёте (#512). Класс LiveView ставит СИНХРОННО внутри putRef — до
      отправки в сокет, то есть в том же кадре, что и тап, — и держит до ответа. Вариант
      `@custom-variant phx-click-loading` объявлен в этом файле с самого начала и не имел

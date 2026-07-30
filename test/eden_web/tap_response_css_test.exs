@@ -34,21 +34,44 @@ defmodule EdenWeb.TapResponseCssTest do
     "ed-admin-row.is-selected"
   ]
 
-  # Разбор с учётом вложенности (@layer/@media): объявления правила — это текст между `{`
-  # и следующей фигурной скобкой в любую сторону, а селектор — чанк перед этим `{`. Наивное
-  # «тело до первой `}`» приписало бы вложенные правила самому @media.
-  defp rules do
+  # Комментарии и строковые литералы вырезаем ДО разбора: в этом файле есть комментарий
+  # с `hero-#\{ICON\}`, то есть фигурные скобки внутри комментария, и брать их за границу
+  # правила нельзя (нашло ревью PR #526).
+  defp stripped do
     @css
+    |> String.replace(~r|/\*.*?\*/|s, "")
+    |> String.replace(~r/"[^"\n]*"|'[^'\n]*'/, "\"\"")
+  end
+
+  # Разбор со СТЕКОМ вложенности. Первая версия хранила только текущий селектор и ничего
+  # не знала о родителях — из-за чего `transition: none` из блока `prefers-reduced-motion`
+  # (таких блоков в файле десятки) считался действующим всегда, и тест недо-сообщал:
+  # мутация, снявшая отклик у десяти целей, называла пять. Родительскую цепочку теперь
+  # видно, и блоки reduced-motion отбрасываются — они описывают предпочтение, которого
+  # на обычном устройстве нет.
+  defp rules do
+    stripped()
     |> String.split(~r/([{}])/, include_captures: true)
-    |> Enum.reduce({[], nil, nil}, fn
-      # Открылся блок: селектор — предыдущий текстовый чанк, следующий станет телом.
-      "{", {acc, prev, _} -> {acc, prev, :body}
-      "}", {acc, _, _} -> {acc, nil, nil}
-      text, {acc, sel, :body} -> {[{sel, text} | acc], String.trim(text), nil}
-      text, {acc, _, _} -> {acc, String.trim(text), nil}
+    |> Enum.reduce({[], [], nil}, fn
+      "{", {acc, stack, pending} -> {acc, [pending || "" | stack], nil}
+      "}", {acc, stack, _} -> {acc, Enum.drop(stack, 1), nil}
+      text, {acc, stack, _} -> {[entry(stack, text) | acc], stack, String.trim(text)}
     end)
     |> elem(0)
     |> Enum.reverse()
+    |> Enum.reject(fn {_, _, ancestors} ->
+      Enum.any?(ancestors, &String.contains?(&1, "prefers-reduced-motion"))
+    end)
+  end
+
+  # Текст внутри блока — объявления этого блока; его родители — остаток стека. Побочные
+  # записи (селектор следующего правила, попавший сюда же) безвредны: селектор не содержит
+  # ни `background:`, ни `transition:`.
+  defp entry(stack, text) do
+    case stack do
+      [sel | ancestors] -> {sel, text, ancestors}
+      [] -> {nil, text, []}
+    end
   end
 
   # Отклик — это либо фон, либо `filter`: у `.ed-btn--secondary` база уже surface-2, и
@@ -64,8 +87,9 @@ defmodule EdenWeb.TapResponseCssTest do
 
     missing =
       Enum.reject(@targets, fn class ->
-        Enum.any?(all, fn {sel, body} ->
-          mentions?(sel, class) and String.contains?(sel, ":active") and sets_background?(body)
+        Enum.any?(all, fn {sel, body, _} ->
+          is_binary(sel) and mentions?(sel, class) and String.contains?(sel, ":active") and
+            sets_background?(body)
         end)
       end)
 
@@ -79,8 +103,8 @@ defmodule EdenWeb.TapResponseCssTest do
 
     missing =
       Enum.reject(@selected_states, fn state ->
-        Enum.any?(all, fn {sel, body} ->
-          String.contains?(sel, ".#{state}:active") and sets_background?(body)
+        Enum.any?(all, fn {sel, body, _} ->
+          is_binary(sel) and String.contains?(sel, ".#{state}:active") and sets_background?(body)
         end)
       end)
 
@@ -98,19 +122,77 @@ defmodule EdenWeb.TapResponseCssTest do
     assert @css =~ ~r/\.ed-convo\.phx-click-loading\s*\{[^}]*opacity:\s*1/
   end
 
-  test "нажатие не анимируется дольше кадра" do
-    # Отклик обязан быть мгновенным: перехода на фоне либо нет, либо он короче ~120 мс,
-    # иначе «мгновенная» подсветка сама превращается в задержку.
-    long =
-      rules()
-      |> Enum.filter(fn {sel, body} ->
-        String.contains?(sel, ":active") and
-          case Regex.run(~r/transition:[^;]*?([\d.]+)s/, body) do
-            [_, secs] -> String.to_float(secs) > 0.12
-            _ -> false
-          end
+  test "нажатие появляется в первом кадре, а не проявляется переходом" do
+    # Самая коварная часть #512, и первая версия этого теста её НЕ ловила: переход
+    # объявлен не в правиле `:active`, а на БАЗОВОМ селекторе (`.ed-admin-row
+    # { transition: background 0.16s }`), и применяется в том числе к смене фона на
+    # нажатии. Подсветка тогда проявляется 160 мс — тот самый лаг, против которого весь
+    # #512, только в виде плавного проявления. Значит смотреть надо не в тело `:active`,
+    # а на ПОБЕДИТЕЛЯ каскада для нажатого состояния.
+    animated =
+      Enum.filter(@targets, fn class ->
+        case winning_transition(class) do
+          nil -> false
+          value -> animates_background?(value)
+        end
       end)
 
-    assert long == [], "слишком долгий переход на :active: #{inspect(long)}"
+    assert animated == [],
+           "фон под пальцем проявляется переходом у: #{Enum.join(animated, ", ")} — " <>
+             "отклик обязан быть в первом кадре; погасите переход в правиле :active"
+  end
+
+  # Победитель каскада по свойству `transition` для ПЛОСКОГО элемента в состоянии
+  # `:active`: максимум по (специфичность, порядок).
+  #
+  # «Плоский» — существенно. Первая версия брала максимум среди всех правил, упоминающих
+  # класс, и составное правило вроде `.ed-seg__btn.is-active:active` со своим `transition:
+  # none` МАСКИРОВАЛО обычное нажатие: мутация, снявшая отклик у десяти целей, не называла
+  # сегмент. У элемента несколько состояний, и одного победителя на класс не существует;
+  # здесь проверяется самое частое — элемент без дополнительных классов и атрибутов.
+  defp winning_transition(class) do
+    rules()
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {{sel, body, _}, order} ->
+      with true <- is_binary(sel),
+           [_ | _] = parts <- Enum.filter(String.split(sel, ","), &plain?(&1, class)),
+           [_, value] <- Regex.run(~r/(?:^|;|\s)transition:\s*([^;]*)/, body) do
+        [{Enum.max(Enum.map(parts, &specificity/1)), order, value}]
+      else
+        _ -> []
+      end
+    end)
+    |> case do
+      [] -> nil
+      candidates -> candidates |> Enum.max_by(fn {spec, order, _} -> {spec, order} end) |> elem(2)
+    end
+  end
+
+  # Часть селектора адресует именно этот класс и ничего сверх него: ровно один класс, ни
+  # одного атрибута. Псевдоклассы (`:active`, `:not(:disabled)`) допустимы — это состояния
+  # того же элемента, а не другой элемент.
+  defp plain?(part, class) do
+    mentions?(part, class) and
+      Regex.scan(~r/\.[\w-]+/, String.replace(part, ~r/:not\([^)]*\)/, " ")) == [[".#{class}"]] and
+      not Regex.match?(~r/\[/, part)
+  end
+
+  # Классы, атрибуты и псевдоклассы весят по 10; элементы и `::псевдоэлементы` — 1.
+  # Идентификаторов в этом файле нет. `:not(...)` сам не считается, считается его содержимое,
+  # поэтому обёртку снимаем, а внутренности оставляем.
+  defp specificity(part) do
+    part = String.replace(part, ~r/:not\(|\)/, " ")
+    tens = Regex.scan(~r/\.[\w-]+|\[[^\]]*\]|(?<!:):(?!:)[\w-]+/, part) |> length()
+    ones = Regex.scan(~r/(?<![\w.\[-])[a-z]+(?![\w-]*[(\]])|::[\w-]+/, part) |> length()
+    tens * 10 + ones
+  end
+
+  # Переход трогает фон и длится дольше кадра. `transition: none` и `0s` — не трогает.
+  defp animates_background?(value) do
+    Regex.match?(~r/\b(background|all)\b/, value) and
+      case Regex.run(~r/([\d.]+)s/, value) do
+        [_, secs] -> String.to_float(secs) > 0.12
+        _ -> false
+      end
   end
 end
