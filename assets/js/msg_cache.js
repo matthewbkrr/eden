@@ -74,9 +74,18 @@ function idbGet(db, k) {
   });
 }
 
+// Which DB handle has already had a full eviction pass. The TTL pass is needed once per
+// session: it only reclaims disk, because an expired record is never handed out anyway — TTL is
+// checked on READ (see `peek`/`get`). The flag rides the HANDLE rather than a clock: a new handle
+// means a new app launch (or a `clearAll`), which is exactly when housekeeping belongs.
+let sweptHandle = null;
+
 // Put a snapshot, then GC in the SAME transaction (no await between requests — WebKit auto-commits
 // an IndexedDB tx across await points): drop anything past TTL, then trim the oldest survivors down
 // to IDB_MAX. The cursor walks by_updated oldest-first, so the overflow to delete is at the front.
+// Eviction, though, does NOT run after every put (#509) — see the gate below. No request in this
+// transaction awaits anything, or WebKit would commit it out from under us, exactly as the line
+// above warns.
 function idbPut(db, record) {
   return new Promise((resolve, reject) => {
     let tx;
@@ -88,22 +97,64 @@ function idbPut(db, record) {
     }
     const os = tx.objectStore(STORE);
     os.put(record);
-    const cutoff = Date.now() - TTL_MS;
-    const survivors = [];
-    os.index("by_updated").openCursor().onsuccess = (e) => {
-      const cur = e.target.result;
-      if (cur) {
-        if (cur.value.updatedAt < cutoff) cur.delete();
-        else survivors.push(cur.primaryKey);
-        cur.continue();
-      } else {
-        for (let i = 0; i < survivors.length - IDB_MAX; i++) os.delete(survivors[i]);
-      }
+    // GC IS OFF THE HOT PATH (#509). A full store walk used to run after EVERY put, and `put` is
+    // called twice per navigation — a snapshot of the chat being left and of the one arriving.
+    // Walking is worth it in exactly two cases: the record count went past the cap (something must
+    // be evicted), or this is the first put on a fresh DB handle (the one-off TTL pass). `count()`
+    // counts records without reading them, so unlike the walk it does not care how many bytes they
+    // hold.
+    //
+    // In practice a person re-opens the same dozen chats all session, so almost every put
+    // overwrites an existing key and the count does not move. The walk now happens when a NEW
+    // conversation is cached, not on every snapshot refresh.
+    const firstOnHandle = sweptHandle !== db;
+    let swept = false;
+    const countReq = os.count();
+    countReq.onsuccess = () => {
+      if (!firstOnHandle && countReq.result <= IDB_MAX) return;
+      swept = true;
+      sweep(os);
     };
-    tx.oncomplete = () => resolve();
+    // The handle is marked swept ONLY after the commit. Marking it up front would let a failed or
+    // aborted transaction still count as housekeeping, and the one-off TTL pass would never be
+    // retried for the rest of the handle's life (#527 review). On an abort `oncomplete` never
+    // fires, the flag stays clear, and the next put tries again.
+    tx.oncomplete = () => {
+      if (swept) sweptHandle = db;
+      resolve();
+    };
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error("aborted"));
   });
+}
+
+// Eviction: anything past TTL, plus whatever overflows the cap. Runs in the SAME transaction as
+// the put, so atomicity is unchanged.
+//
+// `openKeyCursor`, NOT `openCursor`: on a cursor over an index, `key` IS the `updatedAt` and
+// `primaryKey` is the id — everything the walk needs already lives in the keys. Touching
+// `cur.value` would make the engine structured-deserialize the FULL record including the `html`
+// field (up to MAX_BYTES = 1 MB), once per stored record. On Chromium and Firefox that removes the
+// walk's dependence on record size entirely; WebKit (i.e. WKWebView, i.e. iOS) materializes the
+// record even on a key cursor, so there the win comes from the walk no longer running per put.
+function sweep(os) {
+  const cutoff = Date.now() - TTL_MS;
+  const expired = [];
+  const survivors = [];
+  os.index("by_updated").openKeyCursor().onsuccess = (e) => {
+    const cur = e.target.result;
+    if (cur) {
+      if (cur.key < cutoff) expired.push(cur.primaryKey);
+      else survivors.push(cur.primaryKey);
+      cur.continue();
+      return;
+    }
+    // Delete AFTER the walk: `cur.delete()` on a key cursor throws InvalidStateError — the spec
+    // only allows deleting through a value cursor. The cursor walks `updatedAt` ascending, so the
+    // overflow past the cap is at the front of `survivors`, the oldest ones.
+    for (const pk of expired) os.delete(pk);
+    for (let i = 0; i < survivors.length - IDB_MAX; i++) os.delete(survivors[i]);
+  };
 }
 
 export const MsgCache = {
@@ -216,6 +267,7 @@ export const MsgCache = {
     }
     this._db = null;
     this._broken = false; // the wipe resets the store; a fresh session may reopen cleanly
+    sweptHandle = null; // the DB is gone; the next handle earns its one-off pass again
     if (typeof indexedDB === "undefined") return;
     await new Promise((resolve) => {
       let req;
