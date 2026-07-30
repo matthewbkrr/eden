@@ -189,10 +189,32 @@ defmodule EdenWeb.TapResponseCssTest do
 
   # Переход трогает фон и длится дольше кадра. `transition: none` и `0s` — не трогает.
   defp animates_background?(value) do
-    Regex.match?(~r/\b(background|all)\b/, value) and
-      case Regex.run(~r/([\d.]+)s/, value) do
-        [_, secs] -> String.to_float(secs) > 0.12
-        _ -> false
-      end
+    Regex.match?(~r/\b(background|all)\b/, value) and duration_ms(value) > 120
+  end
+
+  # Длительность в миллисекундах. Прежняя версия брала `([\d.]+)s` и звала
+  # `String.to_float/1` — две ошибки, обе нашлись через ревью PR #526:
+  #
+  #   * `String.to_float/1` БРОСАЕТ на валидных для CSS `1` (из `1s`) и `.16` (из `.16s`),
+  #     а исключение здесь роняет весь файл теста, а не одну проверку. `Float.parse/1`
+  #     не бросает, но на `".16"` тоже отдаёт `:error`, поэтому ведущую точку дополняем.
+  #   * `s` в регэкспе не совпадал с `ms`: `300ms` молча читалось как «перехода нет».
+  #     Сегодня в `ms` заданы только `opacity` и `transform`, фона это не касается — то
+  #     есть тест давал бы ложную зелень на будущем `transition: background 300ms`.
+  defp duration_ms(value) do
+    case Regex.run(~r/([\d.]+)\s*(ms|s)\b/, value) do
+      [_, number, unit] -> to_ms(number, unit)
+      _ -> 0
+    end
+  end
+
+  defp to_ms(number, unit) do
+    number = if String.starts_with?(number, "."), do: "0" <> number, else: number
+
+    case Float.parse(number) do
+      {n, _} when unit == "ms" -> n
+      {n, _} -> n * 1000
+      :error -> 0
+    end
   end
 end
