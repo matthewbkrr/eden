@@ -10,11 +10,19 @@
 // reaches, not merely that the menu appears.
 const { test, expect, send, openMenu } = require("../helpers/fixtures");
 
+// Serial: every test here sends into the SAME dm and one of them deletes a message, so running
+// them in parallel had them fighting over the same conversation (the pane simply never opened).
+test.describe.configure({ mode: "serial" });
+
 async function ready(page) {
   await page.goto("/app");
-  await page.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
-    timeout: 15_000,
-  });
+  // Wait for the app's OWN readiness signal, not just the socket: until the instant-nav hook is
+  // armed a click on a sidebar row can be swallowed, and the pane never opens.
+  await page.waitForFunction(
+    () => window.liveSocket && window.liveSocket.isConnected() && window.__edInstantNavReady,
+    null,
+    { timeout: 15_000 },
+  );
 }
 
 async function openDm(page, seed) {
@@ -110,4 +118,48 @@ test("copy link takes the permalink of the row the menu is on", async ({ alice, 
     .catch(() => null);
   if (link) expect(link).toContain(`/m/${id}`);
   else expect(await row.getAttribute("data-link")).toContain(`/m/${id}`);
+});
+
+test("Reply from the menu moves focus into the composer", async ({ alice, seed }) => {
+  // The old markup reached this through JS.focus baked into a per-message phx-click. The shared
+  // menu pushes the row's own reply event instead, so the focus move is now the hook's job — and
+  // a refactor could drop it without anything looking wrong. Locked here (#528 review).
+  await ready(alice);
+  await openDm(alice, seed);
+  const mark = `reply-focus-${Date.now()}`;
+  await send(alice, mark);
+  const row = alice.locator("#messages [data-message-id]", { hasText: mark }).last();
+
+  const menu = await openMenu(alice, row);
+  await menu.locator('[data-act="reply"]').click();
+
+  await expect(menu).toBeHidden();
+  await expect(alice.locator("#composer-body")).toBeFocused();
+  // The reply bar above the composer confirms the server got the event for THIS message.
+  await expect(alice.locator(".ed-reply-bar").first()).toBeVisible({ timeout: 5000 });
+});
+
+test("Delete for everyone asks first, then tombstones the message", async ({ alice, seed }) => {
+  // `data-confirm` is a phx-click feature and these items push directly, so the hook asks with
+  // window.confirm and the text comes from the server. Assert the prompt actually happens — not
+  // just the outcome — or dropping it would go unnoticed (#528 review).
+  await ready(alice);
+  await openDm(alice, seed);
+  const mark = `delete-both-${Date.now()}`;
+  await send(alice, mark);
+  const row = alice.locator("#messages [data-message-id]", { hasText: mark }).last();
+
+  let asked = 0;
+  alice.on("dialog", () => {
+    asked++;
+  });
+
+  const menu = await openMenu(alice, row);
+  const item = menu.locator('[data-act="delete_for_both"]');
+  await expect(item).toBeVisible();
+  await expect(item).toHaveAttribute("data-confirm-text", /.+/);
+  await item.click();
+
+  await expect(alice.locator("#messages", { hasText: mark })).toHaveCount(0, { timeout: 8000 });
+  expect(asked, "no confirmation was asked before deleting for everyone").toBeGreaterThan(0);
 });
