@@ -127,6 +127,19 @@ window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 
+// Сеть вернулась — переподключаемся немедленно (#507). Без этого баннер разрыва висит до
+// heartbeat-таймаута: интервал 15 с плюс ещё столько же на обнаружение, то есть до ~30 с
+// молча мёртвого приложения после выхода из метро или переключения Wi-Fi↔LTE. Хуже того,
+// после суспенда WKWebView сокет остаётся полуоткрытым — `readyState` всё ещё OPEN, поэтому
+// собственный форс phoenix.js не срабатывает, он проверяет `!isConnected()`.
+//
+// `teardown` + `connect` вместо просто `connect`: полуоткрытый сокет надо снести явно, иначе
+// новый коннект не начнётся. Слушатель `offline` не нужен — класс на <html> ставит сам
+// LiveView, когда сокет действительно отвалился, а не когда браузер так думает.
+window.addEventListener("online", () => {
+  if (!liveSocket.isConnected()) liveSocket.socket.teardown(() => liveSocket.socket.connect())
+})
+
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()
 // >> liveSocket.enableLatencySim(1000)  // enabled for duration of browser session

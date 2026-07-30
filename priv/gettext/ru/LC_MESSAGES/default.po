@@ -2890,3 +2890,15 @@ msgstr "Действия с фото"
 msgid "Show in chat"
 msgstr "Показать в чате"
 
+
+#, elixir-autogen, elixir-format
+msgid "No connection to ihichat"
+msgstr "Нет связи с ihichat"
+
+#, elixir-autogen, elixir-format
+msgid "ihichat is unavailable"
+msgstr "ihichat недоступен"
+
+#, elixir-autogen, elixir-format
+msgid "Reconnecting…"
+msgstr "Восстанавливаем соединение…"
