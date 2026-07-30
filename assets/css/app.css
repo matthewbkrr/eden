@@ -4678,6 +4678,107 @@ html {
     50% { opacity: 0.35; }
   }
 
+  /* ────────────────────────────────────────────────────────────────────────────
+     Отклик на касание (#512).
+
+     До этой правки `:active` существовал ровно на трёх селекторах — строка чата,
+     кнопка рельса, вкладка папок (см. блок «Pressed feedback (#445 wave 3)»). Всё
+     остальное на таче не меняло ни пикселя до ответа сервера, а глобальная тап-
+     подсветка снята preflight-ом Tailwind, поэтому обратной связи не было ФИЗИЧЕСКИ:
+     на 160 мс RTT это читается как «не попал», и человек жмёт второй раз.
+
+     Здесь только оформление. Никакой логики, никакого JS: `:active` красится
+     браузером на touchstart, то есть в первом же кадре, независимо от сокета.
+
+     Язык взят из существующих правил, а не придуман: поверхности лифтятся до
+     --ed-surface-2, цветные элементы уходят в --ed-primary-strong. `:focus-visible`
+     не затрагивается — клавиатурная навигация остаётся как была. */
+
+  /* Кнопки. У .ed-btn был только :hover, которого на таче не существует. */
+  .ed-btn:active:not(:disabled) { background: var(--ed-surface-2); }
+  .ed-btn--primary:active:not(:disabled) { background: var(--ed-primary-strong); }
+  .ed-btn--danger:active:not(:disabled) {
+    background: color-mix(in oklab, var(--ed-danger) 22%, transparent);
+  }
+  .ed-btn--icon:active:not(:disabled) { background: var(--ed-surface-2); }
+  /* --secondary уже покрашен в surface-2, поэтому фоном отклик не выразить — ровно
+     та причина, по которой его ховер лифтит brightness (см. комментарий у базового
+     правила). Нажатие лифтит сильнее ховера. */
+  .ed-btn--secondary:active:not(:disabled) { filter: brightness(1.14); }
+
+  /* Пункты контекстного меню — основной мобильный жест, и он был полностью немым. */
+  .ed-menu__item:active { background: var(--ed-surface-2); }
+
+  /* Чипы реакций: тап по ним самый частый после отправки. */
+  .ed-react:active { background: var(--ed-surface-2); }
+  .ed-react--mine:active {
+    background: color-mix(in oklab, var(--ed-primary) 26%, transparent);
+  }
+
+  /* Строчные списки: треды, участники, комнаты, файлы, строки админки. */
+  .ed-thread-row:active,
+  .ed-member-row:active,
+  .ed-room:active,
+  .ed-file:active { background: var(--ed-surface-2); }
+
+  /* Табы. Сегменты, пункты настроек и строки админки живут ниже, рядом со своими
+     объявлениями: их `:hover`/`.is-active` идут ПОЗЖЕ этого блока, а при равной
+     специфичности выигрывает последнее — здесь нажатие проиграло бы молча. */
+  .ed-gallery-tab:active { color: var(--ed-ink); background: var(--ed-surface-2); }
+
+  /* Хромировка лайтбокса живёт на тёмном скриме — лифт делаем светлым, а не surface. */
+  .ed-lightbox__btn:active,
+  .ed-lightbox__nav:active { background: rgb(255 255 255 / 0.22); }
+  .ed-lightbox__item:active { background: rgb(255 255 255 / 0.14); }
+
+  /* Зона выбора сообщения в мультивыборе. */
+  .ed-select-hit:active { background: color-mix(in oklab, var(--ed-primary) 12%, transparent); }
+
+  /* Отклик обязан появляться в ПЕРВОМ кадре — а базовые правила десяти из этих
+     селекторов объявляют `transition: background 0.16s`, и переход применяется в том
+     числе к смене фона на `:active`. Подсветка проявлялась 160 мс, то есть ровно тот
+     лаг, против которого весь #512, только теперь в виде плавного проявления
+     (нашло ревью PR #526 — на одной строке, но затронуто десять).
+
+     Переход при ВХОДЕ в состояние берётся из правил самого состояния, поэтому `none`
+     здесь делает нажатие мгновенным, а отпускание оставляет плавным: его ведёт
+     базовое правило, которое снова начинает применяться после отпускания. Это и есть
+     нативное поведение — мгновенно вжать, мягко отпустить. */
+  .ed-btn:active,
+  .ed-btn--primary:active,
+  .ed-btn--secondary:active,
+  .ed-btn--danger:active,
+  .ed-btn--icon:active,
+  .ed-btn--ghost:active,
+  .ed-btn--affix:active,
+  .ed-menu__item:active,
+  .ed-react:active,
+  .ed-gallery-tab:active,
+  .ed-thread-row:active,
+  .ed-member-row:active,
+  .ed-room:active,
+  .ed-file:active,
+  .ed-lightbox__btn:active,
+  .ed-lightbox__nav:active,
+  .ed-lightbox__item:active,
+  .ed-select-hit:active,
+  .ed-seg__btn:active,
+  .ed-settings-nav__item:active,
+  .ed-admin-row:active { transition: none; }
+
+  /* Пока патч в полёте (#512). Класс LiveView ставит СИНХРОННО внутри putRef — до
+     отправки в сокет, то есть в том же кадре, что и тап, — и держит до ответа. Вариант
+     `@custom-variant phx-click-loading` объявлен в этом файле с самого начала и не имел
+     ни одного потребителя: первый кадр отклика лежал бесплатно и не использовался.
+
+     Только приглушение, без спиннеров: элемент уже отдал `:active`, здесь нужно лишь
+     показать, что ответа ещё нет. `cursor: progress` — для десктопа. */
+  .phx-click-loading,
+  .phx-submit-loading { opacity: 0.62; cursor: progress; }
+  /* Строку чата не глушим — её ведёт мгновенная навигация (#427), приглушение
+     конфликтовало бы с оверлеем, который в этот момент уже рисует целевой экран. */
+  .ed-convo.phx-click-loading { opacity: 1; cursor: default; }
+
   .ed-toast {
     display: flex;
     align-items: center;
@@ -4816,6 +4917,14 @@ html {
   .ed-seg__btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
   /* Active (server-rendered, e.g. current language) */
   .ed-seg__btn.is-active { background: color-mix(in oklab, var(--ed-primary) 16%, transparent); color: var(--ed-ink); box-shadow: var(--ed-shadow); }
+  /* Нажатие (#512): глубже ховера, и отдельно для уже выбранного сегмента — иначе тап
+     по активному сегменту не даёт отклика вовсе. */
+  .ed-seg__btn:active { color: var(--ed-ink); background: var(--ed-surface-2); }
+  .ed-seg__btn.is-active:active,
+  [data-theme="light"] .ed-seg__btn[data-active="light"]:active,
+  [data-theme="dark"] .ed-seg__btn[data-active="dark"]:active {
+    background: color-mix(in oklab, var(--ed-primary) 28%, transparent);
+  }
   /* Active (client theme, driven by the data-theme attribute) */
   [data-theme="light"] .ed-seg__btn[data-active="light"],
   [data-theme="dark"] .ed-seg__btn[data-active="dark"] {
@@ -4852,6 +4961,15 @@ html {
   .ed-settings-nav__item:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
   .ed-settings-nav__item.is-active {
     background: color-mix(in oklab, var(--ed-primary) 16%, transparent);
+  }
+  /* Нажатие (#512). Кобальтовая заливка поверх surface-2 — глубже ховера и не темнит
+     в фон; для уже открытого раздела свой, более насыщенный вариант. */
+  .ed-settings-nav__item:active {
+    color: var(--ed-ink);
+    background: color-mix(in oklab, var(--ed-primary) 10%, var(--ed-surface-2));
+  }
+  .ed-settings-nav__item.is-active:active {
+    background: color-mix(in oklab, var(--ed-primary) 28%, transparent);
   }
   .ed-settings-nav__icon { flex: 0 0 auto; color: var(--ed-muted); }
   .ed-settings-nav__item.is-active .ed-settings-nav__icon { color: var(--ed-primary); }
@@ -4895,6 +5013,9 @@ html {
 .ed-admin-row { transition: background 0.16s var(--ed-ease); }
 .ed-admin-row:hover { background: var(--ed-surface-2); }
 .ed-admin-row.is-selected { background: color-mix(in oklch, var(--ed-primary) 14%, transparent); }
+/* Нажатие (#512): глубже ховера, и отдельно для выделенной строки. */
+.ed-admin-row:active { background: color-mix(in oklch, var(--ed-primary) 10%, var(--ed-surface-2)); }
+.ed-admin-row.is-selected:active { background: color-mix(in oklch, var(--ed-primary) 26%, transparent); }
 
 @media (prefers-reduced-motion: reduce) {
   .ed-typing span { animation: none; }
