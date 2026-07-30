@@ -121,7 +121,10 @@ document.addEventListener(
 // Show progress bar on live navigation and form submits (cobalt --ed-primary, not the topbar default sky-blue)
 const __edPrimary = getComputedStyle(document.documentElement).getPropertyValue("--ed-primary").trim() || "#3b6fd6"
 topbar.config({barColors: {0: __edPrimary}, shadowColor: "rgba(0, 0, 0, .3)"})
-window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
+// 120, не 300 (#512): при RTT ~160 мс большинство операций укладывается в 160-250 мс,
+// то есть на пороге 300 полоса не успевала появиться вообще — индикатор был мёртвым
+// кодом на самых частых путях.
+window.addEventListener("phx:page-loading-start", _info => topbar.show(120))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
 // connect if there are any LiveViews on the page
