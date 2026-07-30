@@ -74,19 +74,18 @@ function idbGet(db, k) {
   });
 }
 
-// Какому хендлу БД уже делали полный проход выселения. Проход по TTL нужен один раз за
-// сессию: он только освобождает диск, потому что просроченную запись всё равно не отдадут
-// наружу — TTL проверяется на ЧТЕНИИ (см. `peek`/`get`). Флаг привязан к хендлу, а не ко
-// времени: новый хендл = новый запуск приложения (или `clearAll`), что и есть естественный
-// момент для уборки.
+// Which DB handle has already had a full eviction pass. The TTL pass is needed once per
+// session: it only reclaims disk, because an expired record is never handed out anyway — TTL is
+// checked on READ (see `peek`/`get`). The flag rides the HANDLE rather than a clock: a new handle
+// means a new app launch (or a `clearAll`), which is exactly when housekeeping belongs.
 let sweptHandle = null;
 
 // Put a snapshot, then GC in the SAME transaction (no await between requests — WebKit auto-commits
 // an IndexedDB tx across await points): drop anything past TTL, then trim the oldest survivors down
 // to IDB_MAX. The cursor walks by_updated oldest-first, so the overflow to delete is at the front.
-// Выселение при этом идёт НЕ после каждой записи (#509) — условие ниже. Ни один запрос в этой
-// транзакции не ждёт await, иначе WebKit закоммитит её у нас под руками, как и предупреждает
-// строка выше.
+// Eviction, though, does NOT run after every put (#509) — see the gate below. No request in this
+// transaction awaits anything, or WebKit would commit it out from under us, exactly as the line
+// above warns.
 function idbPut(db, record) {
   return new Promise((resolve, reject) => {
     let tx;
@@ -98,16 +97,16 @@ function idbPut(db, record) {
     }
     const os = tx.objectStore(STORE);
     os.put(record);
-    // GC УБРАН С ГОРЯЧЕГО ПУТИ (#509). Раньше полный обход хранилища шёл после КАЖДОЙ
-    // записи, а `put` вызывается дважды за навигацию — снимок покидаемого чата и
-    // пришедшего. Обходить есть смысл ровно в двух случаях: записей стало больше кэпа
-    // (надо выселять) или это первая запись на свежем хендле БД (разовая уборка по TTL).
-    // `count()` считает записи, не читая их, — в отличие от обхода он не зависит от того,
-    // сколько в них байт.
+    // GC IS OFF THE HOT PATH (#509). A full store walk used to run after EVERY put, and `put` is
+    // called twice per navigation — a snapshot of the chat being left and of the one arriving.
+    // Walking is worth it in exactly two cases: the record count went past the cap (something must
+    // be evicted), or this is the first put on a fresh DB handle (the one-off TTL pass). `count()`
+    // counts records without reading them, so unlike the walk it does not care how many bytes they
+    // hold.
     //
-    // Практика такая: за сессию человек переоткрывает один и тот же десяток чатов, то есть
-    // почти каждая запись — перезапись существующего ключа, и число записей не меняется.
-    // Обход теперь случается при кэшировании НОВОГО чата, а не при каждом обновлении снимка.
+    // In practice a person re-opens the same dozen chats all session, so almost every put
+    // overwrites an existing key and the count does not move. The walk now happens when a NEW
+    // conversation is cached, not on every snapshot refresh.
     const firstOnHandle = sweptHandle !== db;
     let swept = false;
     const countReq = os.count();
@@ -116,11 +115,10 @@ function idbPut(db, record) {
       swept = true;
       sweep(os);
     };
-    // Хендл помечается убранным ТОЛЬКО после коммита. Если пометить заранее, упавшая или
-    // прерванная транзакция всё равно засчитает уборку, и разовый проход по TTL не повторится
-    // до конца жизни хендла — просроченное осталось бы на диске всю сессию (нашло ревью
-    // PR #527). При аборте `oncomplete` не вызывается, флаг остаётся чистым, и следующая
-    // запись попробует снова.
+    // The handle is marked swept ONLY after the commit. Marking it up front would let a failed or
+    // aborted transaction still count as housekeeping, and the one-off TTL pass would never be
+    // retried for the rest of the handle's life (#527 review). On an abort `oncomplete` never
+    // fires, the flag stays clear, and the next put tries again.
     tx.oncomplete = () => {
       if (swept) sweptHandle = db;
       resolve();
@@ -130,16 +128,15 @@ function idbPut(db, record) {
   });
 }
 
-// Выселение: просроченное по TTL плюс всё, что вылезло за кэп. Идёт в той же транзакции,
-// что и запись, поэтому атомарность прежняя.
+// Eviction: anything past TTL, plus whatever overflows the cap. Runs in the SAME transaction as
+// the put, so atomicity is unchanged.
 //
-// `openKeyCursor`, НЕ `openCursor`: у курсора по индексу `key` — это уже сам `updatedAt`, а
-// `primaryKey` — id, то есть всё нужное лежит в ключах. Обращение к `cur.value` заставило бы
-// движок делать structured-deserialize ПОЛНОЙ записи вместе с полем `html` (до MAX_BYTES =
-// 1 МБ) — на каждую из IDB_MAX записей. На Chromium и Firefox это снимает зависимость
-// стоимости обхода от объёма записей полностью; WebKit (а это WKWebView, то есть iOS)
-// материализует записи и на key-курсоре, поэтому там выигрыш даёт именно то, что обход
-// перестал случаться на каждой записи.
+// `openKeyCursor`, NOT `openCursor`: on a cursor over an index, `key` IS the `updatedAt` and
+// `primaryKey` is the id — everything the walk needs already lives in the keys. Touching
+// `cur.value` would make the engine structured-deserialize the FULL record including the `html`
+// field (up to MAX_BYTES = 1 MB), once per stored record. On Chromium and Firefox that removes the
+// walk's dependence on record size entirely; WebKit (i.e. WKWebView, i.e. iOS) materializes the
+// record even on a key cursor, so there the win comes from the walk no longer running per put.
 function sweep(os) {
   const cutoff = Date.now() - TTL_MS;
   const expired = [];
@@ -152,9 +149,9 @@ function sweep(os) {
       cur.continue();
       return;
     }
-    // Удаляем ПОСЛЕ обхода: `cur.delete()` на key-курсоре бросает InvalidStateError —
-    // спека разрешает удаление только курсору со значением. Курсор идёт по возрастанию
-    // `updatedAt`, поэтому лишние сверх кэпа — это начало `survivors`, самые старые.
+    // Delete AFTER the walk: `cur.delete()` on a key cursor throws InvalidStateError — the spec
+    // only allows deleting through a value cursor. The cursor walks `updatedAt` ascending, so the
+    // overflow past the cap is at the front of `survivors`, the oldest ones.
     for (const pk of expired) os.delete(pk);
     for (let i = 0; i < survivors.length - IDB_MAX; i++) os.delete(survivors[i]);
   };
@@ -270,7 +267,7 @@ export const MsgCache = {
     }
     this._db = null;
     this._broken = false; // the wipe resets the store; a fresh session may reopen cleanly
-    sweptHandle = null; // база удалена — следующий хендл снова заслуживает разовой уборки
+    sweptHandle = null; // the DB is gone; the next handle earns its one-off pass again
     if (typeof indexedDB === "undefined") return;
     await new Promise((resolve) => {
       let req;
