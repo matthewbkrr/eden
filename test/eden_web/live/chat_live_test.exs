@@ -216,14 +216,14 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      # The quick-react row lives in the message context menu (right-click /
-      # long-press); the "more" chevron opens the shared full-emoji grid (#72).
-      assert has_element?(
-               view,
-               ~s(#menu-#{msg.id} .ed-menu__react[phx-click="react"][phx-value-emoji="👍"])
-             )
+      # The quick-react row lives in the message context menu (right-click / long-press),
+      # which since #508 is ONE node for the page rather than one hidden inside every
+      # message — so it carries no per-message values, and the id it acts on comes from the
+      # row the hook opened it over. The DOM affordance itself is covered end-to-end in
+      # test/e2e/specs/zz-message-menu.spec.js; here we assert the markup exists.
+      assert has_element?(view, ~s(#message-menu [data-act="react"][data-emoji="👍"]))
 
-      assert has_element?(view, ~s(#menu-#{msg.id} [data-react-expand]))
+      assert has_element?(view, ~s(#message-menu [data-react-expand]))
       # The full grid is one shared popover for the page (not per-message).
       assert has_element?(view, ~s(#reaction-grid [data-emoji]))
 
@@ -231,8 +231,9 @@ defmodule EdenWeb.ChatLiveTest do
       # A chip appears under the message, highlighted as mine.
       assert has_element?(view, ~s(.ed-react--mine[phx-value-emoji="👍"]))
       assert render(view) =~ "ed-react__count"
-      # The matching menu button reflects the active state too.
-      assert has_element?(view, ~s(#menu-#{msg.id} .ed-menu__react--active[phx-value-emoji="👍"]))
+      # The menu highlights it too — but the highlight is applied on open from the row's
+      # own data-emoji-mine (#508), so THAT is what the server renders.
+      assert has_element?(view, ~s([data-message-id="#{msg.id}"][data-emoji-mine~="👍"]))
 
       # Toggling the same emoji removes the chip.
       render_hook(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
@@ -271,8 +272,8 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      # The menu offers a Reply action.
-      assert has_element?(view, "#menu-#{target.id}", "Reply")
+      # The menu offers a Reply action (one shared menu since #508).
+      assert has_element?(view, "#message-menu", "Reply")
 
       # Staging a reply shows the composer tray with the target's author + snippet.
       render_hook(view, "reply", %{"id" => to_string(target.id)})
@@ -1949,16 +1950,10 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert has_element?(
-               view,
-               ~s(#menu-#{msg.id} .ed-menu__reacts .ed-menu__react[phx-value-emoji="🔥"])
-             )
+      assert has_element?(view, ~s(#message-menu .ed-menu__reacts [data-emoji="🔥"]))
 
       # A default that she dropped is no longer in the quick row (still in the grid).
-      refute has_element?(
-               view,
-               ~s(#menu-#{msg.id} .ed-menu__reacts .ed-menu__react[phx-value-emoji="👍"])
-             )
+      refute has_element?(view, ~s(#message-menu .ed-menu__reacts [data-emoji="👍"]))
     end
 
     test "the active highlight follows the selected conversation", ctx do

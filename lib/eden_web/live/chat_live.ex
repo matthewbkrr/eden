@@ -4901,6 +4901,111 @@ defmodule EdenWeb.ChatLive do
             </button>
           </div>
 
+          <%!-- Shared message menu (#508): ONE per page, exactly like #reaction-grid above.
+                It used to be rendered hidden INSIDE every bubble and every flat row, which
+                measured 68% of the feed's DOM nodes and 64% of its bytes (24 nodes / ~5 KB per
+                message). That mattered beyond render cost: the instant-nav cache stores
+                #messages.innerHTML and MsgCache.put silently DROPS anything over 1 MB, so the
+                hidden menus decided when a scrolled thread quietly stopped being cached at all
+                — around 117 messages instead of ~317.
+
+                Carries no per-message state: the .ContextMenu hook fills visibility + reaction
+                highlights from the row's data-* on open, and items dispatch through pushEvent
+                with the row's id — the same reason #reaction-grid needs none. `data-needs`
+                marks an item whose visibility depends on the message; the server computes those
+                predicates onto the row (data-can-*), so the rules stay in Elixir. --%>
+          <div
+            id="message-menu"
+            class="ed-menu"
+            data-menu
+            role="menu"
+            aria-label={gettext("Message actions")}
+            hidden
+          >
+            <div class="ed-menu__reacts" role="group" aria-label={gettext("React")}>
+              <button
+                :for={e <- @my_quick}
+                type="button"
+                class="ed-menu__react"
+                data-act="react"
+                data-emoji={e}
+              >
+                {e}
+              </button>
+              <%!-- Opens the shared full-emoji grid (#72) for the row the menu is on. --%>
+              <button
+                type="button"
+                class="ed-menu__react ed-menu__react-more"
+                data-react-expand
+                aria-label={gettext("More emoji")}
+                aria-haspopup="menu"
+              >
+                <.icon name="hero-chevron-down-micro" class="size-4" />
+              </button>
+            </div>
+            <div class="ed-menu__sep"></div>
+            <%!-- Quote-reply (#71). The row carries data-reply-event, so a reply from a thread
+                  row lands in the thread and one from a room row lands in the room. --%>
+            <button type="button" class="ed-menu__item" role="menuitem" data-act="reply">
+              <.icon name="hero-arrow-uturn-left-micro" class="size-4" /> {gettext("Reply")}
+            </button>
+            <button
+              type="button"
+              class="ed-menu__item"
+              role="menuitem"
+              data-act="open_thread"
+              data-needs="thread"
+              hidden
+            >
+              <.icon name="hero-chat-bubble-left-micro" class="size-4" /> {gettext("Reply in thread")}
+            </button>
+            <button
+              type="button"
+              class="ed-menu__item"
+              role="menuitem"
+              data-act="start_edit"
+              data-needs="edit"
+              hidden
+            >
+              <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("Edit")}
+            </button>
+            <button
+              type="button"
+              class="ed-menu__item"
+              role="menuitem"
+              data-act="copy_text"
+              data-needs="copy"
+              hidden
+            >
+              <.icon name="hero-clipboard-micro" class="size-4" /> {gettext("Copy text")}
+            </button>
+            <button type="button" class="ed-menu__item" role="menuitem" data-act="copy_link">
+              <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
+            </button>
+            <button type="button" class="ed-menu__item" role="menuitem" data-act="forward_prompt">
+              <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
+            </button>
+            <button type="button" class="ed-menu__item" role="menuitem" data-act="enter_select">
+              <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Select")}
+            </button>
+            <button type="button" class="ed-menu__item" role="menuitem" data-act="delete_for_me">
+              <.icon name="hero-eye-slash-micro" class="size-4" /> {gettext("Delete for me")}
+            </button>
+            <%!-- The confirmation text rides the button because the hook asks for it itself:
+                  `data-confirm` is a phx-click feature, and these items push directly. --%>
+            <button
+              type="button"
+              class="ed-menu__item ed-menu__item--danger"
+              role="menuitem"
+              data-act="delete_for_both"
+              data-needs="own"
+              data-confirm-text={gettext("Delete this message for everyone?")}
+              hidden
+            >
+              <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete for everyone")}
+            </button>
+          </div>
+
           <%!-- Typing indicator (#11): above the MAIN composer for the open conversation
                 (DMs + rooms); each typer auto-expires via its TTL. Thread replies have
                 their own indicator in the thread panel (#103). --%>
@@ -6680,7 +6785,7 @@ defmodule EdenWeb.ChatLive do
             }
             // Fire the quote-reply for this row. In the thread panel the row carries
             // reply_in_thread, so a swipe there replies INTO the thread, not the room.
-            const fireReply = () => {
+            const fireReply = this._fireReply = () => {
               if (!this.el.dataset.messageId) return
               const event = this.el.dataset.replyEvent || "reply"
               this.pushEvent(event, { id: this.el.dataset.messageId })
@@ -6887,10 +6992,17 @@ defmodule EdenWeb.ChatLive do
           // Bind the menu node + its delegated click handler. Idempotent: re-runs on
           // updated() and only attaches the listener to a freshly morphed-in node.
           wire() {
-            this.menu = this.el.querySelector("[data-menu]")
+            // Message rows share ONE page-level menu (#508); every other host (sidebar chats,
+            // the channel rail) still owns its menu inline, so both paths live here.
+            this.menu = this.el.dataset.messageId
+              ? document.getElementById("message-menu")
+              : this.el.querySelector("[data-menu]")
             if (this.menu && !this.menu._wired) {
               this.menu._wired = true
-              this.menu.addEventListener("click", (e) => this.onItem(e))
+              // The shared node outlives every hook instance, so the handler must resolve the
+              // CURRENT owner rather than close over whichever row happened to wire it first —
+              // otherwise every click would carry the first-rendered message's id.
+              this.menu.addEventListener("click", (e) => (active || this).onItem(e))
             }
             // Optional visible trigger (the flat rows' hover "⋯") — anchors the
             // same menu under the button. Wired here so a stream morph that
@@ -6935,6 +7047,11 @@ defmodule EdenWeb.ChatLive do
               this.close()
               return
             }
+            // Shared-menu items (#508) carry data-act and no per-message state: the id comes
+            // from the row that owns the menu right now. Inline menus (sidebar) keep their own
+            // phx-click markup and fall through to the plain close below.
+            const act = e.target.closest("[data-act]")
+            if (act) return this.act(act)
             const ct = e.target.closest("[data-copy-text]")
             const cl = e.target.closest("[data-copy-link]")
             if (ct) this.copy(ct.dataset.text, "text")
@@ -6943,11 +7060,68 @@ defmodule EdenWeb.ChatLive do
             // server; either way the menu closes.
             if (e.target.closest("button")) this.close()
           },
+          // Run one shared-menu item for the row that currently owns the menu.
+          act(btn) {
+            const d = this.el.dataset
+            const id = d.messageId
+            if (!id) return this.close()
+            // The thread panel and the main stream share the menu, so "which surface" is read
+            // from where the row lives rather than baked in at render time.
+            const surface = this.el.closest(".ed-thread") ? "thread" : "main"
+            switch (btn.dataset.act) {
+              case "react":
+                this.pushEvent("react", { id, emoji: btn.dataset.emoji })
+                break
+              case "reply":
+                // Same path as the swipe gesture: pushes the row's own reply event and focuses
+                // the matching composer, so a reply from a thread row stays in the thread.
+                this.close()
+                return this._fireReply && this._fireReply()
+              case "copy_text":
+                return this.copy(d.text || "", "text")
+              case "copy_link":
+                // The row carries the path; the origin is the client's business.
+                return this.copy(location.origin + (d.link || ""), "link")
+              case "forward_prompt":
+              case "enter_select":
+                this.pushEvent(btn.dataset.act, { id, surface })
+                break
+              case "delete_for_both":
+                // `data-confirm` is a phx-click feature and these items push directly, so the
+                // confirmation is asked here — with the server-rendered, localized text.
+                if (btn.dataset.confirmText && !window.confirm(btn.dataset.confirmText)) return
+                this.pushEvent("delete_for_both", { id })
+                break
+              default:
+                this.pushEvent(btn.dataset.act, { id })
+            }
+            this.close()
+          },
+          // Point the shared menu at THIS row: which items apply, and which reactions the
+          // viewer already left. The predicates are computed server-side onto the row
+          // (data-can-*), so the rules that decide "can I edit this" stay in Elixir.
+          fill() {
+            const d = this.el.dataset
+            const toggle = (need, on) =>
+              this.menu.querySelectorAll(`[data-needs="${need}"]`).forEach((n) => { n.hidden = !on })
+            toggle("thread", d.canThread === "1")
+            toggle("edit", d.canEdit === "1")
+            toggle("copy", d.canCopy === "1")
+            toggle("own", d.own === "1")
+            const mine = new Set((d.emojiMine || "").split(" ").filter(Boolean))
+            this.menu.querySelectorAll('[data-act="react"]').forEach((b) => {
+              const on = mine.has(b.dataset.emoji)
+              b.classList.toggle("ed-menu__react--active", on)
+              b.setAttribute("aria-pressed", String(on))
+            })
+            const more = this.menu.querySelector("[data-react-expand]")
+            if (more) more.dataset.mine = d.emojiMine || ""
+          },
           onKeydown(e) {
             if (e.key === "Escape") { this.close(); this.opener && this.opener.focus() }
             else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault()
-              const items = [...this.menu.querySelectorAll("[role=menuitem]")]
+              const items = [...this.menu.querySelectorAll("[role=menuitem]:not([hidden])")]
               if (!items.length) return
               const i = items.indexOf(document.activeElement)
               const n = e.key === "ArrowDown" ? i + 1 : i - 1
@@ -6962,11 +7136,14 @@ defmodule EdenWeb.ChatLive do
             this.x = x; this.y = y
             // Remember a focused trigger (keyboard open) to restore focus on Escape.
             this.opener = this.el.contains(document.activeElement) ? document.activeElement : null
+            // Shared menu (#508): aim it at this row BEFORE it is shown, so no frame ever
+            // paints another message's item set.
+            if (this.el.dataset.messageId) this.fill()
             this.menu.hidden = false
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "true")
             this.position(x, y)
-            const first = this.menu.querySelector("[role=menuitem]")
+            const first = this.menu.querySelector("[role=menuitem]:not([hidden])")
             first && first.focus()
             // Defer the outside-click listener so the same gesture doesn't close it.
             setTimeout(() => document.addEventListener("click", this.onDoc), 0)
@@ -12234,6 +12411,39 @@ defmodule EdenWeb.ChatLive do
   defp reply_js(id, _not_in_thread),
     do: JS.push("reply", value: %{"id" => id}) |> JS.focus(to: "#composer-body")
 
+  # Per-message data the SHARED menu (#508) reads when it opens on this row. Emitted as a
+  # handful of attributes instead of 24 hidden nodes per message. The predicates are computed
+  # HERE on purpose: what may be edited, branched or copied is a product rule, and it stays in
+  # Elixir rather than being re-derived in the hook. `nil` attributes are dropped by HEEx, so a
+  # row only pays for the flags that are actually true.
+  defp menu_attrs(message, mine, me, conversation_id, opts \\ []) do
+    system? = message.kind == "system"
+    body = message.body || ""
+
+    [
+      "data-own": flag(mine),
+      "data-can-edit": flag(mine and not system? and is_nil(message.deleted_at)),
+      "data-can-thread":
+        flag(
+          Keyword.get(opts, :threads, false) and not Keyword.get(opts, :in_thread, false) and
+            is_nil(message.root_id)
+        ),
+      "data-can-copy": flag(body != ""),
+      "data-emoji-mine": blank_to_nil(Enum.join(mine_emoji(message, me), " ")),
+      # The raw body, because "Copy text" must write to the clipboard INSIDE the click gesture
+      # (Firefox refuses a deferred write) and the markdown source exists nowhere else in the
+      # DOM — the bubble renders it. Path only for the permalink; the origin is the client's.
+      "data-text": blank_to_nil(body),
+      "data-link": ~p"/app/c/#{conversation_id}/m/#{message.id}"
+    ]
+  end
+
+  defp flag(true), do: "1"
+  defp flag(_), do: nil
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
+
   # Quote-reply (#71): author + one-line preview of the quoted message, for the
   # composer tray and the rendered quote block.
   defp reply_author(%{sender: %{display_name: name}}) when is_binary(name), do: name
@@ -12723,6 +12933,9 @@ defmodule EdenWeb.ChatLive do
       data-reply-event={(@in_thread && "reply_in_thread") || "reply"}
       phx-hook=".ContextMenu"
       aria-haspopup={@menu && "menu"}
+      {(@menu &&
+          menu_attrs(@message, @mine, @me, @conversation_id, threads: true, in_thread: @in_thread)) ||
+         []}
     >
       <.select_overlay id={@message.id} preview={select_preview(@message)} />
       <div class="ed-flat__gutter">
@@ -12839,16 +13052,6 @@ defmodule EdenWeb.ChatLive do
           <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
         </button>
       </div>
-      <.message_menu
-        :if={@menu}
-        message={@message}
-        conversation_id={@conversation_id}
-        mine={@mine}
-        me={@me}
-        quick={@quick}
-        in_thread={@in_thread}
-        threads
-      />
     </div>
     """
   end
@@ -12922,6 +13125,7 @@ defmodule EdenWeb.ChatLive do
           data-message-id={@message.id}
           phx-hook=".ContextMenu"
           aria-haspopup="menu"
+          {menu_attrs(@message, @mine, @me, @conversation_id)}
         >
           <%= if @media? do %>
             <%!-- Telegram-style media (#messenger only): header (sender/reply/forward)
@@ -13018,15 +13222,6 @@ defmodule EdenWeb.ChatLive do
               </span>
             </div>
           <% end %>
-          <%!-- No thread affordance in the personal messenger (#26): threads are
-                a corporate-room feature only. --%>
-          <.message_menu
-            message={@message}
-            conversation_id={@conversation_id}
-            mine={@mine}
-            me={@me}
-            quick={@quick}
-          />
         </div>
         <.reactions message={@message} me={@me} />
       </div>
@@ -13054,151 +13249,6 @@ defmodule EdenWeb.ChatLive do
         <.icon name="hero-check-micro" class="size-3.5" />
       </span>
     </span>
-    """
-  end
-
-  attr :message, :map, required: true
-  attr :conversation_id, :any, required: true
-  attr :mine, :boolean, required: true
-  attr :me, :any, default: nil
-  # The viewer's personal quick-react row (the top of the menu).
-  attr :quick, :list, default: []
-  attr :in_thread, :boolean, default: false
-  # Threads are a corporate-room feature only (#26) — off in the DM/group menu.
-  attr :threads, :boolean, default: false
-
-  # The message context menu — opened by right-click / long-press on the bubble
-  # (the `.ContextMenu` hook). It opens with a Telegram-style quick-react row on
-  # top (#67): tapping an emoji dispatches "react" and closes the menu, the "more"
-  # chevron opens the shared full-emoji grid popover (#72, the `.ReactionGrid`
-  # hook) anchored to it — carrying the viewer's current reactions in data-mine so
-  # the grid can highlight them. Copy actions run client-side; forward/delete
-  # dispatch to the LiveView.
-  defp message_menu(assigns) do
-    assigns = assign(assigns, :mine_emoji, mine_emoji(assigns.message, assigns.me))
-
-    ~H"""
-    <div class="ed-menu" id={"menu-#{@message.id}"} data-menu role="menu" hidden>
-      <div class="ed-menu__reacts" role="group" aria-label={gettext("React")}>
-        <button
-          :for={e <- @quick}
-          type="button"
-          class={["ed-menu__react", e in @mine_emoji && "ed-menu__react--active"]}
-          phx-click="react"
-          phx-value-id={@message.id}
-          phx-value-emoji={e}
-          aria-pressed={to_string(e in @mine_emoji)}
-        >
-          {e}
-        </button>
-        <%!-- Opens the shared full-emoji grid (#72): one popover per page, not a
-              39-button grid hidden inside every message's menu. --%>
-        <button
-          type="button"
-          class="ed-menu__react ed-menu__react-more"
-          data-react-expand
-          data-mine={Enum.join(@mine_emoji, " ")}
-          aria-label={gettext("More emoji")}
-          aria-haspopup="menu"
-        >
-          <.icon name="hero-chevron-down-micro" class="size-4" />
-        </button>
-      </div>
-      <div class="ed-menu__sep"></div>
-      <%!-- Quote-reply (#71): in DMs and rooms; focuses the composer client-side.
-            Inside the thread panel it targets the thread composer, so the reply
-            stays in the thread. Distinct from "Reply in thread" (the branch). --%>
-      <button
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        phx-click={reply_js(@message.id, @in_thread)}
-      >
-        <.icon name="hero-arrow-uturn-left-micro" class="size-4" /> {gettext("Reply")}
-      </button>
-      <button
-        :if={@threads and not @in_thread and is_nil(@message.root_id)}
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        phx-click="open_thread"
-        phx-value-id={@message.id}
-      >
-        <.icon name="hero-chat-bubble-left-micro" class="size-4" /> {gettext("Reply in thread")}
-      </button>
-      <%!-- Edit (#164): your own, non-system, non-deleted messages. `start_edit` fetches the
-            message and routes text → composer banner, media → the edit-media modal (PR-2).
-            The server re-checks authorship. --%>
-      <button
-        :if={@mine and @message.kind != "system" and is_nil(@message.deleted_at)}
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        phx-click="start_edit"
-        phx-value-id={@message.id}
-      >
-        <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("Edit")}
-      </button>
-      <button
-        :if={@message.body != ""}
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        data-copy-text
-        data-text={@message.body}
-      >
-        <.icon name="hero-clipboard-micro" class="size-4" /> {gettext("Copy text")}
-      </button>
-      <button
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        data-copy-link
-        data-link={url(~p"/app/c/#{@conversation_id}/m/#{@message.id}")}
-      >
-        <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
-      </button>
-      <button
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        phx-click="forward_prompt"
-        phx-value-id={@message.id}
-        phx-value-surface={(@in_thread && "thread") || "main"}
-      >
-        <.icon name="hero-arrow-uturn-right-micro" class="size-4" /> {gettext("Forward")}
-      </button>
-      <button
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        phx-click="enter_select"
-        phx-value-id={@message.id}
-        phx-value-surface={(@in_thread && "thread") || "main"}
-      >
-        <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Select")}
-      </button>
-      <button
-        type="button"
-        class="ed-menu__item"
-        role="menuitem"
-        phx-click="delete_for_me"
-        phx-value-id={@message.id}
-      >
-        <.icon name="hero-eye-slash-micro" class="size-4" /> {gettext("Delete for me")}
-      </button>
-      <button
-        :if={@mine}
-        type="button"
-        class="ed-menu__item ed-menu__item--danger"
-        role="menuitem"
-        phx-click="delete_for_both"
-        phx-value-id={@message.id}
-        data-confirm={gettext("Delete this message for everyone?")}
-      >
-        <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete for everyone")}
-      </button>
-    </div>
     """
   end
 
