@@ -109,13 +109,22 @@ function idbPut(db, record) {
     // почти каждая запись — перезапись существующего ключа, и число записей не меняется.
     // Обход теперь случается при кэшировании НОВОГО чата, а не при каждом обновлении снимка.
     const firstOnHandle = sweptHandle !== db;
-    sweptHandle = db;
+    let swept = false;
     const countReq = os.count();
     countReq.onsuccess = () => {
       if (!firstOnHandle && countReq.result <= IDB_MAX) return;
+      swept = true;
       sweep(os);
     };
-    tx.oncomplete = () => resolve();
+    // Хендл помечается убранным ТОЛЬКО после коммита. Если пометить заранее, упавшая или
+    // прерванная транзакция всё равно засчитает уборку, и разовый проход по TTL не повторится
+    // до конца жизни хендла — просроченное осталось бы на диске всю сессию (нашло ревью
+    // PR #527). При аборте `oncomplete` не вызывается, флаг остаётся чистым, и следующая
+    // запись попробует снова.
+    tx.oncomplete = () => {
+      if (swept) sweptHandle = db;
+      resolve();
+    };
     tx.onerror = () => reject(tx.error);
     tx.onabort = () => reject(tx.error || new Error("aborted"));
   });
