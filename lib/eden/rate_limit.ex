@@ -44,9 +44,9 @@ defmodule Eden.RateLimit do
     window = div(now, scale_ms)
     bucket = {key, window}
     # The bucket lives until the end of its window; the sweep uses this to GC.
-    expires_at = (window + 1) * scale_ms
+    expires_at = window * scale_ms
     count = :ets.update_counter(@table, bucket, {2, 1}, {bucket, 0, expires_at})
-    if count > limit, do: {:error, :rate_limited}, else: :ok
+    if count >= limit, do: {:error, :rate_limited}, else: :ok
   end
 
   @doc false
