@@ -95,3 +95,62 @@ test("the edge swipe does not arm itself under an open modal", async ({ alice, s
 
   await alice.evaluate(() => document.getElementById("probe-modal")?.remove());
 });
+
+test("a NON-modal dialog does not block the edge swipe", async ({ alice, seed }, testInfo) => {
+  // `dialog.show()` sets [open] but captures nothing, so treating it as modal would silently
+  // kill back-navigation behind any popover (#531 review). The guard checks `:modal`, and this
+  // pins the difference — the two cases are one CSS pseudo-class apart.
+  test.skip(!/mobile-chrome/.test(testInfo.project.name), "touch path, CDP-driven");
+
+  await ready(alice);
+  await openDm(alice, seed);
+
+  await alice.evaluate(() => {
+    const d = document.createElement("dialog");
+    d.id = "probe-nonmodal";
+    document.body.appendChild(d);
+    d.show(); // NOT showModal
+  });
+
+  const before = alice.url();
+  const cdp = await alice.context().newCDPSession(alice);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 4, y: 300 }] });
+  for (const x of [40, 90, 160, 240]) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: 300 }] });
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+
+  await expect
+    .poll(() => alice.url(), {
+      timeout: 5000,
+      message: "a non-modal dialog silently disabled back-navigation",
+    })
+    .not.toBe(before);
+
+  await alice.evaluate(() => document.getElementById("probe-nonmodal")?.remove());
+});
+
+test("the trackpad swipe demotes the row too", async ({ alice, seed }, testInfo) => {
+  // The wheel path sets the same compositor hint as the drag. It is cleared through reset(),
+  // which the SETTLE timer re-arms on every horizontal tick — but "it is cleared somewhere" is
+  // exactly the kind of claim that should be a test rather than a reading (#531 review).
+  test.skip(/mobile/.test(testInfo.project.name), "trackpad path");
+
+  await ready(alice);
+  await openDm(alice, seed);
+  const mark = `wheel-${Date.now()}`;
+  await send(alice, mark);
+  const bubble = alice.locator("#messages .ed-bubble", { hasText: mark }).last();
+  await expect(bubble).toBeVisible();
+
+  const box = await bubble.boundingBox();
+  await alice.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 4; i++) await alice.mouse.wheel(30, 0);
+
+  await expect
+    .poll(() => bubble.evaluate((el) => getComputedStyle(el).willChange), {
+      timeout: 4000,
+      message: "the row stayed promoted after the trackpad gesture",
+    })
+    .toBe("auto");
+});

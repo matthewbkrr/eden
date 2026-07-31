@@ -4799,13 +4799,14 @@ html {
     touch-action: pan-y pinch-zoom;
   }
 
-  /* Horizontal strips declare their own axis, so a vertical drag on them scrolls the page
-     instead of fighting the strip. */
-  .ed-folders,
-  .ed-lightbox__strip,
-  .ed-gallery-tabs {
-    touch-action: pan-x;
-  }
+  /* The horizontal strips (.ed-folders, .ed-lightbox__strip, .ed-gallery-tabs) deliberately
+     declare NOTHING, against the table in #515. `pan-x` there would have been a regression, and
+     the comment this replaces said the opposite of what the property does (#531 review):
+     `pan-x` does not "let a vertical drag scroll the page" — it FORBIDS the vertical pan, so a
+     downward drag starting on the folder tabs would do nothing at all, and pinch would be lost
+     with it. The declaration is worth its cost only where the app competes with the browser for
+     an axis; on these strips the browser owns the horizontal scrolling outright and nothing
+     fights it, so `auto` is the correct answer. */
 
   /* The lightbox stage takes the gesture outright — it already preventDefaults. */
   .ed-lightbox__stage {

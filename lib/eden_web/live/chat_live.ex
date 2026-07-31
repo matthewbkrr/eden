@@ -2951,6 +2951,19 @@ defmodule EdenWeb.ChatLive do
       >
       </div>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".InstantNav">
+        // Is this <dialog> MODAL — i.e. does it actually own input? `showModal()` makes it so,
+        // a plain `show()` does not, yet both set [open] (#531 review). `:modal` answers exactly
+        // that; on an engine that does not know the selector `matches` throws, and we treat the
+        // dialog as modal — skipping a gesture is the harmless direction, navigating out from
+        // under a real modal is not.
+        const modalDialog = (el) => {
+          try {
+            return el.matches(":modal")
+          } catch (_e) {
+            return true
+          }
+        }
+
         export default {
           mounted() {
             this.target = null   // conversation id we're transitioning to (string), or null
@@ -3129,11 +3142,17 @@ defmodule EdenWeb.ChatLive do
               if (!loadingOv) {
                 // Only on an open chat (its header carries the back link); the thread sheet
                 // has its own back affordance — don't fight it.
-                // A modal owns the gesture while it is open (#515). The lightbox is a native
+                // A MODAL owns the gesture while it is open (#515). The lightbox is a native
                 // <dialog>, and the chat header BEHIND it stays in the DOM — so [data-nav-back]
                 // is still found and the edge-swipe armed itself under the photo, ready to
                 // navigate the page the viewer cannot even see.
-                if (document.querySelector("dialog[open]")) return
+                //
+                // Modality matters, not merely being open (#531 review): `dialog.show()` also
+                // sets [open] but does NOT capture input, so a non-modal popover would silently
+                // kill back-navigation. `:modal` is the exact test; where it is unsupported the
+                // guard errs toward skipping the swipe, which is the safe direction.
+                const openDialog = document.querySelector("dialog[open]")
+                if (openDialog && modalDialog(openDialog)) return
                 if (!document.querySelector("[data-nav-back]") || document.querySelector(".ed-thread")) return
               }
               const main = document.getElementById("chat-dropzone")

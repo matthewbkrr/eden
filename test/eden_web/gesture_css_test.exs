@@ -10,18 +10,24 @@ defmodule EdenWeb.GestureCssTest do
   # is a device check; the PR carries the steps.
   use ExUnit.Case, async: true
 
+  # Comments are stripped BEFORE parsing: this file explains its decisions by naming selectors,
+  # and a naive scan reads that prose as part of the next rule's selector list — which made this
+  # very test claim `.ed-folders` still declared an axis (#531 review). Same trap as #512.
   @css File.read!(Path.join(__DIR__, "../../assets/css/app.css"))
+       |> String.replace(~r|/\*.*?\*/|s, "")
 
-  # selector => the axis it must claim
+  # selector => the axis it must claim.
+  #
+  # The horizontal strips are deliberately absent, against the table in #515: `pan-x` there
+  # FORBIDS the vertical pan (and pinch), so a downward drag starting on the folder tabs would
+  # do nothing. Declaring an axis pays only where the app competes with the browser for one, and
+  # on those strips nothing does (#531 review).
   @axes %{
     "#message-scroll" => "pan-y",
     "#thread-scroll" => "pan-y",
     ".ed-bubble" => "pan-y",
     ".ed-flat" => "pan-y",
     ".ed-convo-wrap" => "pan-y",
-    ".ed-folders" => "pan-x",
-    ".ed-lightbox__strip" => "pan-x",
-    ".ed-gallery-tabs" => "pan-x",
     ".ed-lightbox__stage" => "none"
   }
 
@@ -48,6 +54,14 @@ defmodule EdenWeb.GestureCssTest do
     assert missing == [],
            "no touch-action on: #{Enum.map_join(missing, ", ", &elem(&1, 0))} — " <>
              "the browser has no way to learn the horizontal axis is not its own"
+  end
+
+  test "horizontal strips claim no axis at all" do
+    # Guards the decision above from being "restored" from the issue's table.
+    for selector <- [".ed-folders", ".ed-lightbox__strip", ".ed-gallery-tabs"] do
+      refute rules_for(selector) =~ "touch-action",
+             "#{selector} claims an axis — pan-x there kills the vertical pan and pinch"
+    end
   end
 
   test "pinch stays available where the page can be zoomed" do
