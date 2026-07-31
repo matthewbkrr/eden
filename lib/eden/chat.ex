@@ -4006,7 +4006,8 @@ defmodule Eden.Chat do
   This is the authorization boundary for viewing a profile: you may see a user
   only when you already share a conversation with them. Returns `{:ok, %User{}}`
   (profile fields included) or `{:error, :not_found}` for an unknown, unshared,
-  or non-numeric id. Note: a user always shares conversations with themselves.
+  or non-numeric id. A user shares conversations with themselves — as long as they are in at
+  least one, since the check is a self-join over memberships (#530 review).
   """
   def get_shared_user(%Scope{user: user}, other_id) do
     with id when is_integer(id) <- safe_id(other_id),
@@ -4024,10 +4025,15 @@ defmodule Eden.Chat do
 
   A cheap `exists?` meant as a GATE. `{:user_updated}` rides a process-wide topic, so without it
   every profile edit by anyone in the organisation costs every live session a full sidebar
-  rebuild (#514). Note a user always shares conversations with themselves.
+  rebuild (#514).
+
+  Self-reference is `true` by definition here, and stated rather than inferred: the underlying
+  self-join needs at least one membership to match, so a person with no conversations at all
+  would otherwise not "share" one with themselves (#530 review).
   """
   def shares_conversation?(%Scope{user: user}, other_id) do
     case safe_id(other_id) do
+      id when id == user.id -> true
       id when is_integer(id) -> shares_any_conversation?(user.id, id)
       _ -> false
     end
