@@ -16780,12 +16780,15 @@ defmodule EdenWeb.ChatLive do
     end)
   end
 
-  defp safe_int(v) when is_integer(v), do: v
-
-  defp safe_int(v) when is_binary(v) do
-    case Integer.parse(v) do
-      {n, ""} -> n
-      _ -> nil
+  # One owner for "is this a usable id" (#520). This used to re-implement the policy — the same
+  # `Integer.parse`, but WITHOUT the bigint bound that #494 added after a 26-digit id reached
+  # Postgrex and crashed it. The duplicate was harmless only because the context doors normalise
+  # too; it was exactly the drift #494 was filed about. Callers here expect `nil` for "no", so the
+  # canonical `:error` is translated rather than the policy re-stated.
+  defp safe_int(v) do
+    case Eden.Ids.normalize(v) do
+      :error -> nil
+      id -> id
     end
   end
 
