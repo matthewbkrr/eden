@@ -101,11 +101,13 @@ defmodule EdenWeb.CoreComponents do
   slot :inner_block, required: true
 
   def button(%{rest: rest} = assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
+    # The app's own button language, not daisyUI's — that plugin is gone (#511) and left this
+    # component pointing at classes nothing defines.
+    variants = %{"primary" => "ed-btn--primary", nil => "ed-btn--secondary"}
 
     assigns =
       assign_new(assigns, :class, fn ->
-        ["btn", Map.fetch!(variants, assigns[:variant])]
+        ["ed-btn", Map.fetch!(variants, assigns[:variant])]
       end)
 
     if rest[:href] || rest[:navigate] || rest[:patch] do
@@ -326,7 +328,7 @@ defmodule EdenWeb.CoreComponents do
         <h1 class="text-lg font-semibold leading-8">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm" style="color: var(--ed-muted);">
           {render_slot(@subtitle)}
         </p>
       </div>
