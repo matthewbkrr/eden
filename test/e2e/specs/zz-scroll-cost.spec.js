@@ -47,6 +47,11 @@ test("scrolling does not build a date formatter per frame", async ({ alice, seed
     window.__fmt = 0;
     window.__formatted = 0;
     const Real = Intl.DateTimeFormat;
+    // Count only DAY-shaped formatters — the chip's own. Anything else on the page builds its
+    // own (the timestamp hooks format hours and minutes), and a scroll that happens to paginate
+    // would then push the count past the threshold for reasons this test is not about
+    // (#535 review).
+    window.__isDayShape = (opts) => !!opts && !!opts.day && !!opts.month && !opts.hour;
     // `format` is an ACCESSOR on the prototype, not a plain method — assigning over it detaches
     // the internal slot and every call then throws "incompatible receiver". Wrap the getter.
     const desc = Object.getOwnPropertyDescriptor(Real.prototype, "format");
@@ -58,10 +63,17 @@ test("scrolling does not build a date formatter per frame", async ({ alice, seed
       },
     });
     Intl.DateTimeFormat = function (...args) {
-      window.__fmt++;
+      if (window.__isDayShape(args[1])) window.__fmt++;
       return new Real(...args);
     };
     Intl.DateTimeFormat.prototype = Real.prototype;
+    // Put everything back when the measurement is over. Playwright gives each test its own
+    // context, so nothing could leak across tests — but a patched global that outlives its
+    // purpose is a trap for whoever debugs this page next (#535 review).
+    window.__restoreIntl = () => {
+      Intl.DateTimeFormat = Real;
+      Object.defineProperty(Real.prototype, "format", desc);
+    };
   });
 
   // A REAL wheel gesture: this is what opens the hook's user-scroll window.
@@ -76,6 +88,7 @@ test("scrolling does not build a date formatter per frame", async ({ alice, seed
 
   const built = await alice.evaluate(() => window.__fmt);
   const formatted = await alice.evaluate(() => window.__formatted);
+  await alice.evaluate(() => window.__restoreIntl && window.__restoreIntl());
   const line = `${TICKS} wheel ticks built ${built} date formatters, formatted ${formatted} labels`;
   console.log(line);
   testInfo.annotations.push({ type: "measurement", description: line });
