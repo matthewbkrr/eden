@@ -736,7 +736,7 @@ defmodule EdenWeb.AdminLive do
   end
 
   defp avatar_src(%{avatar_key: key, id: id}) when is_binary(key),
-    do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"
+    do: EdenWeb.Avatars.user_src(id, key)
 
   defp avatar_src(_user), do: nil
 

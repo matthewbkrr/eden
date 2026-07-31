@@ -115,4 +115,88 @@ defmodule Eden.ImagesTest do
       end
     end
   end
+
+  describe "derived display variants (#516)" do
+    # A photo-like image rather than the solid colour above: a flat fill shrinks to a few hundred
+    # bytes at any size, so every assertion about "smaller" would pass whatever the code did.
+    defp photo_bytes(w, h) do
+      alias Vix.Vips.Operation, as: Op
+      {:ok, structure} = Op.perlin(w, h, cell_size: max(div(w, 8), 8))
+      {:ok, detail} = Op.gaussnoise(w, h, sigma: 0.5, mean: 0.0)
+      {:ok, sum} = Op.sum([structure, detail])
+      {:ok, scaled} = Op.linear(sum, [55.0], [128.0])
+      {:ok, bytes} = Op.cast(scaled, :VIPS_FORMAT_UCHAR)
+      {:ok, rgb} = Op.bandjoin([bytes, bytes, bytes])
+      {:ok, image} = Op.copy(rgb, interpretation: :VIPS_INTERPRETATION_sRGB)
+      {:ok, jpeg} = Image.write(image, :memory, suffix: ".jpg", quality: 80)
+      jpeg
+    end
+
+    defp stored_photo(w \\ 900, h \\ 900) do
+      key = Eden.Storage.build_key("test-variants", "jpg")
+      bytes = photo_bytes(w, h)
+      :ok = Eden.Storage.put_binary(key, bytes)
+      on_exit(fn -> Images.delete_avatar(key) end)
+      {key, bytes}
+    end
+
+    test "the variant key is derived from the source, not stored anywhere" do
+      assert Images.variant_key("avatars/ab12.jpg", 192) == "avatars/ab12@192.webp"
+      assert Images.variant_key("thumbnails/cd34.jpg", 256) == "thumbnails/cd34@256.webp"
+    end
+
+    test "a variant is smaller than its source and actually the requested width" do
+      {key, source} = stored_photo()
+
+      assert {:ok, small} = Images.variant(key, Images.tile_width())
+      assert byte_size(small) < byte_size(source)
+
+      {:ok, image} = Image.from_binary(small)
+      assert Image.width(image) == Images.tile_width()
+    end
+
+    test "the second read comes from storage, not from a second resize" do
+      {key, _source} = stored_photo()
+      vkey = Images.variant_key(key, Images.tile_width())
+
+      refute Eden.Storage.exists?(vkey)
+      assert {:ok, first} = Images.variant(key, Images.tile_width())
+      assert Eden.Storage.exists?(vkey)
+
+      # Prove the cache is what answers, not that the resize happens to be deterministic: put
+      # different bytes under the variant key and they must come back verbatim.
+      :ok = Eden.Storage.put_binary(vkey, "not-an-image")
+      assert {:ok, "not-an-image"} = Images.variant(key, Images.tile_width())
+      refute first == "not-an-image"
+    end
+
+    test "a source that cannot be read yields an error rather than raising" do
+      assert {:error, :unprocessable} = Images.variant("nope/missing.jpg", 192)
+    end
+
+    test "a source that is not an image yields an error rather than raising" do
+      key = Eden.Storage.build_key("test-variants", "jpg")
+      :ok = Eden.Storage.put_binary(key, "definitely not a JPEG")
+      on_exit(fn -> Eden.Storage.delete(key) end)
+
+      assert {:error, :unprocessable} = Images.variant(key, 192)
+    end
+
+    test "reclaiming an avatar takes its variants with it" do
+      {key, _source} = stored_photo()
+      {:ok, _} = Images.variant(key, Images.avatar_width())
+      {:ok, _} = Images.variant(key, Images.tile_width())
+
+      assert Eden.Storage.exists?(Images.variant_key(key, Images.avatar_width()))
+      assert Eden.Storage.exists?(Images.variant_key(key, Images.tile_width()))
+
+      Images.delete_avatar(key)
+
+      # Both widths, not just the avatar's own: a variant that outlives its source is invisible
+      # storage nobody will ever look for again.
+      refute Eden.Storage.exists?(key)
+      refute Eden.Storage.exists?(Images.variant_key(key, Images.avatar_width()))
+      refute Eden.Storage.exists?(Images.variant_key(key, Images.tile_width()))
+    end
+  end
 end

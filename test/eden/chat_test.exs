@@ -3790,6 +3790,83 @@ defmodule Eden.ChatTest do
       assert hd(broadcast.attachments).thumbnail_key == attachment.thumbnail_key
     end
 
+    test "an album broadcasts once it has settled, not once per photo", %{
+      alice: alice,
+      conv: conv
+    } do
+      Chat.subscribe(conv.id)
+
+      sources = for _ <- 1..4, do: %{path: real_png(600, 400)}
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      assert length(message.attachments) == 4
+
+      # Each photo is its own job, and each one used to re-broadcast the whole message: four
+      # `Repo.get` + full preload + a full row re-render on every client, for a row that reaches
+      # its final shape once (#516).
+      for attachment <- message.attachments do
+        assert :ok = Chat.generate_thumbnail(attachment)
+      end
+
+      assert_receive {:thumbnail_ready, broadcast}
+      assert length(broadcast.attachments) == 4
+      assert Enum.all?(broadcast.attachments, &is_binary(&1.thumbnail_key))
+
+      # And exactly once. `refute_receive` with a real timeout, because the defect this guards
+      # against is extra messages arriving, not missing ones.
+      refute_receive {:thumbnail_ready, _}, 100
+    end
+
+    test "a photo that fails still speaks for itself immediately", %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+
+      sources = for _ <- 1..2, do: %{path: real_png(600, 400)}
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      [first, second] = message.attachments
+
+      # A failure is terminal for that attachment: waiting for the album to settle would leave
+      # the renderer on the pending placeholder while the other photo is still generating.
+      {:ok, _} = Chat.mark_thumbnail_failed(first)
+      assert_receive {:thumbnail_ready, _}
+
+      # The album is now settled — one failed, one succeeded — so the success broadcasts too.
+      assert :ok = Chat.generate_thumbnail(second)
+      assert_receive {:thumbnail_ready, broadcast}
+      assert Enum.any?(broadcast.attachments, &is_binary(&1.thumbnail_key))
+    end
+
+    @tag :ffmpeg
+    test "a clip that will never have a poster does not hold up its album", %{
+      alice: alice,
+      conv: conv
+    } do
+      # An audio-only mp4 probes fine but has no video stream to grab a frame from, so the worker
+      # succeeds while leaving `thumbnail_key` nil. That row is then indistinguishable from "the
+      # job has not run yet" — and a settled-message check reads it as forever-pending, stranding
+      # every photo in the same album with it (#516 review). Generation being OVER has to be
+      # recorded even when it is over successfully.
+      Chat.subscribe(conv.id)
+
+      sources = [
+        %{path: audio_mp4(), filename: "voice.mp4"},
+        %{path: real_png(600, 400), filename: "photo.png"}
+      ]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      [clip, photo] = message.attachments
+      assert clip.kind == "video"
+
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: clip.id})
+      assert is_nil(Repo.get(Attachment, clip.id).thumbnail_key)
+
+      assert :ok = Chat.generate_thumbnail(photo)
+
+      assert_receive {:thumbnail_ready, broadcast},
+                     1000,
+                     "the album never settled — a posterless clip holds its siblings hostage"
+
+      assert Enum.any?(broadcast.attachments, &is_binary(&1.thumbnail_key))
+    end
+
     test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
       {:ok, message} =
         Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(300, 200)})
@@ -3942,6 +4019,11 @@ defmodule Eden.ChatTest do
       # No video stream → no poster, but the duration is still saved.
       assert is_nil(attachment.thumbnail_key)
       assert attachment.duration in 800..1300
+
+      # And generation is recorded as OVER (#516 review). The worker calls this a success, so
+      # nothing else would ever write it — and a row that says "no preview, not failed" reads as
+      # forever-pending to anything waiting for the message to settle.
+      assert attachment.thumb_failed
     end
   end
 

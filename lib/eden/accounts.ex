@@ -11,6 +11,7 @@ defmodule Eden.Accounts do
 
   alias Eden.Accounts.{Invite, PasswordResetToken, Scope, User, UserToken}
   alias Eden.DeletedUserScrubWorker
+  alias Eden.Images
   alias Eden.Notifications
   alias Eden.Repo
   alias Eden.Storage
@@ -328,7 +329,7 @@ defmodule Eden.Accounts do
            Repo.transact(fn -> anonymize_locked(actor, target.id, dead_hash) end) do
       # Side effects only after the scrub commits (a rollback can't un-delete a blob or
       # un-send a broadcast): reclaim the avatar blob, boot live sessions, refresh views.
-      if old_avatar_key, do: Storage.delete(old_avatar_key)
+      if old_avatar_key, do: Images.delete_avatar(old_avatar_key)
       broadcast_sessions_revoked(updated.id)
       broadcast_invites_changed()
       {:ok, broadcast_user_update(updated)}
@@ -584,14 +585,14 @@ defmodule Eden.Accounts do
   # (two tabs) would otherwise each delete the same old key and orphan the winner's committed blob
   # forever (#385/R114).
   defp finish_avatar_swap({:ok, {updated, prev_key}}, _key) do
-    if prev_key, do: Storage.delete(prev_key)
+    if prev_key, do: Images.delete_avatar(prev_key)
     {:ok, broadcast_user_update(updated)}
   end
 
   # The DB write failed AFTER the blob landed — reclaim the just-written orphan, else it leaks in
   # storage with nothing referencing it (#385/R114).
   defp finish_avatar_swap({:error, _reason} = error, key) do
-    Storage.delete(key)
+    Images.delete_avatar(key)
     error
   end
 
@@ -615,7 +616,7 @@ defmodule Eden.Accounts do
 
   def remove_avatar(%User{avatar_key: key} = user) do
     with {:ok, updated} <- user |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
-      Storage.delete(key)
+      Images.delete_avatar(key)
       {:ok, broadcast_user_update(updated)}
     end
   end

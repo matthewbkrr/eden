@@ -25,14 +25,14 @@ defmodule EdenWeb.ChannelAvatarControllerTest do
       %{owner: owner, channel: channel}
     end
 
-    test "serves a member the avatar JPEG with nosniff", %{
+    test "serves a member the display-sized avatar with nosniff", %{
       conn: conn,
       owner: owner,
       channel: channel
     } do
       conn = conn |> log_in_user(owner) |> get(~p"/channels/#{channel.id}/avatar")
       assert response(conn, 200)
-      assert get_resp_header(conn, "content-type") == ["image/jpeg"]
+      assert get_resp_header(conn, "content-type") == ["image/webp"]
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
     end
 

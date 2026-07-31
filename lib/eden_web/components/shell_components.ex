@@ -400,13 +400,13 @@ defmodule EdenWeb.ShellComponents do
 
   @doc "Cache-busted URL for a channel's avatar (#70); nil when it has none."
   def channel_avatar_src(%{id: id, avatar_key: key}) when is_binary(key),
-    do: ~p"/channels/#{id}/avatar?v=#{:erlang.phash2(key)}"
+    do: EdenWeb.Avatars.channel_src(id, key)
 
   def channel_avatar_src(_channel), do: nil
 
   # The current user's avatar URL for the rail status button (#102), or nil.
   defp me_avatar_src(%{id: id, avatar_key: key}) when is_binary(key),
-    do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"
+    do: EdenWeb.Avatars.user_src(id, key)
 
   defp me_avatar_src(_user), do: nil
 

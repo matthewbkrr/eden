@@ -68,7 +68,14 @@ defmodule Eden.Chat do
   @max_staged_entries 50
 
   # Thumbnails: longest edge in pixels (never upscaled) and JPEG quality.
+  # The kinds a preview is generated for — the one list, so `needs_media_processing?/1` and the
+  # settled check can't disagree about what "waiting on a preview" means.
+  @preview_kinds ~w(image video)
+
   @thumbnail_max 800
+
+  @doc "Long-edge cap of a stored image preview (#{@thumbnail_max}px) — the wide `srcset` candidate."
+  def thumbnail_max, do: @thumbnail_max
   @thumbnail_quality 80
   # HEIC originals are transcoded to JPEG (#123) at this longest-edge cap (matching
   # the #97 client compression) and quality — never upscaled.
@@ -707,14 +714,14 @@ defmodule Eden.Chat do
     with :ok <- Storage.put_binary(key, jpeg),
          {:ok, updated} <- conv |> Ecto.Changeset.change(avatar_key: key) |> Repo.update() do
       # Best-effort cleanup of the replaced blob (don't fail the update on it).
-      if conv.avatar_key, do: Storage.delete(conv.avatar_key)
+      if conv.avatar_key, do: Images.delete_avatar(conv.avatar_key)
       broadcast_avatar_change(conv.id, updated)
       {:ok, updated}
     else
       error ->
         # The blob was written but the row update failed (e.g. the group was GC'd
         # mid-flight) — reclaim the orphan.
-        Storage.delete(key)
+        Images.delete_avatar(key)
         error
     end
   end
@@ -727,7 +734,7 @@ defmodule Eden.Chat do
          :ok <- ensure_role(actor_role, ~w(owner admin)),
          %Conversation{avatar_key: key} = conv <- Repo.get(Conversation, id),
          {:ok, updated} <- conv |> Ecto.Changeset.change(avatar_key: nil) |> Repo.update() do
-      if key, do: Storage.delete(key)
+      if key, do: Images.delete_avatar(key)
       broadcast_avatar_change(conv.id, updated)
       {:ok, updated}
     else
@@ -3812,7 +3819,13 @@ defmodule Eden.Chat do
 
     keys
     |> Enum.reject(&MapSet.member?(referenced, &1))
-    |> Enum.each(&Storage.delete/1)
+    |> Enum.each(fn key ->
+      Storage.delete(key)
+      # Preview variants (#516) are derived from a key, not stored in a column, so nothing else
+      # would ever find them. Originals never have one; sweeping them anyway costs two no-op
+      # deletes and keeps the rule "a blob is never reclaimed without its variants" whole.
+      Images.delete_variants(key)
+    end)
 
     :ok
   end
@@ -4551,7 +4564,7 @@ defmodule Eden.Chat do
 
     with :ok <- Storage.put_binary(thumb_key, jpeg),
          {:ok, _attachment} <- update_thumbnail(attachment, thumb_key) do
-      broadcast_thumbnail(attachment.message_id)
+      broadcast_when_settled(attachment.message_id)
       :ok
     else
       error ->
@@ -4585,6 +4598,36 @@ defmodule Eden.Chat do
   # Re-broadcast the message (attachment now carries a thumbnail_key) so open
   # conversations swap the full image for the lighter thumbnail in place. The
   # message may be gone if it was deleted while the thumbnail was generating.
+  # An album enqueues one preview job per photo, and each finishing job used to broadcast the
+  # whole message: ten photos meant ten `Repo.get` + full preload + PubSub, and ten full row
+  # re-renders on every open client, for a row that only reaches its final shape once. Broadcast
+  # when the message has SETTLED — nothing left waiting on a preview — so an album costs one
+  # re-render instead of ten (#516).
+  #
+  # Two consequences worth stating. An album now appears as a unit rather than photo by photo,
+  # which is how Telegram reads it too. And the check cannot silently swallow the broadcast: each
+  # worker looks only AFTER committing its own row, so for two workers to both see the other as
+  # pending, each would have to have looked before the other committed and after its own — which
+  # orders `tA < commitB < tB < commitA < tA`. At least one of them always broadcasts.
+  #
+  # A FAILED preview still broadcasts immediately (`mark_thumbnail_failed`): failures are rare,
+  # and it is the terminal signal for an attachment that will never settle any further.
+  defp broadcast_when_settled(message_id) do
+    unless previews_pending?(message_id), do: broadcast_thumbnail(message_id)
+    :ok
+  end
+
+  # Still waiting: an attachment whose kind gets a preview and that has neither one nor a
+  # recorded failure.
+  defp previews_pending?(message_id) do
+    Repo.exists?(
+      from a in Attachment,
+        where:
+          a.message_id == ^message_id and a.kind in ^@preview_kinds and
+            is_nil(a.thumbnail_key) and a.thumb_failed == false
+    )
+  end
+
   defp broadcast_thumbnail(message_id) do
     case Repo.get(Message, message_id) do
       nil ->
@@ -4690,9 +4733,7 @@ defmodule Eden.Chat do
 
   # Which kinds get async media processing (thumbnail for images, poster +
   # duration for video). Files/audio carry no generated preview.
-  defp needs_media_processing?("image"), do: true
-  defp needs_media_processing?("video"), do: true
-  defp needs_media_processing?(_kind), do: false
+  defp needs_media_processing?(kind), do: kind in @preview_kinds
 
   ## Video media (ffmpeg/ffprobe, shelled out by the media worker)
 
@@ -4909,7 +4950,7 @@ defmodule Eden.Chat do
 
     with :ok <- Storage.put_binary(poster_key, poster_jpeg),
          {:ok, _attachment} <- update_attachment(attachment, meta) do
-      broadcast_thumbnail(attachment.message_id)
+      broadcast_when_settled(attachment.message_id)
       :ok
     else
       error ->
@@ -4920,9 +4961,20 @@ defmodule Eden.Chat do
 
   # No poster, but ffprobe gave us metadata — persist it so the UI still knows the
   # duration/dimensions (and that this is a real video).
+  #
+  # `thumb_failed` too, because no poster will EVER come for this clip: ffprobe read it fine,
+  # ffmpeg found no video stream to take a frame from. The worker treats this as a success, so
+  # nothing else ever records it — and without it the row is indistinguishable from "the job has
+  # not run yet", which leaves the message forever unsettled and strands every photo in the same
+  # album (#516 review). Video tiles key off `thumbnail_key` alone, so nothing renders differently.
   defp store_video_preview(attachment, nil, meta) when map_size(meta) > 0 do
-    with {:ok, _attachment} <- update_attachment(attachment, video_meta(attachment, meta)) do
-      broadcast_thumbnail(attachment.message_id)
+    changeset =
+      attachment
+      |> Attachment.changeset(video_meta(attachment, meta))
+      |> Ecto.Changeset.change(thumb_failed: true)
+
+    with {:ok, _attachment} <- Repo.update(changeset, stale_error_field: :id) do
+      broadcast_when_settled(attachment.message_id)
       :ok
     end
   end

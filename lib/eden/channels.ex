@@ -294,14 +294,14 @@ defmodule Eden.Channels do
     with :ok <- Storage.put_binary(key, jpeg),
          {:ok, updated} <- put_avatar_key(channel, key) do
       # Best-effort cleanup of the replaced blob (don't fail the update on it).
-      if channel.avatar_key, do: Storage.delete(channel.avatar_key)
+      if channel.avatar_key, do: Images.delete_avatar(channel.avatar_key)
       notify_members(updated.id, :channels_changed)
       {:ok, %{updated | role: channel.role}}
     else
       error ->
         # The new blob may be written but the row update failed (e.g. the channel
         # was deleted mid-flight) — reclaim it so it isn't orphaned.
-        Storage.delete(key)
+        Images.delete_avatar(key)
         error
     end
   end
@@ -311,7 +311,7 @@ defmodule Eden.Channels do
     with {:ok, channel} <- get_channel(scope, channel_id),
          :ok <- ensure_role(channel.role, ~w(owner admin)),
          {:ok, updated} <- put_avatar_key(channel, nil) do
-      if channel.avatar_key, do: Storage.delete(channel.avatar_key)
+      if channel.avatar_key, do: Images.delete_avatar(channel.avatar_key)
       notify_members(updated.id, :channels_changed)
       {:ok, %{updated | role: channel.role}}
     end
@@ -355,7 +355,7 @@ defmodule Eden.Channels do
         # (forward-safely) only after the delete committed.
         Chat.delete_unreferenced_blobs(blob_keys)
         # The channel's own avatar blob (#70) — best-effort cleanup.
-        if channel.avatar_key, do: Storage.delete(channel.avatar_key)
+        if channel.avatar_key, do: Images.delete_avatar(channel.avatar_key)
         broadcast_channel(channel.id, {:channel_deleted, channel.id})
         Enum.each(member_ids, &broadcast_user(&1, :channels_changed))
         :ok

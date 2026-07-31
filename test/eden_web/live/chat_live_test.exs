@@ -2294,6 +2294,101 @@ defmodule EdenWeb.ChatLiveTest do
       refute html =~ ~s(phx-hook=".Lightbox")
     end
 
+    test "an album tile offers both preview sizes and states its real width (#516)", ctx do
+      # One 800px preview served every surface: an album tile three-across is ~105 CSS px, so the
+      # browser was downloading roughly ten times the pixels it painted, ten times over. `srcset`
+      # hands the choice to the only party that knows both the box and the device.
+      sources = for n <- 1..3, do: %{path: real_png_path(), filename: "#{n}.png"}
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      for attachment <- message.attachments do
+        :ok = Chat.generate_thumbnail(attachment)
+      end
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      attachment = hd(message.attachments)
+
+      assert html =~
+               ~s(/files/#{attachment.id}/thumb/s #{Eden.Images.tile_width()}w, ) <>
+                 ~s(/files/#{attachment.id}/thumb #{Chat.thumbnail_max()}w)
+
+      # `sizes` is what makes the whole thing work: without it the browser assumes the full
+      # viewport and picks the widest candidate every time. Three equal photos split the album's
+      # 20rem row, so each tile is a third of 320px.
+      assert html =~ ~s(sizes="107px"),
+             "the tile does not state its rendered width, so the browser will over-fetch"
+    end
+
+    test "a portrait photo declares the width it really has, not the cap (#516)", ctx do
+      # Both preview sizes fit the image into a SQUARE box, so a portrait photo's preview is
+      # NARROWER than the cap: 600x1200 comes out 400x800, and its tile variant 128x256. The `w`
+      # descriptor is a promise about the candidate's real width — overstate it and the browser
+      # settles for the wide candidate believing it has pixels it does not, which is the srcset
+      # doing the opposite of its job (#540 review).
+      portrait =
+        write_tmp(
+          elem(
+            Image.write(elem(Image.new(600, 1200, color: [30, 90, 200]), 1), :memory,
+              suffix: ".png"
+            ),
+            1
+          )
+        )
+
+      sources = [
+        %{path: portrait, filename: "tall.png"},
+        %{path: real_png_path(), filename: "wide.png"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      [tall, wide] = message.attachments
+      for attachment <- message.attachments, do: :ok = Chat.generate_thumbnail(attachment)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      refute html =~ "/files/#{tall.id}/thumb 800w",
+             "the portrait candidate is still being declared at the cap"
+
+      assert html =~ ~s(/files/#{tall.id}/thumb/s 128w, /files/#{tall.id}/thumb 400w)
+
+      # The landscape one in the same album is unaffected — it really is 800 wide.
+      assert html =~ ~s(/files/#{wide.id}/thumb/s 256w, /files/#{wide.id}/thumb 800w)
+    end
+
+    test "a photo with no preview yet offers no srcset to fetch (#516)", ctx do
+      # There is nothing to derive a variant FROM until the worker runs, and a srcset pointing at
+      # a 404 would make the browser fetch it, fail, and fall back — slower than not offering it.
+      #
+      # THREE photos, with previews for two: a lone photo renders through `attachment_view`, which
+      # has no srcset at all, so a one-photo fixture would pass this whatever the tile does. The
+      # ready pair is asserted alongside so "no srcset anywhere" cannot pass for it either.
+      sources = for n <- 1..3, do: %{path: real_png_path(), filename: "#{n}.png"}
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      [pending | ready] = message.attachments
+      for attachment <- ready, do: :ok = Chat.generate_thumbnail(attachment)
+      refute Eden.Repo.get!(Eden.Chat.Attachment, pending.id).thumbnail_key
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      for attachment <- ready do
+        assert html =~ "/files/#{attachment.id}/thumb/s",
+               "a photo WITH a preview should offer the tile variant"
+      end
+
+      refute html =~ "/files/#{pending.id}/thumb/s",
+             "a photo with no preview yet is offering a variant that cannot exist"
+    end
+
     test "a video in an album tiles in the grid with a play badge (#58)", ctx do
       mp4 = <<0, 0, 0, 0x18>> <> "ftypisom" <> :binary.copy("0", 16)
 

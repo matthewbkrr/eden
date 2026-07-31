@@ -31,14 +31,14 @@ defmodule EdenWeb.GroupAvatarControllerTest do
       %{alice: alice, bob: bob, group: group}
     end
 
-    test "serves a member the avatar JPEG with nosniff + immutable cache", %{
+    test "serves a member the display-sized avatar with nosniff + immutable cache", %{
       conn: conn,
       bob: bob,
       group: group
     } do
       conn = conn |> log_in_user(bob) |> get(~p"/conversations/#{group.id}/avatar")
       assert response(conn, 200)
-      assert get_resp_header(conn, "content-type") == ["image/jpeg"]
+      assert get_resp_header(conn, "content-type") == ["image/webp"]
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
       assert ["private, max-age=31536000, immutable"] = get_resp_header(conn, "cache-control")
     end

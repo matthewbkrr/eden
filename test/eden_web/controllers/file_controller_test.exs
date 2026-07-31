@@ -171,7 +171,7 @@ defmodule EdenWeb.FileControllerTest do
 
       conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}")
       assert response(conn, 404)
-      assert get_resp_header(conn, "cache-control") == []
+      assert get_resp_header(conn, "cache-control") == ["no-store"]
       # The 404 body is text/plain and carries no attachment disposition inherited from the
       # success path — a browser must show the error, not download it under the original name
       # (#374/R170).
@@ -231,7 +231,7 @@ defmodule EdenWeb.FileControllerTest do
       assert conn.status == 416
       assert get_resp_header(conn, "content-range") == ["bytes */#{byte_size(png)}"]
       # A 416 is an error — never cached immutable for a year (#374/R167).
-      assert get_resp_header(conn, "cache-control") == []
+      assert get_resp_header(conn, "cache-control") == ["no-store"]
     end
 
     test "a range unit is case-insensitive per RFC 9110 (#374/R169)", %{
@@ -348,6 +348,93 @@ defmodule EdenWeb.FileControllerTest do
       assert response(conn, 200)
       assert get_resp_header(conn, "content-type") == ["image/jpeg"]
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
+    end
+  end
+
+  describe "tile-sized preview (#516)" do
+    # A photo-like image: a flat fill compresses to a few hundred bytes at 800px as readily as at
+    # 256, so "the tile is smaller than the preview" would hold no matter what the route served.
+    defp photo_png(w, h) do
+      alias Vix.Vips.Operation, as: Op
+      {:ok, structure} = Op.perlin(w, h, cell_size: max(div(w, 8), 8))
+      {:ok, detail} = Op.gaussnoise(w, h, sigma: 0.5, mean: 0.0)
+      {:ok, sum} = Op.sum([structure, detail])
+      {:ok, scaled} = Op.linear(sum, [55.0], [128.0])
+      {:ok, cast} = Op.cast(scaled, :VIPS_FORMAT_UCHAR)
+      {:ok, rgb} = Op.bandjoin([cast, cast, cast])
+      {:ok, image} = Op.copy(rgb, interpretation: :VIPS_INTERPRETATION_sRGB)
+      {:ok, png} = Image.write(image, :memory, suffix: ".png")
+      png
+    end
+
+    defp photo_attachment(alice, bob) do
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      path = image_path(photo_png(1400, 1000))
+      {:ok, message} = Chat.create_attachment_message(scope(alice), conv.id, %{path: path})
+      hd(message.attachments)
+    end
+
+    test "serves a WebP that is materially smaller than the 800px preview", %{
+      conn: conn,
+      alice: alice,
+      bob: bob
+    } do
+      attachment = photo_attachment(alice, bob)
+      :ok = Chat.generate_thumbnail(attachment)
+
+      preview = conn |> log_in_user(bob) |> get(~p"/files/#{attachment.id}/thumb")
+      tile = conn |> log_in_user(bob) |> get(~p"/files/#{attachment.id}/thumb/s")
+
+      assert get_resp_header(tile, "content-type") == ["image/webp"]
+      assert get_resp_header(tile, "x-content-type-options") == ["nosniff"]
+      assert get_resp_header(tile, "cache-control") == ["private, max-age=31536000, immutable"]
+
+      # The whole point: an album tile was downloading the 800px preview. Comparing the two
+      # responses rather than asserting a byte cap keeps this honest if the fixture changes.
+      assert byte_size(response(tile, 200)) < byte_size(response(preview, 200)) / 2
+
+      {:ok, image} = Image.from_binary(response(tile, 200))
+      assert Image.width(image) == Eden.Images.tile_width()
+    end
+
+    test "falls back to the preview rather than 404 when the variant cannot be built", %{
+      conn: conn,
+      alice: alice,
+      bob: bob
+    } do
+      attachment = photo_attachment(alice, bob)
+      :ok = Chat.generate_thumbnail(attachment)
+
+      # A preview that libvips will decline. The tile route must still answer with SOMETHING —
+      # a missing optimization is not a missing image.
+      attachment = Eden.Repo.get!(Eden.Chat.Attachment, attachment.id)
+      :ok = Eden.Storage.put_binary(attachment.thumbnail_key, "not an image at all")
+
+      conn = conn |> log_in_user(bob) |> get(~p"/files/#{attachment.id}/thumb/s")
+      assert response(conn, 200) == "not an image at all"
+      assert get_resp_header(conn, "content-type") == ["image/jpeg"]
+    end
+
+    test "no preview yet is a 404 that browsers are told not to keep", %{
+      conn: conn,
+      alice: alice,
+      attachment: attachment
+    } do
+      conn = conn |> log_in_user(alice) |> get(~p"/files/#{attachment.id}/thumb/s")
+      assert response(conn, 404)
+
+      # `no-store`, not "no header": a response without cache-control may be cached
+      # heuristically, and this 404 usually means "not ready YET" (#516).
+      assert get_resp_header(conn, "cache-control") == ["no-store"]
+    end
+
+    test "a non-member gets nothing", %{conn: conn, alice: alice, bob: bob} do
+      attachment = photo_attachment(alice, bob)
+      :ok = Chat.generate_thumbnail(attachment)
+      stranger = user_fixture(%{username: "stranger"})
+
+      conn = conn |> log_in_user(stranger) |> get(~p"/files/#{attachment.id}/thumb/s")
+      assert response(conn, 404)
     end
   end
 end

@@ -81,6 +81,7 @@ defmodule EdenWeb.Router do
       pipe_through :require_authenticated
       get "/files/:id", FileController, :show
       get "/files/:id/thumb", FileController, :thumb
+      get "/files/:id/thumb/s", FileController, :thumb_small
       get "/users/:id/avatar", AvatarController, :show
       get "/channels/:id/avatar", ChannelAvatarController, :show
       get "/conversations/:id/avatar", GroupAvatarController, :show

@@ -125,7 +125,7 @@ defmodule EdenWeb.FileControllerRemoteTest do
 
     assert conn.status == 416
     assert get_resp_header(conn, "content-range") == ["bytes */#{byte_size(ctx.body)}"]
-    assert get_resp_header(conn, "cache-control") == []
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
 
   test "returns 404 when the remote object is gone, uncached + no disposition", ctx do
@@ -133,7 +133,7 @@ defmodule EdenWeb.FileControllerRemoteTest do
     conn = ctx.conn |> log_in_user(ctx.alice) |> get(~p"/files/#{ctx.att.id}")
 
     assert response(conn, 404)
-    assert get_resp_header(conn, "cache-control") == []
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
     assert get_resp_header(conn, "content-disposition") == []
   end
 
@@ -175,6 +175,6 @@ defmodule EdenWeb.FileControllerRemoteTest do
       |> get(~p"/files/#{ctx.att.id}")
 
     assert conn.status == 416
-    assert get_resp_header(conn, "cache-control") == []
+    assert get_resp_header(conn, "cache-control") == ["no-store"]
   end
 end

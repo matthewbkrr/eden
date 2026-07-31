@@ -140,7 +140,7 @@ defmodule EdenWeb.NotifyHook do
   defp display_preview(preview), do: preview |> EdenWeb.Markup.strip() |> String.slice(0, 140)
 
   defp avatar_src(key, id) when is_binary(key),
-    do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"
+    do: EdenWeb.Avatars.user_src(id, key)
 
   defp avatar_src(_key, _id), do: nil
 
