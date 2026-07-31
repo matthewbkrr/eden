@@ -17200,12 +17200,35 @@ defmodule EdenWeb.ChatLive do
   #
   # Only when a preview exists — with none there is nothing to derive a variant from, and
   # `thumb_src` is already serving the original or a placeholder.
-  defp thumb_srcset(%{thumbnail_key: key, id: id}) when is_binary(key) do
-    ~s(#{~p"/files/#{id}/thumb/s"} #{Eden.Images.tile_width()}w, ) <>
-      ~s(#{~p"/files/#{id}/thumb"} #{Chat.thumbnail_max()}w)
+  defp thumb_srcset(%{thumbnail_key: key, id: id} = attachment) when is_binary(key) do
+    small = candidate_width(attachment, Eden.Images.tile_width())
+    wide = candidate_width(attachment, Chat.thumbnail_max())
+
+    # No descriptors, no offer. Dimensions are best-effort at create (a video probed where ffmpeg
+    # was unavailable has none), and a source no wider than the tile size makes both candidates
+    # the same picture — offering a choice between identical images just costs a decision.
+    if small && wide && small < wide do
+      ~s(#{~p"/files/#{id}/thumb/s"} #{small}w, #{~p"/files/#{id}/thumb"} #{wide}w)
+    end
   end
 
   defp thumb_srcset(_attachment), do: nil
+
+  # What a candidate is ACTUALLY wide, which is what the `w` descriptor promises and what the
+  # browser picks by. Both sizes fit the image into a SQUARE box — libvips `thumbnail` with one
+  # dimension caps the long edge — so a portrait photo's preview is narrower than the cap:
+  # 2160x3840 comes out 450x800, not 800 wide, and its tile variant 144x256, not 256.
+  #
+  # Declaring the cap instead told the browser those candidates had more pixels than they do, so
+  # it settled for the wide one and rendered soft — the srcset quietly doing the opposite of its
+  # job (#540 review). Verified against libvips across landscape, portrait and never-upscaled
+  # sources, including the tile variant, which is derived from the preview rather than the
+  # original and still lands on the same number.
+  defp candidate_width(%{width: w, height: h}, cap)
+       when is_integer(w) and is_integer(h) and w > 0 and h > 0,
+       do: round(w * min(1.0, min(cap / w, cap / h)))
+
+  defp candidate_width(_attachment, _cap), do: nil
 
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
   defp thumb_src(%{thumb_failed: true, id: id}), do: ~p"/files/#{id}"

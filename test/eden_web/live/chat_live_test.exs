@@ -2322,6 +2322,45 @@ defmodule EdenWeb.ChatLiveTest do
              "the tile does not state its rendered width, so the browser will over-fetch"
     end
 
+    test "a portrait photo declares the width it really has, not the cap (#516)", ctx do
+      # Both preview sizes fit the image into a SQUARE box, so a portrait photo's preview is
+      # NARROWER than the cap: 600x1200 comes out 400x800, and its tile variant 128x256. The `w`
+      # descriptor is a promise about the candidate's real width — overstate it and the browser
+      # settles for the wide candidate believing it has pixels it does not, which is the srcset
+      # doing the opposite of its job (#540 review).
+      portrait =
+        write_tmp(
+          elem(
+            Image.write(elem(Image.new(600, 1200, color: [30, 90, 200]), 1), :memory,
+              suffix: ".png"
+            ),
+            1
+          )
+        )
+
+      sources = [
+        %{path: portrait, filename: "tall.png"},
+        %{path: real_png_path(), filename: "wide.png"}
+      ]
+
+      {:ok, message} =
+        Chat.create_album_message(Scope.for_user(ctx.bob), ctx.conversation.id, sources, %{})
+
+      [tall, wide] = message.attachments
+      for attachment <- message.attachments, do: :ok = Chat.generate_thumbnail(attachment)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      refute html =~ "/files/#{tall.id}/thumb 800w",
+             "the portrait candidate is still being declared at the cap"
+
+      assert html =~ ~s(/files/#{tall.id}/thumb/s 128w, /files/#{tall.id}/thumb 400w)
+
+      # The landscape one in the same album is unaffected — it really is 800 wide.
+      assert html =~ ~s(/files/#{wide.id}/thumb/s 256w, /files/#{wide.id}/thumb 800w)
+    end
+
     test "a photo with no preview yet offers no srcset to fetch (#516)", ctx do
       # There is nothing to derive a variant FROM until the worker runs, and a srcset pointing at
       # a 404 would make the browser fetch it, fail, and fall back — slower than not offering it.
