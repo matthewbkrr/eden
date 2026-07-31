@@ -17094,9 +17094,36 @@ defmodule EdenWeb.ChatLive do
 
   defp upload_error_text(_other), do: gettext("Invalid file")
 
-  # Prefer the lighter thumbnail once it exists; fall back to the original while
-  # the worker is still generating it.
+  # A 1×1 transparent GIF: what a photo shows while its thumbnail is still being generated.
+  # The geometry is already reserved by img_box + aspect-ratio, so nothing moves when the real
+  # image lands over {:thumbnail_ready}.
+  @pending_image "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
+  # How long a missing thumbnail counts as "still being generated" (#516).
+  @thumb_grace_seconds 90
+
+  # Prefer the lighter thumbnail once it exists.
+  #
+  # Falling back to the ORIGINAL while the worker runs is what made a RECIPIENT download the
+  # full-size photo: 321 KB on the reference 3840×2160 shot where the 92 KB thumbnail was about
+  # to arrive a moment later over {:thumbnail_ready} — and an album of ten multiplied that. The
+  # sender never saw it because their optimistic snapshot carries a data-URL; the recipient had
+  # no such cover.
+  #
+  # So a FRESH attachment shows the reserved box instead of the original. The fallback stays for
+  # an attachment old enough that generation has certainly finished — or failed: there is no
+  # processing-status field, so "no thumbnail yet" and "no thumbnail ever" are indistinguishable,
+  # and a permanent blank photo would be a far worse failure than a heavy one.
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
+
+  defp thumb_src(%{id: id, inserted_at: %DateTime{} = at}) do
+    if DateTime.diff(DateTime.utc_now(), at) < @thumb_grace_seconds do
+      @pending_image
+    else
+      ~p"/files/#{id}"
+    end
+  end
+
   defp thumb_src(%{id: id}), do: ~p"/files/#{id}"
 
   # Composer upload entry helpers (client-side; for preview only, not trusted —
