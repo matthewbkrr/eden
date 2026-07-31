@@ -2951,16 +2951,22 @@ defmodule EdenWeb.ChatLive do
       >
       </div>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".InstantNav">
-        // Is this <dialog> MODAL — i.e. does it actually own input? `showModal()` makes it so,
-        // a plain `show()` does not, yet both set [open] (#531 review). `:modal` answers exactly
-        // that; on an engine that does not know the selector `matches` throws, and we treat the
-        // dialog as modal — skipping a gesture is the harmless direction, navigating out from
-        // under a real modal is not.
-        const modalDialog = (el) => {
+        // Is ANY modal <dialog> open — i.e. does something own input right now? `showModal()`
+        // makes a dialog modal, a plain `show()` does not, yet both set [open] (#531 review).
+        //
+        // Asks about the whole document, not the first match: `querySelector("dialog[open]")`
+        // returns whichever open dialog comes first in DOM order, so a non-modal popover sitting
+        // above the lightbox would answer for it and the guard would wave the gesture through
+        // under a real modal (#531 review, second round).
+        //
+        // On an engine that does not know `:modal` the selector throws; then fall back to "any
+        // open dialog at all", which errs toward skipping the gesture — harmless, where
+        // navigating out from under a modal is not.
+        const modalOpen = () => {
           try {
-            return el.matches(":modal")
+            return !!document.querySelector("dialog:modal")
           } catch (_e) {
-            return true
+            return !!document.querySelector("dialog[open]")
           }
         }
 
@@ -3147,12 +3153,9 @@ defmodule EdenWeb.ChatLive do
                 // is still found and the edge-swipe armed itself under the photo, ready to
                 // navigate the page the viewer cannot even see.
                 //
-                // Modality matters, not merely being open (#531 review): `dialog.show()` also
-                // sets [open] but does NOT capture input, so a non-modal popover would silently
-                // kill back-navigation. `:modal` is the exact test; where it is unsupported the
-                // guard errs toward skipping the swipe, which is the safe direction.
-                const openDialog = document.querySelector("dialog[open]")
-                if (openDialog && modalDialog(openDialog)) return
+                // Modality matters, not merely being open: `dialog.show()` also sets [open] but
+                // does NOT capture input, so a non-modal popover must not kill back-navigation.
+                if (modalOpen()) return
                 if (!document.querySelector("[data-nav-back]") || document.querySelector(".ed-thread")) return
               }
               const main = document.getElementById("chat-dropzone")

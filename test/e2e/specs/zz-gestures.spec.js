@@ -154,3 +154,45 @@ test("the trackpad swipe demotes the row too", async ({ alice, seed }, testInfo)
     })
     .toBe("auto");
 });
+
+test("a non-modal dialog EARLIER in the DOM does not mask a real modal", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  // `querySelector("dialog[open]")` answers with whichever open dialog comes first in DOM order.
+  // A harmless popover sitting above the lightbox would therefore answer for it, and the guard
+  // would wave the gesture through under a real modal (#531 review, second round). The question
+  // has to be asked about the document, not about one element.
+  test.skip(!/mobile-chrome/.test(testInfo.project.name), "touch path, CDP-driven");
+
+  await ready(alice);
+  await openDm(alice, seed);
+
+  await alice.evaluate(() => {
+    const decoy = document.createElement("dialog");
+    decoy.id = "probe-decoy";
+    document.body.prepend(decoy); // FIRST in DOM order
+    decoy.show(); // non-modal
+
+    const real = document.createElement("dialog");
+    real.id = "probe-real";
+    document.body.appendChild(real);
+    real.showModal();
+  });
+
+  const before = alice.url();
+  const cdp = await alice.context().newCDPSession(alice);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 4, y: 300 }] });
+  for (const x of [40, 90, 160, 240]) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: 300 }] });
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await alice.waitForTimeout(700);
+
+  expect(alice.url(), "a decoy dialog masked the modal and the swipe navigated").toBe(before);
+
+  await alice.evaluate(() => {
+    document.getElementById("probe-decoy")?.remove();
+    document.getElementById("probe-real")?.remove();
+  });
+});
