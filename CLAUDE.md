@@ -343,6 +343,21 @@ design — built incrementally as features land.)
   prod, swappable without touching callers. Callers store only the file **key +
   metadata**, never a concrete storage implementation — chat attachments
   (`Message`) and account avatars (`avatar_key`) both go through it.
+  **Derived display variants** (#516) live on this seam too: everything is stored ONCE at
+  master size (a 512px avatar square, an 800px image preview) and served at the size the
+  screen actually paints. `Eden.Images.variant/2` downscales to a width and re-encodes
+  **WebP**, caching the result in Storage under a key DERIVED from the source
+  (`avatars/ab.jpg` + 192 → `avatars/ab@192.webp`) — so there is no column, no migration,
+  and blobs that predate a variant pick it up on their next read. Two widths
+  (`Eden.Images.avatar_width/0` = 192, `tile_width/0` = 256) cover every surface: 192 is
+  every avatar (the largest the app renders is 3.5rem), 256 is the small photo surfaces
+  (album tile, gallery grid, lightbox reel, file card). Wider photo tiles get BOTH
+  candidates via `srcset` + an exact `sizes` (the album mosaic computes its tile width
+  from the row geometry), so the browser picks per box and DPR instead of the server
+  guessing. Avatar routes go through `EdenWeb.Avatars` — URL builders included, since the
+  `?v=` cache-buster must hash the key TOGETHER with the width or an `immutable` response
+  already in a browser cache would pin the old master for a year. A variant never outlives
+  its source: `Images.delete_avatar/1` and `Chat.delete_unreferenced_blobs/1` sweep them.
 - **Notifications** — notification delivery behind an **adapter behaviour**
   (`Eden.Notifications.Adapter`), mirroring Storage (ADR-0001, #235). `Eden.Chat`
   decides **who** hears (the #213 gating — sender/left/mute/DND, thread-followers

@@ -11722,7 +11722,7 @@ defmodule EdenWeb.ChatLive do
             <div :for={{att, i} <- Enum.with_index(@kept, 1)} class="ed-editmedia__tile">
               <img
                 :if={att.kind == "image"}
-                src={thumb_src(att)}
+                src={thumb_small_src(att)}
                 class="ed-editmedia__img"
                 alt={gettext("Photo %{n}", n: i)}
               />
@@ -13654,6 +13654,7 @@ defmodule EdenWeb.ChatLive do
           class="ed-album__tile"
           gallery={@gallery}
           meta={@meta}
+          sizes={tile_sizes(aspect, sum)}
           style={"flex:#{aspect} 1 0;#{tile_radius(ri, length(@rows), ti, length(row))}"}
         />
       </div>
@@ -13744,7 +13745,7 @@ defmodule EdenWeb.ChatLive do
       aria-label={gettext("Download %{name}", name: @attachment.filename || gettext("photo"))}
     >
       <span :if={as_file_previewable?(@attachment)} class="ed-file__thumb" aria-hidden="true">
-        <img src={thumb_src(@attachment)} loading="lazy" alt="" />
+        <img src={thumb_small_src(@attachment)} loading="lazy" alt="" />
       </span>
       <%!-- A not-yet-rendered original (HEIC before the worker's thumbnail lands) shows the
             document icon rather than a broken <img>; the {:thumbnail_ready} re-render swaps in
@@ -14553,6 +14554,7 @@ defmodule EdenWeb.ChatLive do
         dom_id={"g-#{item.id}"}
         class="ed-gallery-tile"
         gallery="conv-gallery"
+        sizes="(max-width: 640px) 33vw, 128px"
       />
     </div>
     """
@@ -14584,6 +14586,10 @@ defmodule EdenWeb.ChatLive do
   # own-message flag drive the title bar and the action menu. The profile gallery
   # passes none — its lightbox opens chrome-less.
   attr :meta, :map, default: %{}
+  # The tile's rendered width, as an `<img sizes>` value. The album computes it exactly from the
+  # mosaic geometry; the gallery states its grid. Without it the browser assumes the full viewport
+  # and always picks the widest candidate, which is the bug this was meant to fix.
+  attr :sizes, :string, default: nil
 
   # Shared media grid tile (#136): an image opens the lightbox (paging its `gallery`); a video
   # is a poster with a play badge. Used by the message album (album_view) AND the profile
@@ -14612,6 +14618,8 @@ defmodule EdenWeb.ChatLive do
       <%!-- alt="" (decorative) — the a11y label rides the <a>; see attachment_view. --%>
       <img
         src={thumb_src(@item)}
+        srcset={thumb_srcset(@item)}
+        sizes={@sizes}
         loading="lazy"
         decoding="async"
         alt=""
@@ -14635,7 +14643,15 @@ defmodule EdenWeb.ChatLive do
       aria-label={@item.filename || gettext("Video")}
       style={@style}
     >
-      <img :if={@item.thumbnail_key} src={thumb_src(@item)} loading="lazy" decoding="async" alt="" />
+      <img
+        :if={@item.thumbnail_key}
+        src={thumb_src(@item)}
+        srcset={thumb_srcset(@item)}
+        sizes={@sizes}
+        loading="lazy"
+        decoding="async"
+        alt=""
+      />
       <span :if={is_nil(@item.thumbnail_key)} class="ed-album__tile-fill" />
       <span class="ed-album__play" aria-hidden="true">
         <.icon name="hero-play-solid" class="size-6" />
@@ -15762,7 +15778,7 @@ defmodule EdenWeb.ChatLive do
       id: att.id,
       kind: att.kind,
       full: ~p"/files/#{att.id}",
-      thumb: thumb_src(att),
+      thumb: thumb_small_src(att),
       msg: msg && msg.id,
       who: msg && sender_name(%{sender: msg.sender}),
       at: msg && DateTime.to_iso8601(msg.inserted_at),
@@ -15831,13 +15847,13 @@ defmodule EdenWeb.ChatLive do
 
   # Avatar image URL for a user, cache-busted by the avatar key (nil → initials).
   defp avatar_src(%{avatar_key: key, id: id}) when is_binary(key),
-    do: ~p"/users/#{id}/avatar?v=#{:erlang.phash2(key)}"
+    do: EdenWeb.Avatars.user_src(id, key)
 
   defp avatar_src(_user), do: nil
 
   # Avatar image URL for a group (#178), cache-busted by the avatar key (nil → initials).
   defp group_avatar_src(%{id: id, avatar_key: key}) when is_binary(key),
-    do: ~p"/conversations/#{id}/avatar?v=#{:erlang.phash2(key)}"
+    do: EdenWeb.Avatars.group_src(id, key)
 
   defp group_avatar_src(_conversation), do: nil
 
@@ -17159,6 +17175,38 @@ defmodule EdenWeb.ChatLive do
   # coming and the reserved box stands in. An earlier version guessed by `inserted_at`, which
   # expires only on a re-render — so a permanently failed thumbnail could leave a blank photo
   # for the rest of a session.
+  # A mosaic tile's rendered width in CSS pixels. `.ed-album` is a definite 20rem and a row's
+  # tiles split it in proportion to their aspect ratios (`flex:<aspect> 1 0`), so the width is
+  # exactly `320 * aspect / sum` — the same arithmetic the browser is about to do. Rounded up:
+  # under-stating the box makes the browser pick a candidate too small and the photo goes soft.
+  @album_width 320
+  defp tile_sizes(aspect, sum) when is_number(aspect) and is_number(sum) and sum > 0,
+    do: "#{ceil(@album_width * aspect / sum)}px"
+
+  defp tile_sizes(_aspect, _sum), do: nil
+
+  # The tile-sized variant (#516): what every SMALL photo surface asks for — the file card's
+  # 36px square, the edit-media tile, the lightbox reel's 44px strip. Falls back to `thumb_src`
+  # so "no preview yet" and "preview failed" keep behaving exactly as before.
+  defp thumb_small_src(%{thumbnail_key: key, id: id}) when is_binary(key),
+    do: ~p"/files/#{id}/thumb/s"
+
+  defp thumb_small_src(attachment), do: thumb_src(attachment)
+
+  # Both candidates for a tile whose rendered width is not fixed. An album tile is 320 CSS px on
+  # its own row and 105 three-across; a server that picks one size gets the other wrong, and at
+  # 2x DPR the difference is either a soft photo or ten times the bytes. `srcset` hands the choice
+  # to the only party that knows both the box and the device: the browser.
+  #
+  # Only when a preview exists — with none there is nothing to derive a variant from, and
+  # `thumb_src` is already serving the original or a placeholder.
+  defp thumb_srcset(%{thumbnail_key: key, id: id}) when is_binary(key) do
+    ~s(#{~p"/files/#{id}/thumb/s"} #{Eden.Images.tile_width()}w, ) <>
+      ~s(#{~p"/files/#{id}/thumb"} #{Chat.thumbnail_max()}w)
+  end
+
+  defp thumb_srcset(_attachment), do: nil
+
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
   defp thumb_src(%{thumb_failed: true, id: id}), do: ~p"/files/#{id}"
   defp thumb_src(%{id: _id}), do: @pending_image

@@ -11,13 +11,48 @@ defmodule EdenWeb.FileController do
   """
   use EdenWeb, :controller
 
-  alias Eden.{Chat, Storage}
+  alias Eden.{Chat, Images, Storage}
 
   @doc "Serves the original file (honoring Range requests)."
   def show(conn, %{"id" => id}), do: serve(conn, id, :original)
 
   @doc "Serves the downscaled image thumbnail / video poster (404 until the worker produces it)."
   def thumb(conn, %{"id" => id}), do: serve(conn, id, :thumb)
+
+  @doc """
+  Serves the tile-sized preview: the same image at `Images.tile_width/0`, in WebP (#516).
+
+  The 800px preview is what an album tile, the gallery grid and the lightbox reel were all
+  downloading to paint boxes between 44 and 127 CSS px — 53 KB where 5 KB does the job, ten
+  times over in an album. The variant is derived from the preview on first request and cached in
+  Storage, so nothing had to be migrated and photos that predate this get it on their next view.
+
+  Anything that goes wrong — no preview yet, a source libvips declines — falls through to the
+  800px preview rather than 404: a missing optimization must not become a missing image.
+  """
+  def thumb_small(conn, %{"id" => id}) do
+    with {int_id, ""} <- Integer.parse(id),
+         {:ok, %{thumbnail_key: key}} when is_binary(key) <-
+           Chat.fetch_attachment(conn.assigns.current_scope, int_id),
+         {:ok, bytes} <- Images.variant(key, Images.tile_width()) do
+      send_small(conn, bytes)
+    else
+      _ -> serve(conn, id, :thumb)
+    end
+  end
+
+  # Sent from memory rather than through `deliver`: the variant is a few kilobytes, so sendfile
+  # buys nothing and reading it once beats an existence check plus a stream (on S3 that is a HEAD
+  # and a GET where one GET does). No `accept-ranges` — there is nothing here worth seeking.
+  # sobelow_skip ["XSS.SendResp"]
+  defp send_small(conn, bytes) do
+    conn
+    |> put_resp_content_type("image/webp", nil)
+    |> put_resp_header("x-content-type-options", "nosniff")
+    |> put_resp_header("content-disposition", "inline")
+    |> put_resp_header("cache-control", "private, max-age=31536000, immutable")
+    |> send_resp(200, bytes)
+  end
 
   # Signed-link pair (#464): the native app's in-app viewer (SFSafariViewController)
   # has its own cookie store, so it can't ride the WebView session. A MEMBER mints a
@@ -220,10 +255,15 @@ defmodule EdenWeb.FileController do
   # original name/type (#374/R170) — Phoenix's `text/2` would NOT override an already-set
   # content-type, so force text/plain explicitly. A 416 keeps its `content-range` (set by the
   # caller); we don't delete that.
+  #
+  # `no-store` rather than no header at all (#516): a 404 here is usually "the preview is not
+  # ready YET", and a response with no cache-control is one a browser may cache heuristically —
+  # off the `last-modified` distance, for minutes. The photo would then stay blank long after the
+  # worker finished, and only a reload would fix it.
   # sobelow_skip ["XSS.SendResp"]
   defp error_resp(conn, status, body \\ "") do
     conn
-    |> delete_resp_header("cache-control")
+    |> put_resp_header("cache-control", "no-store")
     |> delete_resp_header("content-disposition")
     |> delete_resp_header("accept-ranges")
     |> put_resp_content_type("text/plain")

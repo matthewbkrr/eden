@@ -8,19 +8,12 @@ defmodule EdenWeb.ChannelAvatarController do
   """
   use EdenWeb, :controller
 
-  alias Eden.{Channels, Storage}
+  alias Eden.Channels
+  alias EdenWeb.Avatars
 
-  # sobelow_skip ["XSS.SendResp"]
   def show(conn, %{"id" => id}) do
-    with {:ok, %{avatar_key: key}} when is_binary(key) <-
-           Channels.get_channel(conn.assigns.current_scope, id),
-         {:ok, bytes} <- Storage.read(key) do
-      conn
-      |> put_resp_content_type("image/jpeg", nil)
-      |> put_resp_header("x-content-type-options", "nosniff")
-      |> put_resp_header("cache-control", "private, max-age=31536000, immutable")
-      |> send_resp(200, bytes)
-    else
+    case Channels.get_channel(conn.assigns.current_scope, id) do
+      {:ok, %{avatar_key: key}} when is_binary(key) -> Avatars.send_avatar(conn, key)
       _ -> conn |> put_status(:not_found) |> text("Not found")
     end
   end

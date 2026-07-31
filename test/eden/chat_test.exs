@@ -3790,6 +3790,50 @@ defmodule Eden.ChatTest do
       assert hd(broadcast.attachments).thumbnail_key == attachment.thumbnail_key
     end
 
+    test "an album broadcasts once it has settled, not once per photo", %{
+      alice: alice,
+      conv: conv
+    } do
+      Chat.subscribe(conv.id)
+
+      sources = for _ <- 1..4, do: %{path: real_png(600, 400)}
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      assert length(message.attachments) == 4
+
+      # Each photo is its own job, and each one used to re-broadcast the whole message: four
+      # `Repo.get` + full preload + a full row re-render on every client, for a row that reaches
+      # its final shape once (#516).
+      for attachment <- message.attachments do
+        assert :ok = Chat.generate_thumbnail(attachment)
+      end
+
+      assert_receive {:thumbnail_ready, broadcast}
+      assert length(broadcast.attachments) == 4
+      assert Enum.all?(broadcast.attachments, &is_binary(&1.thumbnail_key))
+
+      # And exactly once. `refute_receive` with a real timeout, because the defect this guards
+      # against is extra messages arriving, not missing ones.
+      refute_receive {:thumbnail_ready, _}, 100
+    end
+
+    test "a photo that fails still speaks for itself immediately", %{alice: alice, conv: conv} do
+      Chat.subscribe(conv.id)
+
+      sources = for _ <- 1..2, do: %{path: real_png(600, 400)}
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      [first, second] = message.attachments
+
+      # A failure is terminal for that attachment: waiting for the album to settle would leave
+      # the renderer on the pending placeholder while the other photo is still generating.
+      {:ok, _} = Chat.mark_thumbnail_failed(first)
+      assert_receive {:thumbnail_ready, _}
+
+      # The album is now settled — one failed, one succeeded — so the success broadcasts too.
+      assert :ok = Chat.generate_thumbnail(second)
+      assert_receive {:thumbnail_ready, broadcast}
+      assert Enum.any?(broadcast.attachments, &is_binary(&1.thumbnail_key))
+    end
+
     test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
       {:ok, message} =
         Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(300, 200)})
