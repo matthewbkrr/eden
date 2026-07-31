@@ -5216,6 +5216,7 @@ defmodule EdenWeb.ChatLive do
                 }
                 autocomplete="off"
                 phx-hook=".PasteUpload"
+                {%{"phx-debounce" => 250}}
                 readonly={@pending_forward != nil}
               />
               <%!-- phx-update="ignore": the picker is fully client-managed (its
