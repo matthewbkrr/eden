@@ -24,9 +24,18 @@ test("icons paint from the sprite, and the sprite is actually served", async ({ 
     const icons = [...document.querySelectorAll("svg.ed-icon")].filter(
       (i) => i.getClientRects().length > 0,
     );
+    // getBBox(), not getBoundingClientRect(). The outer <svg> keeps whatever width/height the
+    // size utility gave it even when <use> resolves to NOTHING — so the box stays honest-looking
+    // while the icon paints nothing at all. getBBox() measures the rendered geometry, which is
+    // zero exactly in that case. The first version of this test asked the wrong one and passed
+    // with a symbol deleted from the sprite (#539 review).
     const sized = icons.filter((i) => {
-      const r = i.getBoundingClientRect();
-      return r.width > 0 && r.height > 0;
+      try {
+        const b = i.getBBox();
+        return b.width > 0 && b.height > 0;
+      } catch (_e) {
+        return false;
+      }
     });
     return {
       total: icons.length,
@@ -36,7 +45,7 @@ test("icons paint from the sprite, and the sprite is actually served", async ({ 
   });
 
   expect(stats.total, "no sprite icons on the page at all").toBeGreaterThan(3);
-  expect(stats.sized, `${stats.total - stats.sized} icons collapsed to zero size`).toBe(stats.total);
+  expect(stats.sized, `${stats.total - stats.sized} of ${stats.total} icons paint nothing — the sprite reference resolves to no geometry`).toBe(stats.total);
   expect(stats.firstHref, "the <use> reference is missing").toMatch(/icons.*\.svg#hero-/);
   expect(requests.length, "the sprite was never fetched").toBeGreaterThan(0);
   expect(requests.every((s) => s === 200 || s === 304), `sprite responses: ${requests}`).toBe(true);

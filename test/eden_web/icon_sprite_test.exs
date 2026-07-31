@@ -23,6 +23,27 @@ defmodule EdenWeb.IconSpriteTest do
              "(it is wired into assets.build, so this means the sprite was committed stale)"
   end
 
+  test "no icon name is built at runtime — the scan can only see literals" do
+    # The sprite holds what a source scan finds, so a name assembled from pieces
+    # (`"hero-\#{kind}-micro"`) would be accepted by the component, missing from the sprite, and
+    # render as nothing at all. Today every name is a literal — including the ones returned from
+    # helper functions, which the scan still sees. This keeps it that way instead of leaving the
+    # guarantee resting on nobody having tried yet (#539 review).
+    offenders =
+      Path.wildcard("lib/**/*.{ex,heex}")
+      |> Enum.flat_map(fn file ->
+        File.read!(file)
+        |> String.split("\n")
+        |> Enum.with_index(1)
+        |> Enum.filter(fn {line, _} -> Regex.match?(~r/"hero-[^"]*\#\{/, line) end)
+        |> Enum.map(fn {_, i} -> "#{file}:#{i}" end)
+      end)
+
+    assert offenders == [],
+           "icon names assembled at runtime: #{Enum.join(offenders, ", ")} — " <>
+             "the sprite is built from a source scan and cannot contain what it cannot see"
+  end
+
   test "the sprite carries the attributes that make an outline icon an outline" do
     sprite = File.read!(@sprite)
 
