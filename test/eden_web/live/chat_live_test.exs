@@ -209,6 +209,57 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#emoji-picker[phx-update="ignore"] [data-emoji-toggle]))
     end
 
+    test "an unrelated profile edit does not rebuild the sidebar (#514)", ctx do
+      # `{:user_updated}` rides a process-wide topic, and the handler rebuilt the sidebar
+      # unconditionally: `list_conversations` (~7 queries, no LIMIT) in EVERY live session, for a
+      # person that session may not even be able to see. The cost is server-side — the rendered
+      # sidebar is usually unchanged, so it barely shows on the wire — which is why this is
+      # measured in QUERIES rather than bytes.
+      stranger = Eden.AccountsFixtures.user_fixture()
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      parent = self()
+      handler = "q-#{System.unique_integer([:positive])}"
+      view_pid = view.pid
+
+      # The handler runs INSIDE the process issuing the query, so comparing self() to the
+      # LiveView's pid keeps other (async) tests' queries out of the count.
+      :telemetry.attach(
+        handler,
+        [:eden, :repo, :query],
+        fn _event, _measure, _meta, _cfg ->
+          if self() == view_pid, do: send(parent, :query)
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      count = fn ->
+        Process.sleep(50)
+        drain = fn drain, n -> receive do: (:query -> drain.(drain, n + 1)), after: (0 -> n) end
+        drain.(drain, 0)
+      end
+
+      send(view.pid, {:user_updated, stranger})
+      _ = render(view)
+      unrelated = count.()
+
+      # A person alice actually shares a conversation with still refreshes it — the gate must
+      # not silence real updates.
+      send(view.pid, {:user_updated, ctx.bob})
+      _ = render(view)
+      related = count.()
+
+      assert unrelated <= 2,
+             "a stranger's profile edit cost #{unrelated} queries — the sidebar is still being rebuilt for people the session cannot see"
+
+      assert related > unrelated,
+             "the gate also silenced an update from someone alice shares a conversation with"
+    end
+
     test "a read receipt flips the ticks and touches nothing else (#513)", ctx do
       # The receipt used to re-fetch and re-stream the WHOLE page for a ✓ → ✓✓ — fifty rendered
       # bubbles, measured at 57 KB on the wire, for a change that touches one row. It did that

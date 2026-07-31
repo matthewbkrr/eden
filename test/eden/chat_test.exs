@@ -362,6 +362,18 @@ defmodule Eden.ChatTest do
       assert conversation_id == conv.id
     end
 
+    test "shares_conversation? is true for yourself even with no conversations (#514)" do
+      # The gate rides a self-join over memberships, so a person who is in NO conversation would
+      # not match themselves (#530 review). Callers rely on self-reference being true — a session
+      # must always react to its own profile edit — so the case is explicit, not inferred.
+      loner = Eden.AccountsFixtures.user_fixture()
+      scope = Scope.for_user(loner)
+
+      assert Chat.shares_conversation?(scope, loner.id)
+      refute Chat.shares_conversation?(scope, Eden.AccountsFixtures.user_fixture().id)
+      refute Chat.shares_conversation?(scope, "not-an-id")
+    end
+
     test "mark_read broadcasts a read receipt", %{bob: bob, conv: conv} do
       Chat.subscribe(conv.id)
       :ok = Chat.mark_read(scope(bob), conv.id)
