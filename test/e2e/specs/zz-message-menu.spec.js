@@ -168,7 +168,15 @@ test("Delete for everyone asks first, then tombstones the message", async ({ ali
   expect(asked, "no confirmation was asked before deleting for everyone").toBeGreaterThan(0);
 });
 
-test("swipe-to-reply still runs the same path as the menu item", async ({ alice, seed }) => {
+test("swipe-to-reply still runs the same path as the menu item", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  // The MOUSE drag path is desktop-only: on a touch device the row is dragged by the finger and
+  // the hook's recentTouch guard deliberately ignores synthesized mouse events. The same guard
+  // sits on the equivalent test in zz-gestures; this one was missing it and failed on
+  // mobile-chrome for that reason alone.
+  test.skip(/mobile/.test(testInfo.project.name), "desktop drag path");
   // fireReply stopped being a closure and became a hook method (#528 review), and the swipe
   // gestures call it too — so the gesture needs its own check, or the refactor could have
   // broken quote-reply everywhere except the menu. Desktop drag path: bubbles only, leftward
