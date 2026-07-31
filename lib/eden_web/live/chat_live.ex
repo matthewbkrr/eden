@@ -6890,18 +6890,21 @@ defmodule EdenWeb.ChatLive do
                 this.el.style.transform = `translateX(${pull(dx)}px)`
               }
             }, { passive: true })
+            // Passive: neither handler calls preventDefault, so saying so up front lets the
+            // browser keep the gesture on the compositor instead of waiting to find out (#519).
+            // Every rendered row carries these two listeners.
             this.el.addEventListener("touchend", () => {
               cancel()
               if (swiping && dx <= -SWIPE) this.fireReply()
               if (swiping) reset()
-            })
+            }, { passive: true })
             // iOS hands the touch to a system gesture (edge swipe, notification pull):
             // touchend never comes — only touchcancel. Without this the armed timer
             // popped the menu seconds into an unrelated gesture (#439).
             this.el.addEventListener("touchcancel", () => {
               cancel()
               if (swiping) reset()
-            })
+            }, { passive: true })
             // Desktop swipe-to-reply (#110) — DM/group BUBBLES only (rooms use flat
             // rows; the thread panel too, so they keep right-click → Reply). Two inputs:
             //   • Mouse: a CLEARLY horizontal left drag (past ENGAGE AND axis-dominant),
@@ -7447,11 +7450,24 @@ defmodule EdenWeb.ChatLive do
             const y = new Date(now)
             y.setDate(y.getDate() - 1)
             if (this.dayKeyOf(d) === this.dayKeyOf(y)) return this.yesterday
-            const opts =
-              d.getFullYear() === now.getFullYear()
-                ? { day: "numeric", month: "long" }
-                : { day: "numeric", month: "long", year: "numeric" }
-            return new Intl.DateTimeFormat(this.locale, opts).format(d)
+            // Reuse the formatter instead of building one per call (#519). This runs on every
+            // scroll tick — measured at 30 constructions for 30 wheel ticks — and constructing an
+            // Intl.DateTimeFormat is one of the most expensive calls in ICU. There are exactly two
+            // shapes (this year / another year), so two cached instances cover every label.
+            const sameYear = d.getFullYear() === now.getFullYear()
+            const key = sameYear ? "short" : "full"
+            this._fmt = this._fmt || {}
+
+            this._fmt[key] =
+              this._fmt[key] ||
+              new Intl.DateTimeFormat(
+                this.locale,
+                sameYear
+                  ? { day: "numeric", month: "long" }
+                  : { day: "numeric", month: "long", year: "numeric" }
+              )
+
+            return this._fmt[key].format(d)
           },
           rows() { return [...this.el.children].filter((c) => c.dataset && c.dataset.ts) },
           // Re-derive the boundary rows (first row of each local day; a non-finite ts is
