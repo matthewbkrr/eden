@@ -43,6 +43,12 @@ test("the tick appears on the tap, before the server answers", async ({ alice, s
     description: `aria-pressed right after the tap: ${pressedImmediately}`,
   });
 
+  // Two assertions, not one: `null` means there was nothing to tap, and reporting THAT as "the
+  // tick waited for the server" would send the next reader hunting a regression that is not
+  // there (#536 review).
+  expect(pressedImmediately, "no unselected row to tap — the fixture did not set the test up")
+    .not.toBeNull();
+
   expect(pressedImmediately, "the tick waited for the server").toBe("true");
 
   // And the server still owns the truth: the count catches up.
