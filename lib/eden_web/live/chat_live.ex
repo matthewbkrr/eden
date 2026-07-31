@@ -12759,6 +12759,15 @@ defmodule EdenWeb.ChatLive do
                 e.preventDefault()
                 e.stopImmediatePropagation()
                 this.pushEvent("select_range", { ids: this.range(this.anchor, id) })
+              } else {
+                // Paint the tick NOW, before the server answers (#521). The selection lives on
+                // the server, so until its diff arrived a tap produced nothing at all — and
+                // selecting five messages meant five taps that each looked ignored.
+                //
+                // Guessing is safe here precisely because sync() is authoritative: it repaints
+                // from `data-selected` on the very next patch, so a wrong guess (a rejected
+                // toggle, a race) corrects itself within one round trip and never persists.
+                this.paint(hit, hit.getAttribute("aria-pressed") !== "true")
               }
               this.anchor = id
             }
@@ -12793,6 +12802,14 @@ defmodule EdenWeb.ChatLive do
             if (i < 0 || j < 0) return [b]
             if (i > j) [i, j] = [j, i]
             return ids.slice(i, j + 1)
+          },
+          // One row's highlight, exactly as sync() paints it — the optimistic path and the
+          // authoritative one must agree on the markup or the tick would flicker between them.
+          paint(hit, on) {
+            const row = hit.closest(".ed-msg, .ed-flat")
+            if (!row) return
+            row.classList.toggle(row.classList.contains("ed-flat") ? "ed-flat--selected" : "ed-msg--selected", on)
+            hit.setAttribute("aria-pressed", on ? "true" : "false")
           },
           sync() {
             let ids = []
