@@ -2138,10 +2138,16 @@ defmodule EdenWeb.ChatLiveTest do
         })
 
       conn = log_in_user(ctx.conn, ctx.alice)
-      {:ok, _view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      {:ok, view, html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
 
-      assert html =~ ~s(src="/files/#{hd(message.attachments).id}")
+      # The LINK is the original — that is what the lightbox opens. The img src is not, while the
+      # thumbnail is still pending: serving the full-size photo there is what #516 removed, and
+      # this assertion used to pin the old behaviour.
       assert html =~ ~s(href="/files/#{hd(message.attachments).id}")
+      refute html =~ ~s(src="/files/#{hd(message.attachments).id}")
+
+      :ok = Chat.generate_thumbnail(hd(message.attachments))
+      assert render(view) =~ ~s(src="/files/#{hd(message.attachments).id}/thumb")
     end
 
     test "renders a generic file as a download card with its name", ctx do
@@ -2195,6 +2201,69 @@ defmodule EdenWeb.ChatLiveTest do
       # is subscribed to, so the image source updates in place.
       :ok = Chat.generate_thumbnail(hd(message.attachments))
       assert render(view) =~ "/files/#{hd(message.attachments).id}/thumb"
+    end
+
+    test "a pending thumbnail shows the reserved box, not the original (#516)", ctx do
+      # `thumb_src/1` fell back to the ORIGINAL while the worker was still generating, so a
+      # RECIPIENT downloaded the full-size photo — 321 KB on the reference shot — and then the
+      # thumbnail a moment later over {:thumbnail_ready}. The sender never saw it: their
+      # optimistic snapshot carries a data-URL, the recipient had no such cover.
+      #
+      # Tested at the decision, not at the race: in tests no thumbnail is generated unless asked,
+      # which is exactly the "still pending" state. An end-to-end attempt proved nothing — on a
+      # local worker the thumbnail is ready before the row renders, so the window never opens.
+      {:ok, message} =
+        Chat.create_album_message(
+          Scope.for_user(ctx.bob),
+          ctx.conversation.id,
+          [%{path: real_png_path(), filename: "pending.png"}],
+          %{}
+        )
+
+      attachment = hd(message.attachments)
+      refute attachment.thumbnail_key, "the fixture is supposed to start without a thumbnail"
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      pending = render(view)
+
+      # The lightbox ANCHOR legitimately points at the original — it is the img src that must
+      # not, so the assertion names the attribute rather than the path.
+      refute pending =~ ~s(src="/files/#{attachment.id}"),
+             "the recipient is still being served the original while the thumbnail is generated"
+
+      assert pending =~ "data:image/gif;base64",
+             "nothing stands in for the photo while its thumbnail is pending"
+
+      # Once it exists the real thumbnail takes over, live.
+      :ok = Chat.generate_thumbnail(attachment)
+      assert render(view) =~ "/files/#{attachment.id}/thumb"
+    end
+
+    test "an attachment whose thumbnail will never come falls back to the original (#516)", ctx do
+      # The placeholder must not be forever. Generation being OVER is recorded as a fact rather
+      # than guessed from age: an age-based rule expires only on a re-render, so a permanently
+      # failed thumbnail could leave a blank photo for the whole session (#532 review).
+      {:ok, message} =
+        Chat.create_album_message(
+          Scope.for_user(ctx.bob),
+          ctx.conversation.id,
+          [%{path: real_png_path(), filename: "doomed.png"}],
+          %{}
+        )
+
+      attachment = hd(message.attachments)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert render(view) =~ "data:image/gif;base64"
+
+      # What the worker does when generation cannot succeed — and it broadcasts, so an open
+      # client recovers without waiting for anything else to re-render the row.
+      {:ok, _} = Chat.mark_thumbnail_failed(attachment)
+
+      assert render(view) =~ ~s(src="/files/#{attachment.id}"),
+             "a failed thumbnail left the photo blank instead of falling back to the original"
     end
 
     test "renders a multi-photo album as a media grid (#58)", ctx do

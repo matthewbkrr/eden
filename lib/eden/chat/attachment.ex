@@ -29,6 +29,10 @@ defmodule Eden.Chat.Attachment do
     field :height, :integer
     field :duration, :integer
     field :thumbnail_key, :string
+    # Thumbnail generation is over and did not produce one (#516). Distinct from a nil
+    # thumbnail_key, which only means "not yet": the renderer needs to tell those apart, or a
+    # failed thumbnail is indistinguishable from a pending one.
+    field :thumb_failed, :boolean, default: false
     # Order within an album (#58); 0 for a lone attachment.
     field :position, :integer, default: 0
     # "Send as file" (#122): an uncompressed image rendered as a downloadable document

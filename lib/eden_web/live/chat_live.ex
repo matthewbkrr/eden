@@ -17094,10 +17094,27 @@ defmodule EdenWeb.ChatLive do
 
   defp upload_error_text(_other), do: gettext("Invalid file")
 
-  # Prefer the lighter thumbnail once it exists; fall back to the original while
-  # the worker is still generating it.
+  # A 1×1 transparent GIF: what a photo shows while its thumbnail is still being generated.
+  # The geometry is already reserved by img_box + aspect-ratio, so nothing moves when the real
+  # image lands over {:thumbnail_ready}.
+  @pending_image "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
+  # Prefer the lighter thumbnail once it exists.
+  #
+  # Falling back to the ORIGINAL while the worker runs is what made a RECIPIENT download the
+  # full-size photo: 321 KB on the reference 3840×2160 shot where the 92 KB thumbnail was about
+  # to arrive a moment later over {:thumbnail_ready} — and an album of ten multiplied that. The
+  # sender never saw it because their optimistic snapshot carries a data-URL; the recipient had
+  # no such cover.
+  #
+  # The three states are answered by FACTS, not by age (#532 review): a thumbnail exists, or
+  # generation is over and produced none (`thumb_failed`, set by the worker), or it is still
+  # coming and the reserved box stands in. An earlier version guessed by `inserted_at`, which
+  # expires only on a re-render — so a permanently failed thumbnail could leave a blank photo
+  # for the rest of a session.
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
-  defp thumb_src(%{id: id}), do: ~p"/files/#{id}"
+  defp thumb_src(%{thumb_failed: true, id: id}), do: ~p"/files/#{id}"
+  defp thumb_src(%{id: _id}), do: @pending_image
 
   # Composer upload entry helpers (client-side; for preview only, not trusted —
   # the server re-classifies by magic bytes and decides the actual album split).

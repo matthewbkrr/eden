@@ -3946,6 +3946,28 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  Record that thumbnail generation is OVER for this attachment and produced nothing.
+
+  Without this the renderer cannot tell "no thumbnail yet" from "no thumbnail ever" and has to
+  guess by age — a guess that only expires on a re-render, so a permanently failed thumbnail
+  could leave a blank photo for the rest of a session (#516, #532 review). Broadcasts like a
+  success does, so open clients fall back to the original immediately.
+  """
+  def mark_thumbnail_failed(%Attachment{} = attachment) do
+    # Broadcast only on a real write. A failed update used to raise a MatchError here (#532
+    # review), taking the worker down inside its own error handling — which is the worst moment
+    # to lose the distinction between "could not generate" and "could not even record that".
+    case attachment |> Ecto.Changeset.change(thumb_failed: true) |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_thumbnail(updated.message_id)
+        {:ok, updated}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
   Produces the attachment's preview off the request path, records it, then
   broadcasts the refreshed message so open clients pick it up. For an image this
   is a downscaled, metadata-stripped JPEG thumbnail; for a video, a poster frame
