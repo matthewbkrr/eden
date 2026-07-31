@@ -6659,13 +6659,20 @@ defmodule EdenWeb.ChatLive do
             // actually added — the final empty page removes the spinner instead, so
             // the height SHRINKS; don't yank the viewport up then (review).
             if (this.loadingMore) {
-              this.loadingMore = false
               // Restore in a rAF so the prepended height is measured AFTER the DateRail
               // hook (#83) has injected the older days' separators — otherwise their
               // height isn't in `delta` and the viewport jumps by it. rAF runs after all
               // hooks' updated() in this patch, before paint, so there's no flash.
+              //
+              // The flag is released INSIDE that frame, not before it (#519). Clearing it here
+              // let the next scroll event re-arm `maybeLoadOlder` while this compensation was
+              // still pending — and that re-arm overwrites `prevHeight` with the ALREADY GROWN
+              // height, so the pending delta computes to zero and a whole page of history goes
+              // uncompensated. Measured on the stand: two pages prepended (+3249 then +3477),
+              // only the second one compensated, the reader thrown 3249px off.
               requestAnimationFrame(() => {
                 const delta = this.el.scrollHeight - this.prevHeight
+                this.loadingMore = false
                 if (delta > 0) this.el.scrollTop += delta
                 // Keep filling while a jump is still settling and the top affordance would
                 // otherwise sit visible-but-idle (#188): self-terminates once ~300px of older
