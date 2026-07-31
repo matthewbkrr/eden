@@ -25,7 +25,7 @@ test("a chat in a background tab doesn't send a false read receipt (#206)", asyn
 
   await send(alice, "hidden-tab msg") // bob (hidden) must NOT auto-read
   await alice.waitForTimeout(1200)
-  const checks = () => alice.locator(".ed-msg").last().locator(".hero-check-micro").count()
+  const checks = () => alice.locator(".ed-msg").last().locator('use[href$="#hero-check-micro"]').count()
   expect(await checks()).toBe(1) // ✓ sent, not read
 
   await setHidden(bob, false) // bob returns → reads

@@ -107,8 +107,9 @@ defmodule Eden.MixProject do
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["compile", "tailwind eden", "esbuild eden"],
+      "assets.build": ["compile", "eden.icons", "tailwind eden", "esbuild eden"],
       "assets.deploy": [
+        "eden.icons",
         "tailwind eden --minify",
         "esbuild eden --minify",
         "phx.digest"

@@ -8,7 +8,11 @@
 
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
    The heroicons installation itself is managed by your mix.exs */
-@plugin "../vendor/heroicons";
+/* Heroicons are no longer inlined here (#511). The plugin emitted one rule per icon carrying a
+   percent-encoded data-URI inside mask-image, and all of it sat in the RENDER-BLOCKING
+   stylesheet: 86 rules, 89 502 raw bytes, 11 796 gzipped — 39% of the whole gzipped CSS, spent
+   on artwork most of which is below the fold. It is now one cacheable sprite (`mix eden.icons`)
+   fetched in parallel, and `<.icon>` references its symbols through <use>. */
 
 /* daisyUI removed (#511): 73 551 raw / 11 545 gzip bytes for a framework nothing used.
    Its only classes (`navbar`, `btn`, `card`, `bg-base-*`) lived in the stock Phoenix scaffold —
@@ -340,6 +344,21 @@ html {
   .ed-emoji__item:focus-visible {
     outline: 2px solid var(--ed-ring);
     outline-offset: 2px;
+  }
+
+  /* A sprite icon (#511). Size normally arrives as a utility from the call site (`size-4` by
+     default on the component) — which is why all 183 call sites needed no change at all. The
+     1.5rem here is the floor, carried over from the plugin this replaced: an <svg> with no size
+     is a replaced element with no intrinsic dimensions, so the browser gives it 300x150px —
+     measured, not feared. One `class="ml-1"` that forgets a size would blow the layout apart
+     (#539 review). This class sits in `components`, utilities sit in a later layer, so any
+     `size-*` still wins. */
+  .ed-icon {
+    display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
+    vertical-align: middle;
+    flex: none;
   }
 
   /* Inputs -------------------------------------------------------------- */

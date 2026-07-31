@@ -159,6 +159,14 @@ window.addEventListener("ed:resume", () => {
 // >> liveSocket.disableLatencySim()
 window.liveSocket = liveSocket
 
+// Sprite icon markup for the hooks that inject icons into the DOM themselves (#511/#539 review).
+// These used to write a span carrying the icon name as a CSS class, which the Tailwind plugin painted with
+// a mask-image; the plugin is gone, and such a span now renders as nothing at all. The sprite URL
+// has to come from the server because prod digests it — it is on <html data-icons>.
+window.edIcon = (name, cls = "") =>
+  `<svg class="ed-icon ${cls}" aria-hidden="true" focusable="false">` +
+  `<use href="${document.documentElement.dataset.icons}#${name}"></use></svg>`
+
 // #207: absorb file drops anywhere in the window so a file dropped OUTSIDE a .DropZone (the
 // sidebar, the rail, the gaps) doesn't make the browser navigate away and open the file. The
 // drop zones handle + stopPropagation their own drops, so this only fires for stray drops.
