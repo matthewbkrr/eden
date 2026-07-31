@@ -51,15 +51,20 @@ defmodule Mix.Tasks.Eden.Icons do
   def used_icon_names do
     Path.wildcard("lib/**/*.{ex,heex}")
     |> Enum.flat_map(fn file ->
-      Regex.scan(~r/hero-[a-z0-9-]+/, File.read!(file)) |> Enum.map(&hd/1)
+      # The QUOTES are load-bearing. A bare `hero-[a-z0-9-]+` also matches prose: this very file
+      # mentions `hero-arrow-up-mini` in a comment below, and it was being shipped as a symbol
+      # nobody references (#539 review). Worse, a comment naming an icon that does not exist would
+      # fail the build from a line that renders nothing. Every real reference is a string literal —
+      # in a template attribute or returned from a helper — so requiring the closing quote keeps
+      # all of them and drops the prose. It also rules out a trailing hyphen.
+      Regex.scan(~r/"(hero-[a-z0-9-]*[a-z0-9])"/, File.read!(file)) |> Enum.map(&List.last/1)
     end)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
   defp symbol(name) do
-    {dir, base} = resolve(name)
-    svg = File.read!(Path.join([@source, dir, base <> ".svg"]))
+    svg = name |> resolve() |> File.read!()
 
     # Carry the root element's presentation attributes onto the symbol: solid icons paint with
     # `fill="currentColor"`, outline ones with `stroke="currentColor"` and a stroke width. Drop
@@ -74,13 +79,29 @@ defmodule Mix.Tasks.Eden.Icons do
     ~s(<symbol id="#{name}" #{kept}>) <> String.trim(body) <> "</symbol>"
   end
 
-  # `hero-arrow-up-mini` → {"20/solid", "arrow-up"}. The suffix decides the variant; what is left
+  # `hero-arrow-up-mini` -> {"20/solid", "arrow-up"}. The suffix decides the variant; what is left
   # is the file name.
   defp resolve("hero-" <> rest) do
-    Enum.find_value(@variants, fn {suffix, dir} ->
-      if suffix == "" or String.ends_with?(rest, suffix) do
-        {dir, String.replace_suffix(rest, suffix, "")}
-      end
-    end)
+    {dir, base} =
+      Enum.find_value(@variants, fn {suffix, dir} ->
+        if suffix == "" or String.ends_with?(rest, suffix) do
+          {dir, String.replace_suffix(rest, suffix, "")}
+        end
+      end)
+
+    path = Path.join([@source, dir, base <> ".svg"])
+
+    # A misspelt name would otherwise surface as `File.read!` raising on a path nobody recognises,
+    # halfway through an asset build (#539 review). Say what is actually wrong instead.
+    unless File.exists?(path) do
+      Mix.raise("""
+      no heroicon named hero-#{rest} (looked for #{path}).
+
+      Icon names are read from string literals in lib/. Check the spelling, or the variant suffix:
+      no suffix = 24/outline, -solid = 24/solid, -mini = 20/solid, -micro = 16/solid.
+      """)
+    end
+
+    path
   end
 end

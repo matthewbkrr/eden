@@ -44,6 +44,33 @@ defmodule EdenWeb.IconSpriteTest do
              "the sprite is built from a source scan and cannot contain what it cannot see"
   end
 
+  test "nothing paints an icon through a CSS class any more" do
+    # `<span class="hero-x-mark-micro">` was how the deleted Tailwind plugin painted icons: the
+    # rule carried the artwork as a mask-image. With the plugin gone that span is an empty inline
+    # element — no error, no warning, a blank gap.
+    #
+    # This PR shipped exactly that bug in ten places at once, all of them in hook JS that builds
+    # markup by hand, none reachable from the `<.icon>` component: the optimistic send tick, the
+    # cancel button, the failed-send warning, the navigation skeleton's composer and back arrow.
+    # The sprite even contained the symbols, which is what made it invisible — the names were there,
+    # nothing referenced them through `<use>`. Hooks now call `window.edIcon/2`.
+    offenders =
+      (Path.wildcard("lib/**/*.{ex,heex}") ++ Path.wildcard("assets/js/**/*.js"))
+      |> Enum.flat_map(fn file ->
+        File.read!(file)
+        |> String.split("\n")
+        |> Enum.with_index(1)
+        |> Enum.filter(fn {line, _} ->
+          String.contains?(line, ~s(class="hero-)) and not String.contains?(line, "window.edIcon")
+        end)
+        |> Enum.map(fn {_, i} -> "#{file}:#{i}" end)
+      end)
+
+    assert offenders == [],
+           "icons painted through a CSS class: #{Enum.join(offenders, ", ")} — " <>
+             "the plugin that made that work is gone; build markup with `window.edIcon(name, class)`"
+  end
+
   test "the sprite carries the attributes that make an outline icon an outline" do
     sprite = File.read!(@sprite)
 

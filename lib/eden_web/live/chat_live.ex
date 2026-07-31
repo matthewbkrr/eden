@@ -3957,12 +3957,12 @@ defmodule EdenWeb.ChatLive do
             // The input is REAL (#439): you can type while the chat loads; dismiss() hands
             // the draft + focus into the mounting composer.
             const foot = withFoot
-              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border);"><div class="flex items-center gap-2"><span class="ed-btn--icon"><span class="hero-paper-clip-micro size-5"></span></span><input type="text" enterkeyhint="send" class="ed-input ed-nav-skel__ph"><span class="ed-btn--icon"><span class="hero-face-smile-micro size-5"></span></span><span class="ed-btn ed-btn--primary ed-btn--send"><span class="hero-paper-airplane-micro size-4"></span></span></div></div>`
+              ? `<div class="ed-nav-skel__foot flex flex-col gap-2 p-3 border-t shrink-0" style="border-color: var(--ed-border);"><div class="flex items-center gap-2"><span class="ed-btn--icon">${window.edIcon("hero-paper-clip-micro", "size-5")}</span><input type="text" enterkeyhint="send" class="ed-input ed-nav-skel__ph"><span class="ed-btn--icon">${window.edIcon("hero-face-smile-micro", "size-5")}</span><span class="ed-btn ed-btn--primary ed-btn--send">${window.edIcon("hero-paper-airplane-micro", "size-4")}</span></div></div>`
               : ""
             // The real mobile header leads with a back arrow (md:hidden) — mirror it on the
             // full-screen variant so the avatar/name don't shift right at the handoff.
             const back = withBack
-              ? `<span class="ed-nav-skel__back"><span class="hero-arrow-left-mini size-5"></span></span>`
+              ? `<span class="ed-nav-skel__back">${window.edIcon("hero-arrow-left-mini", "size-5")}</span>`
               : ""
             return `<div class="ed-nav-skel__head">${back}<div class="ed-nav-skel__title"><span class="ed-nav-skel__name"></span><span class="ed-nav-skel__sub ed-skel-shimmer"></span></div></div><div class="ed-nav-skel__body">${rows}</div>${foot}`
           },
@@ -8633,7 +8633,7 @@ defmodule EdenWeb.ChatLive do
             btn.type = "button"
             btn.className = "ed-sending-cancel"
             btn.setAttribute("aria-label", this.el.dataset.cancelLabel || "Cancel")
-            btn.innerHTML = '<span class="hero-x-mark-micro size-3.5" aria-hidden="true"></span>'
+            btn.innerHTML = window.edIcon("hero-x-mark-micro", "size-3.5")
             btn.addEventListener("click", (e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -8791,7 +8791,7 @@ defmodule EdenWeb.ChatLive do
               const ticks =
                 this.el.dataset.isGroup !== "true"
                   ? '<span class="inline-flex items-center" style="margin-left:2px;">' +
-                    '<span class="hero-check-micro size-3.5"></span></span>'
+                    window.edIcon("hero-check-micro", "size-3.5") + '</span>'
                   : ""
               if (isFile) {
                 // A FILE (or "send as file" docs) keeps the NORMAL padded bubble — mirror
@@ -8965,7 +8965,7 @@ defmodule EdenWeb.ChatLive do
             const icon = card.querySelector(".ed-file__icon")
             if (icon) {
               icon.innerHTML =
-                '<span class="hero-exclamation-circle-mini size-6" aria-hidden="true"></span>'
+                window.edIcon("hero-exclamation-circle-mini", "size-6")
             }
             const notSent = this.el.dataset.notSent || "Not sent"
             const sz = card.querySelector(".ed-file__size")
@@ -9107,7 +9107,7 @@ defmodule EdenWeb.ChatLive do
             bar.className = "ed-upload-failed__bar"
             bar.innerHTML =
               '<span class="ed-upload-failed__bang">' +
-              '<span class="hero-exclamation-circle-mini size-5" aria-hidden="true"></span></span>'
+              window.edIcon("hero-exclamation-circle-mini", "size-5") + '</span>'
             let keys = []
             try {
               keys = JSON.parse(node.dataset.fileKeys || "[]")
@@ -9700,7 +9700,7 @@ defmodule EdenWeb.ChatLive do
             bang.type = "button"
             bang.className = "ed-msg-failed__bang"
             bang.setAttribute("aria-label", this.el.dataset.failed || "Not delivered")
-            bang.innerHTML = '<span class="hero-exclamation-circle-micro size-3.5"></span>'
+            bang.innerHTML = window.edIcon("hero-exclamation-circle-micro", "size-3.5")
             bang.addEventListener("click", (e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -9968,7 +9968,7 @@ defmodule EdenWeb.ChatLive do
             bang.type = "button"
             bang.className = "ed-msg-failed__bang"
             bang.setAttribute("aria-label", this.el.dataset.failed || "Not delivered")
-            bang.innerHTML = '<span class="hero-exclamation-circle-micro size-3.5"></span>'
+            bang.innerHTML = window.edIcon("hero-exclamation-circle-micro", "size-3.5")
             bang.addEventListener("click", (e) => {
               e.preventDefault()
               e.stopPropagation()

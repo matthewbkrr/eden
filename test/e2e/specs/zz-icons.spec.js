@@ -50,3 +50,60 @@ test("icons paint from the sprite, and the sprite is actually served", async ({ 
   expect(requests.length, "the sprite was never fetched").toBeGreaterThan(0);
   expect(requests.every((s) => s === 200 || s === 304), `sprite responses: ${requests}`).toBe(true);
 });
+
+// The hooks that build markup by hand cannot use the `<.icon>` component, so they go through
+// `window.edIcon`. That helper needs the sprite URL from the server — prod digests the filename —
+// and reads it off `<html data-icons>`. Break either half and every JS-injected icon (the send
+// tick, the cancel button, the failed-send warning, the navigation skeleton) turns into a blank
+// gap without a single error in the console. This is the same silent failure the sprite invites,
+// one layer down.
+test("icons injected by hooks paint too", async ({ alice }) => {
+  await alice.goto("/app");
+  await alice.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
+    timeout: 15_000,
+  });
+
+  const result = await alice.evaluate(() => {
+    if (typeof window.edIcon !== "function") return { error: "window.edIcon is not defined" };
+
+    const host = document.createElement("div");
+    // Off the layout but still rendered: `display:none` would zero the geometry for everyone and
+    // make this pass on a broken sprite too.
+    host.style.cssText = "position:fixed;left:-9999px;top:0";
+    document.body.appendChild(host);
+
+    // One per size the hooks actually ask for, so a wrong variant suffix shows up here.
+    const names = [
+      "hero-check-micro",
+      "hero-x-mark-micro",
+      "hero-exclamation-circle-micro",
+      "hero-exclamation-circle-mini",
+      "hero-arrow-left-mini",
+      "hero-paper-airplane-micro",
+    ];
+    host.innerHTML = names.map((n) => window.edIcon(n, "size-4")).join("");
+
+    const blank = names.filter((_, i) => {
+      try {
+        const b = host.children[i].getBBox();
+        return !(b.width > 0 && b.height > 0);
+      } catch (_e) {
+        return true;
+      }
+    });
+
+    const href = host.children[0]?.querySelector("use")?.getAttribute("href") || "";
+    host.remove();
+    return { blank, href, total: names.length };
+  });
+
+  expect(result.error, result.error).toBeUndefined();
+  expect(
+    result.href,
+    `the sprite URL never reached the helper (href="${result.href}") — check <html data-icons>`,
+  ).toContain("/images/icons.svg");
+  expect(
+    result.blank,
+    `${result.blank.length} of ${result.total} hook-injected icons paint nothing: ${result.blank.join(", ")}`,
+  ).toEqual([]);
+});

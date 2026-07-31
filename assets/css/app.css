@@ -346,11 +346,17 @@ html {
     outline-offset: 2px;
   }
 
-  /* A sprite icon (#511). The plugin used to set display and size itself; this class does the
-     first part, while the actual size still arrives as a utility from the call site (`size-4` by
-     default) — which is why all 183 call sites needed no change at all. */
+  /* A sprite icon (#511). Size normally arrives as a utility from the call site (`size-4` by
+     default on the component) — which is why all 183 call sites needed no change at all. The
+     1.5rem here is the floor, carried over from the plugin this replaced: an <svg> with no size
+     is a replaced element with no intrinsic dimensions, so the browser gives it 300x150px —
+     measured, not feared. One `class="ml-1"` that forgets a size would blow the layout apart
+     (#539 review). This class sits in `components`, utilities sit in a later layer, so any
+     `size-*` still wins. */
   .ed-icon {
     display: inline-block;
+    width: 1.5rem;
+    height: 1.5rem;
     vertical-align: middle;
     flex: none;
   }
