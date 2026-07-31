@@ -3954,13 +3954,17 @@ defmodule Eden.Chat do
   success does, so open clients fall back to the original immediately.
   """
   def mark_thumbnail_failed(%Attachment{} = attachment) do
-    {:ok, updated} =
-      attachment
-      |> Ecto.Changeset.change(thumb_failed: true)
-      |> Repo.update()
+    # Broadcast only on a real write. A failed update used to raise a MatchError here (#532
+    # review), taking the worker down inside its own error handling — which is the worst moment
+    # to lose the distinction between "could not generate" and "could not even record that".
+    case attachment |> Ecto.Changeset.change(thumb_failed: true) |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_thumbnail(updated.message_id)
+        {:ok, updated}
 
-    broadcast_thumbnail(updated.message_id)
-    {:ok, updated}
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   @doc """
@@ -3971,7 +3975,6 @@ defmodule Eden.Chat do
   no-op once a preview (`thumbnail_key`) exists. Invoked by
   `Eden.Chat.ThumbnailWorker`; returns `:ok` or `{:error, reason}`.
   """
-
   def generate_thumbnail(%Attachment{thumbnail_key: key}) when is_binary(key), do: :ok
 
   def generate_thumbnail(%Attachment{kind: "video"} = attachment),

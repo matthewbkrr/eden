@@ -19,9 +19,24 @@ defmodule Eden.Chat.ThumbnailWorker do
     case Repo.get(Attachment, id) do
       nil -> :ok
       %Attachment{thumbnail_key: key} when is_binary(key) -> :ok
-      attachment -> handle(Chat.generate_thumbnail(attachment), attachment, job)
+      attachment -> run(attachment, job)
     end
   end
+
+  # A raise is a failure too, and on the last attempt it is a FINAL one — Oban discards the job
+  # and nothing would ever speak for the attachment again, leaving the renderer on the pending
+  # placeholder forever (#532 review). Marking happens before re-raising so Oban still records
+  # the error as it always did.
+  defp run(attachment, job) do
+    handle(Chat.generate_thumbnail(attachment), attachment, job)
+  rescue
+    error ->
+      if last_attempt?(job), do: Chat.mark_thumbnail_failed(attachment)
+      reraise error, __STACKTRACE__
+  end
+
+  defp last_attempt?(%Oban.Job{attempt: n, max_attempts: n}), do: true
+  defp last_attempt?(_job), do: false
 
   # A broken or oversized image will never succeed, so cancel instead of burning
   # retries; storage/DB hiccups are transient, so let those retry.
@@ -37,10 +52,8 @@ defmodule Eden.Chat.ThumbnailWorker do
     {:cancel, reason}
   end
 
-  defp handle({:error, reason}, attachment, %Oban.Job{attempt: n, max_attempts: n}) do
-    Chat.mark_thumbnail_failed(attachment)
+  defp handle({:error, reason}, attachment, job) do
+    if last_attempt?(job), do: Chat.mark_thumbnail_failed(attachment)
     {:error, reason}
   end
-
-  defp handle({:error, reason}, _attachment, _job), do: {:error, reason}
 end
