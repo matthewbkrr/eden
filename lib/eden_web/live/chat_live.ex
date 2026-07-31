@@ -7454,8 +7454,11 @@ defmodule EdenWeb.ChatLive do
             // scroll tick — measured at 30 constructions for 30 wheel ticks — and constructing an
             // Intl.DateTimeFormat is one of the most expensive calls in ICU. There are exactly two
             // shapes (this year / another year), so two cached instances cover every label.
+            // The locale is part of the key (#535 review): it rides a dataset attribute, so a
+            // patch can change it under a live hook, and a cache keyed only by shape would keep
+            // formatting in the language the person just left.
             const sameYear = d.getFullYear() === now.getFullYear()
-            const key = sameYear ? "short" : "full"
+            const key = `${this.locale}|${sameYear ? "short" : "full"}`
             this._fmt = this._fmt || {}
 
             this._fmt[key] =

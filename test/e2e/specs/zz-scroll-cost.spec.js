@@ -40,8 +40,23 @@ test("scrolling does not build a date formatter per frame", async ({ alice, seed
   }
 
   await alice.evaluate(() => {
+    // Two counters, and the second one is the point: counting CONSTRUCTIONS alone cannot tell
+    // "cached correctly" from "never ran". A zero would look like success either way — which is
+    // precisely the trap this file documents and, until now, did not guard against
+    // (#535 review). Counting format() calls proves the path was exercised at all.
     window.__fmt = 0;
+    window.__formatted = 0;
     const Real = Intl.DateTimeFormat;
+    // `format` is an ACCESSOR on the prototype, not a plain method — assigning over it detaches
+    // the internal slot and every call then throws "incompatible receiver". Wrap the getter.
+    const desc = Object.getOwnPropertyDescriptor(Real.prototype, "format");
+    Object.defineProperty(Real.prototype, "format", {
+      configurable: true,
+      get() {
+        window.__formatted++;
+        return desc.get.call(this);
+      },
+    });
     Intl.DateTimeFormat = function (...args) {
       window.__fmt++;
       return new Real(...args);
@@ -60,9 +75,14 @@ test("scrolling does not build a date formatter per frame", async ({ alice, seed
   await alice.waitForTimeout(800);
 
   const built = await alice.evaluate(() => window.__fmt);
-  const line = `${TICKS} wheel ticks built ${built} date formatters`;
+  const formatted = await alice.evaluate(() => window.__formatted);
+  const line = `${TICKS} wheel ticks built ${built} date formatters, formatted ${formatted} labels`;
   console.log(line);
   testInfo.annotations.push({ type: "measurement", description: line });
+
+  // The path must have RUN. Without this the whole test is satisfied by a scroll that never
+  // reached a labelled day, and "0 formatters" would be a green light for nothing at all.
+  expect(formatted, `${line} — the scroll never reached a day needing a label`).toBeGreaterThan(0);
 
   // Before the fix this was one per tick — 30 for 30. The threshold separates the two
   // implementations rather than describing a wish.
