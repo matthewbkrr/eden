@@ -16,7 +16,7 @@ async function watch(alice) {
           if (n.nodeType !== 1 || !n.dataset || !n.dataset.clientId || window.__opt) continue
           window.__opt = {
             cls: n.className,
-            hasClock: !!n.querySelector(".hero-clock-micro, .ed-clock__m"),
+            hasClock: !!n.querySelector('use[href$="#hero-clock-micro"], .ed-clock__m'),
             hasSent: n.classList.contains("ed-msg--sent"),
             // Paint-aligned start (#439): the entrance class lands two rAFs after the
             // insert, and a fast local ack can swap the twin out BEFORE that. The

@@ -308,7 +308,7 @@ defmodule EdenWeb.ChannelModeTest do
 
       assert has_element?(
                view,
-               ~s(a[href^="/channels/#{ctx.channel.id}/r/#{priv.id}/m/"] .hero-lock-closed-micro)
+               ~s(a[href^="/channels/#{ctx.channel.id}/r/#{priv.id}/m/"] use[href$="#hero-lock-closed-micro"])
              )
     end
 
@@ -505,7 +505,7 @@ defmodule EdenWeb.ChannelModeTest do
       assert html =~ "hero-lock-closed-micro"
       # general renders the literal hash, not an icon.
       assert has_element?(view, "#room-#{ctx.general.id} .ed-room__hash span", "#")
-      refute has_element?(view, "#room-#{ctx.general.id} .hero-globe-alt-micro")
+      refute has_element?(view, ~s(#room-#{ctx.general.id} use[href$="#hero-globe-alt-micro"]))
     end
 
     test "the rename modal hides the picker for general but offers it elsewhere", ctx do

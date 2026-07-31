@@ -29,6 +29,13 @@ defmodule EdenWeb.CoreComponents do
   use Phoenix.Component
   use Gettext, backend: EdenWeb.Gettext
 
+  # For the icon sprite's path (#511): static files go through the digest, so the reference has
+  # to be built by a verified route rather than written as a literal.
+  use Phoenix.VerifiedRoutes,
+    endpoint: EdenWeb.Endpoint,
+    router: EdenWeb.Router,
+    statics: EdenWeb.static_paths()
+
   alias Phoenix.LiveView.JS
 
   @doc """
@@ -54,7 +61,9 @@ defmodule EdenWeb.CoreComponents do
 
   def icon(%{name: "hero-" <> _} = assigns) do
     ~H"""
-    <span class={[@name, @class]} />
+    <svg class={["ed-icon", @class]} aria-hidden="true" focusable="false">
+      <use href={~p"/images/icons.svg" <> "##{@name}"} />
+    </svg>
     """
   end
 
