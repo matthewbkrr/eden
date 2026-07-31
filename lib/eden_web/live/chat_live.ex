@@ -15912,8 +15912,13 @@ defmodule EdenWeb.ChatLive do
   defp stream_read_flips(socket, scope, conversation, previous, read_at) do
     compacts = socket.assigns.compacts
 
+    # Bound the query by the loaded window from both ends: never older than its first row, never
+    # more rows than it holds. The interval usually bounds this to nothing at all, but on the
+    # FIRST receipt there is no previous marker, so every own message up to `read_at` flips and
+    # the window is the only bound left (#529 review).
     case Chat.list_own_messages_between(scope, conversation.id, previous, read_at,
-           after_id: compacts |> Map.keys() |> Enum.min(fn -> nil end)
+           after_id: compacts |> Map.keys() |> Enum.min(fn -> nil end),
+           limit: map_size(compacts)
          ) do
       {:ok, messages} ->
         messages

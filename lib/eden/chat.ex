@@ -1890,9 +1890,11 @@ defmodule Eden.Chat do
   message while the chat is open, so each of your own sends came back to you as fifty fully
   rendered bubbles.
 
-  `from` is exclusive and may be `nil` (no marker yet). `after_id:` bounds the query to the
-  window the client actually has loaded — a caller must never stream a row the viewer has
-  paginated past, or it lands appended at the bottom, out of order.
+  `from` is exclusive and may be `nil` — no marker yet, which is the one case the interval does
+  not bound: then EVERY own message up to `to` flips, and only the window bounds the result.
+  `after_id:` and `limit:` are that bound; a caller must never stream a row the viewer has
+  paginated past, or it lands appended at the bottom, out of order, and it can never need more
+  rows than the window holds (#529 review).
   """
   def list_own_messages_between(%Scope{user: user} = scope, conversation_id, from, to, opts \\ []) do
     if has_access?(scope, conversation_id) do
@@ -1902,6 +1904,7 @@ defmodule Eden.Chat do
         |> where([m], m.inserted_at <= ^to)
         |> then(&if from, do: where(&1, [m], m.inserted_at > ^from), else: &1)
         |> then(&if id = opts[:after_id], do: where(&1, [m], m.id >= ^id), else: &1)
+        |> then(&if n = opts[:limit], do: limit(&1, ^n), else: &1)
         |> order_by([m], asc: m.id)
         |> preload(^@message_preloads)
         |> Repo.all()

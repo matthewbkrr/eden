@@ -48,24 +48,36 @@ test("sending into an actively-read DM stays inside the diff budget", async ({
   // Count before navigating: the socket opens during goto.
   let bytes = 0;
   let counting = false;
+  let lastFrameAt = 0;
   alice.on("websocket", (ws) => {
     ws.on("framereceived", (f) => {
-      if (!counting) return;
       const payload = String(f.payload || "");
       // The dev server streams its own logs over a separate phoenix:live_reload channel — 60 KB
       // of them in this window alone. Counting those would measure the tooling, not the app.
       if (payload.includes("phoenix:live_reload")) return;
-      const n = Buffer.byteLength(payload);
-      bytes += n;
+      lastFrameAt = Date.now();
+      if (counting) bytes += Buffer.byteLength(payload);
     });
   });
+
+  // Boundaries by observation, not by the clock. A fixed drain before and a fixed sleep after
+  // would both guess: too short and a late frame goes uncounted (a false pass), too long and the
+  // test is slow for nothing (#529 review). Quiet means the socket has said nothing for `ms`.
+  const quiet = async (ms) => {
+    lastFrameAt = lastFrameAt || Date.now();
+    for (let waited = 0; waited < 15_000; waited += 100) {
+      if (Date.now() - lastFrameAt >= ms) return;
+      await alice.waitForTimeout(100);
+    }
+    throw new Error(`socket never went quiet for ${ms} ms`);
+  };
 
   await ready(alice);
   await ready(bob);
   await openDm(alice, seed);
   await openDm(bob, seed);
   // Let the initial render, presence and any pending receipts drain before measuring.
-  await alice.waitForTimeout(1500);
+  await quiet(600);
 
   const mark = `receipt-${Date.now()}`;
   counting = true;
@@ -78,7 +90,8 @@ test("sending into an actively-read DM stays inside the diff budget", async ({
   // it is an exact signal rather than a guess.
   const row = alice.locator("#messages [data-message-id]", { hasText: mark }).last();
   await expect(row.locator(".-mr-2").first()).toBeVisible({ timeout: 10_000 });
-  await alice.waitForTimeout(1200);
+  // Stop only once nothing more is arriving, so a trailing frame cannot be missed.
+  await quiet(800);
   counting = false;
 
   const line = `one send into an actively-read DM: ${bytes} B received by the sender`;
