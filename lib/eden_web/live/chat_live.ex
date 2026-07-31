@@ -6783,16 +6783,6 @@ defmodule EdenWeb.ChatLive do
               const extra = -delta - CLAMP
               return -(CLAMP + 30 * (1 - Math.exp(-extra / 70)))
             }
-            // Fire the quote-reply for this row. In the thread panel the row carries
-            // reply_in_thread, so a swipe there replies INTO the thread, not the room.
-            const fireReply = this._fireReply = () => {
-              if (!this.el.dataset.messageId) return
-              const event = this.el.dataset.replyEvent || "reply"
-              this.pushEvent(event, { id: this.el.dataset.messageId })
-              const sel = event === "reply_in_thread" ? "#reply-body" : "#composer-body"
-              const input = document.querySelector(sel)
-              input && input.focus()
-            }
             this.el.addEventListener("touchstart", (e) => {
               const t = e.touches[0]; sx = t.clientX; sy = t.clientY; dx = 0; swiping = false
               this.el.style.transition = "none"
@@ -6852,7 +6842,7 @@ defmodule EdenWeb.ChatLive do
             }, { passive: true })
             this.el.addEventListener("touchend", () => {
               cancel()
-              if (swiping && dx <= -SWIPE) fireReply()
+              if (swiping && dx <= -SWIPE) this.fireReply()
               if (swiping) reset()
             })
             // iOS hands the touch to a system gesture (edge swipe, notification pull):
@@ -6888,7 +6878,7 @@ defmodule EdenWeb.ChatLive do
               this._dragUp = () => {
                 document.removeEventListener("mousemove", this._dragMove)
                 document.removeEventListener("mouseup", this._dragUp)
-                if (mDrag && mdx <= -SWIPE) fireReply()
+                if (mDrag && mdx <= -SWIPE) this.fireReply()
                 // A real drag suppresses the click it would otherwise fire (opening a
                 // photo). `dragged` is distinct from the touch long-press flag.
                 if (mDrag) { reset(); this.dragged = true; setTimeout(() => { this.dragged = false }, 0) }
@@ -6939,7 +6929,7 @@ defmodule EdenWeb.ChatLive do
                 this.el.style.transform = `translateX(${pull(-wx)}px)`
                 if (!this._wheelFired && wx >= SWIPE) {
                   this._wheelFired = true
-                  fireReply()
+                  this.fireReply()
                   this._wheelSnap = setTimeout(() => { this._wheelDone = true; reset() }, 180)
                 }
               }, { passive: true })
@@ -6999,10 +6989,13 @@ defmodule EdenWeb.ChatLive do
               : this.el.querySelector("[data-menu]")
             if (this.menu && !this.menu._wired) {
               this.menu._wired = true
-              // The shared node outlives every hook instance, so the handler must resolve the
-              // CURRENT owner rather than close over whichever row happened to wire it first —
-              // otherwise every click would carry the first-rendered message's id.
-              this.menu.addEventListener("click", (e) => (active || this).onItem(e))
+              // The shared node outlives every hook instance, so the handler resolves the CURRENT
+              // owner (`active`, set in open()) rather than closing over whichever row happened
+              // to wire it first — otherwise every click would carry the first-rendered message's
+              // id. No `|| this` fallback: a click can only arrive while a menu is open, and an
+              // open menu always has an owner. Two review rounds read that fallback as the bug
+              // itself, which is reason enough for it not to exist.
+              this.menu.addEventListener("click", (e) => active && active.onItem(e))
             }
             // Optional visible trigger (the flat rows' hover "⋯") — anchors the
             // same menu under the button. Wired here so a stream morph that
@@ -7076,7 +7069,7 @@ defmodule EdenWeb.ChatLive do
                 // Same path as the swipe gesture: pushes the row's own reply event and focuses
                 // the matching composer, so a reply from a thread row stays in the thread.
                 this.close()
-                return this._fireReply && this._fireReply()
+                return this.fireReply()
               case "copy_text":
                 return this.copy(d.text || "", "text")
               case "copy_link":
@@ -7096,6 +7089,19 @@ defmodule EdenWeb.ChatLive do
                 this.pushEvent(btn.dataset.act, { id })
             }
             this.close()
+          },
+          // Fire the quote-reply for this row — from a swipe or from the menu's Reply item.
+          // In the thread panel the row carries reply_in_thread, so either gesture replies INTO
+          // the thread, not the room; and the focus moves to that surface's composer. A real
+          // method, not a closure stashed on the instance (#528 review read the old
+          // `const fireReply = this._fireReply = …` as belonging to some other hook).
+          fireReply() {
+            if (!this.el.dataset.messageId) return
+            const event = this.el.dataset.replyEvent || "reply"
+            this.pushEvent(event, { id: this.el.dataset.messageId })
+            const sel = event === "reply_in_thread" ? "#reply-body" : "#composer-body"
+            const input = document.querySelector(sel)
+            input && input.focus()
           },
           // Point the shared menu at THIS row: which items apply, and which reactions the
           // viewer already left. The predicates are computed server-side onto the row

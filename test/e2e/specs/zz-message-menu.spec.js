@@ -149,9 +149,13 @@ test("Delete for everyone asks first, then tombstones the message", async ({ ali
   await send(alice, mark);
   const row = alice.locator("#messages [data-message-id]", { hasText: mark }).last();
 
+  // Accept here rather than leaning on the fixture's global handler: the test should not depend
+  // on someone else's registration to get past its own confirmation (#528 review). The fixture
+  // also accepts, and the loser of that race just gets a rejected promise — hence the catch.
   let asked = 0;
-  alice.on("dialog", () => {
+  alice.on("dialog", (d) => {
     asked++;
+    d.accept().catch(() => {});
   });
 
   const menu = await openMenu(alice, row);
@@ -162,4 +166,29 @@ test("Delete for everyone asks first, then tombstones the message", async ({ ali
 
   await expect(alice.locator("#messages", { hasText: mark })).toHaveCount(0, { timeout: 8000 });
   expect(asked, "no confirmation was asked before deleting for everyone").toBeGreaterThan(0);
+});
+
+test("swipe-to-reply still runs the same path as the menu item", async ({ alice, seed }) => {
+  // fireReply stopped being a closure and became a hook method (#528 review), and the swipe
+  // gestures call it too — so the gesture needs its own check, or the refactor could have
+  // broken quote-reply everywhere except the menu. Desktop drag path: bubbles only, leftward
+  // and axis-dominant past the 56px threshold.
+  await ready(alice);
+  await openDm(alice, seed);
+  const mark = `swipe-reply-${Date.now()}`;
+  await send(alice, mark);
+  const bubble = alice.locator("#messages .ed-bubble", { hasText: mark }).last();
+  await expect(bubble).toBeVisible();
+
+  const box = await bubble.boundingBox();
+  const y = box.y + box.height / 2;
+  await alice.mouse.move(box.x + box.width - 12, y);
+  await alice.mouse.down();
+  for (const dx of [20, 45, 75, 100]) {
+    await alice.mouse.move(box.x + box.width - 12 - dx, y);
+  }
+  await alice.mouse.up();
+
+  await expect(alice.locator(".ed-reply-bar").first()).toBeVisible({ timeout: 5000 });
+  await expect(alice.locator("#composer-body")).toBeFocused();
 });
