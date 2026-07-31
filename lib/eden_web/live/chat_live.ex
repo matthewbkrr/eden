@@ -2907,7 +2907,19 @@ defmodule EdenWeb.ChatLive do
         socket
       end
 
-    {:noreply, socket |> refresh_sidebar() |> refresh_selected_for(user)}
+    # Gate the sidebar rebuild on whether this person can appear in it at all (#514).
+    # `{:user_updated}` rides a process-wide topic, so before this every profile edit by anyone
+    # in the organisation cost EVERY live session a full `list_conversations` (~7 queries, no
+    # LIMIT) plus a diff of the whole sidebar stream. `refresh_selected_for/2` right below was
+    # already gated the same way — this brings the sidebar in line with it.
+    socket =
+      if Chat.shares_conversation?(scope, user.id) do
+        refresh_sidebar(socket)
+      else
+        socket
+      end
+
+    {:noreply, refresh_selected_for(socket, user)}
   end
 
   # Swallow any unexpected message (a stray PubSub broadcast, a late async reply)

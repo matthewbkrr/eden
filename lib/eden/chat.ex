@@ -4010,7 +4010,7 @@ defmodule Eden.Chat do
   """
   def get_shared_user(%Scope{user: user}, other_id) do
     with id when is_integer(id) <- safe_id(other_id),
-         true <- shares_conversation?(user.id, id),
+         true <- shares_any_conversation?(user.id, id),
          %User{} = other <- Repo.get(User, id) do
       {:ok, other}
     else
@@ -4018,7 +4018,22 @@ defmodule Eden.Chat do
     end
   end
 
-  defp shares_conversation?(user_id, other_id) do
+  @doc """
+  Whether the scoped user shares at least one conversation with `other_id` — i.e. whether that
+  person can appear anywhere in their sidebar.
+
+  A cheap `exists?` meant as a GATE. `{:user_updated}` rides a process-wide topic, so without it
+  every profile edit by anyone in the organisation costs every live session a full sidebar
+  rebuild (#514). Note a user always shares conversations with themselves.
+  """
+  def shares_conversation?(%Scope{user: user}, other_id) do
+    case safe_id(other_id) do
+      id when is_integer(id) -> shares_any_conversation?(user.id, id)
+      _ -> false
+    end
+  end
+
+  defp shares_any_conversation?(user_id, other_id) do
     Repo.exists?(
       from m1 in Membership,
         join: m2 in Membership,
