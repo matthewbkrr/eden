@@ -4766,6 +4766,52 @@ html {
   .ed-settings-nav__item:active,
   .ed-admin-row:active { transition: none; }
 
+  /* ────────────────────────────────────────────────────────────────────────────
+     Gesture ownership (#515).
+
+     `touch-action` was declared NOWHERE in this project — not in the CSS, not in the
+     templates, not in the hooks. So every touch began life as a candidate for a native
+     two-axis pan, while every horizontal recogniser we have is passive or lives on
+     `document` and cannot cancel it. On a swipe-to-reply that means the row is dragged on
+     the main thread while the list still pans on the compositor: the two drift apart pixel
+     by pixel, which is exactly what reads as "a web page" rather than an app.
+
+     Declaring the axis is the fix that does NOT cost anything at runtime. The alternative —
+     making the touchmove listener non-passive so it can preventDefault — puts the main
+     thread in the path of EVERY touchmove, which the comment on the InstantNav hook
+     explicitly avoids.
+
+     `pan-y` disables native double-tap zoom on these elements. Nothing is lost: the double
+     tap is already taken (react on a message, zoom in the lightbox). Pinch is preserved
+     explicitly — the viewport meta carries no `user-scalable=no`. */
+
+  /* Vertical scrollers: the horizontal axis is ours, the vertical stays native. */
+  #message-scroll,
+  #thread-scroll {
+    touch-action: pan-y pinch-zoom;
+  }
+
+  /* The rows themselves — the main point. This is what closes the swipe-vs-scroll conflict
+     without moving any listener off the passive path. */
+  .ed-bubble,
+  .ed-flat,
+  .ed-convo-wrap {
+    touch-action: pan-y pinch-zoom;
+  }
+
+  /* Horizontal strips declare their own axis, so a vertical drag on them scrolls the page
+     instead of fighting the strip. */
+  .ed-folders,
+  .ed-lightbox__strip,
+  .ed-gallery-tabs {
+    touch-action: pan-x;
+  }
+
+  /* The lightbox stage takes the gesture outright — it already preventDefaults. */
+  .ed-lightbox__stage {
+    touch-action: none;
+  }
+
   /* Пока патч в полёте (#512). Класс LiveView ставит СИНХРОННО внутри putRef — до
      отправки в сокет, то есть в том же кадре, что и тап, — и держит до ответа. Вариант
      `@custom-variant phx-click-loading` объявлен в этом файле с самого начала и не имел

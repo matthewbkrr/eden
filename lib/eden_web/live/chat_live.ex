@@ -3129,6 +3129,11 @@ defmodule EdenWeb.ChatLive do
               if (!loadingOv) {
                 // Only on an open chat (its header carries the back link); the thread sheet
                 // has its own back affordance — don't fight it.
+                // A modal owns the gesture while it is open (#515). The lightbox is a native
+                // <dialog>, and the chat header BEHIND it stays in the DOM — so [data-nav-back]
+                // is still found and the edge-swipe armed itself under the photo, ready to
+                // navigate the page the viewer cannot even see.
+                if (document.querySelector("dialog[open]")) return
                 if (!document.querySelector("[data-nav-back]") || document.querySelector(".ed-thread")) return
               }
               const main = document.getElementById("chat-dropzone")
@@ -6788,6 +6793,10 @@ defmodule EdenWeb.ChatLive do
             const reset = () => {
               this.el.style.transition = "transform 0.18s var(--ed-ease)"
               this.el.style.transform = ""
+              // Drop the compositor hint the gesture asked for (#515). It is set only while a
+              // row is actually being dragged: declaring it statically would promote every one
+              // of ~200 rendered rows to its own layer, which costs far more than it saves.
+              this.el.style.willChange = ""
               swiping = false
             }
             // Rubber-band the row to the gesture: follow the finger 1:1 up to CLAMP (a
@@ -6853,6 +6862,8 @@ defmodule EdenWeb.ChatLive do
               // Drag a message row left with the finger (rubber-banded); reply on release.
               if (this.el.dataset.messageId && dx < -10 && Math.abs(dx) > Math.abs(dy)) {
                 swiping = true
+                // Promote for the duration of the drag only — see reset() (#515).
+                this.el.style.willChange = "transform"
                 this.el.style.transform = `translateX(${pull(dx)}px)`
               }
             }, { passive: true })
@@ -6888,6 +6899,7 @@ defmodule EdenWeb.ChatLive do
                 if (!mDrag && (mdx > -ENGAGE || Math.abs(mdx) <= Math.abs(mdy))) return
                 mDrag = true
                 this.el.style.transition = "none"
+                this.el.style.willChange = "transform"
                 this.el.style.transform = `translateX(${pull(mdx)}px)`
                 e.preventDefault() // suppress text selection once it IS a swipe
               }
@@ -6942,6 +6954,7 @@ defmodule EdenWeb.ChatLive do
                 if (this._wheelDone) return // replied + snapped; ignore the momentum tail
                 wx = Math.max(0, wx + e.deltaX)
                 this.el.style.transition = "none"
+                this.el.style.willChange = "transform"
                 this.el.style.transform = `translateX(${pull(-wx)}px)`
                 if (!this._wheelFired && wx >= SWIPE) {
                   this._wheelFired = true
