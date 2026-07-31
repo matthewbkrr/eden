@@ -12,6 +12,10 @@ const { test, expect } = require("../helpers/fixtures");
 // go straight back to one frame per character.
 const MAX_FRAMES = 6;
 
+// A frame addressed to this LiveView, as opposed to the heartbeat on the `phoenix` topic or the
+// dev server's live_reload log channel. Phoenix's wire format puts the topic third.
+const isLiveViewFrame = (payload) => /^\["\d*","[^"]*","lv:/.test(payload);
+
 test.describe.configure({ mode: "serial" });
 
 test("typing a sentence does not cost a round trip per character", async ({
@@ -27,15 +31,19 @@ test("typing a sentence does not cost a round trip per character", async ({
   alice.on("websocket", (ws) => {
     ws.on("framereceived", (f) => {
       const payload = String(f.payload || "");
-      // The dev server streams its own logs over phoenix:live_reload — that is the tooling.
-      if (payload.includes("phoenix:live_reload")) return;
+      // Count only this LiveView's own traffic. Everything else on the socket is noise for this
+      // question and would inflate the number by an amount that depends on timing rather than on
+      // the code: the dev server's live_reload log stream, the `phoenix` topic's 30-second
+      // heartbeat and its reply, and any push that has nothing to do with typing (#534 review).
+      if (!isLiveViewFrame(payload)) return;
       lastFrameAt = Date.now();
       if (!counting) return;
       received += Buffer.byteLength(payload);
       frames++;
     });
     ws.on("framesent", (f) => {
-      if (counting) sent += Buffer.byteLength(String(f.payload || ""));
+      const payload = String(f.payload || "");
+      if (counting && isLiveViewFrame(payload)) sent += Buffer.byteLength(payload);
     });
   });
 
