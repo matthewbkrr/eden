@@ -146,11 +146,25 @@ defmodule Eden.Images do
   defp build_variant(key, vkey, width) do
     with {:ok, bytes} <- Storage.read(key),
          {:ok, small} <- downscale_webp(bytes, width) do
-      Storage.put_binary(vkey, small)
+      cache(key, vkey, small)
       {:ok, small}
     else
       _ -> {:error, :unprocessable}
     end
+  end
+
+  # Building a variant reads the source, resizes, then writes — and a delete can land in the
+  # middle of that. The delete sweeps the variants that exist at the time, so a write landing
+  # after it recreates one whose source is gone: storage nobody will ever look for again
+  # (#516 review). Re-checking the source AFTER the write closes all but a vanishing window,
+  # and this runs once per variant, on the miss path only.
+  #
+  # The request is served either way — the bytes are already in hand, and a variant that could
+  # not be cached is a slower request, not a failed one.
+  defp cache(key, vkey, bytes) do
+    Storage.put_binary(vkey, bytes)
+    unless Storage.exists?(key), do: Storage.delete(vkey)
+    :ok
   end
 
   @doc """

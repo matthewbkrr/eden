@@ -4961,8 +4961,19 @@ defmodule Eden.Chat do
 
   # No poster, but ffprobe gave us metadata — persist it so the UI still knows the
   # duration/dimensions (and that this is a real video).
+  #
+  # `thumb_failed` too, because no poster will EVER come for this clip: ffprobe read it fine,
+  # ffmpeg found no video stream to take a frame from. The worker treats this as a success, so
+  # nothing else ever records it — and without it the row is indistinguishable from "the job has
+  # not run yet", which leaves the message forever unsettled and strands every photo in the same
+  # album (#516 review). Video tiles key off `thumbnail_key` alone, so nothing renders differently.
   defp store_video_preview(attachment, nil, meta) when map_size(meta) > 0 do
-    with {:ok, _attachment} <- update_attachment(attachment, video_meta(attachment, meta)) do
+    changeset =
+      attachment
+      |> Attachment.changeset(video_meta(attachment, meta))
+      |> Ecto.Changeset.change(thumb_failed: true)
+
+    with {:ok, _attachment} <- Repo.update(changeset, stale_error_field: :id) do
       broadcast_when_settled(attachment.message_id)
       :ok
     end

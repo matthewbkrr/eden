@@ -52,26 +52,37 @@ defmodule EdenWeb.Avatars do
   # sobelow_skip ["XSS.SendResp", "XSS.ContentType"]
   def send_avatar(conn, key) do
     case bytes(key) do
-      {:ok, bytes, type} ->
+      {:ok, bytes, type, cache} ->
         conn
         |> put_resp_content_type(type, nil)
         |> put_resp_header("x-content-type-options", "nosniff")
-        |> put_resp_header("cache-control", "private, max-age=31536000, immutable")
+        |> put_resp_header("cache-control", cache)
         |> send_resp(200, bytes)
 
       :error ->
-        conn |> put_status(:not_found) |> Phoenix.Controller.text("Not found")
+        conn
+        |> put_resp_header("cache-control", "no-store")
+        |> put_status(:not_found)
+        |> Phoenix.Controller.text("Not found")
     end
   end
 
+  # The variant is immutable for a year — the URL carries a hash of the key and the width, so
+  # those bytes can never mean anything else.
+  #
+  # The FALLBACK is not. It is served under the same URL, and reaching it means the resize did
+  # not work THIS TIME — a storage hiccup, a source libvips choked on. Marking that immutable
+  # would pin the 512px master in the browser for a year, long after the variant started
+  # working, and nothing would ever ask again (#516 review). `no-store` keeps the avatar showing
+  # and lets the next load try for the small one.
   defp bytes(key) do
     case Images.variant(key, Images.avatar_width()) do
       {:ok, small} ->
-        {:ok, small, "image/webp"}
+        {:ok, small, "image/webp", "private, max-age=31536000, immutable"}
 
       _ ->
         case Storage.read(key) do
-          {:ok, whole} -> {:ok, whole, "image/jpeg"}
+          {:ok, whole} -> {:ok, whole, "image/jpeg", "no-store"}
           _ -> :error
         end
     end

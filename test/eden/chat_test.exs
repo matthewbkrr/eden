@@ -3834,6 +3834,39 @@ defmodule Eden.ChatTest do
       assert Enum.any?(broadcast.attachments, &is_binary(&1.thumbnail_key))
     end
 
+    @tag :ffmpeg
+    test "a clip that will never have a poster does not hold up its album", %{
+      alice: alice,
+      conv: conv
+    } do
+      # An audio-only mp4 probes fine but has no video stream to grab a frame from, so the worker
+      # succeeds while leaving `thumbnail_key` nil. That row is then indistinguishable from "the
+      # job has not run yet" — and a settled-message check reads it as forever-pending, stranding
+      # every photo in the same album with it (#516 review). Generation being OVER has to be
+      # recorded even when it is over successfully.
+      Chat.subscribe(conv.id)
+
+      sources = [
+        %{path: audio_mp4(), filename: "voice.mp4"},
+        %{path: real_png(600, 400), filename: "photo.png"}
+      ]
+
+      {:ok, message} = Chat.create_album_message(scope(alice), conv.id, sources, %{})
+      [clip, photo] = message.attachments
+      assert clip.kind == "video"
+
+      assert :ok = perform_job(ThumbnailWorker, %{attachment_id: clip.id})
+      assert is_nil(Repo.get(Attachment, clip.id).thumbnail_key)
+
+      assert :ok = Chat.generate_thumbnail(photo)
+
+      assert_receive {:thumbnail_ready, broadcast},
+                     1000,
+                     "the album never settled — a posterless clip holds its siblings hostage"
+
+      assert Enum.any?(broadcast.attachments, &is_binary(&1.thumbnail_key))
+    end
+
     test "never upscales an image smaller than the target", %{alice: alice, conv: conv} do
       {:ok, message} =
         Chat.create_attachment_message(scope(alice), conv.id, %{path: real_png(300, 200)})
@@ -3986,6 +4019,11 @@ defmodule Eden.ChatTest do
       # No video stream → no poster, but the duration is still saved.
       assert is_nil(attachment.thumbnail_key)
       assert attachment.duration in 800..1300
+
+      # And generation is recorded as OVER (#516 review). The worker calls this a success, so
+      # nothing else would ever write it — and a row that says "no preview, not failed" reads as
+      # forever-pending to anything waiting for the message to settle.
+      assert attachment.thumb_failed
     end
   end
 

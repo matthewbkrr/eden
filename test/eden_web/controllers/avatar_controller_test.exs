@@ -43,6 +43,26 @@ defmodule EdenWeb.AvatarControllerTest do
       assert Image.width(image) == Eden.Images.avatar_width()
     end
 
+    test "the variant is immutable for a year, the fallback is not", %{
+      conn: conn,
+      viewer: viewer,
+      target: target
+    } do
+      ok = conn |> log_in_user(viewer) |> get(~p"/users/#{target.id}/avatar")
+      assert get_resp_header(ok, "cache-control") == ["private, max-age=31536000, immutable"]
+
+      # Now make the resize fail. The route still answers — an avatar must not disappear because
+      # an optimization did — but it must NOT pin the 512px master for a year under the same URL:
+      # the variant would start working and nobody would ever ask again (#516 review).
+      :ok = Eden.Storage.put_binary(target.avatar_key, "not an image")
+      Eden.Images.delete_variants(target.avatar_key)
+
+      fallback = conn |> log_in_user(viewer) |> get(~p"/users/#{target.id}/avatar")
+      assert response(fallback, 200) == "not an image"
+      assert get_resp_header(fallback, "content-type") == ["image/jpeg"]
+      assert get_resp_header(fallback, "cache-control") == ["no-store"]
+    end
+
     test "404 for a user without an avatar", %{conn: conn, viewer: viewer} do
       no_avatar = user_fixture(%{username: "plain"})
       conn = conn |> log_in_user(viewer) |> get(~p"/users/#{no_avatar.id}/avatar")
