@@ -73,6 +73,28 @@ defmodule EdenWeb.GestureCssTest do
     end
   end
 
+  test "the drag overlay still steps aside for an open staging tray (#520)" do
+    # This guards a regression that a build cannot: deleting one selector from a comma-separated
+    # list leaves the remaining selector attached to the NEXT rule's body. The result is perfectly
+    # valid CSS — the suppression silently disappears and unrelated layout styles land on the
+    # overlay instead. That is exactly what happened here while removing the dead tray rules, and
+    # only a review caught it (#538).
+    # The exact rule, with its own body — not "somewhere a .ed-dropzone__overlay has opacity 0",
+    # which the base rule satisfies on its own and made the first version of this guard vacuous.
+    suppression =
+      ~r/\.ed-dropzone--over:has\(\[data-upload-preview\]\)\s+\.ed-dropzone__overlay\s*\{[^}]*opacity:\s*0/
+
+    assert Regex.match?(suppression, @css),
+           "the overlay no longer steps aside for an open staging tray — dragging more files onto " <>
+             "the compose overlay will fight it again (#207)"
+
+    merged =
+      ~r/\.ed-dropzone--over:has\(\[data-upload-preview\]\)\s+\.ed-dropzone__overlay\s*,/
+
+    refute Regex.match?(merged, @css),
+           "the suppression selector is comma-joined to the next rule — it lost its own body"
+  end
+
   test "the row is promoted for the gesture only, never statically" do
     # A static `will-change: transform` on .ed-bubble/.ed-flat would give every one of ~200
     # rendered rows its own compositor layer. The hook sets it when a drag starts and clears it

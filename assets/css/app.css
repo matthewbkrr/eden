@@ -2898,7 +2898,9 @@ html {
   /* While a staging tray is already open, dragging MORE files in must not clash with it — the
      tray IS the context and the drop still adds to the batch, so suppress the big overlay rather
      than fight the modal (#207 review: it was rendering on top of the open "N фото" tray). */
-  .ed-dropzone--over:has([data-upload-preview]) .ed-dropzone__overlay,
+  .ed-dropzone--over:has([data-upload-preview]) .ed-dropzone__overlay {
+    opacity: 0;
+  }
   .ed-dropzone__inner {
     display: flex;
     flex-direction: column;
