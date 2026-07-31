@@ -2590,18 +2590,22 @@ defmodule EdenWeb.ChatLive do
         # re-streaming the raw list there drops the virtual `compact` flag — every
         # collapsed author header springs back on the sender's screen (#155). So only
         # re-stream where a receipt actually shows; in a room just record the marker.
+        previous = socket.assigns.other_read_at
         socket = assign(socket, other_read_at: read_at)
 
         if conversation.channel_id do
           {:noreply, socket}
         else
-          {:ok, messages} = Chat.list_messages(scope, conversation.id, limit: @page)
-          # list_messages returns raw rows (group_pos defaults to nil), so restore each row's
-          # virtual position from @group_pos before re-streaming — else a merged file-album bubble
-          # decomposes into separate bubbles the moment the peer reads the DM (#379/R058). Same
-          # restore the {:message_edited} path already applies.
-          messages = Enum.map(messages, &restore_group_pos(socket, &1))
-          {:noreply, stream(socket, :messages, messages)}
+          # Only the rows whose tick actually flips (#513). This used to re-fetch and re-stream
+          # the whole page — fifty rendered bubbles, ~35-75 KB, for a ✓ → ✓✓ on usually one row —
+          # and it fired for EVERY incoming message while the chat is open, i.e. right in the
+          # window where the sender is watching their own send land.
+          #
+          # `read?/2` is `inserted_at <= other_read_at`, so the flip set is exactly the viewer's
+          # own messages in `(previous, read_at]`. Bounded to the loaded window by `after_id`,
+          # then filtered through `compacts`: streaming a paginated-out row would append it at
+          # the bottom, out of order — the same trap the {:message_edited} path documents.
+          {:noreply, stream_read_flips(socket, scope, conversation, previous, read_at)}
         end
 
       true ->
@@ -15900,6 +15904,30 @@ defmodule EdenWeb.ChatLive do
     conversation.memberships
     |> Enum.find(&(&1.user_id != user.id))
     |> then(&(&1 && &1.last_read_at))
+  end
+
+  # Re-stream the rows a read receipt actually changed, keeping every virtual flag the raw DB
+  # rows do not carry: `compact` (collapsed author headers, #155) and `group_pos` (merged file
+  # albums, #379/R058). Losing either was the reason the naive whole-page re-stream existed.
+  defp stream_read_flips(socket, scope, conversation, previous, read_at) do
+    compacts = socket.assigns.compacts
+
+    case Chat.list_own_messages_between(scope, conversation.id, previous, read_at,
+           after_id: compacts |> Map.keys() |> Enum.min(fn -> nil end)
+         ) do
+      {:ok, messages} ->
+        messages
+        |> Enum.filter(&Map.has_key?(compacts, &1.id))
+        |> Enum.reduce(socket, fn message, acc ->
+          streamed =
+            restore_group_pos(acc, %{message | compact: Map.get(compacts, message.id, false)})
+
+          stream_insert(acc, :messages, streamed)
+        end)
+
+      {:error, _} ->
+        socket
+    end
   end
 
   defp read?(_message, nil), do: false

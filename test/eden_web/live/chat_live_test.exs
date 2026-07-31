@@ -209,6 +209,48 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(#emoji-picker[phx-update="ignore"] [data-emoji-toggle]))
     end
 
+    test "a read receipt flips the ticks and touches nothing else (#513)", ctx do
+      # The receipt used to re-fetch and re-stream the WHOLE page for a ✓ → ✓✓ — fifty rendered
+      # bubbles, measured at 57 KB on the wire, for a change that touches one row. It did that
+      # because a naive partial re-stream lost the virtual flags raw DB rows do not carry
+      # (`compact`, #155; `group_pos`, #379/R058) and because streaming a paginated-out row
+      # appends it at the bottom, out of order.
+      #
+      # Now only the flipped rows re-stream, restored through the same helper the
+      # {:message_edited} path uses. What this test pins is the part a partial stream can break
+      # silently: the flip happens, and no row is added, dropped or duplicated by it.
+      {:ok, theirs} =
+        Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "from bob"})
+
+      {:ok, _mine} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+          "body" => "from alice"
+        })
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      before_receipt = render(view)
+
+      rows = fn html -> html |> String.split(~s(id="messages-)) |> length() end
+      # Sent, not yet read: one check. The read state renders a SECOND check carrying `-mr-2`,
+      # a class the unread state never has.
+      refute before_receipt =~ "-mr-2"
+
+      :ok = Chat.mark_read(Scope.for_user(ctx.bob), ctx.conversation.id)
+      after_receipt = render(view)
+
+      assert after_receipt =~ "-mr-2", "the peer read the DM but the ticks never flipped"
+
+      assert rows.(after_receipt) == rows.(before_receipt),
+             "the receipt changed the number of rendered rows — a partial re-stream that appends or duplicates"
+
+      # The body also appears in the sidebar preview, so compare counts rather than assume one.
+      occurrences = fn html -> html |> String.split(theirs.body) |> length() end
+
+      assert occurrences.(after_receipt) == occurrences.(before_receipt),
+             "the receipt duplicated the peer's message"
+    end
+
     test "reactions: toggle adds a chip (highlighted as mine), toggle again removes (#67)", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "react me"})

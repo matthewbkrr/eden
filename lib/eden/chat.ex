@@ -1881,6 +1881,38 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  The viewer's OWN messages sent in `(from, to]`, oldest-first — exactly the rows whose
+  delivery ticks flip when a peer's read marker advances to `to`.
+
+  Read receipts are DM-only (#142) and the tick depends on nothing but
+  `inserted_at <= other_read_at`, so a receipt changes only these rows — usually none or one.
+  It used to re-render the whole page instead (#513): a receipt fires for every incoming
+  message while the chat is open, so each of your own sends came back to you as fifty fully
+  rendered bubbles.
+
+  `from` is exclusive and may be `nil` (no marker yet). `after_id:` bounds the query to the
+  window the client actually has loaded — a caller must never stream a row the viewer has
+  paginated past, or it lands appended at the bottom, out of order.
+  """
+  def list_own_messages_between(%Scope{user: user} = scope, conversation_id, from, to, opts \\ []) do
+    if has_access?(scope, conversation_id) do
+      messages =
+        visible_messages(user, conversation_id)
+        |> where([m], m.sender_id == ^user.id)
+        |> where([m], m.inserted_at <= ^to)
+        |> then(&if from, do: where(&1, [m], m.inserted_at > ^from), else: &1)
+        |> then(&if id = opts[:after_id], do: where(&1, [m], m.id >= ^id), else: &1)
+        |> order_by([m], asc: m.id)
+        |> preload(^@message_preloads)
+        |> Repo.all()
+
+      {:ok, messages}
+    else
+      {:error, :not_found}
+    end
+  end
+
+  @doc """
   Loads a window of main-stream messages that **includes** `anchor_id`, for a
   "jump to message" (permalink / jump-to-root). The default `list_messages/3` only
   loads the newest page, so a target older than that page is never rendered and the
