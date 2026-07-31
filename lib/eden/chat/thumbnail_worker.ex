@@ -15,17 +15,32 @@ defmodule Eden.Chat.ThumbnailWorker do
   alias Eden.Repo
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"attachment_id" => id}}) do
+  def perform(%Oban.Job{args: %{"attachment_id" => id}} = job) do
     case Repo.get(Attachment, id) do
       nil -> :ok
       %Attachment{thumbnail_key: key} when is_binary(key) -> :ok
-      attachment -> handle(Chat.generate_thumbnail(attachment))
+      attachment -> handle(Chat.generate_thumbnail(attachment), attachment, job)
     end
   end
 
   # A broken or oversized image will never succeed, so cancel instead of burning
   # retries; storage/DB hiccups are transient, so let those retry.
-  defp handle(:ok), do: :ok
-  defp handle({:error, {:unprocessable, _} = reason}), do: {:cancel, reason}
-  defp handle({:error, reason}), do: {:error, reason}
+  #
+  # Either way, once generation is OVER the attachment is marked (#516): until then the renderer
+  # cannot tell "no thumbnail yet" from "no thumbnail ever", and it showed a placeholder for
+  # both. The last attempt counts as over — Oban discards after it, and nothing would speak for
+  # the attachment again (#532 review).
+  defp handle(:ok, _attachment, _job), do: :ok
+
+  defp handle({:error, {:unprocessable, _} = reason}, attachment, _job) do
+    Chat.mark_thumbnail_failed(attachment)
+    {:cancel, reason}
+  end
+
+  defp handle({:error, reason}, attachment, %Oban.Job{attempt: n, max_attempts: n}) do
+    Chat.mark_thumbnail_failed(attachment)
+    {:error, reason}
+  end
+
+  defp handle({:error, reason}, _attachment, _job), do: {:error, reason}
 end

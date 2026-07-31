@@ -17099,9 +17099,6 @@ defmodule EdenWeb.ChatLive do
   # image lands over {:thumbnail_ready}.
   @pending_image "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
 
-  # How long a missing thumbnail counts as "still being generated" (#516).
-  @thumb_grace_seconds 90
-
   # Prefer the lighter thumbnail once it exists.
   #
   # Falling back to the ORIGINAL while the worker runs is what made a RECIPIENT download the
@@ -17110,21 +17107,14 @@ defmodule EdenWeb.ChatLive do
   # sender never saw it because their optimistic snapshot carries a data-URL; the recipient had
   # no such cover.
   #
-  # So a FRESH attachment shows the reserved box instead of the original. The fallback stays for
-  # an attachment old enough that generation has certainly finished — or failed: there is no
-  # processing-status field, so "no thumbnail yet" and "no thumbnail ever" are indistinguishable,
-  # and a permanent blank photo would be a far worse failure than a heavy one.
+  # The three states are answered by FACTS, not by age (#532 review): a thumbnail exists, or
+  # generation is over and produced none (`thumb_failed`, set by the worker), or it is still
+  # coming and the reserved box stands in. An earlier version guessed by `inserted_at`, which
+  # expires only on a re-render — so a permanently failed thumbnail could leave a blank photo
+  # for the rest of a session.
   defp thumb_src(%{thumbnail_key: key, id: id}) when is_binary(key), do: ~p"/files/#{id}/thumb"
-
-  defp thumb_src(%{id: id, inserted_at: %DateTime{} = at}) do
-    if DateTime.diff(DateTime.utc_now(), at) < @thumb_grace_seconds do
-      @pending_image
-    else
-      ~p"/files/#{id}"
-    end
-  end
-
-  defp thumb_src(%{id: id}), do: ~p"/files/#{id}"
+  defp thumb_src(%{thumb_failed: true, id: id}), do: ~p"/files/#{id}"
+  defp thumb_src(%{id: _id}), do: @pending_image
 
   # Composer upload entry helpers (client-side; for preview only, not trusted —
   # the server re-classifies by magic bytes and decides the actual album split).

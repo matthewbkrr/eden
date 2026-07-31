@@ -2240,6 +2240,32 @@ defmodule EdenWeb.ChatLiveTest do
       assert render(view) =~ "/files/#{attachment.id}/thumb"
     end
 
+    test "an attachment whose thumbnail will never come falls back to the original (#516)", ctx do
+      # The placeholder must not be forever. Generation being OVER is recorded as a fact rather
+      # than guessed from age: an age-based rule expires only on a re-render, so a permanently
+      # failed thumbnail could leave a blank photo for the whole session (#532 review).
+      {:ok, message} =
+        Chat.create_album_message(
+          Scope.for_user(ctx.bob),
+          ctx.conversation.id,
+          [%{path: real_png_path(), filename: "doomed.png"}],
+          %{}
+        )
+
+      attachment = hd(message.attachments)
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+      assert render(view) =~ "data:image/gif;base64"
+
+      # What the worker does when generation cannot succeed — and it broadcasts, so an open
+      # client recovers without waiting for anything else to re-render the row.
+      {:ok, _} = Chat.mark_thumbnail_failed(attachment)
+
+      assert render(view) =~ ~s(src="/files/#{attachment.id}"),
+             "a failed thumbnail left the photo blank instead of falling back to the original"
+    end
+
     test "renders a multi-photo album as a media grid (#58)", ctx do
       sources = [
         %{path: real_png_path(), filename: "1.png"},
