@@ -2049,7 +2049,15 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(view, ~s(#message-menu .ed-menu__reacts [data-emoji="👍"]))
     end
 
-    test "the active highlight follows the selected conversation", ctx do
+    test "the server renders the active highlight on the conversation it opened", ctx do
+      # Moving the wash BETWEEN rows is the client's job now (#514): opening a chat used to
+      # re-stream the whole sidebar for two visual facts the tap already knew, at ~6 queries and
+      # a full stream table per navigation. `.InstantNav` moves it at tap time, a round-trip
+      # earlier — covered by a real click in `zz-sidebar-active.spec.js`.
+      #
+      # What the SERVER still owns, and what this asserts: a fresh load, a deep link, and every
+      # later re-stream render the wash from `@selected`. Without that, a reload or a background
+      # sidebar refresh would leave no row marked at all.
       carol = user_fixture(%{username: "carol_hl", display_name: "Carol"})
       {:ok, conv2} = Chat.create_conversation(Scope.for_user(ctx.alice), [carol.id])
 
@@ -2059,10 +2067,17 @@ defmodule EdenWeb.ChatLiveTest do
       assert has_element?(view, ~s(a[href="/app/c/#{ctx.conversation.id}"].ed-convo--active))
       refute has_element?(view, ~s(a[href="/app/c/#{conv2.id}"].ed-convo--active))
 
-      view |> element(~s(a[href="/app/c/#{conv2.id}"])) |> render_click()
+      # A re-stream for an unrelated reason must still mark the right row — the assign is the
+      # source of truth whenever the server does render the list.
+      {:ok, _} = Chat.create_message(Scope.for_user(carol), conv2.id, %{"body" => "ping"})
+      _ = render(view)
 
-      assert has_element?(view, ~s(a[href="/app/c/#{conv2.id}"].ed-convo--active))
-      refute has_element?(view, ~s(a[href="/app/c/#{ctx.conversation.id}"].ed-convo--active))
+      assert has_element?(view, ~s(a[href="/app/c/#{ctx.conversation.id}"].ed-convo--active))
+
+      # And a deep link straight to the other chat marks that one instead.
+      {:ok, view2, _} = live(log_in_user(ctx.conn, ctx.alice), ~p"/app/c/#{conv2.id}")
+      assert has_element?(view2, ~s(a[href="/app/c/#{conv2.id}"].ed-convo--active))
+      refute has_element?(view2, ~s(a[href="/app/c/#{ctx.conversation.id}"].ed-convo--active))
     end
 
     test "receives another member's message in realtime", ctx do
