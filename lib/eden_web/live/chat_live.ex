@@ -2823,14 +2823,13 @@ defmodule EdenWeb.ChatLive do
     # (rooms show no per-message presence dot).
     socket = assign(socket, statuses: EdenWeb.Presence.statuses())
     changed = presence_changed_ids(payload)
-    socket = stamp_peer_offline(socket, changed)
-    peers = socket.assigns.sidebar_peer_ids
 
-    if socket.assigns.channel || Enum.all?(changed, &(&1 not in peers)) do
-      {:noreply, socket}
-    else
-      {:noreply, stream_conversations(socket, [])}
-    end
+    # No sidebar re-stream (#514). The dots are `[data-presence-uid]` now and `.PresenceDots`
+    # re-applies them from the assign above — which is a plain assign and does re-render. This
+    # used to cost ~7 queries in EVERY session whenever anyone you talk to changed status, and
+    # presence is one global topic, so every connect and every navigation by anyone fanned a diff
+    # to everyone.
+    {:noreply, stamp_peer_offline(socket, changed)}
   end
 
   # The user changed their own status (this tab's set_status, another tab, or the
@@ -2942,6 +2941,25 @@ defmodule EdenWeb.ChatLive do
       <%!-- Carry-and-drop forward: re-hydrates the plaque from sessionStorage on every mount,
             so a carried message survives navigation across DMs, rooms and channels. --%>
       <div id="forward-carry" phx-hook=".ForwardCarry" hidden></div>
+
+      <%!-- Live presence dots (#102, widened in #514). Both the flat message rows and the sidebar
+            chats live in `phx-update="stream"` containers, so a server re-render never reaches an
+            existing avatar's dot. That is why a presence diff used to re-stream the whole sidebar:
+            ~7 queries in every session, on every status change of anyone you talk to, and presence
+            is one global topic.
+            This host carries a plain assign, which DOES re-render, and the hook re-applies both the
+            dot class and its screen-reader label by user id. The labels ride along because the hook
+            cannot localize on its own — the same reason `PasswordReveal` gets its strings this way. --%>
+      <div
+        id="presence-dots"
+        phx-hook=".PresenceDots"
+        data-statuses={Jason.encode!(dot_statuses(assigns))}
+        data-label-online={status_label("online")}
+        data-label-away={status_label("away")}
+        data-label-dnd={status_label("dnd")}
+        hidden
+      >
+      </div>
 
       <%!-- Shared sidebar menus (#508): ONE of each per page, the same idiom as #message-menu and
             #reaction-grid. They used to be rendered hidden INSIDE every chat row and every room
@@ -5079,16 +5097,13 @@ defmodule EdenWeb.ChatLive do
               <div class="ed-msgs-tail" aria-hidden="true"></div>
             </div>
           </div>
-          <%!-- Live presence for the flat message list (#102): the rows live in a
-                `phx-update="stream"` container, so a server re-render never reaches
-                existing avatars' dots. This sibling carries the current statuses
-                map; the .RoomPresence hook re-applies dot classes by user id on
-                every change. Rooms only. --%>
+          <%!-- Superseded by the page-level #presence-dots host (#514) — kept as an empty
+                anchor would only add a node; the hook now lives at the root and covers both
+                the message list and the sidebar. --%>
           <div
-            :if={@selected.channel_id}
+            :if={false}
             id="room-presence"
-            phx-hook=".RoomPresence"
-            data-statuses={Jason.encode!(Map.take(@statuses, room_member_ids(@selected)))}
+            data-statuses="{}"
             hidden
           >
           </div>
@@ -6008,27 +6023,38 @@ defmodule EdenWeb.ChatLive do
           }
         }
       </script>
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".RoomPresence">
-        // Live presence for the flat message list (#102). The rows sit in a
-        // phx-update="stream" container, so the server never re-renders an
-        // existing avatar's dot. This host carries data-statuses (a {uid: status}
-        // map) that DOES re-render on every change; on each update we re-apply the
-        // dot class to every managed dot ([data-presence-uid]) by user id. The
-        // initial server render already sets the right class, so there is no flash.
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".PresenceDots">
+        // Live presence dots (#102, widened in #514). Rows in a `phx-update="stream"` container
+        // are never re-rendered by the server once they exist, so the dot inside them cannot be
+        // updated from the assign that changed. This host carries data-statuses (a {uid: status}
+        // map) which DOES re-render; on each update we re-apply, by user id, to every managed dot
+        // ([data-presence-uid]) anywhere on the page — the message list, the thread panel and the
+        // chat list. The initial server render already sets the right class, so there is no flash.
+        //
+        // The screen-reader label is updated too, from strings the server put on this host. That
+        // is what lets the sidebar's dots be managed at all: without it, making them live would
+        // have traded a stale label for no label (#514).
         export default {
           mounted() { this.apply() },
           updated() { this.apply() },
           apply() {
             let map = {}
             try { map = JSON.parse(this.el.dataset.statuses || "{}") } catch (e) { return }
-            document
-              .querySelectorAll("#messages [data-presence-uid], #thread-replies [data-presence-uid]")
-              .forEach((dot) => {
-                const s = map[dot.dataset.presenceUid] || null
-                dot.classList.toggle("ed-avatar__dot--hidden", !s)
-                dot.classList.toggle("ed-avatar__dot--away", s === "away")
-                dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
-              })
+            const labels = {
+              online: this.el.dataset.labelOnline || "",
+              away: this.el.dataset.labelAway || "",
+              dnd: this.el.dataset.labelDnd || "",
+            }
+            document.querySelectorAll("[data-presence-uid]").forEach((dot) => {
+              const s = map[dot.dataset.presenceUid] || null
+              dot.classList.toggle("ed-avatar__dot--hidden", !s)
+              dot.classList.toggle("ed-avatar__dot--away", s === "away")
+              dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
+              // The label sits INSIDE the dot, not beside it — the avatar renders it as the dot's
+              // only child so the two can never drift apart in the markup.
+              const label = dot.querySelector("[data-presence-label]")
+              if (label) label.textContent = s ? labels[s] || "" : ""
+            })
           }
         }
       </script>
@@ -11388,11 +11414,15 @@ defmodule EdenWeb.ChatLive do
         ]}
         data-presence-uid={@dot_uid}
       >
-        <%!-- SR-only status only on non-managed dots (sidebar / member lists, which
-              carry no visible status text and re-render server-side, so the text
-              stays accurate). Managed room dots update live via JS that can't
-              localize, so their status reaches AT via the profile popover (#102). --%>
-        <span :if={@status && !@dot_uid && @dot_label} class="sr-only">{status_label(@status)}</span>
+        <%!-- SR-only status. Managed dots used to go without it, because the hook that updates
+              them "can't localize" — but it can, if the server hands it the strings, which is how
+              `PasswordReveal` has always done it. So the label is rendered here for every dot and
+              carried live by `.PresenceDots`, which sets both the class and this text (#514).
+              Without that, moving the sidebar's dots to the client would have silently dropped
+              their status for screen readers. --%>
+        <span :if={(@status || @dot_uid) && @dot_label} class="sr-only" data-presence-label>
+          {@status && status_label(@status)}
+        </span>
       </span>
     </span>
     """
@@ -11421,10 +11451,14 @@ defmodule EdenWeb.ChatLive do
         class={["ed-convo", @active && "ed-convo--active"]}
         aria-haspopup="menu"
       >
+        <%!-- A managed dot (#514): the row lives in a `phx-update="stream"` list, so a server
+              re-render never reaches it — which is why a presence diff used to re-stream the
+              WHOLE sidebar, ~7 queries, on every status change of anyone you talk to. --%>
         <.avatar
           name={title(@conversation, @user)}
           src={conversation_avatar_src(@conversation, @user)}
           status={peer_status(@conversation, @user, @statuses)}
+          dot_uid={peer_uid(@conversation, @user)}
         />
         <span class="ed-convo__body">
           <span class="ed-convo__top">
@@ -15964,6 +15998,26 @@ defmodule EdenWeb.ChatLive do
 
   # Presence status of a 1:1's other participant (nil for groups / offline), used
   # to color the avatar dot + header label (#102).
+  # Statuses the dots on screen actually need: the sidebar's DM peers plus, in a room, its
+  # members. Not the whole global map — that would put every online user in the org on the wire
+  # for every session.
+  defp dot_statuses(assigns) do
+    room =
+      if assigns.selected && assigns.selected.channel_id,
+        do: room_member_ids(assigns.selected),
+        else: []
+
+    Map.take(assigns.statuses, assigns.sidebar_peer_ids ++ room)
+  end
+
+  # The DM peer's id, or nil for a group — what tags a sidebar dot for `.PresenceDots` (#514).
+  defp peer_uid(conversation, user) do
+    case peer(conversation, user) do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
+
   defp peer_status(%{is_group: true}, _user, _statuses), do: nil
 
   defp peer_status(conversation, user, statuses) do

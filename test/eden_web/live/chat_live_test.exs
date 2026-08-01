@@ -527,7 +527,10 @@ defmodule EdenWeb.ChatLiveTest do
 
       slot = "#conversations-#{ctx.conversation.id}"
       # bob is offline → no online dot on his DM in alice's sidebar.
-      refute has_element?(view, "#{slot} .ed-avatar__dot")
+      # A managed dot is always in the DOM and hidden when offline (#514) — "no dot" is now
+      # "a hidden dot". Offline and invisible stay indistinguishable, which is the property that
+      # matters here.
+      assert has_element?(view, "#{slot} .ed-avatar__dot--hidden")
 
       # bob comes online; the presence diff makes alice's (streamed) sidebar
       # re-render the dot live — the bug was that stream items stayed stale. The
@@ -669,7 +672,12 @@ defmodule EdenWeb.ChatLiveTest do
 
       # ...but globally offline: the sidebar/profile read the GLOBAL map, which never has her.
       refute Map.has_key?(EdenWeb.Presence.statuses(), alice.id)
-      refute has_element?(bob_view, "#conversations-#{ctx.conversation.id} .ed-avatar__dot")
+      # Hidden, not absent (#514): an invisible peer renders the same empty dot as an offline
+      # one, so the two remain indistinguishable in the markup.
+      assert has_element?(
+               bob_view,
+               "#conversations-#{ctx.conversation.id} .ed-avatar__dot--hidden"
+             )
     end
 
     test "a non-member never sees the invisible user online (#209)", ctx do
@@ -751,10 +759,18 @@ defmodule EdenWeb.ChatLiveTest do
         payload: %{joins: %{to_string(ctx.bob.id) => %{metas: [%{status: "away"}]}}, leaves: %{}}
       })
 
-      assert has_element?(view, "#{slot} .ed-avatar__dot--away")
+      # The dot itself is repainted by `.PresenceDots`, not by a re-render (#514): the row is a
+      # stream item, so the server never reaches it again — which is exactly why a presence diff
+      # used to rebuild the whole sidebar. What the SERVER still owns is the map the hook reads,
+      # and that is what this asserts. The visible colour is covered by a real two-browser run in
+      # `zz-presence-dot.spec.js`.
+      _ = slot
+      # The map rides an HTML attribute, so its quotes come back escaped.
+      assert view |> element("#presence-dots") |> render() =~
+               "&quot;#{ctx.bob.id}&quot;:&quot;away&quot;"
     end
 
-    test "a peer's status-only change (online→away) re-streams the sidebar dot (#102)", ctx do
+    test "a peer's status-only change (online→away) reaches the presence map (#102)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
       slot = "#conversations-#{ctx.conversation.id}"
@@ -770,11 +786,13 @@ defmodule EdenWeb.ChatLiveTest do
         }
       })
 
-      assert has_element?(view, "#{slot} .ed-avatar__dot")
-      refute has_element?(view, "#{slot} .ed-avatar__dot--away")
+      _ = slot
+      host = fn -> view |> element("#presence-dots") |> render() end
+      # The map rides an HTML attribute, so its quotes come back escaped.
+      assert host.() =~ "&quot;#{ctx.bob.id}&quot;:&quot;online&quot;"
 
-      # A meta update lands in the diff as a leave + join of the same key, so the
-      # same re-stream gate catches a status-only change.
+      # A meta update lands in the diff as a leave + join of the same key — the map has to follow
+      # that, not just joins.
       EdenWeb.Presence.set_status(self(), ctx.bob.id, "away")
 
       send(view.pid, %Phoenix.Socket.Broadcast{
@@ -786,7 +804,7 @@ defmodule EdenWeb.ChatLiveTest do
         }
       })
 
-      assert has_element?(view, "#{slot} .ed-avatar__dot--away")
+      assert host.() =~ "&quot;#{ctx.bob.id}&quot;:&quot;away&quot;"
     end
 
     test "a peer typing shows the indicator (not self), survives a stale expiry, clears on send (#11/#94)",
@@ -3149,7 +3167,7 @@ defmodule EdenWeb.ChatLiveTest do
 
       # data-statuses is HTML-escaped JSON; each id appears as a quoted key
       # (&quot;<id>&quot;), so the surrounding quotes make the match exact.
-      html = view |> element("#room-presence") |> render()
+      html = view |> element("#presence-dots") |> render()
 
       # The member's status is exposed; the outsider's is not (no cross-room leak).
       assert html =~ ~s(&quot;#{alice.id}&quot;)
