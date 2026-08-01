@@ -22,7 +22,16 @@ import { MsgCache } from "./msg_cache"
 //
 // This used to live in app.js behind "is the #notifier host absent". Now the bundle itself is the
 // signal, and it is a stronger one: this file only ever loads on a signed-out page.
-MsgCache.clearAll()
+// Both halves best-effort, and for the same reason as the `try` on the line below it: storage can
+// be unavailable (private mode, blocked cookies, a browser that declines IndexedDB). This runs
+// BEFORE `liveSocket.connect()` in a small module, so an exception here would leave the login page
+// rendered but dead — the wipe failing must cost the wipe, not the page (#542 review).
+try {
+  MsgCache.clearAll().catch(() => {})
+} catch (_e) {
+  /* storage unavailable */
+}
+
 try {
   localStorage.removeItem("ed:cacheUser")
 } catch (_e) {
@@ -39,7 +48,10 @@ const liveSocket = new LiveSocket("/live", Socket, {
 
 window.addEventListener("phx:page-loading-start", (_info) => topbar.show(120))
 window.addEventListener("phx:page-loading-stop", (_info) => topbar.hide())
-topbar.config({ barColors: { 0: "#29d" }, shadowColor: "rgba(0, 0, 0, .3)" })
+// Cobalt, read from the stylesheet like app.js does — topbar's own default is a sky blue that
+// belongs to no part of this design, and the login page is where a stray colour is most visible.
+const edPrimary = getComputedStyle(document.documentElement).getPropertyValue("--ed-primary").trim()
+topbar.config({ barColors: { 0: edPrimary || "#3b6fd6" }, shadowColor: "rgba(0, 0, 0, .3)" })
 
 liveSocket.connect()
 window.liveSocket = liveSocket

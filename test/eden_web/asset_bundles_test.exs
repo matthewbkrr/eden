@@ -10,8 +10,21 @@ defmodule EdenWeb.AssetBundlesTest do
 
   describe "which bundle a page loads" do
     test "login, the 2FA challenge and invite acceptance load the auth bundle", %{conn: conn} do
-      for path <- ["/login", "/invite/no-such-token"] do
-        html = conn |> get(path) |> html_response(200)
+      # The 2FA challenge is only reachable with a pending marker in the session — the half-way
+      # state between a correct password and a session token. Naming it in the test title without
+      # requesting it left the busiest signed-out page unverified (#542 review).
+      challenge =
+        conn
+        |> Phoenix.ConnTest.init_test_session(%{})
+        |> Plug.Conn.put_session(:totp_pending_user_id, user_fixture().id)
+        |> Plug.Conn.put_session(:totp_pending_at, System.system_time(:second))
+
+      for {c, path} <- [
+            {conn, "/login"},
+            {conn, "/invite/no-such-token"},
+            {challenge, "/login/totp"}
+          ] do
+        html = c |> get(path) |> html_response(200)
 
         assert html =~ "/assets/js/auth.js",
                "#{path} is not loading the signed-out bundle"
