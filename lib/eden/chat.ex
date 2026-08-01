@@ -3329,7 +3329,15 @@ defmodule Eden.Chat do
       )
 
       if root.sender_id not in [nil, reply.sender_id] do
-        ensure_following(root.sender_id, root.id)
+        # Stamped from the REPLY, not from `now()`. The row is created BY this reply and the
+        # increment below counts it, but the decrement in `decrement_thread_unread/2` gates on
+        # `tm.inserted_at <= reply_at` — and the row is written AFTER the message, so at
+        # `:utc_datetime` (second) precision that held only while both landed in the same second.
+        # Across a second boundary the reply was counted and could never be uncounted: hiding it
+        # left the badge counting a reply the person cannot see, until they opened the thread.
+        # CI caught this as a "flaky test"; it is a race, and this makes the relationship
+        # structural instead of a coincidence of the clock.
+        ensure_following(root.sender_id, root.id, reply.inserted_at)
       end
 
       from(tm in ThreadMembership,
@@ -3362,9 +3370,15 @@ defmodule Eden.Chat do
 
   # Ensure a follow row exists without disturbing an existing one (respects a
   # prior unfollow).
-  defp ensure_following(user_id, root_id) do
+  defp ensure_following(user_id, root_id, at) do
     Repo.insert!(
-      %ThreadMembership{user_id: user_id, root_id: root_id, following: true},
+      %ThreadMembership{
+        user_id: user_id,
+        root_id: root_id,
+        following: true,
+        inserted_at: at,
+        updated_at: at
+      },
       on_conflict: :nothing,
       conflict_target: [:user_id, :root_id]
     )

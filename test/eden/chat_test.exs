@@ -1679,6 +1679,34 @@ defmodule Eden.ChatTest do
       assert {:ok, _root, [_one]} = Chat.list_thread(scope(bob), root.id)
     end
 
+    test "the follow row a reply creates is stamped at that reply, not at the clock", %{
+      alice: alice,
+      bob: bob,
+      root: root
+    } do
+      # `timestamps(type: :utc_datetime)` is SECOND precision, and the row is written AFTER the
+      # message it follows — so `decrement_thread_unread/2`'s `tm.inserted_at <= reply_at` held
+      # only while both landed in the same second. Across a second boundary the reply was counted
+      # (the increment has no time gate at all) and could never be uncounted: hiding it left the
+      # badge counting a reply the person cannot see.
+      #
+      # Honest limit: this assertion also passed BEFORE the fix, because the old code was right by
+      # coincidence most of the time. There is no deterministic oracle for the race at this seam —
+      # `track_reply/2` is only reachable through `create_reply/3`, which always stamps "now". What
+      # the fix changes is that the relationship is now structural rather than a coincidence, and
+      # what this test does is stop someone restoring the coincidence.
+      {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
+
+      membership = Repo.get_by!(ThreadMembership, user_id: alice.id, root_id: root.id)
+
+      assert DateTime.compare(membership.inserted_at, reply.inserted_at) == :eq,
+             "the follow row is stamped from the clock, so whether hiding this reply decrements " <>
+               "the badge depends on which side of a second boundary the insert landed"
+
+      :ok = Chat.delete_message_for_me(scope(alice), reply.id)
+      assert %{unread: 0} = Chat.thread_follow_state(scope(alice), root.id)
+    end
+
     test "a repeat delete-for-me doesn't double-decrement the thread badge (#400 review)", %{
       alice: alice,
       bob: bob,
