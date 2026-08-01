@@ -5097,17 +5097,6 @@ defmodule EdenWeb.ChatLive do
               <div class="ed-msgs-tail" aria-hidden="true"></div>
             </div>
           </div>
-          <%!-- Superseded by the page-level #presence-dots host (#514) — kept as an empty
-                anchor would only add a node; the hook now lives at the root and covers both
-                the message list and the sidebar. --%>
-          <div
-            :if={false}
-            id="room-presence"
-            data-statuses="{}"
-            hidden
-          >
-          </div>
-
           <%!-- Shared full-emoji grid (#72): ONE popover for the page, opened by a
                 message menu's "more" chevron, instead of a 39-button grid hidden in
                 every message. Positioned + targeted by the .ReactionGrid hook. --%>
@@ -6045,7 +6034,16 @@ defmodule EdenWeb.ChatLive do
               away: this.el.dataset.labelAway || "",
               dnd: this.el.dataset.labelDnd || "",
             }
-            document.querySelectorAll("[data-presence-uid]").forEach((dot) => {
+            // Scoped to the three containers `dot_statuses/1` builds the map from — the chat
+            // list, the room's message list and its thread panel. Absence from the map MEANS
+            // offline, so a managed dot outside them would be hidden by a map that was never
+            // about it (#546 review). Widen this and that function together, or not at all.
+            document
+              .querySelectorAll(
+                "#conversations [data-presence-uid], #messages [data-presence-uid], " +
+                  "#thread-replies [data-presence-uid]",
+              )
+              .forEach((dot) => {
               const s = map[dot.dataset.presenceUid] || null
               dot.classList.toggle("ed-avatar__dot--hidden", !s)
               dot.classList.toggle("ed-avatar__dot--away", s === "away")
