@@ -2739,11 +2739,11 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # #165: a group was renamed — update the open header/panel title; the sidebar refresh
-  # is driven by the {:conversation_activity} ping (notify_members) on each member's topic.
+  # #165: a group was renamed — update the open header/panel title; the sidebar row is driven by
+  # the {:conversation_activity} ping that `rename_group/3` sends alongside this one
+  # (`notify_members`), and that handler updates the ONE row. Rebuilding the whole list here as
+  # well cost ~6 queries for a row the other message was already about (#514).
   def handle_info({:conversation_renamed, conv}, socket) do
-    socket = refresh_sidebar(socket)
-
     if open?(socket, conv.id) do
       {:noreply, assign(socket, selected: %{socket.assigns.selected | title: conv.title})}
     else
@@ -2751,10 +2751,15 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # #178: a group's photo changed — same live-refresh as a rename (header/panel from
-  # `selected`, sidebar from the re-stream; non-viewers update via {:conversation_activity}).
+  # #178: a group's photo changed — header/panel from `selected`, sidebar row on its own.
+  #
+  # NOT the same as a rename, despite what the old comment here claimed: `set_group_avatar/3`
+  # sends only `broadcast_avatar_change`, no `notify_members`, so there is no
+  # {:conversation_activity} ping to lean on and dropping the update outright would leave a stale
+  # photo in the list. One row instead of the whole list (#514) — and no `at: 0`, because changing
+  # a photo is not activity and must not bump the chat to the top.
   def handle_info({:conversation_avatar_changed, conv}, socket) do
-    socket = refresh_sidebar(socket)
+    socket = put_sidebar_conversation(socket, conv.id, [])
 
     if open?(socket, conv.id) do
       {:noreply,

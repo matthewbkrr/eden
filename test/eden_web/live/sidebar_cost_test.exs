@@ -79,4 +79,10 @@ defmodule EdenWeb.SidebarCostTest do
              "the sidebar is being rebuilt for the active wash and the unread badge again, " <>
              "which `.InstantNav` already did at tap time"
   end
+
+  # There is deliberately no budget test for the rename / photo-change handlers. They only run
+  # for a session that has that conversation OPEN (the broadcast rides the conversation topic,
+  # which a session subscribes to on selection) — my first attempt measured a member sitting on
+  # the list, never reached them, and reported the same 13 queries with the fix in and out. The
+  # saving is real but narrow, and a budget that does not exercise the path is worse than none.
 end
