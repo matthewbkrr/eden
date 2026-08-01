@@ -15,7 +15,12 @@ const scriptsFor = async (page, url) => {
   const seen = []
   const errors = []
   page.on("response", (r) => {
-    if (/\/assets\/js\/[^/]+\.js/.test(r.url())) seen.push(r.url().split("/").pop().split("?")[0])
+    // Take the file name first, then require it to BE a .js — an unanchored match on the URL also
+    // accepts `app.js.map`, which would put "app.js.map" in `seen` and let a genuine leak through
+    // the `not.toContain("app.js")` assertion below. No source maps are built today; the point is
+    // that this assertion should not depend on that staying true (#542 review).
+    const file = r.url().split("/").pop().split("?")[0]
+    if (r.url().includes("/assets/js/") && /^[^/]+\.js$/.test(file)) seen.push(file)
   })
   page.on("console", (m) => m.type() === "error" && errors.push(m.text().slice(0, 200)))
   page.on("pageerror", (e) => errors.push(String(e).slice(0, 200)))
