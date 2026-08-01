@@ -23,6 +23,10 @@ import "phoenix_html"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/eden"
+// Not colocated (#511): the signed-out bundle needs these two, and the generated colocated index
+// hands back all 42 hooks at once, so importing from it would have pulled the whole chat client
+// onto the login page.
+import {FlashAutoHide, PasswordReveal} from "./shared_hooks"
 import topbar from "../vendor/topbar"
 // Durable send queue (TG-attachments, phase E): the colocated SendQueue hook reaches it via this
 // global so an in-flight upload survives a page reload (persisted to IndexedDB, resumed on mount).
@@ -99,7 +103,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   reconnectAfterMs: backoff,
   rejoinAfterMs: backoff,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, FlashAutoHide, PasswordReveal},
 })
 
 // Record where a profile trigger (avatar / name / member row) was clicked, so
@@ -121,9 +125,8 @@ document.addEventListener(
 // Show progress bar on live navigation and form submits (cobalt --ed-primary, not the topbar default sky-blue)
 const __edPrimary = getComputedStyle(document.documentElement).getPropertyValue("--ed-primary").trim() || "#3b6fd6"
 topbar.config({barColors: {0: __edPrimary}, shadowColor: "rgba(0, 0, 0, .3)"})
-// 120, не 300 (#512): при RTT ~160 мс большинство операций укладывается в 160-250 мс,
-// то есть на пороге 300 полоса не успевала появиться вообще — индикатор был мёртвым
-// кодом на самых частых путях.
+// 120, not 300 (#512): at ~160 ms RTT most operations land in 160-250 ms, so at a 300 ms
+// threshold the bar never appeared at all — the indicator was dead code on the commonest paths.
 window.addEventListener("phx:page-loading-start", _info => topbar.show(120))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 

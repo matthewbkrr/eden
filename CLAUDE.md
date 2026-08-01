@@ -15,7 +15,18 @@ must also be followed.
 - **Req** for HTTP (never httpoison/tesla/httpc). **No mailer / no email** —
   auth is invite-link based by design (delivery from an overseas VPS to RU
   inboxes is unreliable); never add Swoosh or any email dependency.
-- **Tailwind v4** + **esbuild** for assets.
+- **Tailwind v4** + **esbuild** for assets. **Two JS bundles** (#511): `app.js` is the full
+  client; `auth.js` is what a SIGNED-OUT page loads (login, the 2FA challenge, invite
+  acceptance) — the LiveView runtime plus the only two hooks such a page uses, 44.5 KB gzip
+  against 80.1. The split works because those two hooks (`FlashAutoHide`, `PasswordReveal`)
+  are plain modules in `assets/js/shared_hooks.js` rather than colocated: the generated
+  `phoenix-colocated/eden` index statically imports all 42 hooks and exports them as one
+  object, so importing two from there bundles all of them. The router marks those pages with
+  the `:auth_assets` pipeline (`conn.assigns.js_bundle`); the root layout defaults to the full
+  bundle, so a page nobody marked is never accidentally under-served.
+  Icons ship as a generated sprite (`mix eden.icons` → `priv/static/images/icons.svg`, wired
+  into `assets.build`/`assets.deploy`), never inlined into the render-blocking stylesheet;
+  hooks that build markup by hand call `window.edIcon/2`.
 - Media: **`:image`/vix** (bundled libvips, no system dep) for image thumbnails +
   avatar processing. **`ffmpeg`/`ffprobe`** (system dependency — in the Docker
   runtime image and the CI test job) for video poster frames + duration, shelled

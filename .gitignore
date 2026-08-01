@@ -61,3 +61,11 @@ npm-debug.log
 /docs/handbook/shots/
 /docs/handbook/dist/
 /docs/handbook/.demo.json
+
+# `mix phx.digest` writes a fingerprinted copy NEXT TO each original (the originals themselves are
+# tracked), plus .gz siblings. Matching the 32-hex digest shape rather than "anything with a
+# hyphen" so `favicon-32x32.png` stays tracked. One pattern covers both depths: a middle `/**/`
+# matches ZERO or more directories, so this also catches files sitting directly in priv/static
+# (verified with `git check-ignore` on both).
+/priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
+/priv/static/**/*.gz

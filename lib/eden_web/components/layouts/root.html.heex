@@ -15,7 +15,14 @@
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#16181c" />
     <.live_title default="ihichat" suffix=" · ihichat" phx-no-format>{assigns[:page_title]}</.live_title>
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
-    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    <%!-- Signed-out pages load a bundle without the chat client (#511): the router assigns
+          `:js_bundle` for them, everything else gets the full one. --%>
+    <script
+      defer
+      phx-track-static
+      type="text/javascript"
+      src={~p"/assets/js/#{assigns[:js_bundle] || "app.js"}"}
+    >
     </script>
     <script nonce={assigns[:csp_nonce]}>
       (() => {
