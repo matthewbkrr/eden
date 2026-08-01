@@ -3842,6 +3842,38 @@ defmodule EdenWeb.ChatLiveTest do
       assert elem(work_at, 0) < elem(all_at, 0)
     end
 
+    test "the sidebar ships one menu per kind, not one per row (#508)", ctx do
+      # Every chat row and every room row used to carry its own hidden menu. Measured on the e2e
+      # stand: 60% of the chat list's nodes and 59% of its bytes, and 1221 nodes / 240 KB for a
+      # 37-room channel. `list_conversations/2` has no LIMIT, so that grew with the account.
+      #
+      # This is the structural half — cheap, no browser. Behaviour (which row the menu points at,
+      # whether its items reach the server) is `zz-sidebar-menu.spec.js`.
+      for _ <- 1..3 do
+        other = user_fixture()
+        {:ok, conv} = Chat.create_conversation(Scope.for_user(ctx.alice), [other.id])
+        {:ok, _} = Chat.create_message(Scope.for_user(other), conv.id, %{"body" => "hi"})
+      end
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app")
+
+      list = view |> element("#conversations") |> render()
+      rows = length(Regex.scan(~r/class="ed-convo-wrap"/, list))
+      assert rows >= 4, "the fixture is supposed to render several rows"
+
+      # `class="ed-menu"`, not the `data-menu` marker: the room rows carry a `data-menu-trigger`
+      # button (the hover "…"), so a prefix match would one day fail for a reason that has nothing
+      # to do with this (#541 review). The menu itself is what must not be here.
+      refute list =~ ~s(class="ed-menu"),
+             "a context menu is being rendered inside the chat list again — " <>
+               "#{rows} rows means #{rows} copies of it"
+
+      # And exactly one of each shared menu on the page, which is what makes that safe.
+      assert length(Regex.scan(~r/id="convo-menu"/, html)) == 1
+      assert length(Regex.scan(~r/id="room-menu"/, html)) == 1
+    end
+
     test "mute toggles from the chat menu and de-emphasizes the badge", ctx do
       scope = Scope.for_user(ctx.alice)
 
@@ -3851,14 +3883,19 @@ defmodule EdenWeb.ChatLiveTest do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
 
-      menu = view |> element("#convo-menu-#{ctx.conversation.id}") |> render()
-      assert menu =~ "Mute"
-      refute menu =~ "Unmute"
+      # The menu is one shared node now (#508), so mute/unmute is no longer a server-rendered
+      # label — the row publishes the state and the hook picks the wording. Assert what the
+      # SERVER still owns: the fact on the row, the badge, and the write. The wording itself is
+      # covered end-to-end in `zz-sidebar-menu.spec.js`, where a real click flips it.
+      row = view |> element(~s|.ed-convo-wrap[data-id="#{ctx.conversation.id}"]|) |> render()
+      refute row =~ ~s(data-muted="1")
       refute render(view) =~ "ed-badge--muted"
 
       render_click(view, "toggle_mute", %{"id" => to_string(ctx.conversation.id)})
 
-      assert view |> element("#convo-menu-#{ctx.conversation.id}") |> render() =~ "Unmute"
+      assert view |> element(~s|.ed-convo-wrap[data-id="#{ctx.conversation.id}"]|) |> render() =~
+               ~s(data-muted="1")
+
       assert render(view) =~ "ed-badge--muted"
       assert [%{muted: true}] = Chat.list_conversations(scope)
     end

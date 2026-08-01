@@ -189,7 +189,17 @@ design — built incrementally as features land.)
     long-press, Telegram-style) — a quick-react row + a "more" chevron that opens
     one **shared full-emoji grid popover** (`#reaction-grid`, the `.ReactionGrid`
     hook — #72: one per page, not a 39-button grid hidden in every message) —
-    never a per-message hover affordance (that reflows the bubble). The quick-react
+    never a per-message hover affordance (that reflows the bubble). **Every context
+    menu follows that rule** (#72 → #508): the message menu, the chat-row menu and
+    the room-row menu are each ONE page-level node (`#message-menu`, `#convo-menu`,
+    `#room-menu`), configured on open by the `.ContextMenu` hook from `data-*` the
+    server puts on the row — never rendered hidden inside every row (measured: 60%
+    of the chat list's DOM nodes and 59% of its bytes; 1221 nodes / 240 KB for a
+    37-room channel). Predicates stay in Elixir — the row publishes `data-group` /
+    `data-muted` / `data-deletable` — and anything **authorization**-shaped stays a
+    server-side `:if`: a plain channel member never receives the room-admin items
+    at all, because hiding an affordance client-side is a different promise from
+    not shipping it. The quick-react
     row is **per-user**: each member picks
     their own in Settings (`Chat.set_quick_reactions/2`, stored in
     `chat_folder_prefs.quick_reactions`; `nil` = the default set). Chips render

@@ -2937,6 +2937,132 @@ defmodule EdenWeb.ChatLive do
       <%!-- Carry-and-drop forward: re-hydrates the plaque from sessionStorage on every mount,
             so a carried message survives navigation across DMs, rooms and channels. --%>
       <div id="forward-carry" phx-hook=".ForwardCarry" hidden></div>
+
+      <%!-- Shared sidebar menus (#508): ONE of each per page, the same idiom as #message-menu and
+            #reaction-grid. They used to be rendered hidden INSIDE every chat row and every room
+            row — measured on a stand with eleven chats, that was 60% of the sidebar's DOM nodes
+            and 59% of its bytes, and `Chat.list_conversations/2` has no LIMIT, so it grows with
+            the chat list rather than with the screen.
+
+            Neither carries per-row state. The .ContextMenu hook writes the owning row's id onto
+            every item's `phx-value-id` and flips `data-needs` visibility on open, so the actions
+            stay plain `phx-click` markup — which is what keeps `data-confirm` working. The
+            predicates themselves stay in Elixir: the server puts them on the row as data-*. --%>
+      <div
+        id="convo-menu"
+        class="ed-menu"
+        data-menu
+        role="menu"
+        aria-label={gettext("Chat actions")}
+        hidden
+      >
+        <button type="button" class="ed-menu__item" role="menuitem" phx-click="mark_as_read">
+          <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Mark as read")}
+        </button>
+        <button type="button" class="ed-menu__item" role="menuitem" phx-click="toggle_mute">
+          <span data-needs="unmuted"><.icon name="hero-bell-slash-micro" class="size-4" /></span>
+          <span data-needs="muted" hidden><.icon name="hero-bell-micro" class="size-4" /></span>
+          <span data-needs="unmuted">{gettext("Mute")}</span>
+          <span data-needs="muted" hidden>{gettext("Unmute")}</span>
+        </button>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="move_to_folder_prompt"
+        >
+          <.icon name="hero-folder-micro" class="size-4" /> {gettext("Move to folder…")}
+        </button>
+        <div class="ed-menu__sep"></div>
+        <%!-- Leaving a group is IRREVERSIBLE (unlike a DM's re-surfaceable hide), so it gets its
+              own label + a "can't undo" confirm (#369/R069). The owner is caught after confirm
+              with a "transfer ownership first" flash (delete_chat handler); the group profile
+              panel also carries this Leave affordance next to the transfer-ownership actions. --%>
+        <button
+          type="button"
+          class="ed-menu__item ed-menu__item--danger"
+          role="menuitem"
+          phx-click="delete_chat"
+          data-needs="group"
+          data-confirm={gettext("Leave this group? You can't undo this.")}
+          hidden
+        >
+          <.icon name="hero-arrow-right-start-on-rectangle-micro" class="size-4" />
+          {gettext("Leave group")}
+        </button>
+        <button
+          type="button"
+          class="ed-menu__item ed-menu__item--danger"
+          role="menuitem"
+          phx-click="delete_chat"
+          data-needs="direct"
+          data-confirm={gettext("Delete this chat? It will be removed from your list.")}
+          hidden
+        >
+          <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete chat")}
+        </button>
+      </div>
+
+      <div
+        id="room-menu"
+        class="ed-menu"
+        data-menu
+        role="menu"
+        aria-label={gettext("Room actions")}
+        hidden
+      >
+        <button type="button" class="ed-menu__item" role="menuitem" phx-click="mark_as_read">
+          <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Mark as read")}
+        </button>
+        <button
+          type="button"
+          class="ed-menu__item"
+          role="menuitem"
+          phx-click="toggle_room_favorite"
+        >
+          <.icon name="hero-star-micro" class="size-4" />
+          <span data-needs="unfav">{gettext("Favorite")}</span>
+          <span data-needs="fav" hidden>{gettext("Unfavorite")}</span>
+        </button>
+        <button type="button" class="ed-menu__item" role="menuitem" phx-click="toggle_mute">
+          <span data-needs="unmuted"><.icon name="hero-bell-slash-micro" class="size-4" /></span>
+          <span data-needs="muted" hidden><.icon name="hero-bell-micro" class="size-4" /></span>
+          <span data-needs="unmuted">{gettext("Mute")}</span>
+          <span data-needs="muted" hidden>{gettext("Unmute")}</span>
+        </button>
+        <%!-- The link is per-room, so the hook copies it off the row on open — the one piece of
+              this menu that cannot be static. --%>
+        <button type="button" class="ed-menu__item" role="menuitem" data-copy-link data-link="">
+          <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
+        </button>
+        <%!-- Admin items stay behind a SERVER gate, not a hidden attribute. Being a channel admin
+              is a property of the PAGE, not of the row, so it costs nothing to decide here — and
+              a member must not receive markup labelled "Delete room" at all. The server re-checks
+              every one of these events anyway, but shipping the affordance and hiding it in JS is
+              a different promise than never shipping it (#508). Only "which room" stays
+              client-side: `deletable` is the general room, which cannot be deleted. --%>
+        <%= if @channel && @channel.role in ~w(owner admin) do %>
+          <div class="ed-menu__sep"></div>
+          <button type="button" class="ed-menu__item" role="menuitem" phx-click="open_room_add">
+            <.icon name="hero-user-plus-micro" class="size-4" /> {gettext("Add members")}
+          </button>
+          <button type="button" class="ed-menu__item" role="menuitem" phx-click="open_room_rename">
+            <.icon name="hero-pencil-micro" class="size-4" /> {gettext("Rename room")}
+          </button>
+          <div class="ed-menu__sep" data-needs="deletable" hidden></div>
+          <button
+            type="button"
+            class="ed-menu__item ed-menu__item--danger"
+            role="menuitem"
+            phx-click="delete_room"
+            data-needs="deletable"
+            data-confirm={gettext("Delete this room and all its messages? This cannot be undone.")}
+            hidden
+          >
+            <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete room")}
+          </button>
+        <% end %>
+      </div>
       <%!-- Instant navigation: paints the tapped chat's shell + a shimmer skeleton the
             moment a sidebar row is tapped, so the pane opens in the SAME frame instead of
             waiting out the cross-border RTT to chat.ihi.ru (patch nav is a full round-trip).
@@ -7046,9 +7172,7 @@ defmodule EdenWeb.ChatLive do
           wire() {
             // Message rows share ONE page-level menu (#508); every other host (sidebar chats,
             // the channel rail) still owns its menu inline, so both paths live here.
-            this.menu = this.el.dataset.messageId
-              ? document.getElementById("message-menu")
-              : this.el.querySelector("[data-menu]")
+            this.menu = document.getElementById(this.sharedMenuId()) || this.el.querySelector("[data-menu]")
             if (this.menu && !this.menu._wired) {
               this.menu._wired = true
               // The shared node outlives every hook instance, so the handler resolves the CURRENT
@@ -7078,6 +7202,39 @@ defmodule EdenWeb.ChatLive do
                 const r = trigger.getBoundingClientRect()
                 this.open(r.left, r.bottom + 4)
               })
+            }
+          },
+          // Which page-level menu this host uses, if any. Message rows, sidebar chats and room
+          // rows each share one (#508); the folder tabs and the members panel are bounded by the
+          // screen rather than by the account, so they still own their menu inline.
+          sharedMenuId() {
+            const d = this.el.dataset
+            if (d.messageId) return "message-menu"
+            if (d.room) return "room-menu"
+            if (this.el.classList.contains("ed-convo-wrap")) return "convo-menu"
+            return ""
+          },
+          // Point a shared sidebar menu at the row that just opened it. The items keep their
+          // plain `phx-click` markup and only their `phx-value-id` is rewritten — that is what
+          // keeps `data-confirm` working, which a hook-side pushEvent would have thrown away.
+          fillSidebar() {
+            const d = this.el.dataset
+            this.menu.querySelectorAll("[phx-click]").forEach((b) => b.setAttribute("phx-value-id", d.id))
+
+            const toggle = (need, on) =>
+              this.menu.querySelectorAll(`[data-needs="${need}"]`).forEach((n) => { n.hidden = !on })
+            toggle("muted", d.muted === "1")
+            toggle("unmuted", d.muted !== "1")
+
+            if (d.room) {
+              toggle("fav", d.fav === "1")
+              toggle("unfav", d.fav !== "1")
+              toggle("deletable", d.deletable === "1")
+              const copy = this.menu.querySelector("[data-copy-link]")
+              if (copy) copy.dataset.link = d.link || ""
+            } else {
+              toggle("group", d.group === "1")
+              toggle("direct", d.group !== "1")
             }
           },
           onItem(e) {
@@ -7207,6 +7364,7 @@ defmodule EdenWeb.ChatLive do
             // Shared menu (#508): aim it at this row BEFORE it is shown, so no frame ever
             // paints another message's item set.
             if (this.el.dataset.messageId) this.fill()
+            else if (this.sharedMenuId()) this.fillSidebar()
             this.menu.hidden = false
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "true")
@@ -11203,7 +11361,16 @@ defmodule EdenWeb.ChatLive do
 
   defp conversation_item(assigns) do
     ~H"""
-    <div id={@id} class="ed-convo-wrap" data-id={@conversation.id} phx-hook=".ContextMenu">
+    <%!-- The menu itself lives once at the page root (#508); the row publishes only what the
+          menu needs to configure itself, so the predicates stay computed in Elixir. --%>
+    <div
+      id={@id}
+      class="ed-convo-wrap"
+      data-id={@conversation.id}
+      data-group={@conversation.is_group && "1"}
+      data-muted={@conversation.muted && "1"}
+      phx-hook=".ContextMenu"
+    >
       <.link
         patch={~p"/app/c/#{@conversation.id}"}
         class={["ed-convo", @active && "ed-convo--active"]}
@@ -11241,67 +11408,6 @@ defmodule EdenWeb.ChatLive do
           </span>
         </span>
       </.link>
-      <div class="ed-menu" id={"convo-menu-#{@conversation.id}"} data-menu role="menu" hidden>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="mark_as_read"
-          phx-value-id={@conversation.id}
-        >
-          <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Mark as read")}
-        </button>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="toggle_mute"
-          phx-value-id={@conversation.id}
-        >
-          <.icon
-            name={if @conversation.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
-            class="size-4"
-          />
-          {if @conversation.muted, do: gettext("Unmute"), else: gettext("Mute")}
-        </button>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="move_to_folder_prompt"
-          phx-value-id={@conversation.id}
-        >
-          <.icon name="hero-folder-micro" class="size-4" /> {gettext("Move to folder…")}
-        </button>
-        <div class="ed-menu__sep"></div>
-        <%!-- Leaving a group is IRREVERSIBLE (unlike a DM's re-surfaceable hide), so it gets its
-              own label + a "can't undo" confirm (#369/R069). The owner is caught after confirm with
-              a "transfer ownership first" flash (delete_chat handler); the group profile panel also
-              carries this Leave affordance next to the transfer-ownership actions. --%>
-        <button
-          :if={@conversation.is_group}
-          type="button"
-          class="ed-menu__item ed-menu__item--danger"
-          role="menuitem"
-          phx-click="delete_chat"
-          phx-value-id={@conversation.id}
-          data-confirm={gettext("Leave this group? You can't undo this.")}
-        >
-          <.icon name="hero-arrow-right-start-on-rectangle-micro" class="size-4" />
-          {gettext("Leave group")}
-        </button>
-        <button
-          :if={!@conversation.is_group}
-          type="button"
-          class="ed-menu__item ed-menu__item--danger"
-          role="menuitem"
-          phx-click="delete_chat"
-          phx-value-id={@conversation.id}
-          data-confirm={gettext("Delete this chat? It will be removed from your list.")}
-        >
-          <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete chat")}
-        </button>
-      </div>
     </div>
     """
   end
@@ -11553,6 +11659,11 @@ defmodule EdenWeb.ChatLive do
       id={@id}
       class="ed-convo-wrap ed-room-wrap"
       data-id={@room.id}
+      data-room="1"
+      data-muted={@room.muted && "1"}
+      data-fav={@room.favorite && "1"}
+      data-deletable={not @room.is_general && "1"}
+      data-link={url(~p"/channels/#{@channel.id}/r/#{@room.id}")}
       draggable={to_string(@admin)}
       phx-hook=".ContextMenu"
     >
@@ -11590,82 +11701,6 @@ defmodule EdenWeb.ChatLive do
       >
         <.icon name="hero-ellipsis-horizontal-mini" class="size-4" />
       </button>
-      <div class="ed-menu" id={"room-menu-#{@room.id}"} data-menu role="menu" hidden>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="mark_as_read"
-          phx-value-id={@room.id}
-        >
-          <.icon name="hero-check-circle-micro" class="size-4" /> {gettext("Mark as read")}
-        </button>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="toggle_room_favorite"
-          phx-value-id={@room.id}
-        >
-          <.icon name="hero-star-micro" class="size-4" />
-          {if @room.favorite, do: gettext("Unfavorite"), else: gettext("Favorite")}
-        </button>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="toggle_mute"
-          phx-value-id={@room.id}
-        >
-          <.icon
-            name={if @room.muted, do: "hero-bell-micro", else: "hero-bell-slash-micro"}
-            class="size-4"
-          />
-          {if @room.muted, do: gettext("Unmute"), else: gettext("Mute")}
-        </button>
-        <button
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          data-copy-link
-          data-link={url(~p"/channels/#{@channel.id}/r/#{@room.id}")}
-        >
-          <.icon name="hero-link-micro" class="size-4" /> {gettext("Copy link")}
-        </button>
-        <div :if={@admin} class="ed-menu__sep"></div>
-        <button
-          :if={@admin}
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="open_room_add"
-          phx-value-id={@room.id}
-        >
-          <.icon name="hero-user-plus-micro" class="size-4" /> {gettext("Add members")}
-        </button>
-        <button
-          :if={@admin}
-          type="button"
-          class="ed-menu__item"
-          role="menuitem"
-          phx-click="open_room_rename"
-          phx-value-id={@room.id}
-        >
-          <.icon name="hero-pencil-micro" class="size-4" /> {gettext("Rename room")}
-        </button>
-        <div :if={@admin and not @room.is_general} class="ed-menu__sep"></div>
-        <button
-          :if={@admin and not @room.is_general}
-          type="button"
-          class="ed-menu__item ed-menu__item--danger"
-          role="menuitem"
-          phx-click="delete_room"
-          phx-value-id={@room.id}
-          data-confirm={gettext("Delete this room and all its messages? This cannot be undone.")}
-        >
-          <.icon name="hero-trash-micro" class="size-4" /> {gettext("Delete room")}
-        </button>
-      </div>
     </div>
     """
   end
