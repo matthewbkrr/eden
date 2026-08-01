@@ -48,16 +48,22 @@ defmodule EdenWeb.SidebarCostTest do
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    count = fn ->
-      Process.sleep(60)
-      drain = fn d, n -> receive do: (:q -> d.(d, n + 1)), after: (0 -> n) end
-      drain.(drain, 0)
+    # No sleep, and that is the point (#544 review). `render/1` is a synchronous call INTO the
+    # LiveView process, and Erlang guarantees message order between a given pair of processes — so
+    # once its reply is in this mailbox, every `:q` the handler sent while handling the patch is
+    # already in there too, ahead of the reply. A wall-clock wait would be both slower and a race
+    # in the direction that hides a regression: undercounting makes this budget pass.
+    drain = fn ->
+      d = fn d, n -> receive do: (:q -> d.(d, n + 1)), after: (0 -> n) end
+      d.(d, 0)
     end
 
-    _ = count.()
+    _ = render(view)
+    _ = drain.()
+
     render_patch(view, "/app/c/#{hd(convs).id}")
     _ = render(view)
-    queries = count.()
+    queries = drain.()
 
     assert queries > 0, "nothing was measured — the telemetry handler stopped matching"
 

@@ -3122,6 +3122,10 @@ defmodule EdenWeb.ChatLive do
             // snapshot it into the cache (so the NEXT open paints instantly), then, if this is the
             // conversation we're transitioning to, drop the overlay.
             this.onShown = (e) => {
+              // Idempotent, and deliberately in BOTH places: the tap path calls it a round-trip
+              // earlier so the list never flickers, and this one catches every other way a chat
+              // opens — search result, permalink, notification, history.
+              this.markActive(e.detail.id)
               this.snapshot(e.detail.id)
               // Dismiss on the WINNING arrival, not merely on a matching id (#482). Every
               // tap in a burst sends its own live_patch and the server renders all of them —
@@ -3691,7 +3695,7 @@ defmodule EdenWeb.ChatLive do
             //
             // The server still renders the truth on a fresh load or any later re-stream; this
             // only removes the round-trip whose sole job was to agree with what already happened.
-            this.markActive(wrap, link)
+            this.markActive(id)
 
             const isRoom = wrap.classList.contains("ed-room-wrap")
             // A tap that SUPERSEDES an in-flight back must REPLACE the chat's history entry
@@ -3834,12 +3838,18 @@ defmodule EdenWeb.ChatLive do
           // the swap happens in the same task as the gesture that asked for it and the
           // settled gesture never flashes the chat it just left; the patch then normalizes
           // every class. Shared by history traversal (onPop) and the mid-load cancel.
-          // Move the active wash onto the tapped row and drop its unread badge.
-          markActive(wrap, link) {
+          // Move the active wash onto a conversation's sidebar row and drop its unread badge.
+          // Keyed by id, not by the tapped element, because a chat opens from more places than
+          // the list: a search result, a message permalink, a notification, history. Those never
+          // touch a `.ed-convo-wrap`, and before this they left the row unwashed with a stale
+          // badge until something else re-streamed the sidebar (#544 review).
+          markActive(id) {
+            const wrap = document.querySelector(`.ed-convo-wrap[data-id="${CSS.escape(String(id))}"]`)
             document
               .querySelectorAll(".ed-convo--active")
               .forEach((n) => n.classList.remove("ed-convo--active"))
-            link.classList.add("ed-convo--active")
+            if (!wrap) return
+            wrap.querySelector("a.ed-convo")?.classList.add("ed-convo--active")
             // Opening a chat marks it read; the badge is the one part of the row the server would
             // otherwise have to come back to correct. Removed, not hidden — a re-stream renders
             // the row afresh, so there is no stale state to restore.

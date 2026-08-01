@@ -66,3 +66,13 @@ test("a reload still marks the open chat, so the wash is not only client-side", 
   ).toHaveClass(/ed-convo--active/)
   await expect(alice.locator("a.ed-convo--active")).toHaveCount(1)
 })
+
+// A chat also opens from a search result, a permalink, a notification and history — none of which
+// touch a `.ed-convo-wrap`, so the tap handler never runs for them (#544 review). `markActive` is
+// therefore also called on `ed:conv-shown`, which fires on every one of those paths.
+//
+// There is deliberately NO test for it here. Two attempts, both mutation-checked, both passed with
+// the fix deleted: on the search path the sidebar re-renders from the server anyway (clearing the
+// query re-renders the list, and `@active` comes from `@selected`), so the row ends up correct
+// either way and no assertion can tell who did it. The call stays because it makes the client's
+// ownership path-independent for free — not because a failure was observed.
