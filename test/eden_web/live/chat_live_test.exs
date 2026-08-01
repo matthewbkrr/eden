@@ -3862,7 +3862,10 @@ defmodule EdenWeb.ChatLiveTest do
       rows = length(Regex.scan(~r/class="ed-convo-wrap"/, list))
       assert rows >= 4, "the fixture is supposed to render several rows"
 
-      refute list =~ "data-menu",
+      # `class="ed-menu"`, not the `data-menu` marker: the room rows carry a `data-menu-trigger`
+      # button (the hover "…"), so a prefix match would one day fail for a reason that has nothing
+      # to do with this (#541 review). The menu itself is what must not be here.
+      refute list =~ ~s(class="ed-menu"),
              "a context menu is being rendered inside the chat list again — " <>
                "#{rows} rows means #{rows} copies of it"
 

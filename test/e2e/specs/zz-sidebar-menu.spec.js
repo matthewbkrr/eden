@@ -10,9 +10,22 @@
 // "the right menu, pointed at the right row, and its items reach the server".
 const { test, expect } = require("../helpers/fixtures")
 
-const openMenu = async (page, selector) => {
+// Wait for the menu to be OPEN, not for a fixed slice of time: these menus are opened by a hook
+// on a real gesture, and a stand under load can take longer than any number picked in advance
+// (#541 review). Playwright treats the `hidden` attribute as invisible, so this is exactly the
+// condition the assertions care about.
+const openMenu = async (page, selector, menuId) => {
   await page.locator(selector).first().click({ button: "right" })
-  await page.waitForTimeout(300)
+  await page.locator(`#${menuId}`).waitFor({ state: "visible" })
+}
+
+// A connected socket is not a working menu: the row has to exist AND its hook has to be mounted,
+// or a right-click lands on plain markup and nothing opens. `__edInstantNavReady` is the app's own
+// "hooks are up" signal — dropping it in favour of "the row is in the DOM" made the second test
+// time out here, which is the shape of every fixed-delay bug, just without the delay.
+const ready = async (page, rowSelector) => {
+  await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await page.locator(rowSelector).first().waitFor()
 }
 
 const visibleItems = (page, id) =>
@@ -28,8 +41,7 @@ test.describe.configure({ mode: "serial" })
 
 test("a chat menu is configured for the row that opened it", async ({ alice, seed }, testInfo) => {
   await alice.goto("/app")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
-  await alice.waitForTimeout(1000)
+  await ready(alice, ".ed-convo-wrap")
 
   const cost = await alice.evaluate(() => {
     const list = document.getElementById("conversations")
@@ -50,7 +62,7 @@ test("a chat menu is configured for the row that opened it", async ({ alice, see
   // A 1:1 offers "Delete chat" (reversible — messaging back re-opens it); a group offers
   // "Leave group" instead, which is not. Getting that backwards is the failure the shared menu
   // makes possible, because both items exist in the same node.
-  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`)
+  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`, "convo-menu")
   const dmItems = await visibleItems(alice, "convo-menu")
   expect(dmItems).toContain("Delete chat")
   expect(dmItems).not.toContain("Leave group")
@@ -65,7 +77,7 @@ test("a chat menu is configured for the row that opened it", async ({ alice, see
   )
 
   await alice.keyboard.press("Escape")
-  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.group_id}"]`)
+  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.group_id}"]`, "convo-menu")
   const groupItems = await visibleItems(alice, "convo-menu")
   expect(groupItems).toContain("Leave group")
   expect(groupItems).not.toContain("Delete chat")
@@ -76,18 +88,17 @@ test("muting from the shared menu reaches the server and the label follows", asy
   seed,
 }) => {
   await alice.goto("/app")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
-  await alice.waitForTimeout(1000)
+  await ready(alice, ".ed-convo-wrap")
 
   const row = () => alice.locator(`.ed-convo-wrap[data-id="${seed.dm_id}"]`).first()
   const wasMuted = (await row().getAttribute("data-muted")) === "1"
   if (wasMuted) {
-    await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`)
+    await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`, "convo-menu")
     await alice.locator('#convo-menu button[phx-click="toggle_mute"]').click()
     await expect(row()).not.toHaveAttribute("data-muted", "1")
   }
 
-  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`)
+  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`, "convo-menu")
   expect(await visibleItems(alice, "convo-menu")).toContain("Mute")
 
   // A real click, not a pushEvent: the items keep plain `phx-click` markup precisely so that
@@ -97,7 +108,7 @@ test("muting from the shared menu reaches the server and the label follows", asy
   await expect(row()).toHaveAttribute("data-muted", "1")
 
   // Re-opening must re-read the row: the label is now the other one.
-  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`)
+  await openMenu(alice, `.ed-convo-wrap[data-id="${seed.dm_id}"]`, "convo-menu")
   expect(await visibleItems(alice, "convo-menu")).toContain("Unmute")
 
   await alice.locator('#convo-menu button[phx-click="toggle_mute"]').click()
@@ -109,8 +120,7 @@ test("a room menu carries that room's link and hides delete for general", async 
   seed,
 }, testInfo) => {
   await alice.goto(`/channels/${seed.channel_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
-  await alice.waitForTimeout(1500)
+  await ready(alice, ".ed-room-wrap")
 
   const cost = await alice.evaluate(() => {
     const rows = [...document.querySelectorAll(".ed-room-wrap")]
@@ -129,7 +139,7 @@ test("a room menu carries that room's link and hides delete for general", async 
 
   // The general room can never be deleted, and that is the one per-room fact the shared menu
   // still resolves client-side.
-  await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`)
+  await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`, "room-menu")
   const general = await alice.evaluate(() => ({
     link: document.querySelector("#room-menu [data-copy-link]").dataset.link,
     items: [...document.querySelectorAll("#room-menu button")]
@@ -162,6 +172,6 @@ test("a room menu carries that room's link and hides delete for general", async 
   test.skip(!other, "the channel has only a general room on this stand")
 
   await alice.keyboard.press("Escape")
-  await openMenu(alice, `.ed-room-wrap[data-id="${other}"]`)
+  await openMenu(alice, `.ed-room-wrap[data-id="${other}"]`, "room-menu")
   expect(await visibleItems(alice, "room-menu")).toContain("Delete room")
 })
