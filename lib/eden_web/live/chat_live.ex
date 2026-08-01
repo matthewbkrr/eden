@@ -3125,7 +3125,15 @@ defmodule EdenWeb.ChatLive do
               // Idempotent, and deliberately in BOTH places: the tap path calls it a round-trip
               // earlier so the list never flickers, and this one catches every other way a chat
               // opens — search result, permalink, notification, history.
-              this.markActive(e.detail.id)
+              //
+              // Gated on the URL for the same reason the dismiss below is (#482): a tap burst
+              // A -> B -> A makes the server render every live_patch, so `ed:conv-shown` fires
+              // for arrivals that have already been superseded. Washing on each would leave the
+              // wash wherever the last one happened to land. The URL is the discriminator — a
+              // superseded diff always arrives while it points elsewhere. NOT gated on
+              // `this.target`: that is null when the chat was opened from a search result or a
+              // permalink, which is exactly the case this call exists for (#544 review).
+              if (String(this.urlConvId()) === String(e.detail.id)) this.markActive(e.detail.id)
               this.snapshot(e.detail.id)
               // Dismiss on the WINNING arrival, not merely on a matching id (#482). Every
               // tap in a burst sends its own live_patch and the server renders all of them —
