@@ -3122,6 +3122,18 @@ defmodule EdenWeb.ChatLive do
             // snapshot it into the cache (so the NEXT open paints instantly), then, if this is the
             // conversation we're transitioning to, drop the overlay.
             this.onShown = (e) => {
+              // Idempotent, and deliberately in BOTH places: the tap path calls it a round-trip
+              // earlier so the list never flickers, and this one catches every other way a chat
+              // opens — search result, permalink, notification, history.
+              //
+              // Gated on the URL for the same reason the dismiss below is (#482): a tap burst
+              // A -> B -> A makes the server render every live_patch, so `ed:conv-shown` fires
+              // for arrivals that have already been superseded. Washing on each would leave the
+              // wash wherever the last one happened to land. The URL is the discriminator — a
+              // superseded diff always arrives while it points elsewhere. NOT gated on
+              // `this.target`: that is null when the chat was opened from a search result or a
+              // permalink, which is exactly the case this call exists for (#544 review).
+              if (String(this.urlConvId()) === String(e.detail.id)) this.markActive(e.detail.id)
               this.snapshot(e.detail.id)
               // Dismiss on the WINNING arrival, not merely on a matching id (#482). Every
               // tap in a burst sends its own live_patch and the server renders all of them —
@@ -3683,6 +3695,16 @@ defmodule EdenWeb.ChatLive do
               e.stopPropagation()
               return
             }
+            // Own the row's appearance client-side (#514). Opening a chat used to re-stream the
+            // WHOLE sidebar server-side for two visual facts: which row is active and that the
+            // opened one has no unread left. That cost ~6 queries and a full stream table on
+            // every navigation — and it arrived a round-trip late, so the list this hook had
+            // already repainted flickered back. The client knows both facts at tap time.
+            //
+            // The server still renders the truth on a fresh load or any later re-stream; this
+            // only removes the round-trip whose sole job was to agree with what already happened.
+            this.markActive(id)
+
             const isRoom = wrap.classList.contains("ed-room-wrap")
             // A tap that SUPERSEDES an in-flight back must REPLACE the chat's history entry
             // instead of pushing on top of it (#476). LiveView pushes history state only in the
@@ -3824,6 +3846,24 @@ defmodule EdenWeb.ChatLive do
           // the swap happens in the same task as the gesture that asked for it and the
           // settled gesture never flashes the chat it just left; the patch then normalizes
           // every class. Shared by history traversal (onPop) and the mid-load cancel.
+          // Move the active wash onto a conversation's sidebar row and drop its unread badge.
+          // Keyed by id, not by the tapped element, because a chat opens from more places than
+          // the list: a search result, a message permalink, a notification, history. Those never
+          // touch a `.ed-convo-wrap`, and before this they left the row unwashed with a stale
+          // badge until something else re-streamed the sidebar (#544 review).
+          markActive(id) {
+            const wrap = document.querySelector(`.ed-convo-wrap[data-id="${CSS.escape(String(id))}"]`)
+            document
+              .querySelectorAll(".ed-convo--active")
+              .forEach((n) => n.classList.remove("ed-convo--active"))
+            if (!wrap) return
+            wrap.querySelector("a.ed-convo")?.classList.add("ed-convo--active")
+            // Opening a chat marks it read; the badge is the one part of the row the server would
+            // otherwise have to come back to correct. Removed, not hidden — a re-stream renders
+            // the row afresh, so there is no stale state to restore.
+            wrap.querySelector(".ed-badge")?.remove()
+          },
+
           revealList(main, aside) {
             if (!main || !aside) return
             document.activeElement?.blur?.()
@@ -14887,11 +14927,13 @@ defmodule EdenWeb.ChatLive do
     )
     |> stream(:thread, [], reset: true)
     |> stream(:messages, messages, reset: true)
-    # Re-stream the sidebar so the active highlight follows the selection (stream
-    # items don't re-render on assign changes) and the opened conversation's
-    # unread badge clears. In channel mode the rooms list plays that role —
-    # without the refresh, an opened room kept its stale unread badge.
-    |> refresh_sidebar()
+    # No sidebar re-stream here (#514). Its only two jobs — move the active wash and clear the
+    # opened chat's unread badge — are done by `.InstantNav` at tap time, a round-trip earlier,
+    # and cost nothing; doing them again server-side meant ~6 queries and the whole stream table
+    # on every navigation. A fresh load renders both from `@active`/`unread_count` as before.
+    #
+    # The rooms list still refreshes: it is a plain assign, not a stream, and an opened room kept
+    # a stale unread badge without it.
     |> refresh_rooms()
     # Reading a room clears its unread, which lowers the channel's rail badge.
     |> then(fn s -> if conversation.channel_id, do: refresh_rail(s), else: s end)
