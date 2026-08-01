@@ -123,7 +123,7 @@ defmodule EdenWeb.CoreComponents do
       <div
         :if={msg = Phoenix.Flash.get(@flash, :error)}
         id="flash-error"
-        phx-hook=".FlashAutoHide"
+        phx-hook="FlashAutoHide"
         data-autohide="false"
         class="ed-toast ed-toast--error pointer-events-auto"
         role="alert"
@@ -143,7 +143,7 @@ defmodule EdenWeb.CoreComponents do
       <div
         :if={msg = Phoenix.Flash.get(@flash, :info)}
         id="flash-info"
-        phx-hook=".FlashAutoHide"
+        phx-hook="FlashAutoHide"
         data-autohide="true"
         class="ed-toast ed-toast--info pointer-events-auto"
         role="status"
@@ -160,25 +160,6 @@ defmodule EdenWeb.CoreComponents do
           <.icon name="hero-x-mark-mini" class="size-4" />
         </button>
       </div>
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".FlashAutoHide">
-        // Info flashes self-dismiss after a few seconds; errors stay until dismissed.
-        export default {
-          mounted() { this.arm() },
-          // A second info flash reuses this same DOM node (morphdom patches the text in
-          // place, so mounted() doesn't re-run) — re-arm on the patch or the first flash's
-          // timer would dismiss the new one early.
-          updated() { this.arm() },
-          destroyed() { clearTimeout(this._t) },
-          arm() {
-            clearTimeout(this._t)
-            if (this.el.dataset.autohide !== "true") return
-            this._t = setTimeout(() => {
-              const x = this.el.querySelector("[data-flash-close]")
-              x && x.click()
-            }, 5000)
-          }
-        }
-      </script>
     </div>
     """
   end
@@ -250,7 +231,7 @@ defmodule EdenWeb.CoreComponents do
 
   def ed_password_field(assigns) do
     ~H"""
-    <label class="block space-y-1.5" phx-hook=".PasswordReveal" id={"#{@field.id}-wrap"}>
+    <label class="block space-y-1.5" phx-hook="PasswordReveal" id={"#{@field.id}-wrap"}>
       <span style="font-size:0.8125rem; color: var(--ed-muted);">
         {@label}<span
           :if={@rest[:required]}
@@ -283,46 +264,6 @@ defmodule EdenWeb.CoreComponents do
         </button>
       </div>
       <.ed_field_errors field={@field} />
-      <script :type={Phoenix.LiveView.ColocatedHook} name=".PasswordReveal">
-        // Toggle a password input between hidden and visible, swapping the eye icon
-        // and keeping aria-pressed / aria-label in sync for screen readers.
-        //
-        // The toggle state is CLIENT-owned: the server always renders the masked
-        // default, and any LiveView patch (e.g. the form's phx-change validate on
-        // every keystroke) morphs type/aria/classes back — so the state lives on
-        // the hook and updated() re-applies it after each patch (#306 review; the
-        // focused-input carve-out only preserves `value`, not `type`).
-        export default {
-          mounted() {
-            this.showing = false
-            this._onClick = () => {
-              this.showing = !this.showing
-              this.sync()
-            }
-            const btn = this.el.querySelector("[data-reveal-toggle]")
-            btn && btn.addEventListener("click", this._onClick)
-          },
-          updated() { this.sync() },
-          sync() {
-            const input = this.el.querySelector("[data-reveal-input]")
-            const btn = this.el.querySelector("[data-reveal-toggle]")
-            if (!input || !btn) return
-            const show = this.showing
-            input.type = show ? "text" : "password"
-            btn.setAttribute("aria-pressed", String(show))
-            // Labels come from data-* so they honour the server-side gettext locale.
-            btn.setAttribute("aria-label", show ? btn.dataset.hideLabel : btn.dataset.showLabel)
-            const eye = this.el.querySelector("[data-reveal-eye]")
-            const eyeOff = this.el.querySelector("[data-reveal-eye-off]")
-            eye && eye.classList.toggle("hidden", show)
-            eyeOff && eyeOff.classList.toggle("hidden", !show)
-          },
-          destroyed() {
-            const btn = this.el.querySelector("[data-reveal-toggle]")
-            btn && this._onClick && btn.removeEventListener("click", this._onClick)
-          }
-        }
-      </script>
     </label>
     """
   end

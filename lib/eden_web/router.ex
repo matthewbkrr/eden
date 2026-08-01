@@ -22,6 +22,15 @@ defmodule EdenWeb.Router do
 
   # Guards the controller routes for signed-out flows (the LiveView pages use the
   # matching :redirect_if_authenticated on_mount hook).
+  # Login, the 2FA challenge and invite acceptance render a form and nothing else, so they load a
+  # bundle without the chat client — 79 KB gzip down to a fraction of it (#511). The assign is
+  # read by the root layout; anything not marked keeps the full bundle, which is the safe default.
+  pipeline :auth_assets do
+    plug :put_js_bundle, "auth.js"
+  end
+
+  defp put_js_bundle(conn, bundle), do: Plug.Conn.assign(conn, :js_bundle, bundle)
+
   pipeline :redirect_if_authenticated do
     plug :redirect_if_user_is_authenticated
   end
@@ -170,7 +179,7 @@ defmodule EdenWeb.Router do
   end
 
   scope "/", EdenWeb do
-    pipe_through [:browser, :redirect_if_authenticated]
+    pipe_through [:browser, :redirect_if_authenticated, :auth_assets]
 
     live_session :redirect_if_authenticated,
       on_mount: [EdenWeb.Locale, {EdenWeb.UserAuth, :redirect_if_authenticated}] do
