@@ -1695,6 +1695,14 @@ defmodule Eden.ChatTest do
       # `track_reply/2` is only reachable through `create_reply/3`, which always stamps "now". What
       # the fix changes is that the relationship is now structural rather than a coincidence, and
       # what this test does is stop someone restoring the coincidence.
+      # State the premise instead of relying on it: the assertion below only means anything if the
+      # row is created BY this reply. Posting a root does not create a follow row (nothing calls
+      # `ensure_following` outside `track_reply/2`), and an explicit `follow_thread` would stamp
+      # it from the clock — so if a future setup ever adds either, this fails here, where the
+      # reason is visible, rather than in the comparison below (#543 review).
+      refute Repo.get_by(ThreadMembership, user_id: alice.id, root_id: root.id),
+             "alice already follows this thread — the stamp below would not be the reply's"
+
       {:ok, reply} = Chat.create_reply(scope(bob), root.id, %{"body" => "one"})
 
       membership = Repo.get_by!(ThreadMembership, user_id: alice.id, root_id: root.id)
