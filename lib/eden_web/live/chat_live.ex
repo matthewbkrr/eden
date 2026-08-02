@@ -451,13 +451,15 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
+  # Back to the list. No sidebar reload (#514): its rows are already correct — the only thing that
+  # changes is which one carries the active wash, and `.InstantNav` clears that client-side the
+  # moment the list is revealed (`revealList`), a round-trip before this would have.
   def handle_params(_params, _uri, socket) do
     {:noreply,
      socket
      |> leave_channel_mode()
      |> unsubscribe()
-     |> assign(selected: nil)
-     |> refresh_sidebar()}
+     |> assign(selected: nil)}
   end
 
   # #41 access matrix: a room link auto-joins an open room, opens one you're in,
@@ -2727,7 +2729,10 @@ defmodule EdenWeb.ChatLive do
        |> put_flash(:error, gettext("You were removed from the group."))
        |> push_navigate(to: ~p"/app")}
     else
-      {:noreply, refresh_sidebar(socket)}
+      # Drop the one row instead of reloading the list for it (#514): the group is gone, and a
+      # stream delete says exactly that without a query.
+      {:noreply,
+       stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")}
     end
   end
 
