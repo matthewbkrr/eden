@@ -66,11 +66,21 @@ defmodule EdenWeb.SidebarCostTest do
     #
     # Deliberately NOT followed by another `render/1` (#544 review). That would let an ASYNC
     # message land and be counted too, and one always does here: opening a 1:1 publishes
-    # presence, the diff comes back, and `presence_diff` re-streams the sidebar for another
-    # ~7 queries. Real, and next on #514's list — but not what this budget is about, and folding
-    # it in would give a navigation regression somewhere to hide.
-    render_patch(view, "/app/c/#{hd(convs).id}")
-    queries = drain.()
+    # presence, the diff comes back, and `presence_diff` handles it. Folding that in would give a
+    # navigation regression somewhere to hide.
+    #
+    # The MINIMUM of several navigations, not one measurement (#546): async traffic the LiveView
+    # happens to process inside the window can only ADD queries, never remove them, so the floor
+    # is the navigation's own cost. One-shot measuring made this test fail twice under full-suite
+    # load while passing in isolation — a budget that flakes teaches people to ignore it.
+    queries =
+      convs
+      |> Enum.take(3)
+      |> Enum.map(fn conv ->
+        render_patch(view, "/app/c/#{conv.id}")
+        drain.()
+      end)
+      |> Enum.min()
 
     assert queries > 0, "nothing was measured — the telemetry handler stopped matching"
 
@@ -80,6 +90,16 @@ defmodule EdenWeb.SidebarCostTest do
              "which `.InstantNav` already did at tap time"
   end
 
+  # `{:message_edited}` is NOT in this file, and that is a finding rather than an omission.
+  # #514 lists its three `refresh_sidebar` calls as redundant "because only one chat's preview
+  # changes" — but measured, an edit costs 7 queries whether the handler rebuilds the list or
+  # updates the single row: `Chat.get_conversation_summary/2` for one conversation costs about
+  # what `list_conversations/2` costs for the whole (small) list, since both are a base query
+  # plus the same batch of preview/unread/muted lookups.
+  #
+  # A saving may still exist on the WIRE — a `reset: true` re-stream sends every row, a
+  # `stream_insert` sends one — but I could not measure that cheaply, and an unmeasured claim is
+  # not a reason to change working code.
   # There is deliberately no budget test for the rename / photo-change handlers. They only run
   # for a session that has that conversation OPEN (the broadcast rides the conversation topic,
   # which a session subscribes to on selection) — my first attempt measured a member sitting on
