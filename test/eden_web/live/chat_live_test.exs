@@ -763,6 +763,33 @@ defmodule EdenWeb.ChatLiveTest do
              "the sidebar's peers are unknown on this path, so every dot in the list would go dark"
     end
 
+    test "a peer going offline leaves the presence map, it is not merged forever", ctx do
+      # The map is now merged incrementally instead of rebuilt (#514), so "gone" has to be an
+      # explicit removal: a merge alone would keep the last known status forever and the dot would
+      # stay lit for someone who closed their laptop.
+      EdenWeb.Presence.track_user(self(), ctx.bob.id, "online")
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      host = fn -> view |> element("#presence-dots") |> render() end
+      assert host.() =~ "&quot;#{ctx.bob.id}&quot;:&quot;online&quot;"
+
+      EdenWeb.Presence.apply_effective(self(), ctx.bob.id, :invisible)
+
+      send(view.pid, %Phoenix.Socket.Broadcast{
+        event: "presence_diff",
+        topic: EdenWeb.Presence.topic(),
+        payload: %{
+          joins: %{},
+          leaves: %{to_string(ctx.bob.id) => %{metas: [%{status: "online"}]}}
+        }
+      })
+
+      refute host.() =~ "&quot;#{ctx.bob.id}&quot;",
+             "the peer is still in the presence map after going offline"
+    end
+
     test "a peer's away status colors their sidebar dot live (#102)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")
