@@ -746,6 +746,23 @@ defmodule EdenWeb.ChatLiveTest do
       refute has_element?(bob_view, "[data-profile-trigger] .ed-avatar__dot")
     end
 
+    test "mounting straight into a chat still knows who the sidebar's peers are", ctx do
+      # The dot map is `Map.take(statuses, sidebar_peer_ids ++ room_members)`, and mount used to
+      # seed the sidebar with a COPY of `stream_conversations/2` that streamed the rows but never
+      # assigned `sidebar_peer_ids`. A session that opened a chat by URL therefore had it empty:
+      # the map came out `{}` and `.PresenceDots` would hide every dot in the list on its next
+      # pass. Latent before (it only skipped a re-stream); user-visible once the dots moved to the
+      # client (#546 review).
+      EdenWeb.Presence.track_user(self(), ctx.bob.id, "online")
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      assert view |> element("#presence-dots") |> render() =~
+               "&quot;#{ctx.bob.id}&quot;:&quot;online&quot;",
+             "the sidebar's peers are unknown on this path, so every dot in the list would go dark"
+    end
+
     test "a peer's away status colors their sidebar dot live (#102)", ctx do
       conn = log_in_user(ctx.conn, ctx.alice)
       {:ok, view, _html} = live(conn, ~p"/app")

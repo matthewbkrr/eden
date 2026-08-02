@@ -272,10 +272,12 @@ defmodule EdenWeb.ChatLive do
       )
       |> stream(:thread, [])
       |> refresh_folders()
-      |> then(fn s ->
-        convos = Chat.list_conversations(scope)
-        s |> assign(sidebar_top: top_conv_id(convos)) |> stream(:conversations, convos)
-      end)
+      # Through `stream_conversations/2`, not a copy of it (#546 review). The copy set
+      # `sidebar_top` and streamed the rows but forgot `sidebar_peer_ids`, so a session that
+      # mounted straight into a chat had it empty — which used to only mean "presence_diff skips
+      # its re-stream", and now means the dot map is empty and `.PresenceDots` hides every dot in
+      # the list. One function so the two can't drift again.
+      |> stream_conversations([])
       |> stream(:messages, [])
       # Accept anything: the server classifies by magic bytes and enforces the
       # per-kind size cap; the client cap is the largest (video). Images/video get
