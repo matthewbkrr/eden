@@ -19,13 +19,19 @@ defmodule EdenWeb.SidebarCostTest do
 
   defp scope(u), do: Scope.for_user(u)
 
-  # `list_conversations/2` is the only place that joins memberships onto conversations for the
-  # sidebar, so this shape identifies it without depending on a function name the telemetry does
-  # not carry.
+  # `list_conversations/2` is the only place that joins memberships onto conversations AND orders
+  # by activity, so this shape identifies it without depending on a function name the telemetry
+  # does not carry. The ordering clause is what separates it from the authorization lookup that
+  # opening a chat does, which joins the same two tables — without it this counted 2 where the
+  # answer is 0.
+  #
+  # Deliberately no `c0.` in the pattern (#547 review): Ecto's generated alias is not part of the
+  # contract, and pinning it would make a refactor look like a regression. A shape that stops
+  # matching altogether is caught by the reference assertion below, loudly.
   defp sidebar_query?(sql) do
     String.contains?(sql, ~s(FROM "conversations")) and
       String.contains?(sql, ~s(INNER JOIN "memberships")) and
-      String.contains?(sql, ~s(ORDER BY c0."last_message_at"))
+      String.contains?(sql, ~s(ORDER BY )) and String.contains?(sql, ~s("last_message_at" DESC))
   end
 
   test "opening a chat does not re-load the conversation list", %{conn: conn} do
