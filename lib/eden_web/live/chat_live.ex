@@ -2953,7 +2953,7 @@ defmodule EdenWeb.ChatLive do
       <div
         id="presence-dots"
         phx-hook=".PresenceDots"
-        data-statuses={Jason.encode!(dot_statuses(assigns))}
+        data-statuses={Jason.encode!(dot_statuses(@statuses, @sidebar_peer_ids, @selected))}
         data-label-online={status_label("online")}
         data-label-away={status_label("away")}
         data-label-dnd={status_label("dnd")}
@@ -6034,7 +6034,7 @@ defmodule EdenWeb.ChatLive do
               away: this.el.dataset.labelAway || "",
               dnd: this.el.dataset.labelDnd || "",
             }
-            // Scoped to the three containers `dot_statuses/1` builds the map from — the chat
+            // Scoped to the three containers `dot_statuses/3` builds the map from — the chat
             // list, the room's message list and its thread panel. Absence from the map MEANS
             // offline, so a managed dot outside them would be hidden by a map that was never
             // about it (#546 review). Widen this and that function together, or not at all.
@@ -6044,15 +6044,15 @@ defmodule EdenWeb.ChatLive do
                   "#thread-replies [data-presence-uid]",
               )
               .forEach((dot) => {
-              const s = map[dot.dataset.presenceUid] || null
-              dot.classList.toggle("ed-avatar__dot--hidden", !s)
-              dot.classList.toggle("ed-avatar__dot--away", s === "away")
-              dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
-              // The label sits INSIDE the dot, not beside it — the avatar renders it as the dot's
-              // only child so the two can never drift apart in the markup.
-              const label = dot.querySelector("[data-presence-label]")
-              if (label) label.textContent = s ? labels[s] || "" : ""
-            })
+                const s = map[dot.dataset.presenceUid] || null
+                dot.classList.toggle("ed-avatar__dot--hidden", !s)
+                dot.classList.toggle("ed-avatar__dot--away", s === "away")
+                dot.classList.toggle("ed-avatar__dot--dnd", s === "dnd")
+                // The label sits INSIDE the dot, not beside it — the avatar renders it as the dot's
+                // only child so the two can never drift apart in the markup.
+                const label = dot.querySelector("[data-presence-label]")
+                if (label) label.textContent = s ? labels[s] || "" : ""
+              })
           }
         }
       </script>
@@ -15999,13 +15999,12 @@ defmodule EdenWeb.ChatLive do
   # Statuses the dots on screen actually need: the sidebar's DM peers plus, in a room, its
   # members. Not the whole global map — that would put every online user in the org on the wire
   # for every session.
-  defp dot_statuses(assigns) do
-    room =
-      if assigns.selected && assigns.selected.channel_id,
-        do: room_member_ids(assigns.selected),
-        else: []
-
-    Map.take(assigns.statuses, assigns.sidebar_peer_ids ++ room)
+  # Takes the three values it needs, NOT the whole `assigns` (#546 review). Passing `assigns` into
+  # a function from a template hides which assigns the expression reads, so LiveView can no longer
+  # tell when it may skip re-computing it — any change to anything marks this dirty.
+  defp dot_statuses(statuses, peer_ids, selected) do
+    room = if selected && selected.channel_id, do: room_member_ids(selected), else: []
+    Map.take(statuses, peer_ids ++ room)
   end
 
   # The DM peer's id, or nil for a group — what tags a sidebar dot for `.PresenceDots` (#514).
