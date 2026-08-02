@@ -5,6 +5,7 @@ defmodule Eden.ChatTest do
   import Eden.AccountsFixtures
 
   alias Eden.Accounts.Scope
+  alias Eden.Accounts.User
   alias Eden.Channels
   alias Eden.Chat
 
@@ -4238,6 +4239,62 @@ defmodule Eden.ChatTest do
   end
 
   describe "list_conversations/1 enrichment" do
+    test "the schema still marks every credential field as redacted" do
+      # The sidebar's exclusion IS this set (`__schema__(:redact_fields)`), so a credential field
+      # that loses its `redact: true` silently rejoins the preload. This is the guard for that.
+      redacted = User.__schema__(:redact_fields)
+
+      for field <- [:hashed_password, :totp_secret, :totp_backup_codes, :password] do
+        assert field in redacted,
+               "#{field} is no longer redacted — it is back in every LiveView's assigns"
+      end
+    end
+
+    test "does not load anyone's credentials into the sidebar" do
+      # The preload used to pull whole User rows, so every LiveView held `hashed_password`, the
+      # encrypted `totp_secret` and the backup codes for every member of every conversation on
+      # screen, for the life of the session. Not a leak to the client — LiveView sends rendered
+      # content, never assigns — but a copy of the credential store in every connected process
+      # (#514).
+      alice = user_fixture(%{username: "credalice"})
+      bob = user_fixture(%{username: "credbob"})
+
+      # Give bob a REAL secret and backup codes. The fixture sets neither, so without this the
+      # assertions below would pass on a preload that still selects those columns — they would be
+      # nil either way (#549 review). Only `hashed_password` was actually being tested.
+      {:ok, bob} =
+        bob
+        |> Ecto.Changeset.change(totp_secret: "s3cr3t-b1n4ry", totp_backup_codes: ~w(aaa bbb))
+        |> Repo.update()
+
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "hi"})
+
+      [loaded] = Chat.list_conversations(scope(alice))
+      member = loaded.memberships |> Enum.map(& &1.user) |> Enum.find(&(&1.id == bob.id))
+
+      refute is_nil(member), "bob is not in the preloaded members — the fixture drifted"
+
+      # Present in the DB, absent from the sidebar's copy.
+      stored = Repo.get!(User, bob.id)
+      assert is_binary(stored.hashed_password)
+      assert is_binary(stored.totp_secret)
+      assert stored.totp_backup_codes == ~w(aaa bbb)
+
+      assert is_nil(member.hashed_password), "the password hash is in the sidebar's assigns"
+      assert is_nil(member.totp_secret), "the TOTP secret is in the sidebar's assigns"
+      assert member.totp_backup_codes == [], "the backup codes are in the sidebar's assigns"
+
+      # And the fields the sidebar renders still arrive. Compared by VALUE, not with
+      # `Map.has_key?` — every field key exists on an Ecto struct whether or not it was selected,
+      # so the key check asserted nothing (#549 review).
+      assert member.display_name == bob.display_name
+      assert member.username == bob.username
+      assert member.avatar_key == bob.avatar_key
+      assert member.last_active_at == bob.last_active_at
+      assert member.inserted_at == bob.inserted_at
+    end
+
     test "fills last_message_body and per-user unread_count", %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "first"})
