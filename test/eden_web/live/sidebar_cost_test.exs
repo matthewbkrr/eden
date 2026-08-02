@@ -177,6 +177,15 @@ defmodule EdenWeb.SidebarCostTest do
            "the row survived — a delete that does not delete is worse than a reload"
   end
 
+  # No test for "a chat that left the sidebar and comes back". `forget_sidebar_row/2` is now
+  # called wherever a row leaves the stream, and that is right by construction — a memory of a row
+  # nobody can see must not decide whether the next one is sent. But three attempts to make it go
+  # red failed, each for a different reason worth knowing: the copy seeded at mount comes from
+  # `list_conversations/2` and never compares equal to a `get_conversation_summary/2` result, so
+  # it can never trigger the skip; and `{:conversation_activity}` reaches the reorder branch,
+  # which does not consult the memory at all. A test that passes with the fix removed is worse
+  # than none, so there isn't one.
+
   # There is deliberately no equivalent for the rename / photo-change handlers. They only run for
   # a session that has that conversation OPEN (the broadcast rides the conversation topic), and my
   # first attempt measured a member sitting on the list, never reached them, and reported the same

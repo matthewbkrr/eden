@@ -2637,7 +2637,9 @@ defmodule EdenWeb.ChatLive do
         # No DM stream rendered in channel mode; badges refresh on return.
         socket
       else
-        stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+        socket
+        |> forget_sidebar_row(conversation_id)
+        |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")
       end
       |> refresh_folders()
 
@@ -2734,7 +2736,9 @@ defmodule EdenWeb.ChatLive do
       # Drop the one row instead of reloading the list for it (#514): the group is gone, and a
       # stream delete says exactly that without a query.
       {:noreply,
-       stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")}
+       socket
+       |> forget_sidebar_row(conversation_id)
+       |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")}
     end
   end
 
@@ -15189,6 +15193,10 @@ defmodule EdenWeb.ChatLive do
     do:
       assign(socket, sidebar_rows: Map.put(socket.assigns.sidebar_rows, conversation_id, summary))
 
+  # Every path that takes a row OUT of the stream forgets it here too (#551 review). Otherwise the
+  # remembered copy outlives the row, and when that chat comes back — re-added to a folder, a DM
+  # re-surfaced by a new message — the insert would be skipped as "unchanged" against a row that
+  # is no longer on screen, and the chat would simply not appear.
   defp forget_sidebar_row(socket, conversation_id),
     do: assign(socket, sidebar_rows: Map.delete(socket.assigns.sidebar_rows, conversation_id))
 
