@@ -2331,7 +2331,7 @@ defmodule EdenWeb.ChatLive do
       else
         {:noreply,
          socket
-         |> stream(:conversations, Chat.list_conversations(scope), reset: true)
+         |> stream_conversations(reset: true)
          |> push_patch(to: ~p"/app/c/#{conversation.id}")}
       end
     else
@@ -2366,7 +2366,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          socket
          |> assign(show_new: false)
-         |> stream(:conversations, Chat.list_conversations(scope), reset: true)
+         |> stream_conversations(reset: true)
          |> push_patch(to: ~p"/app/c/#{conversation.id}")}
 
       {:error, :no_members} ->
@@ -15073,14 +15073,15 @@ defmodule EdenWeb.ChatLive do
       peers = for c <- convos, p = peer(c, user), not is_nil(p), do: p.id
 
       socket
-      # A full re-stream replaces every row, so the remembered fingerprints describe rows that no
-      # longer exist — drop them, or the next update to an unchanged-looking row would be skipped
+      # A full re-stream replaces every row, so the remembered rows describe rows that no longer
+      # exist — clear them, or the next update to an unchanged-looking row would be skipped
       # against a stale memory.
-      |> assign(
-        sidebar_peer_ids: peers,
-        sidebar_top: top_conv_id(convos),
-        sidebar_rows: Map.new(convos, &{&1.id, &1})
-      )
+      #
+      # CLEARED, not re-seeded from `convos` (#551 review): these come from
+      # `list_conversations/2` and never compare equal to a `get_conversation_summary/2` result,
+      # so seeding them looked like it primed the cache while priming nothing. An empty map is
+      # honest — the first update after a re-stream is sent, and that is correct.
+      |> assign(sidebar_peer_ids: peers, sidebar_top: top_conv_id(convos), sidebar_rows: %{})
       |> stream(:conversations, convos, opts)
     end
   end
