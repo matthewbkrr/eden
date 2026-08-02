@@ -61,14 +61,34 @@ defmodule EdenWeb.Presence do
   def statuses do
     @topic
     |> list()
-    |> Map.new(fn {id, %{metas: metas}} ->
-      status =
-        metas
-        |> Enum.map(&Map.get(&1, :status, "online"))
-        |> Enum.min_by(&Map.get(@status_rank, &1, 0), fn -> "online" end)
+    |> Map.new(fn {id, %{metas: metas}} -> {String.to_integer(id), resolve(metas)} end)
+  end
 
-      {String.to_integer(id), status}
+  @doc """
+  Effective status for `ids` only — the same shape as `statuses/0`, with offline users simply
+  absent.
+
+  Exists so a presence diff does not have to rebuild the whole map (#514). Presence is one global
+  topic: every connect, disconnect and status change by anyone fans a diff out to every session,
+  and each one used to walk the entire online set to answer a question about one or two people —
+  O(online) work per session per event, across the cluster.
+  """
+  def statuses_for(ids) do
+    Map.new(ids, fn id -> {id, get_by_key(@topic, to_string(id))} end)
+    |> Enum.flat_map(fn
+      {id, %{metas: [_ | _] = metas}} -> [{id, resolve(metas)}]
+      # No metas means nobody is tracking them: offline, and absent from the map is what that
+      # means everywhere else too.
+      {_id, _} -> []
     end)
+    |> Map.new()
+  end
+
+  # Most-available session wins (deterministic); a metaless/legacy `%{}` counts as online.
+  defp resolve(metas) do
+    metas
+    |> Enum.map(&Map.get(&1, :status, "online"))
+    |> Enum.min_by(&Map.get(@status_rank, &1, 0), fn -> "online" end)
   end
 
   @doc """

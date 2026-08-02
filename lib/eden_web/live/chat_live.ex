@@ -2828,8 +2828,19 @@ defmodule EdenWeb.ChatLive do
     # (#94 review). A status-only change (away↔online) lands in the diff's
     # joins+leaves keys too, so the same gate catches it. No-op in channel mode
     # (rooms show no per-message presence dot).
-    socket = assign(socket, statuses: EdenWeb.Presence.statuses())
     changed = presence_changed_ids(payload)
+
+    # Merge only who changed, instead of rebuilding the whole online map (#514). Presence is one
+    # global topic, so this handler runs in EVERY session on every connect, disconnect and status
+    # change by anyone; walking the entire online set each time is O(online) per session per
+    # event. Dropping first is what makes someone going offline disappear: absent from the map is
+    # how offline is spelled everywhere else.
+    statuses =
+      socket.assigns.statuses
+      |> Map.drop(changed)
+      |> Map.merge(EdenWeb.Presence.statuses_for(changed))
+
+    socket = assign(socket, statuses: statuses)
 
     # No sidebar re-stream (#514). The dots are `[data-presence-uid]` now and `.PresenceDots`
     # re-applies them from the assign above — which is a plain assign and does re-render. This
