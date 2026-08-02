@@ -148,7 +148,7 @@ defmodule EdenWeb.ChatLive do
         # list (not MapSet) — it's tiny and read back from assigns as an opaque
         # term, so MapSet ops would trip dialyzer's opaqueness check.
         sidebar_peer_ids: [],
-        # Fingerprints of the rows already on screen, so an unchanged row is not re-sent (#513).
+        # The rows already on screen, so an unchanged one is not re-sent (#513).
         sidebar_rows: %{},
         # True between a media send's submit and its server consume (#95): hides
         # the preview overlay immediately so the in-stream node takes over, instead
@@ -15075,7 +15075,7 @@ defmodule EdenWeb.ChatLive do
       |> assign(
         sidebar_peer_ids: peers,
         sidebar_top: top_conv_id(convos),
-        sidebar_rows: Map.new(convos, &{&1.id, row_fingerprint(&1)})
+        sidebar_rows: Map.new(convos, &{&1.id, &1})
       )
       |> stream(:conversations, convos, opts)
     end
@@ -15174,20 +15174,20 @@ defmodule EdenWeb.ChatLive do
     end
   end
 
-  # The last row sent for this conversation, by content. Cleared when the row is deleted so a
-  # re-appearing chat is always sent afresh.
+  # The last row sent for this conversation, compared by VALUE. Cleared when the row is deleted so
+  # a re-appearing chat is always sent afresh.
+  #
+  # The summary itself, not a hash of it (#551 review). `:erlang.phash2/1` is 32 bits and not
+  # collision-free, and the failure it buys is a row that silently keeps showing the wrong preview
+  # until something else changes it — for a saving of a few bytes per conversation over holding
+  # the struct that is already in memory. Exact comparison also cannot drift: a field added to the
+  # row later is compared without anyone remembering to add it here.
   defp sidebar_row_unchanged?(socket, conversation_id, summary),
-    do: Map.get(socket.assigns.sidebar_rows, conversation_id) == row_fingerprint(summary)
+    do: Map.get(socket.assigns.sidebar_rows, conversation_id) == summary
 
-  defp remember_sidebar_row(socket, conversation_id, summary) do
-    rows = Map.put(socket.assigns.sidebar_rows, conversation_id, row_fingerprint(summary))
-    assign(socket, sidebar_rows: rows)
-  end
-
-  # Everything the row renders comes off the summary — title, preview, unread, muted, avatar,
-  # timestamp. The presence dot does not: it is repainted client-side from `@statuses` (#514), so
-  # it cannot go stale behind this.
-  defp row_fingerprint(summary), do: :erlang.phash2(summary)
+  defp remember_sidebar_row(socket, conversation_id, summary),
+    do:
+      assign(socket, sidebar_rows: Map.put(socket.assigns.sidebar_rows, conversation_id, summary))
 
   defp forget_sidebar_row(socket, conversation_id),
     do: assign(socket, sidebar_rows: Map.delete(socket.assigns.sidebar_rows, conversation_id))
