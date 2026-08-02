@@ -10501,7 +10501,15 @@ defmodule EdenWeb.ChatLive do
               id: Number((t.dataset.full || "").split("/").pop()),
               kind: "image",
               full: t.dataset.full,
-              thumb: t.querySelector("img")?.currentSrc || t.querySelector("img")?.src || t.dataset.full,
+              // The tile's own preview URL, from the server (#552). Reading `currentSrc` first made
+              // the viewer's first frame depend on whether the tile had finished painting: a tap on
+              // a photo that had just scrolled into view got `""`, fell through to the original, and
+              // opened on a blank frame until several megabytes arrived.
+              thumb:
+                t.dataset.thumb ||
+                t.querySelector("img")?.currentSrc ||
+                t.querySelector("img")?.src ||
+                t.dataset.full,
               msg: t.dataset.msg,
               who: t.dataset.who,
               at: t.dataset.at,
@@ -10514,7 +10522,13 @@ defmodule EdenWeb.ChatLive do
             // The box is a singleton shared by every tile hook — the one that opened it
             // owns the action pushes for as long as it's up (#465).
             box.__hook = this
-            const img = box.querySelector(".ed-lightbox__img")
+            // ...and owns its own deferred work (#552). Every `items`/`i` below belongs to THIS
+            // open; a reply or a settle timer from a previous one would repaint the box with the
+            // previous photo. Close and reopen inside one round-trip and that is exactly what
+            // happened — the reported "tapping a photo opens a different one". A monotonic stamp
+            // makes stale continuations no-ops instead of racing the live ones.
+            const gen = (box.__gen = (box.__gen || 0) + 1)
+            const live = () => box.__gen === gen
             const count = box.querySelector(".ed-lightbox__count")
             const show = (n, dir) => {
               const prev = i
@@ -10546,7 +10560,7 @@ defmodule EdenWeb.ChatLive do
                 box.__trackTo(0, false)
                 const w = box.__stageW()
                 requestAnimationFrame(() => box.__trackTo(dir > 0 ? -w : w, true))
-                setTimeout(settle, 280)
+                setTimeout(() => live() && settle(), 280)
               } else {
                 settle()
               }
@@ -10566,11 +10580,9 @@ defmodule EdenWeb.ChatLive do
               box.__meta = it
               box.__renderChrome()
               box.__renderStrip(i)
-              // Neighbours decode ahead of the swipe (audit: a cross-border fetch made
-              // paging feel stalled).
-              for (const n of [i - 1, i + 1]) {
-                if (items[n]) new Image().src = items[n].full
-              }
+              // The neighbours are already fetched: slots 0 and 2 hold exactly items[i-1] and
+              // items[i+1] and were painted three lines up. The extra `new Image()` pair here
+              // requested the same two originals a second time (#552).
               // Approaching the older end pulls the next page in (the reel loads
               // lazily backwards, TG-style).
               if (i <= 2 && box.__more && !box.__loading) loadOlder()
@@ -10588,6 +10600,7 @@ defmodule EdenWeb.ChatLive do
               box.__loading = true
               const before = items[0] && items[0].id
               this.pushEvent("lightbox_media", { before }, (reply) => {
+                if (!live()) return
                 box.__loading = false
                 const page = (reply && reply.items) || []
                 box.__more = !!(reply && reply.more)
@@ -10612,6 +10625,7 @@ defmodule EdenWeb.ChatLive do
             box.__anchored = false
             box.__total = 0
             this.pushEvent("lightbox_media", {}, (reply) => {
+              if (!live()) return
               box.__loading = false
               box.__more = !!(reply && reply.more)
               const page = ((reply && reply.items) || []).slice().reverse()
@@ -10627,7 +10641,12 @@ defmodule EdenWeb.ChatLive do
               box.classList.toggle("ed-lightbox--gallery", items.length > 1)
               show(i)
             })
-            box.classList.toggle("ed-lightbox--gallery", items.length > 1)
+            // Reserve the strip's band NOW rather than when the reel lands (#552): a lone photo
+            // opened the stage at full height and the server's reply then took 63px back, so the
+            // photo visibly dropped a moment after it appeared. Anything sent in a conversation
+            // can grow a reel, so assume one; the reply below takes the band back for the one
+            // case that cannot (the profile gallery, which has no message behind it).
+            box.classList.toggle("ed-lightbox--gallery", items.length > 1 || !!items[i]?.msg)
             show(i)
 
             // Native <dialog> (audit P1): showModal() brings the top layer, focus
@@ -10706,11 +10725,22 @@ defmodule EdenWeb.ChatLive do
             const track = box.querySelector(".ed-lightbox__track")
             const slots = [...box.querySelectorAll(".ed-lightbox__slide")]
             const imgs = slots.map((sl) => sl.querySelector("img"))
+            // The photo outranks its own filmstrip (#552). Re-windowing the strip queues up to 49
+            // thumbnails at once, and the browser opens six connections: measured on this stand,
+            // the preview of the photo being paged TO waited ~500ms behind them, which is most of
+            // what "paging is not smooth" was. These are hints, ignored where unsupported.
+            imgs.forEach((im) => (im.fetchPriority = "high"))
             // The centre slot is "the" photo: zoom, save and the a11y name all mean it.
             const img = imgs[1]
             box.__img = () => imgs[1]
             // Track offset in px; -W is "centre slot centred".
-            const stageW = () => box.querySelector(".ed-lightbox__stage").clientWidth || window.innerWidth
+            // Measured once and remembered (#552). `trackTo` runs on every touchmove and writes
+            // `transform` before reading this; reading `clientWidth` there forced a synchronous
+            // layout per frame of the drag, which is the drag's own jank.
+            let sw = 0
+            const stageW = () =>
+              sw || (sw = box.querySelector(".ed-lightbox__stage").clientWidth || window.innerWidth)
+            window.addEventListener("resize", () => (sw = 0))
             const trackTo = (dx, animate) => {
               track.style.transition =
                 animate && !matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -10722,6 +10752,12 @@ defmodule EdenWeb.ChatLive do
             box.__stageW = stageW
             // Paint one slot: its source, its accessible name, and the decode-hide that
             // keeps a half-loaded frame from flashing.
+            // Paint the PREVIEW first, then upgrade (#552). The strip's thumbnail is already
+            // decoded in cache, while the slide was loading the original — up to 8 MB of it,
+            // across the border — behind `visibility: hidden`. So a page landed on an empty
+            // frame and the photo appeared whenever the network was done: the "paging is not
+            // smooth" report. The preview shares the original's aspect ratio and the slide sizes
+            // by `object-fit`, so the upgrade swaps pixels without moving anything.
             const paintSlot = (k, it) => {
               const el = imgs[k]
               if (!it) {
@@ -10731,32 +10767,68 @@ defmodule EdenWeb.ChatLive do
               }
               if (el.dataset.src === it.full) return
               el.dataset.src = it.full
-              el.style.visibility = "hidden"
-              const reveal = () => (el.style.visibility = "visible")
-              el.onload = reveal
-              el.src = it.full
               el.alt = it.who ? `${box.__viewer} — ${it.who}` : box.__viewer
-              if (el.complete) reveal()
+              const pre = it.thumb && it.thumb !== it.full ? it.thumb : null
+              if (pre) {
+                el.src = pre
+                el.style.visibility = "visible"
+              } else {
+                el.style.visibility = "hidden"
+              }
+              const full = new Image()
+              full.decoding = "async"
+              const swap = () => {
+                // Paged away while this decoded: the slot belongs to another photo now.
+                if (el.dataset.src !== it.full) return
+                el.src = it.full
+                el.style.visibility = "visible"
+              }
+              full.onload = swap
+              // NOT swap: a failed original must leave the preview on screen. Swapping to it
+              // replaced a perfectly good frame with a broken one — caught by the test that blocks
+              // originals, and it is what a network blip would have done in production.
+              full.onerror = () => {}
+              full.src = it.full
+              // Decode off the main thread where it is offered, so the swap itself never drops a
+              // frame mid-swipe; `onload` above still covers browsers without it.
+              if (full.decode) full.decode().then(swap, () => {})
             }
             box.__paintSlot = paintSlot
             const menu = box.querySelector(".ed-lightbox__menu")
             const more = box.querySelector(".ed-lightbox__more")
 
             // The strip (#466): the conversation's media as tappable thumbnails, the
-            // current one lit and scrolled into view. Rebuilt only when the reel
-            // changes length; otherwise just the active marker moves.
+            // current one lit and scrolled into view.
             const strip = box.querySelector(".ed-lightbox__strip")
             // A window, not the whole reel: a long conversation has hundreds of photos
             // and that many <img> nodes would cost more than the viewer itself.
             const STRIP_SPAN = 24
+            // How close to an edge of the rendered window the active thumbnail may come before the
+            // window slides. Recentering on EVERY step rebuilt 49 <img> nodes per page — during
+            // the paging animation, which is where the jank was visible (#552).
+            const STRIP_EDGE = 8
             box.__renderStrip = (idx) => {
               const items = box.__items ? box.__items() : []
               strip.hidden = items.length < 2
               if (strip.hidden) return
               const from = Math.max(0, idx - STRIP_SPAN)
               const win = items.slice(from, idx + STRIP_SPAN + 1)
-              if (strip.dataset.from !== String(from) || strip.childElementCount !== win.length) {
+              // Identity, not length (#552): the reel is REPLACED wholesale when the server's page
+              // lands, and a replacement of the same length left the previous conversation's
+              // thumbnails on screen — each one paging to the wrong photo. Ids settle that;
+              // `childElementCount` alone could not.
+              const reel = `${items.length}:${items[0].id}:${items[items.length - 1].id}`
+              const lo = Number(strip.dataset.from)
+              const hi = lo + strip.childElementCount - 1
+              // Still comfortably inside the rendered window: move the marker, keep the nodes.
+              const centred =
+                strip.dataset.reel === reel &&
+                strip.childElementCount > 0 &&
+                (lo === 0 || idx - lo >= STRIP_EDGE) &&
+                (hi >= items.length - 1 || hi - idx >= STRIP_EDGE)
+              if (!centred) {
                 strip.dataset.from = String(from)
+                strip.dataset.reel = reel
                 strip.replaceChildren(
                   ...win.map((it, k) => {
                     const n = from + k
@@ -10765,9 +10837,10 @@ defmodule EdenWeb.ChatLive do
                     b.dataset.i = String(n)
                     b.setAttribute("role", "tab")
                     const im = document.createElement("img")
-                    im.src = it.thumb
                     im.alt = ""
                     im.loading = "lazy"
+                    im.fetchPriority = "low"
+                    im.src = it.thumb
                     // A thumbnail the worker hasn't produced yet 404s — fall back to the
                     // original once, then leave the neutral tile rather than a broken glyph.
                     im.onerror = () => {
@@ -10846,9 +10919,32 @@ defmodule EdenWeb.ChatLive do
               img.style.transform = z > 1 ? `translate(${px}px, ${py}px) scale(${z})` : ""
               box.classList.toggle("ed-lightbox--zoomed", z > 1)
             }
+            // The PHOTO's rendered size, not the element's. The slide now fills the stage and
+            // `object-fit` fits the photo inside it (#552), so `offsetWidth` is the stage — panning
+            // a portrait against that would drag it well past its own edge into empty backdrop.
+            const shown = () => {
+              const nw = img.naturalWidth || img.offsetWidth || 1
+              const nh = img.naturalHeight || img.offsetHeight || 1
+              const s = Math.min(img.offsetWidth / nw, img.offsetHeight / nh) || 1
+              return { w: nw * s, h: nh * s }
+            }
+            // Is this point on the photo itself? The element fills the stage so that the preview and
+            // the original occupy the same box (#552), which means `e.target` is the <img> across
+            // the whole stage — including the letterboxing beside a portrait, where a tap has
+            // always closed the viewer and must keep doing so.
+            const overPhoto = (e) => {
+              const r = img.getBoundingClientRect()
+              const { w, h } = shown()
+              return (
+                Math.abs(e.clientX - (r.left + r.width / 2)) <= w / 2 &&
+                Math.abs(e.clientY - (r.top + r.height / 2)) <= h / 2
+              )
+            }
+            box.__overPhoto = overPhoto
             const clampPan = () => {
-              const bx = Math.max(0, (img.offsetWidth * z - window.innerWidth) / 2 + 24)
-              const by = Math.max(0, (img.offsetHeight * z - window.innerHeight) / 2 + 24)
+              const { w, h } = shown()
+              const bx = Math.max(0, (w * z - window.innerWidth) / 2 + 24)
+              const by = Math.max(0, (h * z - window.innerHeight) / 2 + 24)
               px = Math.min(bx, Math.max(-bx, px))
               py = Math.min(by, Math.max(-by, py))
             }
@@ -10867,7 +10963,20 @@ defmodule EdenWeb.ChatLive do
             const zoomReset = () => { z = 1; px = 0; py = 0; applyZoom(false) }
             box.__zoomReset = zoomReset
             const toggleZoom = (fx, fy) => zoomAt(fx, fy, z > 1 ? 1 : 2.5, true)
-            img.addEventListener("dblclick", (e) => { e.stopPropagation(); toggleZoom(e.clientX, e.clientY) })
+            img.addEventListener("dblclick", (e) => {
+              if (!overPhoto(e)) return
+              e.stopPropagation()
+              toggleZoom(e.clientX, e.clientY)
+            })
+            // The cursor says which of the two the pointer is over. Without this the letterbox
+            // beside a portrait offers zoom-in and then closes the viewer.
+            box.addEventListener("pointermove", (e) => {
+              if (box.__curT) return
+              box.__curT = requestAnimationFrame(() => {
+                box.__curT = 0
+                box.classList.toggle("ed-lightbox--on-photo", overPhoto(e))
+              })
+            })
             box.addEventListener(
               "wheel",
               (e) => {
@@ -10998,7 +11107,7 @@ defmodule EdenWeb.ChatLive do
                 // still an intent to page, never an intent to close (#466 audit).
                 return box.__step(zone.classList.contains("ed-lightbox__zone--next") ? 1 : -1)
               }
-              if (!e.target.closest(".ed-lightbox__img")) {
+              if (!overPhoto(e)) {
                 close()
               }
             })
@@ -13897,6 +14006,7 @@ defmodule EdenWeb.ChatLive do
       id={"att-#{@attachment.id}"}
       phx-hook=".Lightbox"
       data-full={~p"/files/#{@attachment.id}"}
+      data-thumb={thumb_small_src(@attachment)}
       data-gallery={@gallery}
       data-msg={@meta[:id]}
       data-who={@meta[:who]}
@@ -14731,6 +14841,7 @@ defmodule EdenWeb.ChatLive do
       id={@dom_id}
       phx-hook=".Lightbox"
       data-full={~p"/files/#{@item.id}"}
+      data-thumb={thumb_small_src(@item)}
       data-gallery={@gallery}
       data-ts={DateTime.to_unix(@item.inserted_at)}
       data-msg={@meta[:id]}

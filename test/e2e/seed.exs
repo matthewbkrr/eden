@@ -70,6 +70,38 @@ unless has_dm_photo? do
   File.rm(png)
 end
 
+# Two photos the lightbox specs can name: a PORTRAIT taller than any viewport the harness uses
+# (the geometry the viewer got wrong, #552) and a second one to page to. Matched by body so
+# re-runs reuse them; their message ids go into .seed.json rather than being looked up by shape.
+photo_msg = fn body, w, h, colour ->
+  case Repo.one(
+         from(m in Eden.Chat.Message,
+           where: m.conversation_id == ^dm.id and m.body == ^body,
+           limit: 1
+         )
+       ) do
+    nil ->
+      {:ok, img} = Image.new(w, h, color: colour)
+      {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+      file = Path.join(System.tmp_dir!(), "#{body}.png")
+      File.write!(file, bytes)
+
+      {:ok, m} =
+        Chat.create_album_message(as, dm.id, [%{path: file, filename: "#{body}.png"}], %{
+          body: body
+        })
+
+      File.rm(file)
+      m.id
+
+    m ->
+      m.id
+  end
+end
+
+portrait_msg_id = photo_msg.("e2e-portrait", 1200, 1600, [200, 80, 60])
+landscape_msg_id = photo_msg.("e2e-landscape", 2400, 1200, [60, 140, 90])
+
 # Group (alice + bob + carol) — match by title before creating so re-runs don't pile up.
 group =
   case Repo.one(from(c in Conversation, where: c.is_group and c.title == "E2E Group", limit: 1)) do
@@ -145,6 +177,8 @@ out = %{
     carol: %{username: carol.username, id: carol.id, display_name: carol.display_name}
   },
   dm_id: dm.id,
+  portrait_msg_id: portrait_msg_id,
+  landscape_msg_id: landscape_msg_id,
   group_id: group.id,
   channel_id: channel_id,
   room_id: room_id,
