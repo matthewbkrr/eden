@@ -148,6 +148,8 @@ defmodule EdenWeb.ChatLive do
         # list (not MapSet) — it's tiny and read back from assigns as an opaque
         # term, so MapSet ops would trip dialyzer's opaqueness check.
         sidebar_peer_ids: [],
+        # Fingerprints of the rows already on screen, so an unchanged row is not re-sent (#513).
+        sidebar_rows: %{},
         # True between a media send's submit and its server consume (#95): hides
         # the preview overlay immediately so the in-stream node takes over, instead
         # of the overlay lingering for the whole upload. Reset once consumed.
@@ -15067,7 +15069,14 @@ defmodule EdenWeb.ChatLive do
       peers = for c <- convos, p = peer(c, user), not is_nil(p), do: p.id
 
       socket
-      |> assign(sidebar_peer_ids: peers, sidebar_top: top_conv_id(convos))
+      # A full re-stream replaces every row, so the remembered fingerprints describe rows that no
+      # longer exist — drop them, or the next update to an unchanged-looking row would be skipped
+      # against a stale memory.
+      |> assign(
+        sidebar_peer_ids: peers,
+        sidebar_top: top_conv_id(convos),
+        sidebar_rows: Map.new(convos, &{&1.id, row_fingerprint(&1)})
+      )
       |> stream(:conversations, convos, opts)
     end
   end
@@ -15130,7 +15139,9 @@ defmodule EdenWeb.ChatLive do
 
     cond do
       not (is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id)) ->
-        stream_delete_by_dom_id(socket, :conversations, dom_id)
+        socket
+        |> forget_sidebar_row(conversation_id)
+        |> stream_delete_by_dom_id(:conversations, dom_id)
 
       # Reorder-to-top (activity bump, #194): stream_insert(at: 0) updates an existing row in
       # place but does NOT lift it to the front, so delete first to actually reposition it — BUT
@@ -15140,14 +15151,46 @@ defmodule EdenWeb.ChatLive do
       # no animation).
       Keyword.has_key?(insert_opts, :at) and socket.assigns.sidebar_top != conversation_id ->
         socket
+        |> remember_sidebar_row(conversation_id, summary)
         |> stream_delete_by_dom_id(:conversations, dom_id)
         |> stream_insert(:conversations, summary, insert_opts)
         |> assign(sidebar_top: conversation_id)
 
+      # Identical to the row already on screen — sending it again costs ~2.6 KB of diff for a
+      # picture that does not change (#513). One incoming message in the open chat legitimately
+      # updates this row twice: `{:conversation_activity}` (it arrived) and the read handler (we
+      # read it, drop the badge). `mark_read` runs before both, so both compute the SAME row, and
+      # the second was pure repetition.
+      #
+      # Only for a plain in-place update: the reorder branch above must still run even when the
+      # content matches, because moving a row is not something a fingerprint can see.
+      sidebar_row_unchanged?(socket, conversation_id, summary) ->
+        socket
+
       true ->
-        stream_insert(socket, :conversations, summary, insert_opts)
+        socket
+        |> remember_sidebar_row(conversation_id, summary)
+        |> stream_insert(:conversations, summary, insert_opts)
     end
   end
+
+  # The last row sent for this conversation, by content. Cleared when the row is deleted so a
+  # re-appearing chat is always sent afresh.
+  defp sidebar_row_unchanged?(socket, conversation_id, summary),
+    do: Map.get(socket.assigns.sidebar_rows, conversation_id) == row_fingerprint(summary)
+
+  defp remember_sidebar_row(socket, conversation_id, summary) do
+    rows = Map.put(socket.assigns.sidebar_rows, conversation_id, row_fingerprint(summary))
+    assign(socket, sidebar_rows: rows)
+  end
+
+  # Everything the row renders comes off the summary — title, preview, unread, muted, avatar,
+  # timestamp. The presence dot does not: it is repainted client-side from `@statuses` (#514), so
+  # it cannot go stale behind this.
+  defp row_fingerprint(summary), do: :erlang.phash2(summary)
+
+  defp forget_sidebar_row(socket, conversation_id),
+    do: assign(socket, sidebar_rows: Map.delete(socket.assigns.sidebar_rows, conversation_id))
 
   defp refresh_rooms_if_current(socket, conversation_id) do
     if socket.assigns.channel && Enum.any?(socket.assigns.rooms, &(&1.id == conversation_id)) do
