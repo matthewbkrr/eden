@@ -4238,6 +4238,36 @@ defmodule Eden.ChatTest do
   end
 
   describe "list_conversations/1 enrichment" do
+    test "does not load anyone's credentials into the sidebar" do
+      # The preload used to pull whole User rows, so every LiveView held `hashed_password`, the
+      # encrypted `totp_secret` and the backup codes for every member of every conversation on
+      # screen, for the life of the session. Not a leak to the client — LiveView sends rendered
+      # content, never assigns — but a copy of the credential store in every connected process
+      # (#514).
+      alice = user_fixture(%{username: "credalice"})
+      bob = user_fixture(%{username: "credbob"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
+      {:ok, _} = Chat.create_message(scope(bob), conv.id, %{"body" => "hi"})
+
+      [loaded] = Chat.list_conversations(scope(alice))
+      member = loaded.memberships |> Enum.map(& &1.user) |> Enum.find(&(&1.id == bob.id))
+
+      refute is_nil(member), "bob is not in the preloaded members — the fixture drifted"
+
+      # Present in the DB, absent from the sidebar's copy.
+      assert is_binary(Repo.get!(Eden.Accounts.User, bob.id).hashed_password)
+      assert is_nil(member.hashed_password), "the password hash is in the sidebar's assigns"
+      assert is_nil(member.totp_secret), "the TOTP secret is in the sidebar's assigns"
+      assert member.totp_backup_codes == [], "the backup codes are in the sidebar's assigns"
+
+      # And the fields the sidebar actually renders still arrive — a select that drops those
+      # would pass the assertions above while breaking every row.
+      assert member.display_name == bob.display_name
+      assert member.username == bob.username
+      assert Map.has_key?(member, :avatar_key)
+      assert Map.has_key?(member, :last_active_at)
+    end
+
     test "fills last_message_body and per-user unread_count", %{alice: alice, bob: bob} do
       {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id])
       {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "first"})

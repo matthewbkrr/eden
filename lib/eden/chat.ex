@@ -154,7 +154,7 @@ defmodule Eden.Chat do
       |> where([c], is_nil(c.channel_id))
       |> filter_by_folder(folder_id, user.id)
       |> order_by([c], desc_nulls_last: c.last_message_at, desc: c.id)
-      |> preload(memberships: :user)
+      |> preload(memberships: [user: ^sidebar_user_query()])
       |> Repo.all()
 
     ids = Enum.map(conversations, & &1.id)
@@ -170,6 +170,25 @@ defmodule Eden.Chat do
       }
       |> apply_preview(previews[conversation.id])
     end)
+  end
+
+  # Every User column the sidebar could want, minus the credentials (#514). Without this the
+  # preload loads whole rows, so every LiveView holds `hashed_password`, the encrypted
+  # `totp_secret` and the backup codes for every member of every conversation on screen, for the
+  # life of the session.
+  #
+  # It is not a leak to the client — LiveView sends rendered content, never assigns — but it is
+  # a copy of the credential store in the memory of every connected process, and there is no
+  # reason for it to be there.
+  #
+  # Subtractive on purpose, not a whitelist: a whitelist decides today which fields the ten-odd
+  # readers of `others/2` are allowed to touch, and the ones it forgets come back as nil rather
+  # than as an error. This drops exactly what must never be here and leaves the rest working.
+  @sidebar_user_secrets [:hashed_password, :totp_secret, :totp_backup_codes]
+
+  defp sidebar_user_query do
+    fields = Eden.Accounts.User.__schema__(:fields) -- @sidebar_user_secrets
+    from(u in Eden.Accounts.User, select: ^fields)
   end
 
   # Conversations the user muted — directly (memberships.muted_at) or by muting
