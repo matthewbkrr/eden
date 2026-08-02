@@ -1,9 +1,14 @@
 defmodule EdenWeb.SidebarCostTest do
-  # What opening a chat costs, in QUERIES (#514).
+  # Whether opening a chat re-loads the conversation LIST (#514).
   #
-  # Bytes were the wrong instrument here and measured zero: re-streaming a sidebar whose contents
-  # did not change produces almost no diff, so the whole cost is server-side. Counting queries
-  # through Ecto telemetry is what makes it visible — the same switch #514's first half needed.
+  # This started as a budget on total queries and that instrument turned out to be unusable: the
+  # count drifts with async traffic the LiveView happens to process inside the window (presence
+  # diffs, PubSub), and measured across runs it ranged 12–23 for the same navigation. A threshold
+  # inside that band fails at random, which teaches people to ignore it — so the budget is gone.
+  #
+  # What replaced it is specific and binary: count only the SIDEBAR'S OWN query — the one
+  # `Chat.list_conversations/2` issues — and assert it does not run at all on a navigation. One
+  # before this change, none after. Nothing else in the system can make that number move.
   use EdenWeb.ConnCase
 
   import Phoenix.LiveViewTest
@@ -12,15 +17,24 @@ defmodule EdenWeb.SidebarCostTest do
   alias Eden.Accounts.Scope
   alias Eden.Chat
 
-  # Measured on this fixture: 19 before, 12 after. The threshold sits between them rather than at
-  # the achieved number — it separates "the sidebar is rebuilt on every navigation" from "it is
-  # not", which is the thing that must not come back. It does NOT scale with the chat list, and
-  # that is the point: `list_conversations/2` has no LIMIT.
-  @open_budget 16
-
   defp scope(u), do: Scope.for_user(u)
 
-  test "opening a chat does not rebuild the sidebar", %{conn: conn} do
+  # `list_conversations/2` is the only place that joins memberships onto conversations AND orders
+  # by activity, so this shape identifies it without depending on a function name the telemetry
+  # does not carry. The ordering clause is what separates it from the authorization lookup that
+  # opening a chat does, which joins the same two tables — without it this counted 2 where the
+  # answer is 0.
+  #
+  # Deliberately no `c0.` in the pattern (#547 review): Ecto's generated alias is not part of the
+  # contract, and pinning it would make a refactor look like a regression. A shape that stops
+  # matching altogether is caught by the reference assertion below, loudly.
+  defp sidebar_query?(sql) do
+    String.contains?(sql, ~s(FROM "conversations")) and
+      String.contains?(sql, ~s(INNER JOIN "memberships")) and
+      String.contains?(sql, ~s(ORDER BY )) and String.contains?(sql, ~s("last_message_at" DESC))
+  end
+
+  test "opening a chat does not re-load the conversation list", %{conn: conn} do
     alice = user_fixture(%{username: "scalice"})
 
     convs =
@@ -42,47 +56,50 @@ defmodule EdenWeb.SidebarCostTest do
     :telemetry.attach(
       handler,
       [:eden, :repo, :query],
-      fn _e, _m, _meta, _c -> if self() == view_pid, do: send(parent, :q) end,
+      fn _e, _m, meta, _c ->
+        if self() == view_pid, do: send(parent, {:q, meta[:query] || ""})
+      end,
       nil
     )
 
     on_exit(fn -> :telemetry.detach(handler) end)
 
-    # No sleep, and that is the point (#544 review). `render/1` is a synchronous call INTO the
-    # LiveView process, and Erlang guarantees message order between a given pair of processes — so
-    # once its reply is in this mailbox, every `:q` the handler sent while handling the patch is
-    # already in there too, ahead of the reply. A wall-clock wait would be both slower and a race
-    # in the direction that hides a regression: undercounting makes this budget pass.
     drain = fn ->
-      d = fn d, n -> receive do: (:q -> d.(d, n + 1)), after: (0 -> n) end
-      d.(d, 0)
+      d = fn d, acc -> receive do: ({:q, sql} -> d.(d, [sql | acc])), after: (0 -> acc) end
+      d.(d, [])
     end
 
+    # First establish that the shape still matches something, using a path that is SUPPOSED to
+    # reload the list: picking a folder. Without this the whole test would quietly pass on a
+    # predicate that stopped matching anything at all — the failure mode a "count of zero" invites.
+    # (Mount's own load happens before the handler is attached, so it cannot serve as the check.)
+    render_click(view, "select_folder", %{"id" => "all"})
     _ = render(view)
-    _ = drain.()
+    reference = drain.() |> Enum.count(&sidebar_query?/1)
 
-    # `render_patch/2` is itself the barrier — a synchronous call into the LiveView, so by the
-    # time it returns every query the patch issued is already counted.
-    #
-    # Deliberately NOT followed by another `render/1` (#544 review). That would let an ASYNC
-    # message land and be counted too, and one always does here: opening a 1:1 publishes
-    # presence, the diff comes back, and `presence_diff` re-streams the sidebar for another
-    # ~7 queries. Real, and next on #514's list — but not what this budget is about, and folding
-    # it in would give a navigation regression somewhere to hide.
+    assert reference > 0,
+           "the query shape no longer matches the sidebar's own load — this test would now " <>
+             "pass whatever the code does"
+
+    # `render_patch/2` is a synchronous call into the LiveView, so by the time it returns every
+    # query the patch issued has already been counted.
     render_patch(view, "/app/c/#{hd(convs).id}")
-    queries = drain.()
+    reloads = drain.() |> Enum.count(&sidebar_query?/1)
 
-    assert queries > 0, "nothing was measured — the telemetry handler stopped matching"
-
-    assert queries <= @open_budget,
-           "opening a chat cost #{queries} queries (budget #{@open_budget}) — " <>
-             "the sidebar is being rebuilt for the active wash and the unread badge again, " <>
-             "which `.InstantNav` already did at tap time"
+    assert reloads == 0,
+           "opening a chat re-loaded the conversation list #{reloads} time(s) — " <>
+             "the active wash and the unread badge are `.InstantNav`'s job, and the list has " <>
+             "no LIMIT, so this cost grows with the account rather than with the screen"
   end
 
-  # There is deliberately no budget test for the rename / photo-change handlers. They only run
-  # for a session that has that conversation OPEN (the broadcast rides the conversation topic,
-  # which a session subscribes to on selection) — my first attempt measured a member sitting on
-  # the list, never reached them, and reported the same 13 queries with the fix in and out. The
-  # saving is real but narrow, and a budget that does not exercise the path is worse than none.
+  # There is deliberately no equivalent for the rename / photo-change handlers. They only run for
+  # a session that has that conversation OPEN (the broadcast rides the conversation topic), and my
+  # first attempt measured a member sitting on the list, never reached them, and reported the same
+  # number with the fix in and out.
+  #
+  # And none for `{:message_edited}`: #514 calls its three `refresh_sidebar` calls redundant
+  # "because only one chat's preview changes", but measured, an edit costs 7 queries either way —
+  # `Chat.get_conversation_summary/2` for one conversation costs about what
+  # `list_conversations/2` costs for the whole small list. A saving may exist on the WIRE, but it
+  # is not the one the issue claims, and an unmeasured claim is not a reason to change code.
 end
