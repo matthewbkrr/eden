@@ -148,6 +148,8 @@ defmodule EdenWeb.ChatLive do
         # list (not MapSet) — it's tiny and read back from assigns as an opaque
         # term, so MapSet ops would trip dialyzer's opaqueness check.
         sidebar_peer_ids: [],
+        # The rows already on screen, so an unchanged one is not re-sent (#513).
+        sidebar_rows: %{},
         # True between a media send's submit and its server consume (#95): hides
         # the preview overlay immediately so the in-stream node takes over, instead
         # of the overlay lingering for the whole upload. Reset once consumed.
@@ -2329,7 +2331,7 @@ defmodule EdenWeb.ChatLive do
       else
         {:noreply,
          socket
-         |> stream(:conversations, Chat.list_conversations(scope), reset: true)
+         |> stream_conversations(reset: true)
          |> push_patch(to: ~p"/app/c/#{conversation.id}")}
       end
     else
@@ -2364,7 +2366,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          socket
          |> assign(show_new: false)
-         |> stream(:conversations, Chat.list_conversations(scope), reset: true)
+         |> stream_conversations(reset: true)
          |> push_patch(to: ~p"/app/c/#{conversation.id}")}
 
       {:error, :no_members} ->
@@ -2635,7 +2637,9 @@ defmodule EdenWeb.ChatLive do
         # No DM stream rendered in channel mode; badges refresh on return.
         socket
       else
-        stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")
+        socket
+        |> forget_sidebar_row(conversation_id)
+        |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")
       end
       |> refresh_folders()
 
@@ -2732,7 +2736,9 @@ defmodule EdenWeb.ChatLive do
       # Drop the one row instead of reloading the list for it (#514): the group is gone, and a
       # stream delete says exactly that without a query.
       {:noreply,
-       stream_delete_by_dom_id(socket, :conversations, "conversations-#{conversation_id}")}
+       socket
+       |> forget_sidebar_row(conversation_id)
+       |> stream_delete_by_dom_id(:conversations, "conversations-#{conversation_id}")}
     end
   end
 
@@ -15067,7 +15073,15 @@ defmodule EdenWeb.ChatLive do
       peers = for c <- convos, p = peer(c, user), not is_nil(p), do: p.id
 
       socket
-      |> assign(sidebar_peer_ids: peers, sidebar_top: top_conv_id(convos))
+      # A full re-stream replaces every row, so the remembered rows describe rows that no longer
+      # exist — clear them, or the next update to an unchanged-looking row would be skipped
+      # against a stale memory.
+      #
+      # CLEARED, not re-seeded from `convos` (#551 review): these come from
+      # `list_conversations/2` and never compare equal to a `get_conversation_summary/2` result,
+      # so seeding them looked like it primed the cache while priming nothing. An empty map is
+      # honest — the first update after a re-stream is sent, and that is correct.
+      |> assign(sidebar_peer_ids: peers, sidebar_top: top_conv_id(convos), sidebar_rows: %{})
       |> stream(:conversations, convos, opts)
     end
   end
@@ -15130,7 +15144,9 @@ defmodule EdenWeb.ChatLive do
 
     cond do
       not (is_nil(fid) or fid in Chat.conversation_folder_ids(scope, conversation_id)) ->
-        stream_delete_by_dom_id(socket, :conversations, dom_id)
+        socket
+        |> forget_sidebar_row(conversation_id)
+        |> stream_delete_by_dom_id(:conversations, dom_id)
 
       # Reorder-to-top (activity bump, #194): stream_insert(at: 0) updates an existing row in
       # place but does NOT lift it to the front, so delete first to actually reposition it — BUT
@@ -15140,14 +15156,50 @@ defmodule EdenWeb.ChatLive do
       # no animation).
       Keyword.has_key?(insert_opts, :at) and socket.assigns.sidebar_top != conversation_id ->
         socket
+        |> remember_sidebar_row(conversation_id, summary)
         |> stream_delete_by_dom_id(:conversations, dom_id)
         |> stream_insert(:conversations, summary, insert_opts)
         |> assign(sidebar_top: conversation_id)
 
+      # Identical to the row already on screen — sending it again costs ~2.6 KB of diff for a
+      # picture that does not change (#513). One incoming message in the open chat legitimately
+      # updates this row twice: `{:conversation_activity}` (it arrived) and the read handler (we
+      # read it, drop the badge). `mark_read` runs before both, so both compute the SAME row, and
+      # the second was pure repetition.
+      #
+      # Only for a plain in-place update: the reorder branch above must still run even when the
+      # content matches, because moving a row is not something a fingerprint can see.
+      sidebar_row_unchanged?(socket, conversation_id, summary) ->
+        socket
+
       true ->
-        stream_insert(socket, :conversations, summary, insert_opts)
+        socket
+        |> remember_sidebar_row(conversation_id, summary)
+        |> stream_insert(:conversations, summary, insert_opts)
     end
   end
+
+  # The last row sent for this conversation, compared by VALUE. Cleared when the row is deleted so
+  # a re-appearing chat is always sent afresh.
+  #
+  # The summary itself, not a hash of it (#551 review). `:erlang.phash2/1` is 32 bits and not
+  # collision-free, and the failure it buys is a row that silently keeps showing the wrong preview
+  # until something else changes it — for a saving of a few bytes per conversation over holding
+  # the struct that is already in memory. Exact comparison also cannot drift: a field added to the
+  # row later is compared without anyone remembering to add it here.
+  defp sidebar_row_unchanged?(socket, conversation_id, summary),
+    do: Map.get(socket.assigns.sidebar_rows, conversation_id) == summary
+
+  defp remember_sidebar_row(socket, conversation_id, summary),
+    do:
+      assign(socket, sidebar_rows: Map.put(socket.assigns.sidebar_rows, conversation_id, summary))
+
+  # Every path that takes a row OUT of the stream forgets it here too (#551 review). Otherwise the
+  # remembered copy outlives the row, and when that chat comes back — re-added to a folder, a DM
+  # re-surfaced by a new message — the insert would be skipped as "unchanged" against a row that
+  # is no longer on screen, and the chat would simply not appear.
+  defp forget_sidebar_row(socket, conversation_id),
+    do: assign(socket, sidebar_rows: Map.delete(socket.assigns.sidebar_rows, conversation_id))
 
   defp refresh_rooms_if_current(socket, conversation_id) do
     if socket.assigns.channel && Enum.any?(socket.assigns.rooms, &(&1.id == conversation_id)) do
