@@ -145,6 +145,42 @@ defmodule EdenWeb.SidebarCostTest do
            "going back to the list re-loaded it #{reloads} time(s) — the rows did not change"
   end
 
+  # The other half of #558: leaving channel mode DOES have to re-stream the list (the container
+  # was unmounted, so the rows are gone), but moving between rooms of the same channel must not —
+  # the list is not on screen and rebuilding it is pure cost. Raised in review of #559 as a
+  # suspicion; measured here instead of argued.
+  test "switching rooms inside a channel does not touch the conversation list", %{conn: conn} do
+    alice = user_fixture(%{username: "rmswitch"})
+
+    for i <- 1..3 do
+      other = user_fixture(%{username: "rmswpeer#{i}"})
+      {:ok, c} = Chat.create_conversation(scope(alice), [other.id])
+      {:ok, _} = Chat.create_message(scope(other), c.id, %{"body" => "hi #{i}"})
+    end
+
+    {:ok, channel} = Eden.Channels.create_channel(scope(alice), %{"name" => "Switching"})
+    {:ok, [general]} = Eden.Channels.list_rooms(scope(alice), channel.id)
+    {:ok, second} = Eden.Channels.create_room(scope(alice), channel.id, %{"name" => "second"})
+
+    {:ok, view, _} = live(log_in_user(conn, alice), ~p"/channels/#{channel.id}/r/#{general.id}")
+    {drain, _} = watch(view)
+
+    render_patch(view, ~p"/channels/#{channel.id}/r/#{second.id}")
+    switches = drain.() |> Enum.count(&sidebar_query?/1)
+
+    assert switches == 0,
+           "moving between rooms re-loaded the conversation list #{switches} time(s) — " <>
+             "the list is not even rendered in channel mode"
+
+    # ...and the reference: leaving the channel MUST re-load it, or #558 is back.
+    render_patch(view, ~p"/app")
+    leaves = drain.() |> Enum.count(&sidebar_query?/1)
+
+    assert leaves > 0,
+           "leaving channel mode did not re-load the conversation list — " <>
+             "the stream container was unmounted, so it comes back empty (#558)"
+  end
+
   test "being removed from a group drops its row without re-loading the list", %{conn: conn} do
     alice = user_fixture(%{username: "rmalice"})
     bob = user_fixture(%{username: "rmbob"})
