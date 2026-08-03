@@ -10664,6 +10664,11 @@ defmodule EdenWeb.ChatLive do
             box.__closing = false
             box.classList.remove("ed-lightbox--out")
             if (!box.open) box.showModal()
+            // Take focus off the back arrow (#554). `showModal()` hands it to the first focusable
+            // child, and WebKit counts that as focus-visible: on an iPhone the viewer opened with a
+            // ring drawn around a control nobody had touched. The container is the right holder
+            // anyway — a screen reader announces the modal, and Tab starts from the top of it.
+            box.focus({ preventScroll: true })
             // The stage has a width only now that the dialog is in the top layer; the track was
             // positioned a moment ago against a fallback. Re-centre on the real measurement.
             box.__forgetW()
@@ -10671,6 +10676,8 @@ defmodule EdenWeb.ChatLive do
             // Start each open with a clean gesture flag — a stale `__swiped` from a
             // prior swipe would otherwise suppress the first tap (e.g. the X) (#96).
             box.__swiped = false
+            box.__dismiss = false
+            box.__dismissReset()
             document.body.style.overflow = "hidden"
             document.addEventListener("keydown", box.__onKey)
           },
@@ -10698,6 +10705,10 @@ defmodule EdenWeb.ChatLive do
             box.__viewer = lbl.lbViewer || "Photo"
             // The dialog's accessible name — a screen reader announces the modal (audit P1).
             box.setAttribute("aria-label", lbl.lbViewer || "Photo")
+            // Focusable so the dialog can hold its own focus (#554) — see the `focus()` next to
+            // `showModal()`. `autofocus` on the dialog is specified to do this and is NOT honoured
+            // here (measured: focus still landed on the back arrow), so the call is explicit.
+            box.setAttribute("tabindex", "-1")
             const dots = "M10 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"
             // TG-style chrome (#465): a back arrow + who/when + an actions menu, all in a
             // top bar that respects the safe area — the lone floating X sat under the notch
@@ -10769,6 +10780,50 @@ defmodule EdenWeb.ChatLive do
             }
             box.__trackTo = trackTo
             box.__stageW = stageW
+
+            // Swipe to dismiss (#554). The stage carries the photo, the root carries the scrim's
+            // alpha; both follow the finger, so letting go halfway puts everything back instead of
+            // committing to a state the gesture never reached.
+            const stage = box.querySelector(".ed-lightbox__stage")
+            const root = document.documentElement
+            // How far a finger must travel before the viewer lets go. Roughly a fifth of the
+            // screen, which is where a flick ends and a drag begins.
+            const DISMISS = () => Math.max(80, window.innerHeight * 0.18)
+            const dimTo = (v) => root.style.setProperty("--ed-lb-fade", String(v))
+            const dismissTo = (dy) => {
+              // Shrink a little as it goes: the photo reads as receding rather than sliding off a
+              // shelf. Clamped, so a long drag does not shrink it to nothing.
+              const t = Math.min(1, Math.abs(dy) / (window.innerHeight * 0.6))
+              stage.style.transform = `translate3d(0,${dy}px,0) scale(${1 - t * 0.18})`
+              dimTo(1 - t * 0.75)
+            }
+            // A gesture can end without a touchend: a second finger arrives, or the system takes the
+            // touch away (a notification, an edge swipe). Without this the photo stays where the
+            // finger left it and the viewer is stuck half-dismissed.
+            // One owner for the settle timer (#555 review). Each of these schedules the same
+            // cleanup, and a gesture that starts inside the previous one's 280ms would otherwise be
+            // stripped of `--dismissing` mid-drag — the chrome would stop fading halfway through.
+            const settle = (fn, ms) => {
+              clearTimeout(box.__dismissT)
+              box.__dismissT = setTimeout(fn, ms)
+            }
+            const dismissDone = () =>
+              box.classList.remove("ed-lightbox--dismissing", "ed-lightbox--settling")
+            const dismissCancel = () => {
+              if (!box.__dismiss) return
+              box.__dismiss = false
+              box.classList.add("ed-lightbox--settling")
+              stage.style.transform = ""
+              dimTo(1)
+              settle(dismissDone, 280)
+            }
+            const dismissReset = () => {
+              clearTimeout(box.__dismissT)
+              stage.style.transform = ""
+              dimTo(1)
+              dismissDone()
+            }
+            box.__dismissReset = dismissReset
             // Paint one slot: its source, its accessible name, and the decode-hide that
             // keeps a half-loaded frame from flashing.
             // Paint the PREVIEW first, then upgrade (#552). The strip's thumbnail is already
@@ -11086,7 +11141,7 @@ defmodule EdenWeb.ChatLive do
               }
             }
 
-            const close = () => {
+            const close = (instant) => {
               if (box.__closing || !box.open) return
               box.__closing = true
               closeMenu()
@@ -11097,10 +11152,14 @@ defmodule EdenWeb.ChatLive do
                 document.body.style.overflow = ""
                 document.removeEventListener("keydown", box.__onKey)
                 zoomReset()
+                // The next open must start from rest, wherever this one was dragged to.
+                dismissReset()
               }
               // A 150ms fade out (audit P2: the instant display-flip cut the swipe-to-
-              // close gesture off mid-motion); instant under reduced motion.
-              if (matchMedia("(prefers-reduced-motion: reduce)").matches) return fin()
+              // close gesture off mid-motion); instant under reduced motion, and instant when a
+              // dismiss gesture has already animated the photo out (#554) — fading a photo that
+              // has left the screen only delays the dialog.
+              if (instant || matchMedia("(prefers-reduced-motion: reduce)").matches) return fin()
               box.classList.add("ed-lightbox--out")
               box.__closeTimer = setTimeout(fin, 150)
             }
@@ -11183,6 +11242,7 @@ defmodule EdenWeb.ChatLive do
               "touchmove",
               (e) => {
                 if (e.touches.length === 2 && pinch) {
+                  dismissCancel()
                   e.preventDefault()
                   const [a, b] = e.touches
                   zoomAt(pinch.mx, pinch.my, pinch.z0 * (dist(a, b) / pinch.d0), false)
@@ -11198,8 +11258,21 @@ defmodule EdenWeb.ChatLive do
                   // like a phone gallery. Vertical intent is left to swipe-to-close.
                   const dx = e.touches[0].clientX - tx
                   const dy = e.touches[0].clientY - ty
-                  if (!box.__dragging && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
+                  if (!box.__dragging && !box.__dismiss && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy)) {
                     box.__dragging = true
+                  }
+                  // The other axis dismisses (#554). Decided once, like the paging drag, so a
+                  // gesture never fights itself halfway through.
+                  if (!box.__dragging && !box.__dismiss && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) {
+                    box.__dismiss = true
+                    clearTimeout(box.__dismissT)
+                    box.classList.add("ed-lightbox--dismissing")
+                    box.classList.remove("ed-lightbox--settling")
+                  }
+                  if (box.__dismiss) {
+                    e.preventDefault()
+                    dismissTo(dy)
+                    return
                   }
                   if (box.__dragging) {
                     e.preventDefault()
@@ -11215,9 +11288,12 @@ defmodule EdenWeb.ChatLive do
               },
               { passive: false }
             )
+            box.addEventListener("touchcancel", dismissCancel, { passive: true })
             box.addEventListener(
               "touchend",
               (e) => {
+                // A pinch or a stray extra finger cancels a dismiss rather than committing it.
+                if (multi || (pinch && e.touches.length < 2)) dismissCancel()
                 if (pinch && e.touches.length < 2) {
                   // Pinch released: snap a near-1x back to rest.
                   if (z < 1.05) zoomReset()
@@ -11262,10 +11338,28 @@ defmodule EdenWeb.ChatLive do
                   }
                   return
                 }
-                if (dy > 70 && dy > Math.abs(dx)) {
+                if (box.__dismiss) {
+                  box.__dismiss = false
                   box.__swiped = true
-                  close()
-                } else if (moved < 10) {
+                  const fast =
+                    Math.abs(dy) / Math.max(1, e.timeStamp - (box.__dragT0 || e.timeStamp)) > 0.5
+                  box.classList.add("ed-lightbox--settling")
+                  if (Math.abs(dy) > DISMISS() || fast) {
+                    // Committed: carry it the rest of the way off screen and take the scrim with
+                    // it, then close without the fade — the photo has already gone.
+                    const out = dy > 0 ? window.innerHeight : -window.innerHeight
+                    stage.style.transform = `translate3d(0,${out}px,0) scale(0.82)`
+                    dimTo(0)
+                    settle(() => close(true), 240)
+                  } else {
+                    // Not far enough: everything goes back exactly the way it came.
+                    stage.style.transform = ""
+                    dimTo(1)
+                    settle(dismissDone, 280)
+                  }
+                  return
+                }
+                if (moved < 10) {
                   // Double-tap zoom (300ms window, near the same spot).
                   const now = e.timeStamp
                   if (now - lastTap.t < 300 && Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 40) {
