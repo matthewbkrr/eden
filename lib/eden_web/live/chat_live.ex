@@ -576,11 +576,18 @@ defmodule EdenWeb.ChatLive do
   end
 
   defp leave_channel_mode(socket) do
+    # This runs on EVERY messenger navigation, not only on the way out of a channel — so the
+    # re-stream at the bottom has to know which it is, or opening a chat re-loads the whole
+    # conversation list and undoes #514. Caught by `SidebarCostTest`, which exists for exactly
+    # that.
+    was_in_channel? = socket.assigns.channel != nil
+
     if old = socket.assigns.channel_topic_id, do: Channels.unsubscribe_channel(old)
 
     # Modal flags reset too — otherwise a members/invites modal left open
     # would auto-reopen on the next visit to any channel.
-    assign(socket,
+    socket
+    |> assign(
       channel: nil,
       channel_topic_id: nil,
       rooms: [],
@@ -601,6 +608,17 @@ defmodule EdenWeb.ChatLive do
       thread_list: [],
       thread_unreads: %{}
     )
+    # ...and, only when a channel was actually open, re-stream the chat list (#558).
+    #
+    # `#conversations` is a `phx-update="stream"` container, and channel mode does not render it.
+    # A stream is consumed by the render that receives it: once the container leaves the DOM, the
+    # rows are gone, and returning to the messenger mounts it EMPTY — the person is met by "no
+    # chats yet" and a button to start one, with every conversation they have sitting untouched in
+    # the database. Opening any chat repopulated it, which is why it looked intermittent.
+    #
+    # After the assign, never before: `stream_conversations/2` returns early while `:channel` is
+    # set, so the order here is what makes the call do anything at all.
+    |> then(&if was_in_channel?, do: stream_conversations(&1, reset: true), else: &1)
   end
 
   defp conversation_gone(socket) do
