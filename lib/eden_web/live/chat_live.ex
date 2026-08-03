@@ -6709,7 +6709,7 @@ defmodule EdenWeb.ChatLive do
             // catches the viewport shrinking and keeps the last message visible above the
             // composer instead of letting it hide behind the reply bar.
             this.ro = new ResizeObserver(() => {
-              if (this.pinned && !this._focusing()) this.toBottom(false)
+              if ((this.pinned || this.sticky()) && !this._focusing()) this.toBottom(false)
             })
             this.ro.observe(this.el)
             // After a send the user always wants their message at the bottom, but the send
@@ -6725,18 +6725,31 @@ defmodule EdenWeb.ChatLive do
               // composer scrolls its own pane separately, never via this event.
               if (this.el.id !== "message-scroll") return
               this.stickUntil = performance.now() + 1200
-              if (this._sticking) return
-              this._sticking = true
-              const tick = () => {
-                if (performance.now() > this.stickUntil) { this._sticking = false; return }
-                this.toBottom(false)
-                requestAnimationFrame(tick)
-              }
               // Pin SYNCHRONOUSLY first (#351) — the optimistic node was just appended in this same
               // tick, so an immediate toBottom lands it at the bottom with NO one-frame gap where it
-              // sits below the fold and then jumps up. The rAF loop keeps it pinned through the later
-              // settle stages (composer resize, real-row swap, late media decode).
-              tick()
+              // sits below the fold and then jumps up.
+              this.toBottom(false)
+              // Then let the settle stages announce themselves (#519). This used to be a
+              // requestAnimationFrame loop running for the whole 1200ms window: on a 565-row feed
+              // that is ~72 read-scrollHeight/write-scrollTop pairs, each a synchronous layout of
+              // the entire list, landing exactly while media decodes and the composer resizes.
+              // Measured at 79 `scrollHeight` reads for one send.
+              //
+              // Every stage it was covering CHANGES A HEIGHT — the composer resizing, the real row
+              // replacing the optimistic one, a photo decoding — and two ResizeObservers already
+              // watch those heights. `sticky()` simply lets them pin during the window, so the same
+              // work happens on the three or four frames where something actually moved.
+              clearTimeout(this._stickT)
+              // A settle that changes no observed height (a font swap, a late attribute) would
+              // otherwise be missed, so a few coarse re-pins remain as a backstop. Three, not
+              // seventy-two.
+              const again = (ms) =>
+                setTimeout(() => {
+                  if (this.sticky() && !this._focusing()) this.toBottom(false)
+                }, ms)
+              this._stickT = again(120)
+              this._stickT2 = again(420)
+              this._stickT3 = again(900)
             }
             window.addEventListener("ed:after-send", this.onAfterSend)
             // A just-sent (or received) photo/video/file row grows AFTER we scrolled — its
@@ -6751,7 +6764,7 @@ defmodule EdenWeb.ChatLive do
             this.content = this.el.querySelector("#messages")
             if (this.content) {
               this.contentRo = new ResizeObserver(() => {
-                if (this.follow && !this._focusing()) this.toBottom(false)
+                if ((this.follow || this.sticky()) && !this._focusing()) this.toBottom(false)
               })
               this.contentRo.observe(this.content)
             }
@@ -6924,7 +6937,14 @@ defmodule EdenWeb.ChatLive do
             this.contentRo && this.contentRo.disconnect()
             this.onScroll && this.el.removeEventListener("scroll", this.onScroll)
             this.onAfterSend && window.removeEventListener("ed:after-send", this.onAfterSend)
+            // The backstop re-pins outlive a fast navigation otherwise, and would scroll a feed
+            // that belongs to another conversation by then.
+            clearTimeout(this._stickT)
+            clearTimeout(this._stickT2)
+            clearTimeout(this._stickT3)
           },
+          // Inside the short window a send glues the feed to the bottom (#519).
+          sticky() { return performance.now() < (this.stickUntil || 0) },
           toBottom(smooth) {
             const motion =
               smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -7658,7 +7678,7 @@ defmodule EdenWeb.ChatLive do
                 // Momentum keeps firing scroll with no input events — extend the window so the
                 // chip stays through the glide, then lapses ~150ms after motion stops.
                 this._userScrollUntil = Date.now() + 150
-                this.updateChip()
+                this.updateChip(top)
               })
             }
             this.scroller.addEventListener("scroll", this.onScroll, { passive: true })
@@ -7672,8 +7692,16 @@ defmodule EdenWeb.ChatLive do
             // scrollHeight never visibly changes.
             this.mo = new MutationObserver(() => this.reconcile())
             this.mo.observe(this.el, { childList: true })
+            // The cached boundary positions (#519) are only as good as the layout they were taken
+            // from. Rows arriving is one signal and `reconcile()` covers it, but a photo decoding
+            // changes heights without touching the child list — and the feed would then label the
+            // wrong day. The container's own size changes in both cases.
+            this._invalidate = () => { this._geo = null }
+            this.ro = new ResizeObserver(this._invalidate)
+            this.ro.observe(this.el)
+            window.addEventListener("resize", this._invalidate, { passive: true })
           },
-          updated() { this.reconcile() },
+          updated() { this._geo = null; this.reconcile() },
           destroyed() {
             if (this.scroller) {
               this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
@@ -7682,6 +7710,8 @@ defmodule EdenWeb.ChatLive do
               this._onUserKey && this.scroller.removeEventListener("keydown", this._onUserKey)
             }
             this.mo && this.mo.disconnect()
+            this.ro && this.ro.disconnect()
+            this._invalidate && window.removeEventListener("resize", this._invalidate)
             this._raf && cancelAnimationFrame(this._raf)
             clearTimeout(this._fade)
             clearTimeout(this._midnight)
@@ -7782,31 +7812,67 @@ defmodule EdenWeb.ChatLive do
           // Track the topmost visible row's day in the floating chip; fade when idle. The
           // rows are vertically ordered, so binary-search the first one still in view
           // (O(log n) rect reads) instead of scanning every row each scroll frame.
-          updateChip() {
+          // Where the day boundaries sit, in the scroller's own content coordinates (#519).
+          //
+          // The chip used to answer by measuring: a rect for the scroller, one per separator, and
+          // a binary search over the rows costing ~8 more — every frame, for the whole length of a
+          // momentum glide. Measured on a 565-row feed: 1021 `getBoundingClientRect` calls for
+          // thirty wheel ticks, each one a forced layout flush.
+          //
+          // None of that has to happen per frame, and most of it never has to happen at all: the
+          // label is the day of the last boundary ABOVE the viewport, and there are as many
+          // boundaries as there are days on screen — a handful, not hundreds. Measure those once,
+          // then a frame is a comparison against a cached number.
+          buildGeo() {
+            const sTop = this.scroller.getBoundingClientRect().top
+            const scrolled = this.scroller.scrollTop
+            const at = (el) => {
+              const r = el.getBoundingClientRect()
+              return { top: r.top - sTop + scrolled, bottom: r.bottom - sTop + scrolled }
+            }
+            const seps = [...this.el.querySelectorAll(":scope > .ed-date-sep")].map((el) => {
+              // The day a separator introduces is carried by the row after it, not by itself.
+              let n = el.nextElementSibling
+              while (n && !(n.dataset && n.dataset.ts)) n = n.nextElementSibling
+              return { ...at(el), ts: n ? Number(n.dataset.ts) : NaN }
+            })
+            const first = this.el.querySelector(":scope > [data-ts]")
+            this._geo = {
+              chipH: this.chip ? this.chip.offsetHeight : 0,
+              seps,
+              // Above the first separator the feed is still one day: the oldest row's.
+              firstTs: first ? Number(first.dataset.ts) : NaN
+            }
+          },
+          updateChip(scrolled) {
             if (!this.chip) return
-            const rows = this.rows()
-            if (!rows.length) { this.chip.classList.remove("is-visible"); return }
-            const vtop = this.scroller.getBoundingClientRect().top
+            if (scrolled === undefined) scrolled = this.scroller.scrollTop
+            if (!this._geo) this.buildGeo()
+            const geo = this._geo
+            if (!Number.isFinite(geo.firstTs) && !geo.seps.length) {
+              this.chip.classList.remove("is-visible")
+              return
+            }
             // If an inline separator sits in the floating chip's band at the top, let it
             // BE the label and keep the chip hidden — otherwise both render the same pill
             // stacked at a day boundary (the reported duplicate).
-            const band = vtop + this.chip.offsetHeight + 6
-            for (const sep of this.el.querySelectorAll(":scope > .ed-date-sep")) {
-              const r = sep.getBoundingClientRect()
-              if (r.bottom > vtop && r.top < band) {
+            const band = scrolled + geo.chipH + 6
+            for (const sep of geo.seps) {
+              if (sep.bottom > scrolled && sep.top < band) {
                 this.chip.classList.remove("is-visible")
                 clearTimeout(this._fade)
                 return
               }
             }
-            const top = vtop + 4
-            let lo = 0, hi = rows.length - 1, cur = rows[rows.length - 1]
-            while (lo <= hi) {
-              const mid = (lo + hi) >> 1
-              if (rows[mid].getBoundingClientRect().bottom > top) { cur = rows[mid]; hi = mid - 1 }
-              else lo = mid + 1
+            const top = scrolled + 4
+            let ts = geo.firstTs
+            for (const sep of geo.seps) {
+              if (sep.top > top) break
+              ts = sep.ts
             }
-            this.chip.textContent = this.dayLabel(Number(cur.dataset.ts))
+            const label = this.dayLabel(ts)
+            if (!label) { this.chip.classList.remove("is-visible"); return }
+            this.chip.textContent = label
             this.chip.classList.add("is-visible")
             clearTimeout(this._fade)
             this._fade = setTimeout(() => this.chip.classList.remove("is-visible"), 1400)
