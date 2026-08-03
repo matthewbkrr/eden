@@ -24,6 +24,29 @@ defmodule EdenWeb.ChannelModeTest do
     %{alice: alice, bob: bob, channel: channel, general: general}
   end
 
+  describe "returning to the messenger" do
+    setup [:setup_channel]
+
+    # `#conversations` is a `phx-update="stream"` container that channel mode does not render. A
+    # stream is consumed by the render that receives it, so once the container left the DOM the
+    # rows were gone and coming back mounted it empty — "no chats yet" over a full database (#558).
+    test "the chat list is re-streamed when leaving channel mode", ctx do
+      {:ok, dm} = Chat.create_conversation(scope(ctx.alice), [ctx.bob.id])
+      {:ok, _} = Chat.create_message(scope(ctx.alice), dm.id, %{body: "hello"})
+
+      conn = log_in_user(build_conn(), ctx.alice)
+      {:ok, view, html} = live(conn, ~p"/app")
+      assert html =~ ~s(data-id="#{dm.id}")
+
+      # Into the channel and its general room, then back — all patches inside one live_session.
+      assert render_patch(view, ~p"/channels/#{ctx.channel.id}/r/#{ctx.general.id}")
+      back = render_patch(view, ~p"/app")
+
+      assert back =~ ~s(data-id="#{dm.id}"),
+             "the chat list came back empty after a trip through a channel"
+    end
+  end
+
   describe "channel workspace" do
     setup [:setup_channel]
 
