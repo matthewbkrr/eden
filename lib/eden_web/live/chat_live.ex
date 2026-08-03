@@ -5713,6 +5713,7 @@ defmodule EdenWeb.ChatLive do
               ]}
               id="thread-replies"
               phx-update="stream"
+              phx-hook=".LocalTimes"
             >
               <.flat_message
                 :for={{dom_id, reply} <- @streams.thread}
@@ -7637,6 +7638,36 @@ defmodule EdenWeb.ChatLive do
           }
         }
       </script>
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTimes">
+        // The same formatter as .DateRail's, for the thread panel — which holds message rows but
+        // has no hook of its own (#557). Duplicated rather than shared because a colocated hook is
+        // its own module: eight lines is a smaller price than a shared global reaching across two
+        // of them.
+        export default {
+          mounted() { this.fmt(); this.watch() },
+          updated() { this.fmt() },
+          destroyed() {
+            this.mo && this.mo.disconnect()
+            this._raf && cancelAnimationFrame(this._raf)
+          },
+          watch() {
+            this.mo = new MutationObserver(() => {
+              if (this._raf) return
+              this._raf = requestAnimationFrame(() => { this._raf = null; this.fmt() })
+            })
+            this.mo.observe(this.el, { childList: true, subtree: true })
+          },
+          fmt() {
+            for (const t of this.el.querySelectorAll("time[datetime]:not([data-lt])")) {
+              const d = new Date(t.getAttribute("datetime"))
+              if (isNaN(d)) continue
+              t.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              t.dataset.lt = "1"
+            }
+          }
+        }
+      </script>
+
       <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTime">
         export default {
           mounted() { this.fmt() },
@@ -7715,6 +7746,24 @@ defmodule EdenWeb.ChatLive do
             // from. Rows arriving is one signal and `reconcile()` covers it, but a photo decoding
             // changes heights without touching the child list — and the feed would then label the
             // wrong day. The container's own size changes in both cases.
+            // Local time for every <time> in the feed, from ONE hook (#557). A `phx-hook` on each
+            // one meant 450 hook instances on a 462-row feed — 450 `mounted()` calls every time the
+            // chat opens, which is what made the switch script-bound. The work per label is
+            // identical; only the bookkeeping is gone.
+            //
+            // rAF-coalesced and marked with `data-lt`, so a burst of patches is one pass and an
+            // already-formatted label is skipped. morphdom strips the marker when it rewrites a
+            // row, which is exactly right: the row goes back to the server's UTC text and this
+            // formats it again.
+            this.fmtTimes()
+            this.timeMo = new MutationObserver(() => {
+              if (this._tRaf) return
+              this._tRaf = requestAnimationFrame(() => {
+                this._tRaf = null
+                this.fmtTimes()
+              })
+            })
+            this.timeMo.observe(this.el, { childList: true, subtree: true })
             this._invalidate = () => {
               this._geo = null
               // A chip already on screen would otherwise keep naming the day it was computed for
@@ -7726,7 +7775,7 @@ defmodule EdenWeb.ChatLive do
             this.ro.observe(this.el)
             window.addEventListener("resize", this._invalidate)
           },
-          updated() { this._geo = null; this.reconcile() },
+          updated() { this._geo = null; this.reconcile(); this.fmtTimes() },
           destroyed() {
             if (this.scroller) {
               this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
@@ -7735,6 +7784,8 @@ defmodule EdenWeb.ChatLive do
               this._onUserKey && this.scroller.removeEventListener("keydown", this._onUserKey)
             }
             this.mo && this.mo.disconnect()
+            this.timeMo && this.timeMo.disconnect()
+            this._tRaf && cancelAnimationFrame(this._tRaf)
             this.ro && this.ro.disconnect()
             this._invalidate && window.removeEventListener("resize", this._invalidate)
             this._raf && cancelAnimationFrame(this._raf)
@@ -7752,6 +7803,14 @@ defmodule EdenWeb.ChatLive do
               this.updateChip()
               this.scheduleMidnight()
             }, next - now)
+          },
+          fmtTimes() {
+            for (const t of this.el.querySelectorAll("time[datetime]:not([data-lt])")) {
+              const d = new Date(t.getAttribute("datetime"))
+              if (isNaN(d)) continue
+              t.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              t.dataset.lt = "1"
+            }
           },
           // Local-day key (browser TZ): a row's day-change boundary + Today/Yesterday.
           dayKeyOf(d) { return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate() },
@@ -13531,7 +13590,7 @@ defmodule EdenWeb.ChatLive do
           </button>
           <span :if={!@message.sender} class="ed-flat__name">{gettext("Deleted account")}</span>
           <span :if={@message.edited_at} class="ed-edited">{gettext("edited")}</span>
-          <span class="ed-flat__time"><.local_time at={@message.inserted_at} /></span>
+          <span class="ed-flat__time"><.local_time at={@message.inserted_at} hook={false} /></span>
         </div>
         <.quoted_reply message={@message} />
         <span :if={@message.forwarded_from} class="ed-forwarded">
@@ -13574,7 +13633,7 @@ defmodule EdenWeb.ChatLive do
             {@thread_unread}
           </span>
           <span :if={@message.last_reply_at} class="ed-thread-footer__time">
-            <.local_time at={@message.last_reply_at} />
+            <.local_time at={@message.last_reply_at} hook={false} />
           </span>
         </button>
         <.reactions message={@message} me={@me} />
@@ -13801,7 +13860,7 @@ defmodule EdenWeb.ChatLive do
   defp msg_meta(assigns) do
     ~H"""
     <span :if={@edited} class="ed-edited">{gettext("edited")}</span>
-    <.local_time at={@at} />
+    <.local_time at={@at} hook={false} />
     <span :if={@ticks} class="inline-flex items-center" style="margin-left:2px;">
       <.icon :if={not @read} name="hero-check-micro" class="size-3.5" />
       <span :if={@read} class="inline-flex items-center">
@@ -15177,6 +15236,18 @@ defmodule EdenWeb.ChatLive do
   # long-press is already guarded at fire time by #479, so what remains there is cost, not a
   # correctness gap.
   attr :id, :string, default: nil
+  # Inside the message feed, pass `hook={false}` (#557): the container formats every <time> it
+  # holds, so a row does not need a hook instance of its own. Measured on a 462-row feed: 450
+  # `LocalTime` instances, i.e. 450 `mounted()` calls every time the chat opens.
+  attr :hook, :boolean, default: true
+
+  defp local_time(%{hook: false} = assigns) do
+    ~H"""
+    <time class={@class} datetime={DateTime.to_iso8601(@at)}>
+      {Calendar.strftime(@at, "%H:%M")}
+    </time>
+    """
+  end
 
   defp local_time(assigns) do
     # assign, not assign_new (#489 review): :dom_id is not an attr, so there is never an
