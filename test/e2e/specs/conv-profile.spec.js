@@ -41,11 +41,14 @@ test("the DM header opens the profile panel with a media gallery (#136)", async 
   // Back to Photo → click a tile → the shared lightbox opens.
   await panel.locator(".ed-gallery-tab", { hasText: "Photo" }).click()
   await panel.locator(".ed-gallery-grid .ed-gallery-tile").first().click()
-  await expect(alice.locator(".ed-lightbox--open")).toBeVisible()
+  // The viewer is a native <dialog> since #470, so "open" is the [open] attribute the platform
+  // sets, not a class. The class this waited for stopped existing at that merge, which made
+  // every assertion below it wait four seconds and fail (#552).
+  await expect(alice.locator("#ed-lightbox[open]")).toBeVisible()
 
   // Esc closes ONLY the lightbox — the panel stays open (no window-Esc handler on it).
   await alice.keyboard.press("Escape")
-  await expect(alice.locator(".ed-lightbox--open")).toHaveCount(0)
+  await expect(alice.locator("#ed-lightbox[open]")).toHaveCount(0)
   await expect(panel).toBeVisible()
 })
 

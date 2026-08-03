@@ -1723,7 +1723,10 @@ html {
      paints over it. Covers the message stream AND the profile gallery (.ed-photo is on
      both photo links). */
   .ed-photo img {
-    background-color: oklch(0.62 0.012 261);
+    /* A token, so the placeholder is a surface in both themes (#552). The literal it replaced was
+       a mid-grey picked against the light theme; in the dark one it read as a lit panel, and a
+       grid of not-yet-loaded photos flashed brighter than the message it belongs to. */
+    background-color: var(--ed-surface-2);
   }
   .ed-media-time {
     position: absolute;
@@ -1892,6 +1895,19 @@ html {
      Esc and focus return; the scrim is the ::backdrop. z-index is irrelevant in the
      top layer. */
   .ed-lightbox {
+    /* Chrome heights as tokens, not as six hand-tuned one-off numbers (#552). The bar is
+       0.6 + 2.75 + 0.6rem tall and the strip the same; the stage, the paging zones and the
+       image clamp all derive from these, so they cannot drift apart again — the 5px gap where
+       a tall photo slid under the bar came from `3.6rem` vs an actual 3.95rem. */
+    --ed-lb-chrome: 3.95rem;
+    --ed-lb-bar: calc(env(safe-area-inset-top) + var(--ed-lb-chrome));
+    --ed-lb-foot: calc(env(safe-area-inset-bottom) + 0.75rem);
+    /* Paint order was DOM order because nothing declared a layer, which is how the stage came
+       to cover the ← arrow and the zones came to cover the bar. Semantic scale instead. */
+    --ed-z-stage: 1;
+    --ed-z-zone: 2;
+    --ed-z-bar: 3;
+    --ed-z-menu: 4;
     position: fixed;
     inset: 0;
     width: 100dvw;
@@ -1953,6 +1969,7 @@ html {
      safe area, so nothing hides under the notch (the floating X did). */
   .ed-lightbox__bar {
     position: fixed;
+    z-index: var(--ed-z-bar);
     top: 0;
     left: 0;
     right: 0;
@@ -1964,6 +1981,15 @@ html {
     /* A soft top scrim keeps white chrome legible over a bright photo. */
     background: linear-gradient(oklch(0 0 0 / 0.55), oklch(0 0 0 / 0));
     cursor: default;
+  }
+  .ed-lightbox__btn:focus-visible,
+  .ed-lightbox__nav:focus-visible,
+  .ed-lightbox__thumb:focus-visible,
+  .ed-lightbox__item:focus-visible {
+    /* White, not `--ed-ring`: the ring token is tuned for the app's surfaces and disappears against
+       a photo. The viewer is the one place where the backdrop is arbitrary. */
+    outline: 2px solid oklch(1 0 0 / 0.9);
+    outline-offset: 2px;
   }
   .ed-lightbox__btn {
     flex: none;
@@ -2026,8 +2052,9 @@ html {
     border-radius: var(--ed-radius-lg);
     background: var(--ed-surface);
     border: 1px solid var(--ed-border);
-    box-shadow: var(--ed-shadow-lg, 0 12px 32px oklch(0 0 0 / 0.35));
-    z-index: 1;
+    /* `--ed-shadow-lg` never existed; every other popover in this file uses this token. */
+    box-shadow: var(--ed-shadow-pop);
+    z-index: var(--ed-z-menu);
     animation: ed-lb-menu-in 0.14s var(--ed-ease);
   }
   .ed-lightbox__menu[hidden] {
@@ -2069,41 +2096,65 @@ html {
     position: fixed;
     left: 0;
     right: 0;
-    top: calc(env(safe-area-inset-top) + 3.6rem);
-    bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+    top: var(--ed-lb-bar);
+    bottom: var(--ed-lb-foot);
+    z-index: var(--ed-z-stage);
     overflow: hidden;
     display: grid;
     place-items: center;
   }
-  .ed-lightbox--gallery .ed-lightbox__stage {
-    /* Leave the strip its band. */
-    bottom: calc(env(safe-area-inset-bottom) + 4.6rem);
+  .ed-lightbox--gallery {
+    /* The strip claims the foot. */
+    --ed-lb-foot: calc(env(safe-area-inset-bottom) + var(--ed-lb-chrome) + 0.65rem);
   }
   .ed-lightbox__track {
     display: flex;
     width: 300%;
     height: 100%;
+    /* The stage centres its children, and the track is three times its width — so the track's own
+       left edge sat a full stage-width to the LEFT before any transform, and `translate3d(-stageW)`
+       landed on the slot AFTER the current one. Every photo opened one further along the reel than
+       the one that was tapped, which is the "tapping a photo opens a different one" report (#552).
+       The track is a filmstrip: it starts where the stage starts. */
+    justify-self: start;
     will-change: transform;
   }
   .ed-lightbox__slide {
-    flex: 0 0 33.3333%;
-    display: grid;
-    place-items: center;
-    padding: 0 0.75rem;
+    /* calc, not 33.3333%: the rounded literal is 0.9999x the stage, so every page landed a
+       fraction of a pixel off and the settle snapped it back. */
+    flex: 0 0 calc(100% / 3);
+    min-width: 0;
   }
   .ed-lightbox__img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
+    /* Clamped against the VIEWPORT minus the chrome, never against `100%` (#552). The slide's
+       grid row is `auto`, so a percentage here refers back to a row the image itself is sizing —
+       a cyclic reference the browser resolves to `none`. The row then took the photo's natural
+       height and a portrait rendered at 1200x1600 inside a 749px stage, 778px of it below the
+       fold and unreachable behind `overflow: hidden`. This is what #466 replaced and #552 puts
+       back, now expressed in the same tokens the stage uses. */
+    display: block;
+    /* Fill the slide and let `object-fit` do the fitting, rather than letting the photo's own
+       pixels size the element (#552). Two things follow: the box is the same before and after the
+       preview upgrades to the original, so the swap moves nothing; and the height comes from the
+       track, which the stage sizes, so no percentage ever refers back to the image. */
+    width: 100%;
+    height: 100%;
+    /* Belt and braces for the height chain above: if the track ever loses its definite height the
+       photo falls back to its natural size, and this is what keeps that from overflowing the
+       viewport the way `max-height: 100%` did. */
+    max-width: 100dvw;
+    max-height: calc(100dvh - var(--ed-lb-bar) - var(--ed-lb-foot));
     object-fit: contain;
-    border-radius: var(--ed-radius);
-    box-shadow: 0 10px 40px oklch(0 0 0 / 0.5);
-    /* The cursor finishes the sentence the backdrop starts (audit): zoom-out around,
-       zoom-in on the photo, grab while zoomed. */
+    /* The cursor finishes the sentence the backdrop starts (audit): zoom-out around, zoom-in on
+       the photo, grab while zoomed. The element spans the stage now (#552), so the class — set
+       from a real hit test against the photo — is what distinguishes the two. */
+    cursor: zoom-out;
+  }
+  .ed-lightbox--on-photo .ed-lightbox__img {
     cursor: zoom-in;
   }
-  .ed-lightbox--zoomed .ed-lightbox__img {
+  .ed-lightbox--zoomed .ed-lightbox__img,
+  .ed-lightbox--zoomed.ed-lightbox--on-photo .ed-lightbox__img {
     cursor: grab;
   }
   /* Paging zones (#466): a wide invisible column around each arrow — on a 1920px
@@ -2112,11 +2163,15 @@ html {
      Hidden for a lone image, shown for a reel; touch pages by swipe. */
   .ed-lightbox__zone {
     position: fixed;
-    top: 0;
-    bottom: 0;
+    /* Between the bar and the strip, not the full height (#552): spanning the whole viewport put
+       a 7rem column over the bar's own buttons below 1160px, where Close paged backwards and the
+       actions button paged forwards. */
+    top: var(--ed-lb-bar);
+    bottom: var(--ed-lb-foot);
     width: 7rem;
     display: none;
     place-items: center;
+    z-index: var(--ed-z-zone);
     cursor: pointer;
   }
   .ed-lightbox--gallery .ed-lightbox__zone {
@@ -3029,6 +3084,29 @@ html {
     height: 100%;
     object-fit: cover;
     display: block;
+  }
+  /* A photo is a button and should answer like one (#552): every other tappable surface here dims
+     or lifts under the finger, and the one thing people tap most did nothing at all until the
+     viewer appeared — on a slow open that reads as a missed tap, so they tap again.
+     The dim is INSTANT on press and eases back on release; putting the transition on the base
+     selector alone makes the press itself fade in, which is late enough to miss. */
+  .ed-photo,
+  .ed-album__tile,
+  .ed-gallery-tile {
+    transition: filter 0.2s var(--ed-ease);
+  }
+  .ed-photo:active,
+  .ed-album__tile:active,
+  .ed-gallery-tile:active {
+    transition: none;
+    filter: brightness(0.88);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-photo,
+    .ed-album__tile,
+    .ed-gallery-tile {
+      transition: none;
+    }
   }
   .ed-gallery-list {
     display: flex;
