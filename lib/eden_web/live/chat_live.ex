@@ -7700,7 +7700,7 @@ defmodule EdenWeb.ChatLive do
             this._invalidate = () => { this._geo = null }
             this.ro = new ResizeObserver(this._invalidate)
             this.ro.observe(this.el)
-            window.addEventListener("resize", this._invalidate, { passive: true })
+            window.addEventListener("resize", this._invalidate)
           },
           updated() { this._geo = null; this.reconcile() },
           destroyed() {
