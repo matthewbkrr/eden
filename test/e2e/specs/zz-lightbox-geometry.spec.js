@@ -73,8 +73,18 @@ test("the photo on screen is the one that was tapped", async ({ alice, seed }) =
     await alice.waitForFunction(() => document.getElementById("ed-lightbox")?.open)
     await alice.waitForTimeout(900)
 
-    const showing = await alice.evaluate(() => window.__edOnScreen().dataset.src)
-    expect(showing, `tapped ${tapped} in message ${msg}`).toBe(tapped)
+    const shown = await alice.evaluate(() => {
+      const box = document.getElementById("ed-lightbox")
+      const stage = box.querySelector(".ed-lightbox__stage").getBoundingClientRect()
+      const slide = window.__edOnScreen().closest(".ed-lightbox__slide").getBoundingClientRect()
+      return { src: window.__edOnScreen().dataset.src, offset: Math.abs(slide.left - stage.left) }
+    })
+    expect(shown.src, `tapped ${tapped} in message ${msg}`).toBe(tapped)
+    // Flush with the stage, not merely the nearest slot. The width the track is positioned by is
+    // measured from the stage; taking it from `window.innerWidth` instead lands a scrollbar's
+    // width off on every platform that reserves one, which this stand (overlay scrollbars) cannot
+    // reproduce — so this is the invariant that would catch it elsewhere.
+    expect(shown.offset, "the slide is not flush with the stage").toBeLessThanOrEqual(1)
     await alice.keyboard.press("Escape")
   }
 })
@@ -189,6 +199,62 @@ test("a tap beside a portrait photo closes, a tap on it does not", async ({ alic
     await alice.evaluate(() => document.getElementById("ed-lightbox").open),
     "tapping the backdrop beside the photo did not close the viewer",
   ).toBe(false)
+})
+
+// Zooming moves the photo's edges outward; the dismiss hit test has to move with them. It did not:
+// it measured the photo from the untransformed layout box, so at 2.5x a click on the enlarged photo
+// outside its 1x footprint read as backdrop and closed the viewer (#553 review).
+test("a click on a zoomed photo does not dismiss the viewer", async ({ alice, seed }) => {
+  await alice.setViewportSize({ width: 1280, height: 880 })
+  await open(alice, seed.portrait_msg_id, seed)
+  await alice.waitForFunction(() => {
+    const el = window.__edOnScreen()
+    return !!el && el.complete && el.naturalWidth > 0
+  })
+
+  const box = await alice.evaluate(() => {
+    const el = window.__edOnScreen()
+    const r = el.getBoundingClientRect()
+    const s = Math.min(r.width / el.naturalWidth, r.height / el.naturalHeight)
+    return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: el.naturalWidth * s }
+  })
+
+  // Zoom about the centre, the way a double-click does.
+  await alice.mouse.dblclick(box.cx, box.cy)
+  await alice.waitForTimeout(400)
+
+  const zoomed = await alice.evaluate(() => {
+    const el = window.__edOnScreen()
+    const r = el.getBoundingClientRect()
+    const s = Math.min(r.width / el.naturalWidth, r.height / el.naturalHeight)
+    return { cx: r.left + r.width / 2, w: el.naturalWidth * s, cy: r.top + r.height / 2 }
+  })
+  expect(zoomed.w, "the double-click did not zoom, so this proves nothing").toBeGreaterThan(
+    box.w * 1.5,
+  )
+
+  // A point that is on the ENLARGED photo, outside its unzoomed footprint, and clear of the paging
+  // zone — a click in the zone pages and never reaches the dismiss, so it would pass either way.
+  const spot = await alice.evaluate(
+    ([unzoomedRight, enlargedRight]) => {
+      const zone = document
+        .querySelector(".ed-lightbox__zone--next")
+        .getBoundingClientRect()
+      const limit = Math.min(enlargedRight, zone.left)
+      return { x: (unzoomedRight + limit) / 2, room: limit - unzoomedRight }
+    },
+    [box.cx + box.w / 2, zoomed.cx + zoomed.w / 2],
+  )
+  expect(spot.room, "no room between the unzoomed photo and the paging zone to test with")
+    .toBeGreaterThan(40)
+
+  await alice.mouse.click(spot.x, zoomed.cy)
+  await alice.waitForTimeout(400)
+
+  expect(
+    await alice.evaluate(() => document.getElementById("ed-lightbox").open),
+    "clicking the enlarged photo closed the viewer",
+  ).toBe(true)
 })
 
 test("with the original unavailable the viewer still shows the photo", async ({ alice, seed }) => {

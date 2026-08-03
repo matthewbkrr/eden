@@ -10658,6 +10658,10 @@ defmodule EdenWeb.ChatLive do
             box.__closing = false
             box.classList.remove("ed-lightbox--out")
             if (!box.open) box.showModal()
+            // The stage has a width only now that the dialog is in the top layer; the track was
+            // positioned a moment ago against a fallback. Re-centre on the real measurement.
+            box.__forgetW()
+            box.__trackTo(0, false)
             // Start each open with a clean gesture flag — a stale `__swiped` from a
             // prior swipe would otherwise suppress the first tap (e.g. the X) (#96).
             box.__swiped = false
@@ -10738,8 +10742,17 @@ defmodule EdenWeb.ChatLive do
             // `transform` before reading this; reading `clientWidth` there forced a synchronous
             // layout per frame of the drag, which is the drag's own jank.
             let sw = 0
-            const stageW = () =>
-              sw || (sw = box.querySelector(".ed-lightbox__stage").clientWidth || window.innerWidth)
+            const stageW = () => {
+              if (sw) return sw
+              // Only a real measurement is worth remembering. `show()` runs before `showModal()`,
+              // and a closed <dialog> is display:none — so the first call here reads 0 and the
+              // fallback would be cached forever, off by the scrollbar's width on every platform
+              // that reserves one (#553 review). The viewer re-centres itself once it is open.
+              const w = box.querySelector(".ed-lightbox__stage").clientWidth
+              if (w) sw = w
+              return w || window.innerWidth
+            }
+            box.__forgetW = () => (sw = 0)
             window.addEventListener("resize", () => (sw = 0))
             const trackTo = (dx, animate) => {
               track.style.transition =
@@ -10933,11 +10946,19 @@ defmodule EdenWeb.ChatLive do
             // the whole stage — including the letterboxing beside a portrait, where a tap has
             // always closed the viewer and must keep doing so.
             const overPhoto = (e) => {
+              // Fit the photo inside the element's VISUAL rect, which already carries the zoom
+              // transform and the pan — not inside `offsetWidth`, which is the untransformed
+              // layout box. Deriving it from `shown()` (layout-based, as `clampPan` needs it)
+              // measured the photo at 1x while the person was looking at it at 2.5x, so a click
+              // on the enlarged photo outside its 1x footprint counted as backdrop and shut the
+              // viewer (#553 review).
               const r = img.getBoundingClientRect()
-              const { w, h } = shown()
+              const nw = img.naturalWidth || 1
+              const nh = img.naturalHeight || 1
+              const s = Math.min(r.width / nw, r.height / nh) || 1
               return (
-                Math.abs(e.clientX - (r.left + r.width / 2)) <= w / 2 &&
-                Math.abs(e.clientY - (r.top + r.height / 2)) <= h / 2
+                Math.abs(e.clientX - (r.left + r.width / 2)) <= (nw * s) / 2 &&
+                Math.abs(e.clientY - (r.top + r.height / 2)) <= (nh * s) / 2
               )
             }
             box.__overPhoto = overPhoto

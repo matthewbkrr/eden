@@ -29,9 +29,9 @@ test("navigating with the lightbox open unlocks body scroll (#380/R187)", async 
   await photo.scrollIntoViewIfNeeded()
   // The in-message Lightbox defers its open ~250ms (double-click-to-react disambiguation).
   await photo.click()
-// The viewer is a native <dialog> since #470, so "open" is the [open] attribute the platform
-// sets, not a class. The class this waited for stopped existing at that merge, which made
-// every assertion below it wait four seconds and fail (#552).
+  // The viewer is a native <dialog> since #470, so "open" is the [open] attribute the platform
+  // sets, not a class. The class this waited for stopped existing at that merge, which made
+  // every assertion below it wait four seconds and fail (#552).
   await expect(alice.locator("#ed-lightbox[open]")).toHaveCount(1, { timeout: 4_000 })
   expect(await alice.evaluate(() => document.body.style.overflow)).toBe("hidden")
 

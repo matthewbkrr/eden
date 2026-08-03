@@ -44,9 +44,9 @@ test("dbl-click a photo reacts (lightbox stays closed); single-click opens it (#
   const before = await alice.locator("#messages .ed-react").count()
   await photo.dblclick()
   await expect(alice.locator("#messages .ed-react")).toHaveCount(before + 1, { timeout: 8000 })
-// The viewer is a native <dialog> since #470, so "open" is the [open] attribute the platform
-// sets, not a class. The class this waited for stopped existing at that merge, which made
-// every assertion below it wait four seconds and fail (#552).
+  // The viewer is a native <dialog> since #470, so "open" is the [open] attribute the platform
+  // sets, not a class. The class this waited for stopped existing at that merge, which made
+  // every assertion below it wait four seconds and fail (#552).
   await expect(alice.locator("#ed-lightbox[open]")).toHaveCount(0)
 
   // Single click (after the click-count resets) → the lightbox opens past the ~250ms delay.
