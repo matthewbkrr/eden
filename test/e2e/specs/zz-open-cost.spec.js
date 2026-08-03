@@ -18,11 +18,24 @@ const openBigChat = async (page, seed) => {
   await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
   await page.locator(`#conversations a.ed-convo[href$="/app/c/${seed.group_id}"]`).first().click()
   await page.locator(`#message-scroll[data-conversation-id="${seed.group_id}"]`).waitFor()
-  await page.waitForTimeout(1200)
-  // At scale: the cost is per row, and a fresh feed holds fifty.
-  for (let i = 0; i < 8; i++) {
+  await page.locator("#messages > *").first().waitFor()
+
+  // At scale: the cost is per row, and a fresh feed holds fifty. Pull history until the feed
+  // stops growing rather than for a fixed number of sleeps — a slow stand would otherwise measure
+  // whatever happened to have loaded (#560 review).
+  let seen = -1
+  for (let i = 0; i < 12; i++) {
+    const before = await page.locator("#messages > *").count()
+    if (before === seen) break
+    seen = before
     await page.evaluate(() => document.getElementById("message-scroll")?.scrollTo({ top: 0 }))
-    await page.waitForTimeout(300)
+    await page
+      .waitForFunction(
+        (n) => document.querySelectorAll("#messages > *").length > n,
+        before,
+        { timeout: 3000 },
+      )
+      .catch(() => {}) // the top of the history: nothing more to wait for
   }
 }
 
@@ -73,7 +86,7 @@ test("the feed does not carry a hook and a selection widget per row", async ({
 })
 
 // The point of cutting them: the switch is script-bound, and the script is per row.
-test("switching into a long chat stays under the script budget", async ({
+test("reports what switching into a long chat costs", async ({
   alice,
   seed,
   browserName,
@@ -106,7 +119,7 @@ test("switching into a long chat stays under the script budget", async ({
   const after = await grab()
 
   const ms = (k) => Math.round((after[k] - before[k]) * 1000)
-  const line = `switch into ${rows} rows at 4x CPU: script=${ms("script")}ms style=${ms("style")}ms layout=${ms("layout")}ms`
+  const line = `switch into ${rows} rows at 4x CPU: script=${ms("script")}ms style=${ms("style")}ms layout=${ms("layout")}ms (reported, not gated)`
   console.log(line)
   testInfo.annotations.push({ type: "measurement", description: line })
 
@@ -127,13 +140,28 @@ test("every timestamp in the feed reads in the viewer's own zone", async ({ alic
 
   const check = () =>
     alice.evaluate(() => {
-      const want = (iso) =>
-        new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      // Arithmetic, NOT `toLocaleTimeString` (#560 review): computing the expectation the same way
+      // the hook does would only prove the hook ran, and would agree with it even if it formatted
+      // in the wrong zone. Shift the instant by the browser's own offset and read the UTC clock —
+      // a different path to the same answer.
+      const want = (iso) => {
+        const d = new Date(Date.parse(iso) - new Date().getTimezoneOffset() * 60000)
+        return d.getUTCHours() * 60 + d.getUTCMinutes()
+      }
+      // Compare the MINUTE, not the string: the locale decides 24-hour vs "02:37 PM", and the
+      // question here is which instant is shown, not how it is punctuated.
+      const got = (txt) => {
+        const m = txt.match(/(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/)
+        if (!m) return null
+        let h = Number(m[1])
+        if (m[3]) h = (h % 12) + (/[Pp]/.test(m[3]) ? 12 : 0)
+        return h * 60 + Number(m[2])
+      }
       const times = [...document.querySelectorAll("#messages time[datetime]")]
       return {
         total: times.length,
         wrong: times
-          .filter((t) => t.textContent.trim() !== want(t.getAttribute("datetime")))
+          .filter((t) => got(t.textContent.trim()) !== want(t.getAttribute("datetime")))
           .slice(0, 3)
           .map((t) => `${t.getAttribute("datetime")} -> "${t.textContent.trim()}"`),
       }
@@ -141,6 +169,10 @@ test("every timestamp in the feed reads in the viewer's own zone", async ({ alic
 
   const onOpen = await check()
   expect(onOpen.total, "no timestamps on screen, so this measures nothing").toBeGreaterThan(50)
+  // ...and the zones must actually differ, or "local" and "what the server rendered" are the same
+  // string and nothing here can fail.
+  const offset = await alice.evaluate(() => new Date().getTimezoneOffset())
+  expect(offset, "this stand runs in UTC, so a UTC bug would read as correct").not.toBe(0)
   expect(onOpen.wrong, `timestamps left in the server's zone: ${onOpen.wrong}`).toEqual([])
 
   // A newly streamed row arrives through the MutationObserver path, not the mount path.
