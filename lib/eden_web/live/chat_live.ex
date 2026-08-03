@@ -7697,7 +7697,13 @@ defmodule EdenWeb.ChatLive do
             // from. Rows arriving is one signal and `reconcile()` covers it, but a photo decoding
             // changes heights without touching the child list — and the feed would then label the
             // wrong day. The container's own size changes in both cases.
-            this._invalidate = () => { this._geo = null }
+            this._invalidate = () => {
+              this._geo = null
+              // A chip already on screen would otherwise keep naming the day it was computed for
+              // until the next scroll event — and a photo decoding above it moves every boundary
+              // under it (#556 review). Only while it is visible, which is only during a scroll.
+              if (this.chip && this.chip.classList.contains("is-visible")) this.updateChip()
+            }
             this.ro = new ResizeObserver(this._invalidate)
             this.ro.observe(this.el)
             window.addEventListener("resize", this._invalidate)
@@ -7869,7 +7875,10 @@ defmodule EdenWeb.ChatLive do
             let ts = geo.firstTs
             for (const sep of geo.seps) {
               if (sep.top > top) break
-              ts = sep.ts
+              // A separator whose following row carries no timestamp (an optimistic node, a
+              // placeholder) has no day to offer — keep the last one that did rather than
+              // blanking the chip (#556 review).
+              if (Number.isFinite(sep.ts)) ts = sep.ts
             }
             const label = this.dayLabel(ts)
             if (!label) { this.chip.classList.remove("is-visible"); return }
