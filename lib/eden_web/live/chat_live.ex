@@ -10953,8 +10953,13 @@ defmodule EdenWeb.ChatLive do
               // on the enlarged photo outside its 1x footprint counted as backdrop and shut the
               // viewer (#553 review).
               const r = img.getBoundingClientRect()
-              const nw = img.naturalWidth || 1
-              const nh = img.naturalHeight || 1
+              const nw = img.naturalWidth
+              const nh = img.naturalHeight
+              // Nothing decoded yet means there is no photo under the pointer, so the whole stage is
+              // backdrop and a tap dismisses. Falling back to 1x1 instead made the hit region a
+              // square the height of the stage, and a tap in the middle of a still-loading viewer
+              // did nothing at all (#553 review).
+              if (!nw || !nh) return false
               const s = Math.min(r.width / nw, r.height / nh) || 1
               return (
                 Math.abs(e.clientX - (r.left + r.width / 2)) <= (nw * s) / 2 &&

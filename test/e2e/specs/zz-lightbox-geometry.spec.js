@@ -204,6 +204,36 @@ test("a tap beside a portrait photo closes, a tap on it does not", async ({ alic
 // Zooming moves the photo's edges outward; the dismiss hit test has to move with them. It did not:
 // it measured the photo from the untransformed layout box, so at 2.5x a click on the enlarged photo
 // outside its 1x footprint read as backdrop and closed the viewer (#553 review).
+// While nothing has decoded there is no photo to protect, and the viewer must still dismiss on a
+// tap. It did not: the hit test fell back to a 1x1 "photo", which fits to a square the height of
+// the stage, so the middle of a still-loading viewer swallowed the tap (#553 review).
+test("a tap dismisses a viewer that has not painted yet", async ({ alice, seed }) => {
+  await alice.setViewportSize({ width: 1280, height: 880 })
+  // Neither the original nor the preview: nothing can decode.
+  await alice.route(/\/files\/\d+/, (route) => route.abort())
+
+  await open(alice, seed.portrait_msg_id, seed)
+  await alice.waitForTimeout(600)
+
+  const blank = await alice.evaluate(() => {
+    const el = window.__edOnScreen()
+    return el.complete && el.naturalWidth > 0
+  })
+  expect(blank, "something decoded, so this is not the blank case").toBe(false)
+
+  const centre = await alice.evaluate(() => {
+    const r = document.querySelector(".ed-lightbox__stage").getBoundingClientRect()
+    return [r.left + r.width / 2, r.top + r.height / 2]
+  })
+  await alice.mouse.click(...centre)
+  await alice.waitForTimeout(400)
+
+  expect(
+    await alice.evaluate(() => document.getElementById("ed-lightbox").open),
+    "a tap on an empty viewer did nothing",
+  ).toBe(false)
+})
+
 test("a click on a zoomed photo does not dismiss the viewer", async ({ alice, seed }) => {
   await alice.setViewportSize({ width: 1280, height: 880 })
   await open(alice, seed.portrait_msg_id, seed)
