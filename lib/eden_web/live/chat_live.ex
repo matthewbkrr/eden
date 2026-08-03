@@ -10800,20 +10800,28 @@ defmodule EdenWeb.ChatLive do
             // A gesture can end without a touchend: a second finger arrives, or the system takes the
             // touch away (a notification, an edge swipe). Without this the photo stays where the
             // finger left it and the viewer is stuck half-dismissed.
+            // One owner for the settle timer (#555 review). Each of these schedules the same
+            // cleanup, and a gesture that starts inside the previous one's 280ms would otherwise be
+            // stripped of `--dismissing` mid-drag — the chrome would stop fading halfway through.
+            const settle = (fn, ms) => {
+              clearTimeout(box.__dismissT)
+              box.__dismissT = setTimeout(fn, ms)
+            }
+            const dismissDone = () =>
+              box.classList.remove("ed-lightbox--dismissing", "ed-lightbox--settling")
             const dismissCancel = () => {
               if (!box.__dismiss) return
               box.__dismiss = false
               box.classList.add("ed-lightbox--settling")
               stage.style.transform = ""
               dimTo(1)
-              setTimeout(() => {
-                box.classList.remove("ed-lightbox--dismissing", "ed-lightbox--settling")
-              }, 280)
+              settle(dismissDone, 280)
             }
             const dismissReset = () => {
+              clearTimeout(box.__dismissT)
               stage.style.transform = ""
               dimTo(1)
-              box.classList.remove("ed-lightbox--dismissing", "ed-lightbox--settling")
+              dismissDone()
             }
             box.__dismissReset = dismissReset
             // Paint one slot: its source, its accessible name, and the decode-hide that
@@ -11257,6 +11265,7 @@ defmodule EdenWeb.ChatLive do
                   // gesture never fights itself halfway through.
                   if (!box.__dragging && !box.__dismiss && Math.abs(dy) > 12 && Math.abs(dy) >= Math.abs(dx)) {
                     box.__dismiss = true
+                    clearTimeout(box.__dismissT)
                     box.classList.add("ed-lightbox--dismissing")
                     box.classList.remove("ed-lightbox--settling")
                   }
@@ -11341,14 +11350,12 @@ defmodule EdenWeb.ChatLive do
                     const out = dy > 0 ? window.innerHeight : -window.innerHeight
                     stage.style.transform = `translate3d(0,${out}px,0) scale(0.82)`
                     dimTo(0)
-                    setTimeout(() => close(true), 240)
+                    settle(() => close(true), 240)
                   } else {
                     // Not far enough: everything goes back exactly the way it came.
                     stage.style.transform = ""
                     dimTo(1)
-                    setTimeout(() => {
-                      box.classList.remove("ed-lightbox--dismissing", "ed-lightbox--settling")
-                    }, 280)
+                    settle(dismissDone, 280)
                   }
                   return
                 }

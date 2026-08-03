@@ -204,3 +204,46 @@ test("a cancelled gesture puts the photo back", async ({ alice, seed, browserNam
   expect(after.y, "the photo stayed where the cancelled gesture left it").toBe(0)
   expect(after.fade, "the scrim stayed thin after a cancelled gesture").toBe(1)
 })
+
+// Each settle schedules the same cleanup on a timer. A gesture that starts inside the previous
+// one's window used to be stripped of `--dismissing` mid-drag by that stale timer, and the chrome
+// stopped fading halfway through (#555 review).
+test("a gesture started inside the previous settle keeps fading the chrome", async ({
+  alice,
+  seed,
+  browserName,
+}) => {
+  touchable(browserName)
+  await openViewer(alice, seed)
+
+  // A short drag, released: this schedules the 280ms cleanup.
+  await dragDown(alice, 50)
+
+  // ...and a new one immediately, well inside that window.
+  const cdp = await alice.context().newCDPSession(alice)
+  const { x, y } = await alice.evaluate(() => {
+    const r = document.querySelector(".ed-lightbox__stage").getBoundingClientRect()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] })
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 40 }] })
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 90 }] })
+  await alice.waitForTimeout(320) // past when the previous settle would have fired
+
+  const mid = await alice.evaluate(() => {
+    const box = document.getElementById("ed-lightbox")
+    const bar = box.querySelector(".ed-lightbox__bar")
+    return {
+      dismissing: box.classList.contains("ed-lightbox--dismissing"),
+      barOpacity: Number(getComputedStyle(bar).opacity),
+      ...window.__edStage(),
+    }
+  })
+  console.log("SECOND GESTURE", JSON.stringify(mid))
+
+  expect(mid.dismissing, "the previous settle stripped the class mid-gesture").toBe(true)
+  expect(mid.barOpacity, "the chrome stopped fading mid-gesture").toBeLessThan(1)
+  expect(mid.y, "the photo is not following the second gesture").toBeGreaterThan(50)
+
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] })
+})
