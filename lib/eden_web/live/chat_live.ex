@@ -6739,17 +6739,20 @@ defmodule EdenWeb.ChatLive do
               // replacing the optimistic one, a photo decoding — and two ResizeObservers already
               // watch those heights. `sticky()` simply lets them pin during the window, so the same
               // work happens on the three or four frames where something actually moved.
-              clearTimeout(this._stickT)
               // A settle that changes no observed height (a font swap, a late attribute) would
               // otherwise be missed, so a few coarse re-pins remain as a backstop. Three, not
               // seventy-two.
-              const again = (ms) =>
+              //
+              // Held as a list (#556 review): a second send inside the window overwrote the ids of
+              // the first one's timers and left them running, and `destroyed()` could then not
+              // clear what it could no longer name — a pin firing at a feed that had been
+              // navigated away from.
+              ;(this._stickTimers || []).forEach(clearTimeout)
+              this._stickTimers = [120, 420, 900].map((ms) =>
                 setTimeout(() => {
                   if (this.sticky() && !this._focusing()) this.toBottom(false)
                 }, ms)
-              this._stickT = again(120)
-              this._stickT2 = again(420)
-              this._stickT3 = again(900)
+              )
             }
             window.addEventListener("ed:after-send", this.onAfterSend)
             // A just-sent (or received) photo/video/file row grows AFTER we scrolled — its
@@ -6939,9 +6942,7 @@ defmodule EdenWeb.ChatLive do
             this.onAfterSend && window.removeEventListener("ed:after-send", this.onAfterSend)
             // The backstop re-pins outlive a fast navigation otherwise, and would scroll a feed
             // that belongs to another conversation by then.
-            clearTimeout(this._stickT)
-            clearTimeout(this._stickT2)
-            clearTimeout(this._stickT3)
+            ;(this._stickTimers || []).forEach(clearTimeout)
           },
           // Inside the short window a send glues the feed to the bottom (#519).
           sticky() { return performance.now() < (this.stickUntil || 0) },
