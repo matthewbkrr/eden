@@ -7071,7 +7071,15 @@ defmodule EdenWeb.ChatLive do
 
         // A refusal comes back as an event, not as a diff: the row's markup is the same either
         // way, so there is nothing for morphdom to undo. Our paint is a pure toggle, so replaying
-        // it reverses it — a created chip decrements to zero and hides.
+        // it reverses it — a created chip decrements to zero and is removed.
+        //
+        // Replaying a toggle is only exact while the DOM still holds what that paint produced, and
+        // the invariant that makes it exact here is that REFUSAL IS A PROPERTY OF THE TARGET, not
+        // of the moment: an emoji outside the allowed set, a deleted message, a non-member. So if
+        // one tap on a (message, emoji) pair is refused, every tap on it is — replays match taps
+        // one for one and the state converges. Mixing accepted and refused taps on the SAME pair
+        // is not reachable through the interface; it would take a client sending an emoji the UI
+        // never offers, which is outside the trust model anyway (#562 review).
         if (!window.__edReactUndo) {
           window.__edReactUndo = true
           window.addEventListener("phx:react_rejected", (e) => {
