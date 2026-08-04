@@ -159,3 +159,52 @@ test("a reaction the server refuses does not stay on screen", async ({ alice, se
   // The server refuses and re-streams the row; the invented chip must be gone.
   await expect(row.locator(".ed-react")).toHaveCount(0, { timeout: 10_000 })
 })
+
+// Taking the last reaction off hides the chip. Putting it back before the server answers has to
+// bring it back — the toggle found the chip again but left it hidden, so the restored reaction was
+// invisible for a whole round trip (#562 review).
+test("re-adding a reaction before the server answers shows it again", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(room(seed))
+  await ready(alice)
+
+  const body = `retoggle-probe ${Date.now()}`
+  await alice.locator("#composer-body").fill(body)
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  const row = alice.locator("#messages .ed-flat", { hasText: body }).first()
+  await expect(row).toBeVisible()
+  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+
+  await alice.evaluate(
+    ([mid]) =>
+      window.liveSocket.execJS(
+        document.body,
+        JSON.stringify([["push", { event: "react", value: { id: mid, emoji: "👍" } }]]),
+      ),
+    [id],
+  )
+  const chip = row.locator(".ed-react").first()
+  await expect(chip).toBeVisible({ timeout: 10_000 })
+
+  // Off and straight back on, both inside one (slowed) round trip.
+  await alice.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
+  await chip.click()
+  await expect(chip).toBeHidden()
+  // Re-add and read ONCE, with no auto-retry: the server's own answer to the first tap is still in
+  // flight and will remove the chip for real, so a retrying assertion would be judging the
+  // authoritative render rather than the optimistic one (learned the hard way elsewhere in this
+  // harness).
+  const restored = await alice.evaluate(([mid]) => {
+    window.__edReact(mid, "👍")
+    const row = document.getElementById(`messages-${mid}`)
+    const c = row && row.querySelector('.ed-react[phx-value-emoji="👍"]')
+    return c && { hidden: c.hidden, text: c.textContent.trim(), pressed: c.getAttribute("aria-pressed") }
+  }, [id])
+
+  expect(restored, "the chip vanished entirely").not.toBeNull()
+  expect(restored.hidden, "the restored reaction stayed invisible").toBe(false)
+  expect(restored.text, `the restored chip reads "${restored && restored.text}"`).toMatch(/1/)
+  expect(restored.pressed).toBe("true")
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+})

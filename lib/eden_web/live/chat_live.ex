@@ -7016,8 +7016,15 @@ defmodule EdenWeb.ChatLive do
               chip.setAttribute("aria-pressed", String(mine))
               const c = chip.querySelector(".ed-react__count")
               const n = Math.max(0, (Number(c && c.textContent) || 0) + (mine ? 1 : -1))
+              // ALWAYS write the count, including the zero. The text is what the next toggle reads,
+              // and skipping the write on the way down made the way back up compute 1 + 1 = 2 —
+              // found by the test for the un-hide below, not by reading the code.
+              if (c) c.textContent = String(n)
               if (n > 0) {
-                if (c) c.textContent = String(n)
+                // Un-hide (#562 review): taking the last reaction off hides the chip, and putting
+                // it back before the server answers found the chip again but left it hidden — the
+                // restored reaction was invisible until the round trip landed.
+                chip.hidden = false
               } else if (chip.dataset.optimistic) {
                 // We invented this chip, so we take it away — hiding would leave a node the
                 // server never rendered, and a count of nothing.
