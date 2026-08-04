@@ -7641,10 +7641,34 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTimes">
-        // The same formatter as .DateRail's, for the thread panel — which holds message rows but
-        // has no hook of its own (#557). Duplicated rather than shared because a colocated hook is
-        // its own module: eight lines is a smaller price than a shared global reaching across two
-        // of them.
+        // ONE implementation of "rewrite this <time> in the viewer's zone", shared by the three
+        // places that need it: this hook, `.DateRail` (the main feed) and `.LocalTime` (a single
+        // label outside any feed). Registered at bundle load — every colocated module's top level
+        // runs when the index imports it, well before any `mounted()` — the same way the overlay
+        // nav guard above is (#560 review: it was triplicated).
+        //
+        // Writes through `firstChild.nodeValue` rather than `textContent` where it can: assigning
+        // `textContent` REPLACES the text node, which is a childList mutation inside the very
+        // subtree the observers watch, so every format pass re-fired them and bought a redundant
+        // rAF and a full re-scan. `nodeValue` mutates characterData, which nothing here observes.
+        window.__edFmtTime =
+          window.__edFmtTime ||
+          ((t) => {
+            const d = new Date(t.getAttribute("datetime"))
+            if (isNaN(d)) return
+            const text = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            if (t.firstChild && t.firstChild.nodeType === 3) t.firstChild.nodeValue = text
+            else t.textContent = text
+            t.dataset.lt = "1"
+          })
+        window.__edFmtTimes =
+          window.__edFmtTimes ||
+          ((root) => {
+            for (const t of root.querySelectorAll("time[datetime]:not([data-lt])")) {
+              window.__edFmtTime(t)
+            }
+          })
+
         export default {
           mounted() { this.fmt(); this.watch() },
           updated() { this.fmt() },
@@ -7659,25 +7683,17 @@ defmodule EdenWeb.ChatLive do
             })
             this.mo.observe(this.el, { childList: true, subtree: true })
           },
-          fmt() {
-            for (const t of this.el.querySelectorAll("time[datetime]:not([data-lt])")) {
-              const d = new Date(t.getAttribute("datetime"))
-              if (isNaN(d)) continue
-              t.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-              t.dataset.lt = "1"
-            }
-          }
+          fmt() { window.__edFmtTimes(this.el) }
         }
       </script>
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".LocalTime">
+        // A single label outside any feed (sidebar row, search result, thread list). Inside a feed
+        // the container formats them all instead — see `.LocalTimes` for the shared body.
         export default {
           mounted() { this.fmt() },
           updated() { this.fmt() },
-          fmt() {
-            const d = new Date(this.el.getAttribute("datetime"));
-            if (!isNaN(d)) this.el.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-          }
+          fmt() { window.__edFmtTime(this.el) }
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".DateRail">
@@ -7806,14 +7822,7 @@ defmodule EdenWeb.ChatLive do
               this.scheduleMidnight()
             }, next - now)
           },
-          fmtTimes() {
-            for (const t of this.el.querySelectorAll("time[datetime]:not([data-lt])")) {
-              const d = new Date(t.getAttribute("datetime"))
-              if (isNaN(d)) continue
-              t.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-              t.dataset.lt = "1"
-            }
-          },
+          fmtTimes() { window.__edFmtTimes(this.el) },
           // Local-day key (browser TZ): a row's day-change boundary + Today/Yesterday.
           dayKeyOf(d) { return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate() },
           dayLabel(ts) {

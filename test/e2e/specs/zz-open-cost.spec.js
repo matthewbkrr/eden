@@ -165,7 +165,12 @@ test("every timestamp in the feed reads in the viewer's own zone", async ({ alic
       return {
         total: times.length,
         wrong: times
-          .filter((t) => got(t.textContent.trim()) !== want(t.getAttribute("datetime")))
+          .filter((t) => {
+            const g = got(t.textContent.trim())
+            // `null` means the label did not even look like a time — wrong by definition, and it
+            // must not slip through by comparing equal to anything.
+            return g === null || g !== want(t.getAttribute("datetime"))
+          })
           .slice(0, 3)
           .map((t) => `${t.getAttribute("datetime")} -> "${t.textContent.trim()}"`),
       }
@@ -176,7 +181,9 @@ test("every timestamp in the feed reads in the viewer's own zone", async ({ alic
   // ...and the zones must actually differ, or "local" and "what the server rendered" are the same
   // string and nothing here can fail.
   const offset = await alice.evaluate(() => new Date().getTimezoneOffset())
-  expect(offset, "this stand runs in UTC, so a UTC bug would read as correct").not.toBe(0)
+  // A UTC stand cannot answer this question — "local" and "what the server rendered" are the same
+  // string there. That is a missing precondition, not a failure (#560 review).
+  test.skip(offset === 0, "this stand runs in UTC, so a UTC bug would read as correct")
   expect(onOpen.wrong, `timestamps left in the server's zone: ${onOpen.wrong}`).toEqual([])
 
   // A newly streamed row arrives through the MutationObserver path, not the mount path.
@@ -215,7 +222,7 @@ test("the thread root's timestamp reads in the viewer's zone too", async ({ alic
     const ms = Date.parse(t.getAttribute("datetime"))
     const local = new Date(ms - new Date(ms).getTimezoneOffset() * 60000)
     const m = t.textContent.trim().match(/(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/)
-    if (!m) return { shown: t.textContent.trim(), got: null, want: null }
+    if (!m) return { shown: t.textContent.trim(), got: null, want: -1 }
     let h = Number(m[1])
     if (m[3]) h = (h % 12) + (/[Pp]/.test(m[3]) ? 12 : 0)
     return {
@@ -226,6 +233,9 @@ test("the thread root's timestamp reads in the viewer's zone too", async ({ alic
   })
 
   expect(root, "the thread panel has no timestamp to check").not.toBeNull()
+  // Explicit: an unparsable label used to leave both sides null, and null === null passed while
+  // the panel showed nothing at all (#560 review).
+  expect(root.got, `the thread root's timestamp did not parse: "${root.shown}"`).not.toBeNull()
   expect(root.got, `the thread root shows "${root.shown}", which is the server's zone`).toBe(
     root.want,
   )
