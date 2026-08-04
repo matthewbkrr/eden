@@ -11,7 +11,7 @@
 //
 // So this file counts what the feed is made of, not how long a frame took. A count is
 // deterministic; a millisecond on a loaded stand is not.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, openMenu } = require("../helpers/fixtures")
 
 const openBigChat = async (page, seed) => {
   await page.goto("/app")
@@ -145,7 +145,11 @@ test("every timestamp in the feed reads in the viewer's own zone", async ({ alic
       // in the wrong zone. Shift the instant by the browser's own offset and read the UTC clock —
       // a different path to the same answer.
       const want = (iso) => {
-        const d = new Date(Date.parse(iso) - new Date().getTimezoneOffset() * 60000)
+        const t = Date.parse(iso)
+        // The offset in effect ON THAT DATE, not the one in effect now (#560 review): in a zone
+        // with daylight saving those differ by an hour, and a July message read in January would
+        // be judged against the wrong clock.
+        const d = new Date(t - new Date(t).getTimezoneOffset() * 60000)
         return d.getUTCHours() * 60 + d.getUTCMinutes()
       }
       // Compare the MINUTE, not the string: the locale decides 24-hour vs "02:37 PM", and the
@@ -184,4 +188,45 @@ test("every timestamp in the feed reads in the viewer's own zone", async ({ alic
   const afterSend = await check()
   expect(afterSend.total).toBeGreaterThan(onOpen.total)
   expect(afterSend.wrong, `a just-sent row kept the server's zone: ${afterSend.wrong}`).toEqual([])
+})
+
+// The thread panel renders its ROOT message above the replies list, outside it. A formatter scoped
+// to the list left that one timestamp in the server's zone — the kind of gap that hides in plain
+// sight, because a wrong time still looks like a time (#560 review).
+//
+// Threads are a rooms-only feature, so this has to happen in a room; opening a group would skip.
+test("the thread root's timestamp reads in the viewer's zone too", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+  test.skip(!seed.thread_reply_id, "no seeded thread on this stand")
+
+  // A reply permalink opens the thread panel directly — no context menu, no gestures. The menu
+  // route is what `thread-attach-optimistic` uses, and that spec is red on `main` for its own
+  // reasons; borrowing it would make this test fail for something it is not about.
+  await alice.goto(
+    `/channels/${seed.channel_id}/r/${seed.general_room_id}/m/${seed.thread_reply_id}`,
+  )
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await alice.locator("#thread-body").waitFor({ timeout: 15_000 })
+  await alice.waitForTimeout(800)
+
+  const root = await alice.evaluate(() => {
+    const t = document.querySelector("#thread-body time[datetime]")
+    if (!t) return null
+    const ms = Date.parse(t.getAttribute("datetime"))
+    const local = new Date(ms - new Date(ms).getTimezoneOffset() * 60000)
+    const m = t.textContent.trim().match(/(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/)
+    if (!m) return { shown: t.textContent.trim(), got: null, want: null }
+    let h = Number(m[1])
+    if (m[3]) h = (h % 12) + (/[Pp]/.test(m[3]) ? 12 : 0)
+    return {
+      shown: t.textContent.trim(),
+      got: h * 60 + Number(m[2]),
+      want: local.getUTCHours() * 60 + local.getUTCMinutes(),
+    }
+  })
+
+  expect(root, "the thread panel has no timestamp to check").not.toBeNull()
+  expect(root.got, `the thread root shows "${root.shown}", which is the server's zone`).toBe(
+    root.want,
+  )
 })

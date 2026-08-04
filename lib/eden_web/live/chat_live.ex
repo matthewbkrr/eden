@@ -5690,7 +5690,10 @@ defmodule EdenWeb.ChatLive do
           phx-hook=".ScrollBottom"
           data-pending-id="thread-pending"
         >
-          <div class="ed-bounce-wrap">
+          <%!-- The formatter sits HERE, not on the replies list (#560 review): the thread's ROOT
+                message renders above that list, so a hook scoped to `#thread-replies` left the
+                root's timestamp in the server's UTC. One instance covers both. --%>
+          <div class="ed-bounce-wrap" id="thread-body" phx-hook=".LocalTimes">
             <%!-- in_thread: the "N replies" separator right below makes the
                 root's own footer pill redundant. --%>
             <.flat_message
@@ -5713,7 +5716,6 @@ defmodule EdenWeb.ChatLive do
               ]}
               id="thread-replies"
               phx-update="stream"
-              phx-hook=".LocalTimes"
             >
               <.flat_message
                 :for={{dom_id, reply} <- @streams.thread}
