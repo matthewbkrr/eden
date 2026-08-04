@@ -167,10 +167,40 @@ in_folder? =
 
 unless in_folder?, do: {:ok, _} = Chat.toggle_conversation_folder(alice_scope, dm.id, folder.id)
 
+# A thread in the general room, so the thread panel has a root and a reply to show (#557). Threads
+# are rooms-only, and the panel renders its root ABOVE the replies list — a place that is easy to
+# leave out of anything scoped to the list. Matched by body so re-runs reuse them.
+thread_root =
+  case Repo.one(
+         from(m in Eden.Chat.Message,
+           where: m.conversation_id == ^general_room_id and m.body == "e2e-thread-root",
+           limit: 1
+         )
+       ) do
+    nil ->
+      {:ok, m} = Chat.create_message(as, general_room_id, %{body: "e2e-thread-root"})
+      m
+
+    m ->
+      m
+  end
+
+thread_reply =
+  case Repo.one(from(m in Eden.Chat.Message, where: m.root_id == ^thread_root.id, limit: 1)) do
+    nil ->
+      {:ok, r} = Chat.create_reply(as, thread_root.id, %{body: "e2e-thread-reply"})
+      r
+
+    r ->
+      r
+  end
+
 out = %{
   base_url: "http://localhost:4001",
   password: password,
   general_room_id: general_room_id,
+  thread_root_id: thread_root.id,
+  thread_reply_id: thread_reply.id,
   users: %{
     alice: %{username: alice.username, id: alice.id, display_name: alice.display_name},
     bob: %{username: bob.username, id: bob.id, display_name: bob.display_name},
