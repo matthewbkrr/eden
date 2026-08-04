@@ -2146,7 +2146,12 @@ defmodule EdenWeb.ChatLive do
         # A rejected toggle (gone/not a member/non-allowed emoji/add-add race) is a
         # no-op for the UI; log for diagnosis rather than failing silently.
         Logger.debug("react rejected: #{inspect(reason)} (message #{inspect(id)})")
-        {:noreply, socket}
+
+        # ...but the client has ALREADY painted the chip (#521), so it has to be told. A re-stream
+        # does NOT do it: the row's server-rendered markup is unchanged by a refusal, LiveView
+        # sends no diff, and the invented chip survives (measured). An explicit event is the only
+        # thing that reaches the party that guessed.
+        {:noreply, push_event(socket, "react_rejected", %{id: to_string(id), emoji: emoji})}
     end
   end
 
@@ -6984,6 +6989,104 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ContextMenu">
+        // Optimistic reactions (#521). A reaction is the most frequent gesture in the app and it
+        // was completely mute: the handler answers `{:noreply, socket}` and the chips come back
+        // over PubSub, so with the socket slowed to 400ms nothing on screen changed AT ALL before
+        // the reply — measured, and the reason the tap feels dropped on a cross-border link.
+        //
+        // The client already knows the answer: whose reaction it is and which way it goes. So it
+        // paints it, and the server's re-render — which arrives either way — is the correction.
+        //
+        // Registered once at bundle load, like the overlay nav guard: every path that reacts goes
+        // through here — the chip's own `phx-click`, the menu's quick row, the shared emoji grid
+        // and the double-tap.
+        window.__edReact =
+          window.__edReact ||
+          ((id, emoji) => {
+            const row =
+              document.getElementById(`messages-${id}`) ||
+              document.querySelector(`[data-message-id="${id}"]`)?.closest(".ed-msg, .ed-flat")
+            if (!row || !emoji) return
+            const esc = window.CSS && CSS.escape ? CSS.escape(emoji) : emoji
+            let box = row.querySelector(".ed-reactions")
+            const chip = box && box.querySelector(`.ed-react[phx-value-emoji="${esc}"]`)
+
+            if (chip) {
+              const mine = chip.classList.toggle("ed-react--mine")
+              chip.setAttribute("aria-pressed", String(mine))
+              const c = chip.querySelector(".ed-react__count")
+              const n = Math.max(0, (Number(c && c.textContent) || 0) + (mine ? 1 : -1))
+              if (n > 0) {
+                if (c) c.textContent = String(n)
+              } else if (chip.dataset.optimistic) {
+                // We invented this chip, so we take it away — hiding would leave a node the
+                // server never rendered, and a count of nothing.
+                chip.remove()
+              } else {
+                chip.hidden = true
+              }
+              box.hidden = box.querySelectorAll(".ed-react:not([hidden])").length === 0
+              if (box.dataset.optimistic && !box.children.length) box.remove()
+              return
+            }
+
+            // A first reaction has no chip and may have no container. Build one where the server
+            // puts it — last child of the row's main column — and ONLY where that column is
+            // known: a guess at the wrong place would be worse than the round trip it saves.
+            if (!box) {
+              const host = row.querySelector(".ed-flat__main") || row.querySelector(".ed-bubble")
+              if (!host) return
+              box = document.createElement("div")
+              box.className = "ed-reactions"
+              box.dataset.optimistic = "1"
+              host.appendChild(box)
+            }
+            box.hidden = false
+            const b = document.createElement("button")
+            b.type = "button"
+            b.className = "ed-react ed-react--mine"
+            b.setAttribute("phx-click", "react")
+            b.setAttribute("phx-value-id", String(id))
+            b.setAttribute("phx-value-emoji", emoji)
+            b.setAttribute("aria-pressed", "true")
+            b.dataset.optimistic = "1"
+            const em = document.createElement("span")
+            em.className = "ed-react__emoji"
+            em.setAttribute("aria-hidden", "true")
+            em.textContent = emoji
+            const ct = document.createElement("span")
+            ct.className = "ed-react__count"
+            ct.setAttribute("aria-hidden", "true")
+            ct.textContent = "1"
+            b.append(em, ct)
+            box.appendChild(b)
+          })
+
+        // A refusal comes back as an event, not as a diff: the row's markup is the same either
+        // way, so there is nothing for morphdom to undo. Our paint is a pure toggle, so replaying
+        // it reverses it — a created chip decrements to zero and hides.
+        if (!window.__edReactUndo) {
+          window.__edReactUndo = true
+          window.addEventListener("phx:react_rejected", (e) => {
+            window.__edReact(e.detail && e.detail.id, e.detail && e.detail.emoji)
+          })
+        }
+
+        // The chip's own tap is declarative (`phx-click="react"`), so it never passes through the
+        // hook's push sites — catch it in capture, before LiveView sends anything.
+        if (!window.__edReactChipGuard) {
+          window.__edReactChipGuard = true
+          document.addEventListener(
+            "click",
+            (e) => {
+              const chip = e.target.closest && e.target.closest(".ed-react")
+              if (!chip || !chip.getAttribute("phx-click")) return
+              window.__edReact(chip.getAttribute("phx-value-id"), chip.getAttribute("phx-value-emoji"))
+            },
+            true
+          )
+        }
+
         // Telegram-style context menu, shared by message bubbles and sidebar chats:
         // open it with a right-click (desktop) or a long-press (touch) anywhere on
         // the host element — no visible trigger. The dropdown is position:fixed at
@@ -7068,6 +7171,7 @@ defmodule EdenWeb.ChatLive do
                 const emoji = document.getElementById("composer")?.dataset.dblReact
                 if (!emoji) return
                 e.preventDefault()
+                window.__edReact(this.el.dataset.messageId, emoji)
                 this.pushEvent("react", { id: this.el.dataset.messageId, emoji })
               })
             }
@@ -7417,6 +7521,7 @@ defmodule EdenWeb.ChatLive do
             const surface = this.el.closest(".ed-thread") ? "thread" : "main"
             switch (btn.dataset.act) {
               case "react":
+                window.__edReact(id, btn.dataset.emoji)
                 this.pushEvent("react", { id, emoji: btn.dataset.emoji })
                 break
               case "reply":
@@ -7576,6 +7681,7 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("click", (e) => {
               const btn = e.target.closest("[data-emoji]")
               if (!btn) return
+              window.__edReact(this.msgId, btn.dataset.emoji)
               this.pushEvent("react", { id: this.msgId, emoji: btn.dataset.emoji })
               this.close()
             })
