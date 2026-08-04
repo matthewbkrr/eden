@@ -216,6 +216,11 @@ test("the thread root's timestamp reads in the viewer's zone too", async ({ alic
   await alice.locator("#thread-body").waitFor({ timeout: 15_000 })
   await alice.waitForTimeout(800)
 
+  // Same precondition as the feed check: in UTC "local" and "what the server rendered" are one
+  // string, so the test would pass on a broken formatter (#560 review).
+  const offset = await alice.evaluate(() => new Date().getTimezoneOffset())
+  test.skip(offset === 0, "this stand runs in UTC, so a UTC bug would read as correct")
+
   const root = await alice.evaluate(() => {
     const t = document.querySelector("#thread-body time[datetime]")
     if (!t) return null
