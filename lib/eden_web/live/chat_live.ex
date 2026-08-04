@@ -2151,7 +2151,13 @@ defmodule EdenWeb.ChatLive do
         # does NOT do it: the row's server-rendered markup is unchanged by a refusal, LiveView
         # sends no diff, and the invented chip survives (measured). An explicit event is the only
         # thing that reaches the party that guessed.
-        {:noreply, push_event(socket, "react_rejected", %{id: to_string(id), emoji: emoji})}
+        #
+        # And it carries the TRUTH, not just "no" (#562 review). Undoing by inverting what the
+        # client painted assumes a refusal means the reaction is absent — false for an add-add
+        # race, where the reaction IS recorded and the loser of the race is the one being told no.
+        # Inverting there would show "not mine" over a row where it is. So the event says what the
+        # state actually is and the client sets it.
+        {:noreply, push_event(socket, "react_rejected", reaction_state(socket, id, emoji))}
     end
   end
 
@@ -7059,7 +7065,10 @@ defmodule EdenWeb.ChatLive do
             b.dataset.optimistic = "1"
             const em = document.createElement("span")
             em.className = "ed-react__emoji"
-            em.setAttribute("aria-hidden", "true")
+            // NOT aria-hidden here, unlike the server's chip (#562 review): that one carries an
+            // `aria-label` built from the reactor list, and gettext is out of reach in a hook. The
+            // emoji itself is a language-neutral name, and it lasts only until the authoritative
+            // render replaces this node — a nameless button would not.
             em.textContent = emoji
             const ct = document.createElement("span")
             ct.className = "ed-react__count"
@@ -7070,22 +7079,48 @@ defmodule EdenWeb.ChatLive do
           })
 
         // A refusal comes back as an event, not as a diff: the row's markup is the same either
-        // way, so there is nothing for morphdom to undo. Our paint is a pure toggle, so replaying
-        // it reverses it — a created chip decrements to zero and is removed.
+        // way, so there is nothing for morphdom to undo.
         //
-        // Replaying a toggle is only exact while the DOM still holds what that paint produced, and
-        // the invariant that makes it exact here is that REFUSAL IS A PROPERTY OF THE TARGET, not
-        // of the moment: an emoji outside the allowed set, a deleted message, a non-member. So if
-        // one tap on a (message, emoji) pair is refused, every tap on it is — replays match taps
-        // one for one and the state converges. Mixing accepted and refused taps on the SAME pair
-        // is not reachable through the interface; it would take a client sending an emoji the UI
-        // never offers, which is outside the trust model anyway (#562 review).
+        // It carries the server's own count and ownership, and the client SETS that — it does not
+        // invert its guess (#562 review). Inverting assumes a refusal means the reaction is
+        // absent, which is false for an add-add race: there the reaction IS recorded and the loser
+        // of the race is the one being told no, so an inversion would show "not mine" over a row
+        // where it is mine, with no later diff to correct it.
         if (!window.__edReactUndo) {
           window.__edReactUndo = true
           window.addEventListener("phx:react_rejected", (e) => {
-            window.__edReact(e.detail && e.detail.id, e.detail && e.detail.emoji)
+            const d = e.detail || {}
+            window.__edSetReact?.(d.id, d.emoji, d.count, d.mine)
           })
         }
+
+        // Put one (message, emoji) chip into an exact state. Used by the correction above; the
+        // optimistic paint below is the same operation with a guessed count.
+        window.__edSetReact =
+          window.__edSetReact ||
+          ((id, emoji, count, mine) => {
+            const row =
+              document.getElementById(`messages-${id}`) ||
+              document.querySelector(`[data-message-id="${id}"]`)?.closest(".ed-msg, .ed-flat")
+            if (!row || !emoji) return
+            const esc = window.CSS && CSS.escape ? CSS.escape(emoji) : emoji
+            const box = row.querySelector(".ed-reactions")
+            const chip = box && box.querySelector(`.ed-react[phx-value-emoji="${esc}"]`)
+            if (!chip) return
+            const c = chip.querySelector(".ed-react__count")
+            if (c) c.textContent = String(count)
+            chip.classList.toggle("ed-react--mine", !!mine)
+            chip.setAttribute("aria-pressed", String(!!mine))
+            if (count > 0) {
+              chip.hidden = false
+            } else if (chip.dataset.optimistic) {
+              chip.remove()
+            } else {
+              chip.hidden = true
+            }
+            box.hidden = box.querySelectorAll(".ed-react:not([hidden])").length === 0
+            if (box.dataset.optimistic && !box.children.length) box.remove()
+          })
 
         // The chip's own tap is declarative (`phx-click="react"`), so it never passes through the
         // hook's push sites — catch it in capture, before LiveView sends anything.
@@ -7186,7 +7221,7 @@ defmodule EdenWeb.ChatLive do
                 const emoji = document.getElementById("composer")?.dataset.dblReact
                 if (!emoji) return
                 e.preventDefault()
-                window.__edReact(this.el.dataset.messageId, emoji)
+                window.__edReact?.(this.el.dataset.messageId, emoji)
                 this.pushEvent("react", { id: this.el.dataset.messageId, emoji })
               })
             }
@@ -7536,7 +7571,7 @@ defmodule EdenWeb.ChatLive do
             const surface = this.el.closest(".ed-thread") ? "thread" : "main"
             switch (btn.dataset.act) {
               case "react":
-                window.__edReact(id, btn.dataset.emoji)
+                window.__edReact?.(id, btn.dataset.emoji)
                 this.pushEvent("react", { id, emoji: btn.dataset.emoji })
                 break
               case "reply":
@@ -7696,7 +7731,7 @@ defmodule EdenWeb.ChatLive do
             this.el.addEventListener("click", (e) => {
               const btn = e.target.closest("[data-emoji]")
               if (!btn) return
-              window.__edReact(this.msgId, btn.dataset.emoji)
+              window.__edReact?.(this.msgId, btn.dataset.emoji)
               this.pushEvent("react", { id: this.msgId, emoji: btn.dataset.emoji })
               this.close()
             })
@@ -16200,6 +16235,26 @@ defmodule EdenWeb.ChatLive do
 
   # A tombstone reaching here (a re-render racing a delete-for-both) must not be
   # re-inserted — {:message_deleted} already removed the row.
+  # What the server holds for one (message, emoji) pair, for the rejection event above: whether the
+  # scoped user's reaction is there and how many there are in total. A message that has since gone
+  # answers "none", which is also the right correction.
+  defp reaction_state(socket, id, emoji) do
+    me = socket.assigns.current_scope.user.id
+
+    rows =
+      case Chat.get_message_reactions(socket.assigns.current_scope, id) do
+        {:ok, rows} -> Enum.filter(rows, &(&1.emoji == emoji))
+        _ -> []
+      end
+
+    %{
+      id: to_string(id),
+      emoji: emoji,
+      count: length(rows),
+      mine: Enum.any?(rows, &(&1.user_id == me))
+    }
+  end
+
   defp restream_message_in_place(socket, %{deleted_at: deleted} = _message, _root)
        when not is_nil(deleted),
        do: socket

@@ -3586,6 +3586,22 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  The reaction rows on a message the scoped user can see, membership-authorized like every other
+  read here (`{:error, :not_found}` otherwise).
+
+  Exists for the ONE case where the web layer needs the truth without a re-render: a rejected
+  optimistic toggle (#521/#562). The client has already painted its guess, and a refusal does not
+  always mean "the reaction is absent" — an add-add race refuses the loser while the reaction is
+  recorded — so the correction has to carry what is actually there rather than an inversion.
+  """
+  def get_message_reactions(%Scope{} = scope, message_id) do
+    case fetch_message(scope, message_id) do
+      {:ok, message} -> {:ok, Repo.preload(message, :reactions).reactions}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   Toggles the scoped user's `emoji` reaction on a message (DM or room): adds it
   if absent, removes it if present. Authorized by **active** conversation
   membership (`:not_found` if you never joined or have left it); tombstoned

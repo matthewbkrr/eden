@@ -2749,6 +2749,38 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ ~s(/app/c/#{ctx.conversation.id}/m/#{mine.id})
     end
 
+    # The optimistic reaction (#521) paints before the server answers, so a refusal has to correct
+    # it — and the correction has to carry what the server HOLDS, not the inverse of the guess. The
+    # difference matters for the add-add race the context lists as a refusal cause: there the
+    # reaction is recorded and the loser is the one told no, so inverting would clear a reaction
+    # that exists (#562 review).
+    test "a refused reaction answers with the server's own state", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+          "body" => "react me"
+        })
+
+      # Bob's reaction is really there; alice's 🦄 is not allowed and will be refused.
+      {:ok, _} = Chat.toggle_reaction(Scope.for_user(ctx.bob), msg.id, "👍")
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_click(view, "react", %{"id" => to_string(msg.id), "emoji" => "🦄"})
+
+      assert_push_event(view, "react_rejected", payload)
+      assert payload.id == to_string(msg.id)
+      assert payload.emoji == "🦄"
+      # Nobody holds a unicorn — the state, not a bare "no".
+      assert payload.count == 0
+      refute payload.mine
+
+      # And the same event for an emoji that IS held reports it, which is what makes the
+      # correction safe for a lost race rather than an inversion.
+      render_click(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
+      assert render(view) =~ "ed-react"
+    end
+
     test "delete for me hides it from this user", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hush"})

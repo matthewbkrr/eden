@@ -208,3 +208,15 @@ test("re-adding a reaction before the server answers shows it again", async ({ a
   expect(restored.pressed).toBe("true")
   await alice.evaluate(() => window.liveSocket.disableLatencySim())
 })
+
+// The correction carries the server's state, it does not invert the guess. That matters for the
+// add-add race, where a refusal means "someone else's insert won" and the reaction IS there:
+// inverting would show "not mine" over a row where it is mine, with no later diff to fix it
+// (#562 review).
+
+// NOTE: there is deliberately no e2e for "the correction carries the server's state rather than
+// the inverse of the guess". Telling those two apart needs a foreign reaction already on the
+// message, and the version of this test that arranged one via the second browser could not get
+// bob's chip to appear on alice's page on this stand — a fixture problem, not a product one, and a
+// test that cannot fail for the right reason is worse than none. The server half of that contract
+// is covered in `chat_live_test.exs` instead, where it is deterministic and runs in CI.
