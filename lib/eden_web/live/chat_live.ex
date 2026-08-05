@@ -7059,7 +7059,7 @@ defmodule EdenWeb.ChatLive do
                 chip.hidden = true
               }
               box.hidden = box.querySelectorAll(".ed-react:not([hidden])").length === 0
-              if (box.dataset.optimistic && !box.children.length) box.remove()
+              if (box.dataset.optimistic && !box.querySelectorAll(".ed-react").length) box.remove()
               return
             }
 
@@ -7082,6 +7082,12 @@ defmodule EdenWeb.ChatLive do
               host.appendChild(box)
             }
             box.hidden = false
+            let strip = box.querySelector(".ed-reactions__row")
+            if (!strip) {
+              strip = document.createElement("div")
+              strip.className = "ed-reactions__row"
+              box.appendChild(strip)
+            }
             const b = document.createElement("button")
             b.type = "button"
             b.className = "ed-react ed-react--mine"
@@ -7102,7 +7108,7 @@ defmodule EdenWeb.ChatLive do
             ct.setAttribute("aria-hidden", "true")
             ct.textContent = "1"
             b.append(em, ct)
-            box.appendChild(b)
+            strip.appendChild(b)
           })
 
         // A refusal comes back as an event, not as a diff: the row's markup is the same either
@@ -7146,7 +7152,7 @@ defmodule EdenWeb.ChatLive do
               chip.hidden = true
             }
             box.hidden = box.querySelectorAll(".ed-react:not([hidden])").length === 0
-            if (box.dataset.optimistic && !box.children.length) box.remove()
+            if (box.dataset.optimistic && !box.querySelectorAll(".ed-react").length) box.remove()
           })
 
         // The chip's own tap is declarative (`phx-click="react"`), so it never passes through the
@@ -13356,20 +13362,25 @@ defmodule EdenWeb.ChatLive do
 
     ~H"""
     <div :if={@chips != []} class="ed-reactions">
-      <button
-        :for={chip <- @chips}
-        type="button"
-        class={["ed-react", chip.mine && "ed-react--mine"]}
-        phx-click="react"
-        phx-value-id={@message.id}
-        phx-value-emoji={chip.emoji}
-        aria-pressed={to_string(chip.mine)}
-        title={chip.title}
-        aria-label={chip.label}
-      >
-        <span class="ed-react__emoji" aria-hidden="true">{chip.emoji}</span>
-        <span class="ed-react__count" aria-hidden="true">{chip.count}</span>
-      </button>
+      <%!-- The inner row is what makes the reveal animatable (#565): a grid track can go from
+            0fr to 1fr, an element cannot go from height 0 to auto. The chips live in the track,
+            which is clipped while it opens. --%>
+      <div class="ed-reactions__row">
+        <button
+          :for={chip <- @chips}
+          type="button"
+          class={["ed-react", chip.mine && "ed-react--mine"]}
+          phx-click="react"
+          phx-value-id={@message.id}
+          phx-value-emoji={chip.emoji}
+          aria-pressed={to_string(chip.mine)}
+          title={chip.title}
+          aria-label={chip.label}
+        >
+          <span class="ed-react__emoji" aria-hidden="true">{chip.emoji}</span>
+          <span class="ed-react__count" aria-hidden="true">{chip.count}</span>
+        </button>
+      </div>
     </div>
     """
   end

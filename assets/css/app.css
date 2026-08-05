@@ -1410,11 +1410,40 @@ html {
   }
 
   /* Reactions (#67): chips under a message + a hover smiley + the shared bar. */
+  /* The row grows by the height of this block when a reaction lands, and that growth used to be a
+     jump (#565). An element cannot animate from height 0 to auto, but a GRID TRACK can go from 0fr
+     to 1fr — so the block is a one-track grid and the chips live inside it, clipped while it opens.
+     `@starting-style` is what makes it work for a node that did not exist a frame ago, which is
+     every reaction: both the server's render and the optimistic paint insert a fresh element. */
   .ed-reactions {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition:
+      grid-template-rows 0.18s var(--ed-ease),
+      opacity 0.18s var(--ed-ease);
+  }
+  @starting-style {
+    .ed-reactions {
+      grid-template-rows: 0fr;
+      opacity: 0;
+    }
+  }
+  .ed-reactions__row {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
-    margin-top: 0.3rem;
+    /* Both are required for the track to actually collapse: a grid item's default `min-height:
+       auto` refuses to shrink below its content, and without the clip the chips would spill out of
+       the closing track. The spacing lives here rather than as a margin on the parent, or it would
+       stay behind while the track closes. */
+    min-height: 0;
+    overflow: hidden;
+    padding-top: 0.3rem;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-reactions {
+      transition: none;
+    }
   }
   .ed-react {
     display: inline-flex;
