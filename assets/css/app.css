@@ -1440,6 +1440,13 @@ html {
     overflow: hidden;
     padding-top: 0.3rem;
   }
+  /* ...and closing again when the last reaction goes. The same track, driven the other way: the
+     node stays in the DOM for the length of the transition, so there IS something to animate —
+     which is why this is a class rather than the node simply going away. */
+  .ed-reactions--closing {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
   @media (prefers-reduced-motion: reduce) {
     .ed-reactions {
       transition: none;

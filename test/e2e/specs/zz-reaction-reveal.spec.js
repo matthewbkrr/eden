@@ -75,3 +75,76 @@ test("reduced motion gets the space without the animation", async ({ alice, seed
   await expect(row.locator(".ed-react")).toBeVisible()
   await alice.emulateMedia({ reducedMotion: null })
 })
+
+// ...and closing again. Taking your own last reaction off used to shut the space in one step, the
+// same jump in reverse. The node has to stay in the DOM for the length of the transition — an
+// element that has left it has nothing to animate — so this is a class, not a removal.
+test("the space closes gradually when the last reaction goes", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+
+  const body = `collapse-probe ${Date.now()}`
+  await alice.locator("#composer-body").fill(body)
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
+  await expect(row).toBeVisible()
+  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+
+  // Through the SERVER, so the chip is real: an optimistic one is wiped by the next re-render of
+  // the row (a read tick is enough), and the close would then be measured from an already-closed
+  // state — which is what the first version of this test did.
+  await alice.evaluate(
+    ([mid]) =>
+      window.liveSocket.execJS(
+        document.body,
+        JSON.stringify([["push", { event: "react", value: { id: mid, emoji: "👍" } }]]),
+      ),
+    [id],
+  )
+  await expect(row.locator(".ed-react")).toBeVisible({ timeout: 10_000 })
+  await alice.waitForTimeout(400)
+
+  // Slow the socket, or the server's own diff replaces the row before the first animation frame
+  // and there is nothing left to measure — on this stand a round trip is milliseconds. On a real
+  // connection the optimistic close is what a person sees, which is exactly the thing under test.
+  await alice.evaluate(() => window.liveSocket.enableLatencySim(600))
+
+  const before = await alice.evaluate(([mid]) => {
+    const el = document.getElementById(`messages-${mid}`)
+    return {
+      found: !!el,
+      h: el && Math.round(el.getBoundingClientRect().height),
+      chips: el && el.querySelectorAll(".ed-react").length,
+      box: el && !!el.querySelector(".ed-reactions"),
+    }
+  }, [id])
+  console.log("BEFORE", JSON.stringify(before))
+
+  const heights = await alice.evaluate(async ([mid]) => {
+    const el = document.getElementById(`messages-${mid}`)
+    const seen = []
+    let done
+    const finished = new Promise((r) => (done = r))
+    const tick = () => {
+      seen.push(Math.round(el.getBoundingClientRect().height * 10) / 10)
+      if (seen.length < 40) requestAnimationFrame(tick)
+      else done()
+    }
+    requestAnimationFrame(tick)
+    // The real gesture: a tap on the chip. It paints the close and sends the toggle.
+    el.querySelector(".ed-react").click()
+    await finished
+    return seen
+  }, [id])
+
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  const distinct = [...new Set(heights)]
+  const line = `row height across the close: ${distinct.join(" → ")}`
+  console.log(line)
+
+  expect(distinct.length, `${line} — the space shut in one step`).toBeGreaterThan(3)
+  expect(distinct[distinct.length - 1], line).toBeLessThan(distinct[0])
+})

@@ -7051,15 +7051,15 @@ defmodule EdenWeb.ChatLive do
                 // it back before the server answers found the chip again but left it hidden — the
                 // restored reaction was invisible until the round trip landed.
                 chip.hidden = false
-              } else if (chip.dataset.optimistic) {
-                // We invented this chip, so we take it away — hiding would leave a node the
-                // server never rendered, and a count of nothing.
-                chip.remove()
+                delete chip.dataset.gone
               } else {
-                chip.hidden = true
+                // Spent, but NOT hidden yet (#565): hiding here empties the block in the same
+                // frame, and the track then has nothing to close over — the space would still
+                // vanish in one step. `__edCollapse` takes it away at the end of the animation,
+                // or at once if other chips remain.
+                chip.dataset.gone = "1"
               }
-              box.hidden = box.querySelectorAll(".ed-react:not([hidden])").length === 0
-              if (box.dataset.optimistic && !box.querySelectorAll(".ed-react").length) box.remove()
+              window.__edCollapse(box)
               return
             }
 
@@ -7127,6 +7127,46 @@ defmodule EdenWeb.ChatLive do
           })
         }
 
+        // Open or close the block that holds the chips, animating the space rather than snapping
+        // it (#565). Empty means closing: the node stays for the length of the transition, because
+        // an element that has left the DOM has nothing to animate.
+        //
+        // This is the path a PERSON drives — taking their own last reaction off. A reaction
+        // removed by SOMEONE ELSE arrives as a node removal from the server and still snaps;
+        // holding that node back would mean intercepting morphdom, which is a different job.
+        window.__edCollapse =
+          window.__edCollapse ||
+          ((box) => {
+            if (!box) return
+            const chips = [...box.querySelectorAll(".ed-react")]
+            const spent = chips.filter((c) => c.dataset.gone)
+            const live = chips.filter((c) => !c.dataset.gone && !c.hidden)
+            const drop = (c) => (c.dataset.optimistic ? c.remove() : (c.hidden = true))
+            clearTimeout(box.__collapseT)
+
+            if (live.length || !spent.length) {
+              // The block stays open, so a spent chip just goes — there is no space to animate.
+              spent.forEach(drop)
+              box.classList.remove("ed-reactions--closing")
+              box.hidden = false
+              return
+            }
+
+            // Everything is going: close the track WITH the chips still inside, then take them
+            // away. The node has to outlive the click or there is nothing to animate.
+            box.classList.add("ed-reactions--closing")
+            box.__collapseT = setTimeout(() => {
+              // A reaction can come back inside the transition, and then nothing is going anywhere.
+              if (box.querySelectorAll(".ed-react:not([data-gone]):not([hidden])").length) {
+                box.classList.remove("ed-reactions--closing")
+                return
+              }
+              spent.forEach(drop)
+              box.hidden = true
+              if (box.dataset.optimistic) box.remove()
+            }, 200)
+          })
+
         // Put one (message, emoji) chip into an exact state. Used by the correction above; the
         // optimistic paint below is the same operation with a guessed count.
         window.__edSetReact =
@@ -7146,13 +7186,11 @@ defmodule EdenWeb.ChatLive do
             chip.setAttribute("aria-pressed", String(!!mine))
             if (count > 0) {
               chip.hidden = false
-            } else if (chip.dataset.optimistic) {
-              chip.remove()
+              delete chip.dataset.gone
             } else {
-              chip.hidden = true
+              chip.dataset.gone = "1"
             }
-            box.hidden = box.querySelectorAll(".ed-react:not([hidden])").length === 0
-            if (box.dataset.optimistic && !box.querySelectorAll(".ed-react").length) box.remove()
+            window.__edCollapse(box)
           })
 
         // The chip's own tap is declarative (`phx-click="react"`), so it never passes through the
