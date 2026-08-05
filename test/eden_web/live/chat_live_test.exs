@@ -2775,10 +2775,15 @@ defmodule EdenWeb.ChatLiveTest do
       assert payload.count == 0
       refute payload.mine
 
-      # And the same event for an emoji that IS held reports it, which is what makes the
-      # correction safe for a lost race rather than an inversion.
-      render_click(view, "react", %{"id" => to_string(msg.id), "emoji" => "👍"})
-      assert render(view) =~ "ed-react"
+      # The other half of the contract — that the payload reports a NONZERO state when the emoji
+      # is held — is asserted against the context directly. Driving it through the LiveView would
+      # need a refused toggle on an emoji that is present, i.e. a real add-add race, which cannot
+      # be staged deterministically here; the earlier version of this test claimed to check it and
+      # merely toggled 👍 successfully (#562 review).
+      assert %{count: 1, mine: false} =
+               Chat.reaction_state(Scope.for_user(ctx.alice), msg.id, "👍")
+
+      assert %{count: 1, mine: true} = Chat.reaction_state(Scope.for_user(ctx.bob), msg.id, "👍")
     end
 
     test "delete for me hides it from this user", ctx do

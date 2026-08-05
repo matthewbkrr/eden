@@ -2157,7 +2157,15 @@ defmodule EdenWeb.ChatLive do
         # race, where the reaction IS recorded and the loser of the race is the one being told no.
         # Inverting there would show "not mine" over a row where it is. So the event says what the
         # state actually is and the client sets it.
-        {:noreply, push_event(socket, "react_rejected", reaction_state(socket, id, emoji))}
+        {:noreply,
+         push_event(
+           socket,
+           "react_rejected",
+           Map.merge(
+             %{id: to_string(id), emoji: emoji},
+             Chat.reaction_state(socket.assigns.current_scope, id, emoji)
+           )
+         )}
     end
   end
 
@@ -16235,26 +16243,6 @@ defmodule EdenWeb.ChatLive do
 
   # A tombstone reaching here (a re-render racing a delete-for-both) must not be
   # re-inserted — {:message_deleted} already removed the row.
-  # What the server holds for one (message, emoji) pair, for the rejection event above: whether the
-  # scoped user's reaction is there and how many there are in total. A message that has since gone
-  # answers "none", which is also the right correction.
-  defp reaction_state(socket, id, emoji) do
-    me = socket.assigns.current_scope.user.id
-
-    rows =
-      case Chat.get_message_reactions(socket.assigns.current_scope, id) do
-        {:ok, rows} -> Enum.filter(rows, &(&1.emoji == emoji))
-        _ -> []
-      end
-
-    %{
-      id: to_string(id),
-      emoji: emoji,
-      count: length(rows),
-      mine: Enum.any?(rows, &(&1.user_id == me))
-    }
-  end
-
   defp restream_message_in_place(socket, %{deleted_at: deleted} = _message, _root)
        when not is_nil(deleted),
        do: socket
