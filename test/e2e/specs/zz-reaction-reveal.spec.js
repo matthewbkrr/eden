@@ -142,9 +142,13 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
     const seen = []
     let done
     const finished = new Promise((r) => (done = r))
+    // By time, not by frames (#566 review): the close is 180ms of animation and then the server's
+    // diff at the simulated latency — a fixed frame count can end between the two and call the
+    // result smooth without having seen the part that used to step.
+    const until = performance.now() + 1000
     const tick = () => {
       seen.push(Math.round(el.getBoundingClientRect().height * 10) / 10)
-      if (seen.length < 40) requestAnimationFrame(tick)
+      if (performance.now() < until) requestAnimationFrame(tick)
       else done()
     }
     requestAnimationFrame(tick)
@@ -162,6 +166,18 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
 
   expect(distinct.length, `${line} — the space shut in one step`).toBeGreaterThan(3)
   expect(distinct[distinct.length - 1], line).toBeLessThan(distinct[0])
+
+  // The SHAPE, not just the number of samples (#566 review): the reported defect — smooth, then a
+  // stall, then a drop — produces a curve with plenty of intermediate values too. What it does not
+  // produce is a decelerating one. An ease-out shrinks its steps monotonically; a step at the end
+  // is a bigger delta after a smaller one, which is exactly what a residual box being hidden looks
+  // like (measured on the broken version: … 4.3 → 0.3 → 4.7).
+  const steps = distinct.slice(1).map((v, i) => Math.round((distinct[i] - v) * 10) / 10)
+  const late = steps.findIndex((d, i) => i > 0 && d > steps[i - 1] + 0.5)
+  expect(
+    late,
+    `${line} — step ${late >= 0 ? steps[late] : ""}px came after ${late > 0 ? steps[late - 1] : ""}px: the space stalled and then dropped (steps: ${steps.join(", ")})`,
+  ).toBe(-1)
 })
 
 // Reacting again while the space is closing (#565 review). Two ways this went wrong: the block was
@@ -349,7 +365,7 @@ test("pulling in history does not play the reveal on the rows it brings", async 
 // tried here and changed nothing, because scrolling up already turns `follow` off. The gate was
 // reverted rather than kept as an unproven guess. This test stays because the invariant is worth
 // holding whatever keeps it true — it does not, on its own, prove any particular line.
-test("the feed does not twitch while a reaction collapses", async ({ alice, seed }) => {
+test("the feed does not twitch while a reaction collapses", async ({ alice, seed }, testInfo) => {
   test.setTimeout(120_000)
 
   await alice.goto(`/app/c/${seed.dm_id}`)
@@ -384,14 +400,19 @@ test("the feed does not twitch while a reaction collapses", async ({ alice, seed
   await alice.waitForTimeout(300)
   await alice.evaluate(() => window.liveSocket.enableLatencySim(600))
 
+  // Sample by TIME, not by a frame count (#566 review): forty frames is about 667ms, which barely
+  // reaches the server's answer at 600ms — and the removal it brings is another moment the feed
+  // could be yanked. A second of wall clock covers the optimistic collapse (180ms), the diff, and
+  // the settle after it.
   const tops = await alice.evaluate(async ([mid]) => {
     const s = document.getElementById("message-scroll")
     const seen = []
+    const until = performance.now() + 1000
     let done
     const finished = new Promise((r) => (done = r))
     const tick = () => {
       seen.push(Math.round(s.scrollTop))
-      if (seen.length < 40) requestAnimationFrame(tick)
+      if (performance.now() < until) requestAnimationFrame(tick)
       else done()
     }
     requestAnimationFrame(tick)
@@ -405,6 +426,8 @@ test("the feed does not twitch while a reaction collapses", async ({ alice, seed
   // The feed may settle by a few pixels as the row shrinks; what it must not do is get yanked to
   // the bottom, which is a jump of the distance we scrolled up by.
   const jump = Math.max(...tops) - Math.min(...tops)
-  console.log(`scrollTop across the collapse: ${[...new Set(tops)].join(" → ")}`)
+  const line = `scrollTop across the collapse and the diff that follows it: ${[...new Set(tops)].join(" → ")}`
+  console.log(line)
+  testInfo.annotations.push({ type: "measurement", description: line })
   expect(jump, `the feed was pulled by ${jump}px while a reaction collapsed`).toBeLessThan(40)
 })
