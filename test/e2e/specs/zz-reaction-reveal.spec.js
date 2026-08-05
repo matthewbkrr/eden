@@ -22,8 +22,8 @@ test("the space under a message opens gradually, not in one step", async ({ alic
   await expect(row).toBeVisible()
   const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
 
-  // The feed suppresses motion for the frame a batch lands in, and a just-sent message is such a
-  // frame. Wait it out — a person reacting does too.
+  // The feed suppresses motion for the frame a batch lands in. Wait it out — a person reacting
+  // does too.
   await alice.waitForFunction(
     () => !document.getElementById("messages").classList.contains("ed-feed--bulk"),
     null,
@@ -277,4 +277,59 @@ test("opening a chat does not play the reveal on every message", async ({ alice,
   await alice.waitForTimeout(300)
   const after = await alice.evaluate(() => window.__reveals)
   expect(after, "a reaction the person just added did not animate").toBeGreaterThan(onLoad.reveals)
+})
+
+// Pulling in history drops a page of rows into a feed that is already mounted, so the server's
+// suppression class is not re-sent for it.
+//
+// Measured honestly: this passes with the batch detection disabled too, so something else is
+// already keeping those rows quiet — most likely the synchronous layout the separator reconcile
+// does in the same task, which commits the end state before the starting one is ever painted. The
+// test stays because "history does not animate itself in" is worth holding down whatever keeps it
+// true; the batch threshold above is a rule, not a fix, and is NOT what this proves.
+test("pulling in history does not play the reveal on the rows it brings", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.addInitScript(() => {
+    window.__reveals = 0
+    document.addEventListener(
+      "transitionstart",
+      (e) => {
+        if (e.propertyName === "grid-template-rows" && e.target.classList?.contains("ed-reactions")) {
+          window.__reveals++
+        }
+      },
+      true,
+    )
+  })
+
+  await alice.goto(`/channels/${seed.channel_id}/r/${seed.general_room_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.waitForTimeout(1200)
+  await alice.evaluate(() => (window.__reveals = 0))
+
+  // Page back until the feed stops growing.
+  let seen = -1
+  for (let i = 0; i < 8; i++) {
+    const before = await alice.locator("#messages > *").count()
+    if (before === seen) break
+    seen = before
+    await alice.evaluate(() => document.getElementById("message-scroll")?.scrollTo({ top: 0 }))
+    await alice
+      .waitForFunction((n) => document.querySelectorAll("#messages > *").length > n, before, {
+        timeout: 3000,
+      })
+      .catch(() => {})
+  }
+  await alice.waitForTimeout(600)
+
+  const state = await alice.evaluate(() => ({
+    rows: document.querySelectorAll("#messages > *").length,
+    blocks: document.querySelectorAll("#messages .ed-reactions").length,
+    reveals: window.__reveals,
+  }))
+  console.log(`after paging: ${state.rows} rows, ${state.blocks} reaction blocks, ${state.reveals} reveals`)
+
+  expect(state.blocks, "history brought no reactions, so nothing could have animated").toBeGreaterThan(0)
+  expect(state.reveals, "history animated itself in").toBe(0)
 })

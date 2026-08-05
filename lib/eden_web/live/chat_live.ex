@@ -8045,9 +8045,21 @@ defmodule EdenWeb.ChatLive do
             this.mo = new MutationObserver((records) => {
               // A wholesale arrival — opening a chat, switching to another, pulling in history —
               // must not play every reaction reveal at once (#565 review). One row landing is an
-              // event and animates; a batch is a render and does not.
-              const added = records.reduce((n, r) => n + r.addedNodes.length, 0)
-              if (added >= 3) {
+              // event and animates; two or more at once is a render and does not.
+              //
+              // Only MESSAGE rows count: this observer's own separators land in the same container
+              // (that is what `reconcile()` does), and counting them would call a single arrival
+              // a batch. The threshold was 3 to dodge exactly that, which was a guess covering a
+              // miscount rather than a rule (#565 review).
+              const rows = records.reduce(
+                (n, r) =>
+                  n +
+                  [...r.addedNodes].filter(
+                    (x) => x.nodeType === 1 && x.matches(".ed-msg, .ed-flat")
+                  ).length,
+                0
+              )
+              if (rows > 1) {
                 this.el.classList.add("ed-feed--bulk")
                 this._unbulk()
               }
@@ -8091,10 +8103,19 @@ defmodule EdenWeb.ChatLive do
             window.addEventListener("resize", this._invalidate)
           },
           updated() { this._geo = null; this.reconcile(); this.fmtTimes(); this._unbulk() },
-          // Let the paint that carries a batch happen, then allow motion again.
+          // Let the paint that carries the batch happen, THEN allow motion again. Two frames, not
+          // a timer: a timer is a guess about when a paint happened, and on a throttled or
+          // backgrounded page it can fire first — which would let the whole screen animate on load,
+          // the exact thing this suppresses (#565 review). The first callback runs before the
+          // paint, the second after it.
           _unbulk() {
-            clearTimeout(this._bulkT)
-            this._bulkT = setTimeout(() => this.el.classList.remove("ed-feed--bulk"), 60)
+            if (this._bulkR) cancelAnimationFrame(this._bulkR)
+            this._bulkR = requestAnimationFrame(() => {
+              this._bulkR = requestAnimationFrame(() => {
+                this._bulkR = 0
+                this.el.classList.remove("ed-feed--bulk")
+              })
+            })
           },
           destroyed() {
             if (this.scroller) {
@@ -8104,7 +8125,7 @@ defmodule EdenWeb.ChatLive do
               this._onUserKey && this.scroller.removeEventListener("keydown", this._onUserKey)
             }
             this.mo && this.mo.disconnect()
-            clearTimeout(this._bulkT)
+            if (this._bulkR) cancelAnimationFrame(this._bulkR)
             this.timeMo && this.timeMo.disconnect()
             this._tRaf && cancelAnimationFrame(this._tRaf)
             this.ro && this.ro.disconnect()
