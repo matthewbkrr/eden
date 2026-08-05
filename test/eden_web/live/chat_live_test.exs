@@ -2749,6 +2749,43 @@ defmodule EdenWeb.ChatLiveTest do
       assert html =~ ~s(/app/c/#{ctx.conversation.id}/m/#{mine.id})
     end
 
+    # The optimistic reaction (#521) paints before the server answers, so a refusal has to correct
+    # it — and the correction has to carry what the server HOLDS, not the inverse of the guess. The
+    # difference matters for the add-add race the context lists as a refusal cause: there the
+    # reaction is recorded and the loser is the one told no, so inverting would clear a reaction
+    # that exists (#562 review).
+    test "a refused reaction answers with the server's own state", ctx do
+      {:ok, msg} =
+        Chat.create_message(Scope.for_user(ctx.alice), ctx.conversation.id, %{
+          "body" => "react me"
+        })
+
+      # Bob's reaction is really there; alice's 🦄 is not allowed and will be refused.
+      {:ok, _} = Chat.toggle_reaction(Scope.for_user(ctx.bob), msg.id, "👍")
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+      {:ok, view, _html} = live(conn, ~p"/app/c/#{ctx.conversation.id}")
+
+      render_click(view, "react", %{"id" => to_string(msg.id), "emoji" => "🦄"})
+
+      assert_push_event(view, "react_rejected", payload)
+      assert payload.id == to_string(msg.id)
+      assert payload.emoji == "🦄"
+      # Nobody holds a unicorn — the state, not a bare "no".
+      assert payload.count == 0
+      refute payload.mine
+
+      # The other half of the contract — that the payload reports a NONZERO state when the emoji
+      # is held — is asserted against the context directly. Driving it through the LiveView would
+      # need a refused toggle on an emoji that is present, i.e. a real add-add race, which cannot
+      # be staged deterministically here; the earlier version of this test claimed to check it and
+      # merely toggled 👍 successfully (#562 review).
+      assert %{count: 1, mine: false} =
+               Chat.reaction_state(Scope.for_user(ctx.alice), msg.id, "👍")
+
+      assert %{count: 1, mine: true} = Chat.reaction_state(Scope.for_user(ctx.bob), msg.id, "👍")
+    end
+
     test "delete for me hides it from this user", ctx do
       {:ok, msg} =
         Chat.create_message(Scope.for_user(ctx.bob), ctx.conversation.id, %{"body" => "hush"})

@@ -3586,6 +3586,37 @@ defmodule Eden.Chat do
   end
 
   @doc """
+  What one `(message, emoji)` pair holds for the scoped user: `%{count: n, mine: bool}`. A message
+  the user cannot see (or that is gone) answers `%{count: 0, mine: false}`, which is also the right
+  correction for the caller below.
+
+  Exists for the ONE case where the web layer needs the truth without a re-render: a rejected
+  optimistic toggle (#521/#562). The client has already painted its guess, and a refusal does not
+  always mean "the reaction is absent" — an add-add race refuses the loser while the reaction IS
+  recorded — so the correction has to carry what is actually there rather than an inversion.
+
+  Scoped to the one emoji on purpose (#562 review): the caller needs a count and a flag, and
+  loading every reaction on the message to filter in the web layer would read rows nobody wants.
+  """
+  def reaction_state(%Scope{user: user} = scope, message_id, emoji) do
+    case fetch_message(scope, message_id) do
+      {:ok, message} ->
+        rows =
+          Repo.all(
+            from(r in MessageReaction,
+              where: r.message_id == ^message.id and r.emoji == ^emoji,
+              select: r.user_id
+            )
+          )
+
+        %{count: length(rows), mine: user.id in rows}
+
+      _ ->
+        %{count: 0, mine: false}
+    end
+  end
+
+  @doc """
   Toggles the scoped user's `emoji` reaction on a message (DM or room): adds it
   if absent, removes it if present. Authorized by **active** conversation
   membership (`:not_found` if you never joined or have left it); tombstoned
