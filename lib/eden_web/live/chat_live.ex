@@ -7109,6 +7109,10 @@ defmodule EdenWeb.ChatLive do
             ct.textContent = "1"
             b.append(em, ct)
             strip.appendChild(b)
+            // A block caught mid-close is still wearing the closing class, and appending into it
+            // would leave the new reaction inside a collapsed track (#565 review). `__edCollapse`
+            // is the one place that decides open or shut, so let it decide again.
+            window.__edCollapse(box)
           })
 
         // A refusal comes back as an event, not as a diff: the row's markup is the same either
@@ -7155,16 +7159,28 @@ defmodule EdenWeb.ChatLive do
             // Everything is going: close the track WITH the chips still inside, then take them
             // away. The node has to outlive the click or there is nothing to animate.
             box.classList.add("ed-reactions--closing")
-            box.__collapseT = setTimeout(() => {
-              // A reaction can come back inside the transition, and then nothing is going anywhere.
-              if (box.querySelectorAll(".ed-react:not([data-gone]):not([hidden])").length) {
+
+            const finish = () => {
+              clearTimeout(box.__collapseT)
+              box.removeEventListener("transitionend", onEnd)
+              // A reaction can come back inside the transition. The block then stays — and the
+              // spent chips go here too. Belt and braces, not a fix: the revival runs through
+              // `__edCollapse` first, which already drops them, and I could not build a case where
+              // removing this line changes anything (#565 review, checked by mutation).
+              spent.forEach(drop)
+              if (box.querySelectorAll(".ed-react:not([hidden])").length) {
                 box.classList.remove("ed-reactions--closing")
                 return
               }
-              spent.forEach(drop)
               box.hidden = true
               if (box.dataset.optimistic) box.remove()
-            }, 200)
+            }
+            // The transition itself says when it is over, so the duration lives in ONE place —
+            // the stylesheet (#565 review). The timer is only a backstop for the cases where no
+            // transition runs at all: reduced motion, a hidden tab, an engine that declines it.
+            const onEnd = (e) => e.target === box && e.propertyName === "grid-template-rows" && finish()
+            box.addEventListener("transitionend", onEnd)
+            box.__collapseT = setTimeout(finish, 600)
           })
 
         // Put one (message, emoji) chip into an exact state. Used by the correction above; the

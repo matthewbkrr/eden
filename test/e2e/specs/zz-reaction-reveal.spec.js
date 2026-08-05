@@ -148,3 +148,54 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
   expect(distinct.length, `${line} — the space shut in one step`).toBeGreaterThan(3)
   expect(distinct[distinct.length - 1], line).toBeLessThan(distinct[0])
 })
+
+// Reacting again while the space is closing (#565 review). Two ways this went wrong: the block was
+// still wearing the closing class, so the new chip landed inside a collapsed track; and the spent
+// chip stayed behind, reading zero, because the revival path only took the class off.
+test("a reaction that arrives mid-close reopens the space cleanly", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+
+  const body = `revive-probe ${Date.now()}`
+  await alice.locator("#composer-body").fill(body)
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
+  await expect(row).toBeVisible()
+  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+
+  await alice.evaluate(() => window.liveSocket.enableLatencySim(600))
+
+  const state = await alice.evaluate(async ([mid]) => {
+    const el = document.getElementById(`messages-${mid}`)
+    window.__edReact(mid, "👍") // on
+    await new Promise((r) => setTimeout(r, 250))
+    window.__edReact(mid, "👍") // off — the space starts closing
+    await new Promise((r) => setTimeout(r, 60)) // ...and back on, mid-animation
+    window.__edReact(mid, "🎉")
+    // Read INSIDE the closing window, not after it: the finish handler cleans up on its own, so a
+    // late look sees a tidy result whether or not the re-add was handled (both mutants passed a
+    // check taken at +500ms).
+    await new Promise((r) => setTimeout(r, 40))
+
+    const box = el.querySelector(".ed-reactions")
+    return box && {
+      closing: box.classList.contains("ed-reactions--closing"),
+      hidden: box.hidden,
+      rows: getComputedStyle(box).gridTemplateRows,
+      visibleChips: [...box.querySelectorAll(".ed-react")].filter((c) => !c.hidden).length,
+      zeroChips: [...box.querySelectorAll(".ed-react")].filter(
+        (c) => !c.hidden && (c.querySelector(".ed-react__count")?.textContent || "").trim() === "0",
+      ).length,
+    }
+  }, [id])
+
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  expect(state, "the block disappeared entirely").not.toBeNull()
+  expect(state.closing, "the block is still marked closing with a live reaction in it").toBe(false)
+  expect(state.hidden, "the revived block stayed hidden").toBe(false)
+  expect(state.visibleChips, "the new reaction is not on screen").toBe(1)
+  expect(state.zeroChips, "a spent chip stayed behind reading zero").toBe(0)
+})
