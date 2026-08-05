@@ -3590,6 +3590,18 @@ defmodule EdenWeb.ChatLive do
             // the sheet slides off to the right, then the real close event fires. Capture-phase
             // stopPropagation keeps LiveView's own phx-click from closing it instantly mid-slide.
             const closer = e.target.closest?.('[phx-click="close_thread"], [phx-click="close_threads"]')
+            // Desktop: the panel is `:if={@thread_root}` on the server, so it stood there for the
+            // whole round trip after the click — measured, the panel left only when the diff
+            // arrived (#521). Take it off screen now and let the event go on to LiveView, whose
+            // diff removes the node for real; morphdom drops this inline style with it.
+            //
+            // Not the mobile choreography below: there the panel is the whole screen and slides
+            // away, and the event is deferred until the slide ends. Here it is a column beside the
+            // chat, so it simply stops being there — and the click is answered in the same frame.
+            if (closer && !window.matchMedia("(max-width: 767px)").matches) {
+              const sheet = closer.closest(".ed-thread")
+              if (sheet) sheet.style.display = "none"
+            }
             if (closer && window.matchMedia("(max-width: 767px)").matches) {
               if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
               const sheet = closer.closest(".ed-thread")
