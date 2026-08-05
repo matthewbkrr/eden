@@ -7067,7 +7067,14 @@ defmodule EdenWeb.ChatLive do
             // puts it — last child of the row's main column — and ONLY where that column is
             // known: a guess at the wrong place would be worse than the round trip it saves.
             if (!box) {
-              const host = row.querySelector(".ed-flat__main") || row.querySelector(".ed-bubble")
+              // Where the SERVER puts it, in both layouts: last child of the flat row's main
+              // column, and — in a bubble row — a SIBLING of the bubble, not a child of it.
+              // Appending inside `.ed-bubble` put the chip in the blue bubble, left-aligned, for
+              // the length of a round trip before the authoritative render moved it (user report).
+              // The flat side was checked against the DOM when this was written; the bubble side
+              // was guessed, which is exactly what the comment below warned against.
+              const host =
+                row.querySelector(".ed-flat__main") || row.querySelector(".ed-bubble")?.parentElement
               if (!host) return
               box = document.createElement("div")
               box.className = "ed-reactions"
@@ -7491,6 +7498,23 @@ defmodule EdenWeb.ChatLive do
               // open menu always has an owner. Two review rounds read that fallback as the bug
               // itself, which is reason enough for it not to exist.
               this.menu.addEventListener("click", (e) => active && active.onItem(e))
+              // A long press opens the menu UNDER the finger, and lifting that same finger lands
+              // a click on whatever item is now beneath it — the item fires without ever being
+              // chosen (user report). Arm on a fresh press ON THE MENU instead of on a timer: the
+              // press that opened it happened on the row, before this node was visible, so it can
+              // never arm it.
+              const arm = () => (this.menu.dataset.armed = "1")
+              this.menu.addEventListener("pointerdown", arm, true)
+              this.menu.addEventListener("touchstart", arm, { capture: true, passive: true })
+              this.menu.addEventListener(
+                "click",
+                (e) => {
+                  if (this.menu.dataset.armed) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                },
+                true
+              )
             }
             // Optional visible trigger (the flat rows' hover "⋯") — anchors the
             // same menu under the button. Wired here so a stream morph that
@@ -7675,6 +7699,8 @@ defmodule EdenWeb.ChatLive do
             // paints another message's item set.
             if (this.el.dataset.messageId) this.fill()
             else if (this.sharedMenuId()) this.fillSidebar()
+            // Disarmed until a press lands on the menu itself — see the capture listener in bind().
+            delete this.menu.dataset.armed
             this.menu.hidden = false
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "true")

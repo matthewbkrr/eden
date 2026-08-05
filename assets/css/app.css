@@ -1118,11 +1118,21 @@ html {
      menu has "Copy text". Desktop keeps normal selection. */
   @media (hover: none) {
     .ed-bubble,
-    .ed-convo-wrap {
+    .ed-convo-wrap,
+    /* Room rows too: they carry the same long-press menu as a bubble, and without this the press
+       selects the message text instead (parity, user report). */
+    .ed-flat {
       user-select: none;
     }
   }
   .ed-menu {
+    /* A context menu is never a place to select text. iOS carries the long-press that OPENED the
+       menu straight into it: the selection callout ("Copy | Look Up | Translate") appears over our
+       own items with a menu label selected (user report). Not gated on `hover: none` — selecting
+       a menu label is meaningless with a mouse too. */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
     position: fixed;
     z-index: 60;
     min-width: 12rem;
