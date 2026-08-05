@@ -37,9 +37,14 @@ test("the space under a message opens gradually, not in one step", async ({ alic
     // outer wait and this paint (a patch landing in between), and then the reveal is instant and
     // the measurement reads one value — which is how this test flaked.
     const feed = document.getElementById("messages")
-    while (feed.classList.contains("ed-feed--bulk")) {
+    // Bounded (#566 review): an unbounded spin would hang until the whole test times out and say
+    // nothing about why. If the class is still there after a second, report it and let the
+    // assertions fail on the measurement rather than on a timeout.
+    const waitUntil = performance.now() + 1000
+    while (feed.classList.contains("ed-feed--bulk") && performance.now() < waitUntil) {
       await new Promise((r) => requestAnimationFrame(r))
     }
+    const stillBulk = feed.classList.contains("ed-feed--bulk")
     const seen = []
     let done
     const finished = new Promise((r) => (done = r))
@@ -51,10 +56,11 @@ test("the space under a message opens gradually, not in one step", async ({ alic
     requestAnimationFrame(tick)
     window.__edReact(mid, "👍")
     await finished
-    return seen
+    return { seen, stillBulk }
   }, [id])
 
-  const distinct = [...new Set(heights)]
+  expect(heights.stillBulk, "the feed never left its bulk-render frame").toBe(false)
+  const distinct = [...new Set(heights.seen)]
   const line = `row height across the reveal: ${distinct.join(" → ")}`
   console.log(line)
 
@@ -147,7 +153,11 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
     // result smooth without having seen the part that used to step.
     const until = performance.now() + 1000
     const tick = () => {
-      seen.push(Math.round(el.getBoundingClientRect().height * 10) / 10)
+      // With timestamps: comparing raw per-frame deltas assumes every frame arrives on time, and a
+      // single dropped frame doubles a delta — which would read as the very step this looks for
+      // (#566 review). Velocity is indifferent to that: a dropped frame doubles the delta AND the
+      // interval.
+      seen.push([performance.now(), Math.round(el.getBoundingClientRect().height * 10) / 10])
       if (performance.now() < until) requestAnimationFrame(tick)
       else done()
     }
@@ -160,23 +170,33 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
 
   await alice.evaluate(() => window.liveSocket.disableLatencySim())
 
-  const distinct = [...new Set(heights)]
+  const distinct = [...new Set(heights.map(([, h]) => h))]
   const line = `row height across the close: ${distinct.join(" → ")}`
   console.log(line)
 
   expect(distinct.length, `${line} — the space shut in one step`).toBeGreaterThan(3)
   expect(distinct[distinct.length - 1], line).toBeLessThan(distinct[0])
 
-  // The SHAPE, not just the number of samples (#566 review): the reported defect — smooth, then a
-  // stall, then a drop — produces a curve with plenty of intermediate values too. What it does not
-  // produce is a decelerating one. An ease-out shrinks its steps monotonically; a step at the end
-  // is a bigger delta after a smaller one, which is exactly what a residual box being hidden looks
-  // like (measured on the broken version: … 4.3 → 0.3 → 4.7).
-  const steps = distinct.slice(1).map((v, i) => Math.round((distinct[i] - v) * 10) / 10)
-  const late = steps.findIndex((d, i) => i > 0 && d > steps[i - 1] + 0.5)
+  // The SHAPE, and specifically the reported signature: motion that STOPS and then starts again.
+  //
+  // Two earlier versions of this check failed to see it. Counting distinct values passed, because
+  // a stall plus a step still produces plenty of them. Comparing consecutive deltas of the
+  // CHANGED values passed too — filtering out the repeats throws away the stall itself, and its
+  // duration then hides inside the next interval, making the final drop look slow and gentle.
+  //
+  // So: velocity across EVERY frame, in px per ms (a dropped frame doubles the delta and the
+  // interval, so it cannot fake anything), and the question is whether the curve comes to rest and
+  // then moves again.
+  const speeds = heights
+    .slice(1)
+    .map(([t, h], i) => (heights[i][1] - h) / Math.max(1, t - heights[i][0]))
+  const stalled = speeds.findIndex((v) => v < 0.02)
+  const resumed = stalled >= 0 ? speeds.slice(stalled).findIndex((v) => v > 0.1) : -1
   expect(
-    late,
-    `${line} — step ${late >= 0 ? steps[late] : ""}px came after ${late > 0 ? steps[late - 1] : ""}px: the space stalled and then dropped (steps: ${steps.join(", ")})`,
+    resumed,
+    `${line} — the space stopped and then dropped (px/ms: ${speeds
+      .map((v) => Math.round(v * 100) / 100)
+      .join(", ")})`,
   ).toBe(-1)
 })
 
