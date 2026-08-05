@@ -33,6 +33,13 @@ test("the space under a message opens gradually, not in one step", async ({ alic
   // Sample the row's height every frame across the reveal.
   const heights = await alice.evaluate(async ([mid]) => {
     const el = document.getElementById(`messages-${mid}`)
+    // Re-checked HERE, not only before this call: the suppression class can come back between the
+    // outer wait and this paint (a patch landing in between), and then the reveal is instant and
+    // the measurement reads one value — which is how this test flaked.
+    const feed = document.getElementById("messages")
+    while (feed.classList.contains("ed-feed--bulk")) {
+      await new Promise((r) => requestAnimationFrame(r))
+    }
     const seen = []
     let done
     const finished = new Promise((r) => (done = r))
@@ -332,4 +339,72 @@ test("pulling in history does not play the reveal on the rows it brings", async 
 
   expect(state.blocks, "history brought no reactions, so nothing could have animated").toBeGreaterThan(0)
   expect(state.reveals, "history animated itself in").toBe(0)
+})
+
+// The feed must not jump while a reaction block collapses — the second half of the "the reverse is
+// broken" report: a smooth close followed by a step moves everything below it.
+//
+// What actually caused the step was the spacing left behind by the collapsed track (fixed by
+// animating the margin with it), NOT the scroll pinning: gating the content observer on growth was
+// tried here and changed nothing, because scrolling up already turns `follow` off. The gate was
+// reverted rather than kept as an unproven guess. This test stays because the invariant is worth
+// holding whatever keeps it true — it does not, on its own, prove any particular line.
+test("the feed does not twitch while a reaction collapses", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+
+  const body = `twitch-probe ${Date.now()}`
+  await alice.locator("#composer-body").fill(body)
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
+  await expect(row).toBeVisible()
+  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+
+  await alice.evaluate(
+    ([mid]) =>
+      window.liveSocket.execJS(
+        document.body,
+        JSON.stringify([["push", { event: "react", value: { id: mid, emoji: "👍" } }]]),
+      ),
+    [id],
+  )
+  await expect(row.locator(".ed-react")).toBeVisible({ timeout: 10_000 })
+  // Past the send's own sticky window (#519: a send glues the feed to the bottom for 1200ms with
+  // backstop pins at 120/420/900ms). Measuring inside it catches THAT pin and blames the collapse
+  // — which is what the first version of this test did.
+  await alice.waitForTimeout(1400)
+
+  // Scroll up a little, so a pin would be VISIBLE as a jump rather than a no-op at the bottom.
+  await alice.evaluate(() => {
+    const s = document.getElementById("message-scroll")
+    s.scrollTop = s.scrollHeight - s.clientHeight - 120
+  })
+  await alice.waitForTimeout(300)
+  await alice.evaluate(() => window.liveSocket.enableLatencySim(600))
+
+  const tops = await alice.evaluate(async ([mid]) => {
+    const s = document.getElementById("message-scroll")
+    const seen = []
+    let done
+    const finished = new Promise((r) => (done = r))
+    const tick = () => {
+      seen.push(Math.round(s.scrollTop))
+      if (seen.length < 40) requestAnimationFrame(tick)
+      else done()
+    }
+    requestAnimationFrame(tick)
+    document.getElementById(`messages-${mid}`).querySelector(".ed-react").click()
+    await finished
+    return seen
+  }, [id])
+
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  // The feed may settle by a few pixels as the row shrinks; what it must not do is get yanked to
+  // the bottom, which is a jump of the distance we scrolled up by.
+  const jump = Math.max(...tops) - Math.min(...tops)
+  console.log(`scrollTop across the collapse: ${[...new Set(tops)].join(" → ")}`)
+  expect(jump, `the feed was pulled by ${jump}px while a reaction collapsed`).toBeLessThan(40)
 })
