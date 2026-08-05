@@ -5104,11 +5104,20 @@ defmodule EdenWeb.ChatLive do
                   Intl(locale) + gettext Today/Yesterday — gettext is unreachable in the
                   hook, so they ride as data-*. --%>
               <div
-                class={[
-                  "flex flex-col",
-                  (@selected.channel_id && "ed-flat-list") || "gap-2",
-                  (@selection != nil and @select_surface == :main) && "ed-selecting"
-                ]}
+                class={
+                  [
+                    "flex flex-col",
+                    (@selected.channel_id && "ed-flat-list") || "gap-2",
+                    (@selection != nil and @select_surface == :main) && "ed-selecting",
+                    # Rendered WITH the suppression already on (#565 review): the first paint happens
+                    # before any hook runs, so a class added in `mounted()` arrives too late and the
+                    # whole screen plays its reveals on load. `.DateRail` takes it off after a frame;
+                    # a stream insert never re-sends this attribute, so a single arrival still
+                    # animates, while a wholesale re-render (a chat switch) brings it back and is
+                    # suppressed again — which is the intent.
+                    "ed-feed--bulk"
+                  ]
+                }
                 id="messages"
                 phx-update="stream"
                 phx-hook=".DateRail"
@@ -7145,8 +7154,18 @@ defmodule EdenWeb.ChatLive do
             const chips = [...box.querySelectorAll(".ed-react")]
             const spent = chips.filter((c) => c.dataset.gone)
             const live = chips.filter((c) => !c.dataset.gone && !c.hidden)
-            const drop = (c) => (c.dataset.optimistic ? c.remove() : (c.hidden = true))
+            // Re-checked at call time, not captured: a chip that was spent when the close began
+            // can be back by the time this runs, and dropping it then would take a LIVE reaction
+            // off the screen (#565 review).
+            const drop = (c) =>
+              c.dataset.gone && (c.dataset.optimistic ? c.remove() : (c.hidden = true))
+
+            // Whatever the previous close scheduled, it is superseded — both the timer AND the
+            // listener. Leaving the listener attached meant the REOPEN's own transition ended up
+            // running the old close's cleanup, with an array of chips that had since come back.
             clearTimeout(box.__collapseT)
+            if (box.__onEnd) box.removeEventListener("transitionend", box.__onEnd)
+            box.__onEnd = null
 
             if (live.length || !spent.length) {
               // The block stays open, so a spent chip just goes — there is no space to animate.
@@ -7162,11 +7181,8 @@ defmodule EdenWeb.ChatLive do
 
             const finish = () => {
               clearTimeout(box.__collapseT)
-              box.removeEventListener("transitionend", onEnd)
-              // A reaction can come back inside the transition. The block then stays — and the
-              // spent chips go here too. Belt and braces, not a fix: the revival runs through
-              // `__edCollapse` first, which already drops them, and I could not build a case where
-              // removing this line changes anything (#565 review, checked by mutation).
+              if (box.__onEnd) box.removeEventListener("transitionend", box.__onEnd)
+              box.__onEnd = null
               spent.forEach(drop)
               if (box.querySelectorAll(".ed-react:not([hidden])").length) {
                 box.classList.remove("ed-reactions--closing")
@@ -7175,11 +7191,17 @@ defmodule EdenWeb.ChatLive do
               box.hidden = true
               if (box.dataset.optimistic) box.remove()
             }
-            // The transition itself says when it is over, so the duration lives in ONE place —
-            // the stylesheet (#565 review). The timer is only a backstop for the cases where no
-            // transition runs at all: reduced motion, a hidden tab, an engine that declines it.
-            const onEnd = (e) => e.target === box && e.propertyName === "grid-template-rows" && finish()
-            box.addEventListener("transitionend", onEnd)
+
+            // Nothing animates under reduced motion, so no `transitionend` ever arrives and the
+            // cleanup would wait out the backstop while the track is already shut (#565 review).
+            if (matchMedia("(prefers-reduced-motion: reduce)").matches) return finish()
+
+            // The transition itself says when it is over, so the duration lives in ONE place — the
+            // stylesheet. The timer is only a backstop for the cases where no transition runs at
+            // all: a hidden tab, an engine that declines it.
+            box.__onEnd = (e) =>
+              e.target === box && e.propertyName === "grid-template-rows" && finish()
+            box.addEventListener("transitionend", box.__onEnd)
             box.__collapseT = setTimeout(finish, 600)
           })
 
@@ -8020,8 +8042,21 @@ defmodule EdenWeb.ChatLive do
             // anchoring, e.g. Firefox) (#104). This observer re-derives them in the SAME
             // microtask the drop happens in — before the browser reflows/paints — so
             // scrollHeight never visibly changes.
-            this.mo = new MutationObserver(() => this.reconcile())
+            this.mo = new MutationObserver((records) => {
+              // A wholesale arrival — opening a chat, switching to another, pulling in history —
+              // must not play every reaction reveal at once (#565 review). One row landing is an
+              // event and animates; a batch is a render and does not.
+              const added = records.reduce((n, r) => n + r.addedNodes.length, 0)
+              if (added >= 3) {
+                this.el.classList.add("ed-feed--bulk")
+                this._unbulk()
+              }
+              this.reconcile()
+            })
             this.mo.observe(this.el, { childList: true })
+            // The first render arrives with the class already on it (see the template) — take it
+            // off once the frame it belongs to has been painted.
+            this._unbulk()
             // The cached boundary positions (#519) are only as good as the layout they were taken
             // from. Rows arriving is one signal and `reconcile()` covers it, but a photo decoding
             // changes heights without touching the child list — and the feed would then label the
@@ -8055,7 +8090,12 @@ defmodule EdenWeb.ChatLive do
             this.ro.observe(this.el)
             window.addEventListener("resize", this._invalidate)
           },
-          updated() { this._geo = null; this.reconcile(); this.fmtTimes() },
+          updated() { this._geo = null; this.reconcile(); this.fmtTimes(); this._unbulk() },
+          // Let the paint that carries a batch happen, then allow motion again.
+          _unbulk() {
+            clearTimeout(this._bulkT)
+            this._bulkT = setTimeout(() => this.el.classList.remove("ed-feed--bulk"), 60)
+          },
           destroyed() {
             if (this.scroller) {
               this.onScroll && this.scroller.removeEventListener("scroll", this.onScroll)
@@ -8064,6 +8104,7 @@ defmodule EdenWeb.ChatLive do
               this._onUserKey && this.scroller.removeEventListener("keydown", this._onUserKey)
             }
             this.mo && this.mo.disconnect()
+            clearTimeout(this._bulkT)
             this.timeMo && this.timeMo.disconnect()
             this._tRaf && cancelAnimationFrame(this._tRaf)
             this.ro && this.ro.disconnect()

@@ -22,6 +22,14 @@ test("the space under a message opens gradually, not in one step", async ({ alic
   await expect(row).toBeVisible()
   const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
 
+  // The feed suppresses motion for the frame a batch lands in, and a just-sent message is such a
+  // frame. Wait it out — a person reacting does too.
+  await alice.waitForFunction(
+    () => !document.getElementById("messages").classList.contains("ed-feed--bulk"),
+    null,
+    { timeout: 5000 },
+  )
+
   // Sample the row's height every frame across the reveal.
   const heights = await alice.evaluate(async ([mid]) => {
     const el = document.getElementById(`messages-${mid}`)
@@ -198,4 +206,75 @@ test("a reaction that arrives mid-close reopens the space cleanly", async ({ ali
   expect(state.hidden, "the revived block stayed hidden").toBe(false)
   expect(state.visibleChips, "the new reaction is not on screen").toBe(1)
   expect(state.zeroChips, "a spent chip stayed behind reading zero").toBe(0)
+})
+
+// Opening a chat renders every message at once, and each one with reactions would play the reveal
+// — fifty little animations for a screen nobody has acted on. That is choreography on load, which
+// the product's own motion rules rule out (#565 review).
+test("opening a chat does not play the reveal on every message", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  // Watch from before the feed exists.
+  await alice.addInitScript(() => {
+    window.__reveals = 0
+    document.addEventListener(
+      "transitionstart",
+      (e) => {
+        if (e.propertyName === "grid-template-rows" && e.target.classList?.contains("ed-reactions")) {
+          window.__reveals++
+        }
+      },
+      true,
+    )
+  })
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+
+  // Put a real reaction in the chat first, or the load has nothing to animate and the assertion
+  // below would pass on any code at all.
+  const seedBody = `bulk-seed ${Date.now()}`
+  await alice.locator("#composer-body").fill(seedBody)
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  const seedRow = alice.locator("#messages .ed-msg", { hasText: seedBody }).first()
+  await expect(seedRow).toBeVisible()
+  const seedId = await seedRow.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  await alice.evaluate(
+    ([mid]) =>
+      window.liveSocket.execJS(
+        document.body,
+        JSON.stringify([["push", { event: "react", value: { id: mid, emoji: "👍" } }]]),
+      ),
+    [seedId],
+  )
+  await expect(seedRow.locator(".ed-react")).toBeVisible({ timeout: 10_000 })
+
+  // Now load the chat afresh: every block arrives in one batch.
+  await alice.evaluate(() => (window.__reveals = 0))
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.waitForTimeout(1500)
+
+  const onLoad = await alice.evaluate(() => ({
+    reveals: window.__reveals,
+    blocks: document.querySelectorAll("#messages .ed-reactions").length,
+  }))
+  console.log(`on open: ${onLoad.blocks} reaction blocks, ${onLoad.reveals} reveals played`)
+
+  expect(onLoad.blocks, "no reactions in this chat, so nothing could have animated").toBeGreaterThan(0)
+  expect(onLoad.reveals, "the whole screen animated itself in on load").toBe(0)
+
+  // ...and a single reaction still animates: the suppression is for renders, not for events.
+  const body = `bulk-probe ${Date.now()}`
+  await alice.locator("#composer-body").fill(body)
+  await alice.locator("#composer").evaluate((f) => f.requestSubmit())
+  const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
+  await expect(row).toBeVisible()
+  await alice.waitForTimeout(400)
+  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+
+  await alice.evaluate(([mid]) => window.__edReact(mid, "👍"), [id])
+  await alice.waitForTimeout(300)
+  const after = await alice.evaluate(() => window.__reveals)
+  expect(after, "a reaction the person just added did not animate").toBeGreaterThan(onLoad.reveals)
 })

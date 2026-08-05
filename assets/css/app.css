@@ -1447,6 +1447,14 @@ html {
     grid-template-rows: 0fr;
     opacity: 0;
   }
+  /* Opening a chat renders every message at once, and each one with reactions would play the
+     reveal — fifty little animations for a screen nobody has acted on. That is choreography on
+     load, not feedback. The feed marks a wholesale arrival and the transition sits it out; with no
+     transition there is nothing for `@starting-style` to animate from, so those blocks are simply
+     there. A single message arriving still animates, because that IS an event. */
+  .ed-feed--bulk .ed-reactions {
+    transition: none;
+  }
   @media (prefers-reduced-motion: reduce) {
     .ed-reactions {
       transition: none;
