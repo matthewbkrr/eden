@@ -3627,6 +3627,14 @@ defmodule EdenWeb.ChatLive do
               sheet.classList.add("ed-thread--out")
               return
             }
+            // Opening a thread costs a full round trip before anything appears: the panel is
+            // `:if={@thread_root}` on the server, and behind that reply the server runs a query, a
+            // WRITE (mark_thread_read), a follow lookup and a stream reset. Measured with the
+            // socket at 500ms: 1022ms of nothing, and on a phone that is a full-screen transition
+            // with no frame at all (#521). Paint the panel's shape now; the real one replaces it.
+            const opener = e.target.closest?.('[phx-click="open_thread"], [phx-click="open_threads"]')
+            if (opener && !document.querySelector(".ed-thread")) this.threadSkel()
+
             const anchor = e.target.closest && e.target.closest("a")
             if (!anchor) return
             // Logging out wipes the at-rest cache BEFORE navigating away (shared-machine privacy).
@@ -4300,6 +4308,55 @@ defmodule EdenWeb.ChatLive do
             this.asideOv = ov
             this.asideTimer = setTimeout(() => this.asideDismiss(), 15000)
           },
+          // The thread panel's shape, painted before the server has said anything. Same skeleton
+          // parts as the sidebar overlay above — the same idea aimed at a different rectangle:
+          // full screen on a phone, the 24rem column on desktop.
+          threadSkel() {
+            if (this.threadOv) return
+            const wide = window.matchMedia("(min-width: 768px)").matches
+            const ov = document.createElement("div")
+            let rows = ""
+            for (const w of [72, 54, 66, 44, 60]) {
+              rows += `<div class="ed-nav-skel__row"><span class="ed-nav-skel__av ed-skel-shimmer"></span><span class="ed-nav-skel__bubble ed-skel-shimmer" style="width:${w}%"></span></div>`
+            }
+            ov.innerHTML =
+              '<div class="ed-aside-skel__head"><span class="ed-aside-skel__title"></span></div>' +
+              `<div class="ed-aside-skel__body">${rows}</div>`
+            ov.classList.add("ed-aside-skel", "ed-thread-skel")
+            ov.setAttribute("aria-hidden", "true")
+
+            if (wide) {
+              const pane = document.getElementById("chat-dropzone") || document.body
+              const r = pane.getBoundingClientRect()
+              const w = 24 * parseFloat(getComputedStyle(document.documentElement).fontSize || "16")
+              ov.style.left = r.right - w + "px"
+              ov.style.top = r.top + "px"
+              ov.style.width = w + "px"
+              ov.style.height = r.height + "px"
+            } else {
+              ov.style.inset = "0"
+            }
+            document.body.appendChild(ov)
+            this.threadOv = ov
+
+            // Gone the moment the real panel exists — or after a bounded wait, so a reply that
+            // never comes cannot leave a shimmer on screen.
+            this.threadMo = new MutationObserver(() => {
+              if (document.querySelector(".ed-thread")) this.threadSkelDismiss()
+            })
+            this.threadMo.observe(document.body, { childList: true, subtree: true })
+            this.threadTimer = setTimeout(() => this.threadSkelDismiss(), 8000)
+          },
+          threadSkelDismiss() {
+            const ov = this.threadOv
+            if (!ov) return
+            this.threadOv = null
+            clearTimeout(this.threadTimer)
+            this.threadMo && this.threadMo.disconnect()
+            if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return ov.remove()
+            ov.classList.add("ed-aside-skel--out")
+            setTimeout(() => ov.remove(), 200)
+          },
           asideDismiss() {
             const ov = this.asideOv
             if (!ov) return
@@ -4409,6 +4466,7 @@ defmodule EdenWeb.ChatLive do
             this.overlay = null
           },
           destroyed() {
+            this.threadSkelDismiss()
             window.__edInstantNavReady = false
             document.removeEventListener("click", this.onClick, true)
             window.__edNavBusy = false
