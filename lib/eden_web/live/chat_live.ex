@@ -4343,6 +4343,12 @@ defmodule EdenWeb.ChatLive do
             const files = [...(input.files || [])]
             if (!files.length || !files.every((f) => /^image\//.test(f.type || ""))) return
             if (document.querySelector("[data-upload-preview]")) return
+            // A pick past the staging cap is stopped dead by SendQueue (stopImmediatePropagation +
+            // a cleared input, #193): nothing stages, so no overlay is ever coming and a
+            // placeholder would be a photo that vanishes a few seconds later. Same number, read
+            // from the same attribute.
+            const max = Number(input.closest("#composer")?.dataset.maxStaged) || 50
+            if (files.length > max) return
             this.pickDismiss()
 
             // The object URL SendQueue would mint anyway, keyed the way it keys them: filling the
@@ -4351,8 +4357,9 @@ defmodule EdenWeb.ChatLive do
             // real preview paints from a warm cache.
             const store = input.closest("#composer, #reply-composer")?.edenVideoUrls
             const mine = []
+            // Every picked file, not the first ten: the overlay shows all of them (albums of ten
+            // are a SEND-side split), so a truncated placeholder would resize the panel on handoff.
             const tiles = files
-              .slice(0, 10)
               .map((f) => {
                 const key = `${f.name}:${f.size}:${f.lastModified}`
                 let url
@@ -4368,7 +4375,7 @@ defmodule EdenWeb.ChatLive do
               .join("")
 
             // album_cols/1, in the same order the server uses.
-            const n = Math.min(files.length, 10)
+            const n = files.length
             const cols = n <= 3 ? n : n === 4 ? 2 : 3
             const grid = `ed-compose__grid ed-album--${cols}${n === 1 ? " ed-compose__grid--single" : ""}`
 
@@ -4407,11 +4414,17 @@ defmodule EdenWeb.ChatLive do
               if (painted) {
                 real.classList.add("ed-compose--handoff")
                 this.pickDismiss()
-              } else if (performance.now() - t0 < 3000) {
+              } else if (!window.liveSocket?.isConnected()) {
+                // The answer is not merely late, it is not coming: a pick made across a dropped
+                // socket is lost with the cleared input, there is nothing to resume. Better an
+                // empty screen than a modal that answers nothing.
+                this.pickDismiss()
+              } else if (performance.now() - t0 < 10_000) {
+                // Ten seconds, not three (#569 review): what the placeholder waits for is one round
+                // trip, not the upload, but on a bad mobile link that round trip can still be
+                // seconds — and a slow link is exactly where the placeholder is worth the most.
                 this.pickRaf = requestAnimationFrame(poll)
               } else {
-                // The overlay never came: a socket that is down, or a file the server refused
-                // outright. Better an empty screen than a modal that answers nothing.
                 this.pickDismiss()
               }
             }

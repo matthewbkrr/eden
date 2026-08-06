@@ -4,6 +4,7 @@
 // between closing the picker and seeing a thumbnail there is a round trip, even though the file is
 // already on the device.
 const { test, expect } = require("../helpers/fixtures")
+const fs = require("fs")
 const path = require("path")
 
 const LATENCY = 500
@@ -16,6 +17,17 @@ const ready = (page) =>
 // sequential one — and the first in document order is the resend channel, so a bare
 // `input[type=file]` stages into a slot nothing is watching.
 const MAIN_INPUT = 'input[name="attachment"]'
+
+// N distinct photos from the one on disk: the trailing bytes are ignored by every decoder and make
+// each file its own (name AND size), so nothing collapses into one entry on the way in.
+const photos = (n) => {
+  const base = fs.readFileSync(fixture("sample1.png"))
+  return Array.from({ length: n }, (_, i) => ({
+    name: `pick-${i}.png`,
+    mimeType: "image/png",
+    buffer: Buffer.concat([base, Buffer.alloc(i + 1)]),
+  }))
+}
 
 test("a picked photo appears without waiting for the server", async ({ alice, seed }, testInfo) => {
   test.setTimeout(120_000)
@@ -219,10 +231,96 @@ test("a multi-photo pick lands in the same grid the server draws", async ({ alic
   expect(Math.abs(real.panel.h - skel.panel.h), `${line} — the panel resized on handoff`).toBeLessThanOrEqual(2)
 })
 
-// A placeholder is a promise the server has to keep. When it cannot — the socket is down, so no
-// entry is ever staged — the promise has to expire rather than leave a modal on screen that answers
-// nothing.
-test("a placeholder the server never answers gives up", async ({ alice, seed }) => {
+// Twelve, because the overlay shows every staged photo (albums of ten are a SEND-side split) and a
+// placeholder that drew only the first ten would resize the panel on handoff — the same jump the
+// tests above exist to catch, one pick size further out.
+test("a pick past one album still hands off without moving", async ({ alice, seed }, testInfo) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(600)
+  await alice.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
+
+  await alice.evaluate(() => {
+    window.__skel = null
+    const rect = (n) => {
+      const r = n.getBoundingClientRect()
+      return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+    }
+    const tick = () => {
+      const tiles = [...document.querySelectorAll(".ed-compose-skel .ed-compose__tile")]
+      if (tiles.length && tiles.every((t) => t.offsetWidth > 0)) {
+        window.__skel = {
+          count: tiles.length,
+          panel: rect(document.querySelector(".ed-compose-skel .ed-compose__panel")),
+          first: rect(tiles[0]),
+          last: rect(tiles[tiles.length - 1]),
+        }
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+
+  await alice.setInputFiles(MAIN_INPUT, photos(12))
+  await expect(alice.locator("[data-upload-preview] .ed-compose__tile")).toHaveCount(12, { timeout: 15_000 })
+  await expect(alice.locator(".ed-compose-skel")).toHaveCount(0, { timeout: 10_000 })
+  await alice.waitForTimeout(300)
+
+  const real = await alice.evaluate(() => {
+    const ov = document.querySelector("[data-upload-preview]")
+    const rect = (n) => {
+      const r = n.getBoundingClientRect()
+      return { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+    }
+    const tiles = [...ov.querySelectorAll(".ed-compose__tile")]
+    return {
+      count: tiles.length,
+      panel: rect(ov.querySelector(".ed-compose__panel")),
+      first: rect(tiles[0]),
+      last: rect(tiles[tiles.length - 1]),
+    }
+  })
+  const skel = await alice.evaluate(() => window.__skel)
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  expect(skel, "the placeholder never laid out its tiles").not.toBeNull()
+  const line = `12-photo handoff: placeholder drew ${skel.count} tiles, overlay ${real.count}; panel ${Math.abs(real.panel.h - skel.panel.h)}px`
+  console.log(line, JSON.stringify({ skel, real }))
+  testInfo.annotations.push({ type: "measurement", description: line })
+
+  expect(skel.count, `${line} — the placeholder truncated the pick`).toBe(real.count)
+  expect(Math.abs(real.panel.h - skel.panel.h), `${line} — the panel resized on handoff`).toBeLessThanOrEqual(2)
+  for (const k of ["x", "y", "w", "h"]) {
+    expect(Math.abs(real.first[k] - skel.first[k]), `${line} — the first tile moved (${k})`).toBeLessThanOrEqual(2)
+    expect(Math.abs(real.last[k] - skel.last[k]), `${line} — the last tile moved (${k})`).toBeLessThanOrEqual(2)
+  }
+})
+
+// Past the staging cap SendQueue stops the pick dead — nothing stages, no overlay is coming — so a
+// placeholder here would be a photo that vanishes a few seconds later.
+test("a pick past the staging cap paints no placeholder", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(600)
+
+  const max = await alice.evaluate(() => Number(document.getElementById("composer")?.dataset.maxStaged))
+  expect(max, "the composer does not carry the staging cap").toBeGreaterThan(0)
+
+  await alice.setInputFiles(MAIN_INPUT, photos(max + 1))
+  await alice.waitForTimeout(1500)
+  expect(await alice.locator(".ed-compose-skel").count(), "an over-cap pick drew a placeholder").toBe(0)
+  expect(await alice.locator("[data-upload-preview]").count(), "an over-cap pick staged after all").toBe(0)
+})
+
+// A placeholder is a promise the server has to keep. When the socket is down the pick is lost with
+// the cleared input — nothing is coming, and it has to say so at once rather than sit out the
+// ceiling that exists for a link which is merely slow.
+test("a placeholder gives up at once when the socket is down", async ({ alice, seed }) => {
   test.setTimeout(120_000)
 
   await alice.goto(`/app/c/${seed.dm_id}`)
@@ -230,9 +328,34 @@ test("a placeholder the server never answers gives up", async ({ alice, seed }) 
   await alice.waitForTimeout(600)
 
   await alice.evaluate(() => window.liveSocket.disconnect())
+
+  // Watched from inside the page: it comes and goes within a frame or two of the pick, which is
+  // faster than an out-of-process assertion can poll — the first version of this test read zero and
+  // concluded the placeholder had never painted at all.
+  await alice.evaluate(() => {
+    window.__seen = null
+    window.__gone = null
+    const t0 = performance.now()
+    const tick = () => {
+      const n = document.querySelectorAll(".ed-compose-skel").length
+      if (n && window.__seen === null) window.__seen = performance.now() - t0
+      if (window.__seen !== null && !n) {
+        window.__gone = performance.now() - t0
+        return
+      }
+      if (performance.now() - t0 < 12_000) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+
   await alice.setInputFiles(MAIN_INPUT, fixture("sample1.png"))
-  await expect(alice.locator(".ed-compose-skel")).toHaveCount(1)
-  await expect(alice.locator(".ed-compose-skel")).toHaveCount(0, { timeout: 10_000 })
+  await alice.waitForTimeout(2500)
+
+  const { seen, gone } = await alice.evaluate(() => ({ seen: window.__seen, gone: window.__gone }))
+  console.log(`offline placeholder: painted at ${seen && Math.round(seen)}ms, gone at ${gone && Math.round(gone)}ms`)
+  expect(seen, "the placeholder never painted, so its exit proves nothing").not.toBeNull()
+  expect(gone, "the placeholder is still on screen with the socket down").not.toBeNull()
+  expect(gone, `the placeholder sat out the slow-link ceiling instead (${gone}ms)`).toBeLessThan(2000)
   expect(await alice.locator("[data-upload-preview]").count(), "an overlay appeared while offline").toBe(0)
 })
 
