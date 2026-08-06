@@ -29,6 +29,16 @@ function pageKey(path) {
   // Settings first: the authed alias lives UNDER /app (#445) — same page class.
   if (/^\/(app\/)?settings(\/|$)/.test(path)) return "settings";
   if (/^\/(app|channels)(\/|$)/.test(path)) return "app";
+  // The admin panel is its own remount-separated world and was the one authed page left out
+  // (#521): reaching it showed a blank frame for the whole round trip, with no shimmer and no
+  // cached replica on the way back. Same treatment as the other two — window-scoped, dies with
+  // the tab, nothing at rest.
+  //
+  // NOT covered by a test, deliberately: `/admin` is unreachable on the e2e stand, because the
+  // `:require_admin` gate sends an admin without TOTP to Settings to enrol first, and the seeded
+  // account has no second factor. A test that cannot reach the page can only re-implement this
+  // regex and call itself a check — which is the shape of a test that proves nothing.
+  if (/^\/admin(\/|$)/.test(path)) return "admin";
   return null;
 }
 

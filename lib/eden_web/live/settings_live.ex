@@ -410,7 +410,13 @@ defmodule EdenWeb.SettingsLive do
                     </label>
 
                     <div class="flex justify-end">
-                      <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
+                      <button
+                        type="submit"
+                        class="ed-btn ed-btn--primary"
+                        phx-disable-with={gettext("Saving...")}
+                      >
+                        {gettext("Save")}
+                      </button>
                     </div>
                   </.form>
                 </section>
@@ -484,7 +490,13 @@ defmodule EdenWeb.SettingsLive do
                     </div>
 
                     <div class="flex justify-end">
-                      <button type="submit" class="ed-btn ed-btn--primary">{gettext("Save")}</button>
+                      <button
+                        type="submit"
+                        class="ed-btn ed-btn--primary"
+                        phx-disable-with={gettext("Saving...")}
+                      >
+                        {gettext("Save")}
+                      </button>
                     </div>
                   </.form>
                 </section>
@@ -564,7 +576,11 @@ defmodule EdenWeb.SettingsLive do
                       {@password_error}
                     </p>
                     <div class="flex justify-end">
-                      <button type="submit" class="ed-btn ed-btn--primary">
+                      <button
+                        type="submit"
+                        class="ed-btn ed-btn--primary"
+                        phx-disable-with={gettext("Saving...")}
+                      >
                         {gettext("Change password")}
                       </button>
                     </div>
@@ -731,7 +747,11 @@ defmodule EdenWeb.SettingsLive do
                           required
                         />
                       </label>
-                      <button type="submit" class="ed-btn ed-btn--primary">
+                      <button
+                        type="submit"
+                        class="ed-btn ed-btn--primary"
+                        phx-disable-with={gettext("Turning on...")}
+                      >
                         {gettext("Turn on")}
                       </button>
                       <button type="button" phx-click="totp_cancel" class="ed-btn ed-btn--ghost">

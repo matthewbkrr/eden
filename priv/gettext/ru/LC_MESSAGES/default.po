@@ -2902,3 +2902,13 @@ msgstr "ihichat недоступен"
 #, elixir-autogen, elixir-format
 msgid "Reconnecting…"
 msgstr "Восстанавливаем соединение…"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Saving..."
+msgstr "Сохранение…"
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Turning on..."
+msgstr "Включаем…"
