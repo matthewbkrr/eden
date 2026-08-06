@@ -3527,6 +3527,11 @@ html {
   .ed-aside-skel--out {
     opacity: 0;
   }
+  /* The thread panel's placeholder sits above the pane but below the chat nav overlay, like the
+     panel it stands in for (#521). */
+  .ed-thread-skel {
+    z-index: 22;
+  }
   .ed-aside-skel__head {
     display: flex;
     align-items: center;
