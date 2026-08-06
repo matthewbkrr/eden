@@ -1418,13 +1418,20 @@ html {
   .ed-reactions {
     display: grid;
     grid-template-rows: 1fr;
+    /* The spacing lives OUT here and animates with the track. Inside the row it was padding on a
+       clipped grid item, which the track's collapse does not take away: the close ran smoothly to
+       0fr and then a stray 4.8rem-of-a-rem stayed behind until the node was hidden — a stall and a
+       step, exactly as reported. Measured: 42.5px collapsed, 37.8px hidden. */
+    margin-top: 0.3rem;
     transition:
       grid-template-rows 0.18s var(--ed-ease),
+      margin-top 0.18s var(--ed-ease),
       opacity 0.18s var(--ed-ease);
   }
   @starting-style {
     .ed-reactions {
       grid-template-rows: 0fr;
+      margin-top: 0;
       opacity: 0;
     }
   }
@@ -1438,13 +1445,13 @@ html {
        stay behind while the track closes. */
     min-height: 0;
     overflow: hidden;
-    padding-top: 0.3rem;
   }
   /* ...and closing again when the last reaction goes. The same track, driven the other way: the
      node stays in the DOM for the length of the transition, so there IS something to animate —
      which is why this is a class rather than the node simply going away. */
   .ed-reactions--closing {
     grid-template-rows: 0fr;
+    margin-top: 0;
     opacity: 0;
   }
   /* Opening a chat renders every message at once, and each one with reactions would play the
