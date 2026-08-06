@@ -2871,3 +2871,12 @@ msgstr "Photo actions"
 msgid "Show in chat"
 msgstr "Show in chat"
 
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Saving..."
+msgstr ""
+
+#: lib/eden_web/live/settings_live.ex
+#, elixir-autogen, elixir-format
+msgid "Turning on..."
+msgstr ""

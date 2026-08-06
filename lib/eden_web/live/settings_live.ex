@@ -750,7 +750,7 @@ defmodule EdenWeb.SettingsLive do
                       <button
                         type="submit"
                         class="ed-btn ed-btn--primary"
-                        phx-disable-with={gettext("Saving...")}
+                        phx-disable-with={gettext("Turning on...")}
                       >
                         {gettext("Turn on")}
                       </button>

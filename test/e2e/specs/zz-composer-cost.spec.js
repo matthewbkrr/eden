@@ -24,8 +24,9 @@ test("typing does not send a message per character", async ({ alice, seed }, tes
   await input.click()
   await alice.evaluate(() => (window.__pushes = 0))
 
-  const text = "hello there"
-  await input.type(text, { delay: 45 })
+  const text = `hello there ${Date.now()}`
+  // `pressSequentially`, not the deprecated `type` (#568 review).
+  await input.pressSequentially(text, { delay: 45 })
   await alice.waitForTimeout(700)
 
   const pushes = await alice.evaluate(() => window.__pushes)
@@ -33,8 +34,15 @@ test("typing does not send a message per character", async ({ alice, seed }, tes
   console.log(line)
   testInfo.annotations.push({ type: "measurement", description: line })
 
-  await input.fill("")
-
-  // The composer has to keep working: what the server holds must match what was typed.
   expect(pushes, `${line} — one round trip per keystroke`).toBeLessThan(text.length)
+
+  // ...and the server has to hold the WHOLE string, not just the last batch. Counting events alone
+  // would pass on a debounce that drops characters — the comment here used to claim this check and
+  // the code did not make it (#568 review). Sending is the proof: the message that arrives is what
+  // was typed.
+  await alice.keyboard.press("Enter")
+  await expect(
+    alice.locator("#messages", { hasText: text }),
+    "the server did not receive everything that was typed",
+  ).toBeVisible({ timeout: 10_000 })
 })
