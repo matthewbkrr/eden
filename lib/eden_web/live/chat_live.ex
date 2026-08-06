@@ -4382,6 +4382,14 @@ defmodule EdenWeb.ChatLive do
               `<div class="ed-compose__body"><div class="${grid}">${tiles}</div></div>` +
               '<div class="ed-compose__foot"></div>' +
               "</div>"
+            // It looks modal, so it behaves modally: a tap lands HERE rather than falling through
+            // to a message underneath (#569 review P1) — and dismisses, so a placeholder whose
+            // answer never comes can never hold the screen hostage either.
+            //
+            // On release, not on press: the placeholder has to still be under the finger when the
+            // press is delivered, or the press retargets to whatever was beneath and focuses it —
+            // the fall-through this listener exists to stop.
+            ov.addEventListener("pointerup", () => this.pickDismiss())
             document.body.appendChild(ov)
             this.pickOv = ov
             this.pickUrls = mine
@@ -4412,13 +4420,14 @@ defmodule EdenWeb.ChatLive do
           pickDismiss() {
             const ov = this.pickOv
             cancelAnimationFrame(this.pickRaf)
-            // Only what this placeholder minted alone: a URL that went into the shared store is
-            // revoked by its owner, and pulling it out from under .ImgPreview would blank the
-            // preview it is about to hand over to.
-            ;(this.pickUrls || []).forEach((u) => URL.revokeObjectURL(u))
-            this.pickUrls = null
             this.pickOv = null
             if (ov) ov.remove()
+            // Off the page first, then let the URLs go — nothing can be asked to paint one that has
+            // just been revoked. And only what this placeholder minted alone: a URL that went into
+            // the shared store is revoked by its owner, and pulling it out from under .ImgPreview
+            // would blank the preview it is about to hand over to.
+            ;(this.pickUrls || []).forEach((u) => URL.revokeObjectURL(u))
+            this.pickUrls = null
           },
           // The thread panel's shape, painted before the server has said anything. Same skeleton
           // parts as the sidebar overlay above — the same idea aimed at a different rectangle:

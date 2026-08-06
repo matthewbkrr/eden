@@ -2425,12 +2425,10 @@ html {
     background: var(--ed-scrim);
   }
   /* The picked-photo placeholder (#521): the same box as the real staging overlay, minus every
-     control — it stands in for one round trip and must not invite a tap it cannot honour.
-     The head/foot heights stand in for chrome this box does not draw; zz-pick-preview asserts the
-     photo does not move when the real overlay takes over, so they cannot drift unnoticed. */
-  .ed-compose-skel {
-    pointer-events: none;
-  }
+     control — it stands in for one round trip. The head/foot heights stand in for chrome this box does not draw; zz-pick-preview asserts the
+     photo does not move when the real overlay takes over, so they cannot drift unnoticed.
+     It catches pointers like the real overlay does (a scrim that lets taps through to the chat
+     underneath would be a lie) — the hook dismisses on one. */
   .ed-compose-skel .ed-compose__head {
     min-height: 3.3125rem;
   }

@@ -211,6 +211,45 @@ test("a placeholder the server never answers gives up", async ({ alice, seed }) 
   expect(await alice.locator("[data-upload-preview]").count(), "an overlay appeared while offline").toBe(0)
 })
 
+// A full-screen scrim that lets taps through to the chat underneath is a lie: the placeholder looks
+// modal for as long as it is up, so it has to swallow the tap the way the real overlay does — and
+// give the screen back, since it is the one thing on top when the answer never comes.
+test("the placeholder catches taps instead of passing them to the chat", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(600)
+
+  // The composer, because it is always on screen and says plainly whether a press reached it: a
+  // press on a text field focuses it.
+  const box = await alice.locator("#composer-body").boundingBox()
+  expect(box, "no composer to tap through to").not.toBeNull()
+  await alice.evaluate(() => document.activeElement?.blur())
+
+  // A second of latency: the placeholder is up long enough that the tap is unambiguously ITS tap
+  // and not the real overlay's, which the assertion below re-checks rather than assumes.
+  await alice.evaluate(() => window.liveSocket.enableLatencySim(1000))
+  await alice.setInputFiles(MAIN_INPUT, fixture("sample1.png"))
+  await expect(alice.locator(".ed-compose-skel")).toHaveCount(1)
+
+  const state = await alice.evaluate(() => ({
+    skel: document.querySelectorAll(".ed-compose-skel").length,
+    real: document.querySelectorAll("[data-upload-preview]").length,
+  }))
+  await alice.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  const focused = await alice.evaluate(() => document.activeElement?.id || "")
+  const skelAfter = await alice.locator(".ed-compose-skel").count()
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  expect(state, "the real overlay was already up — this tap proves nothing about the placeholder").toEqual({
+    skel: 1,
+    real: 0,
+  })
+  expect(focused, "the tap went through the placeholder and landed in the composer").not.toBe("composer-body")
+  expect(skelAfter, "the placeholder ignored a tap on itself").toBe(0)
+})
+
 // Only photos. A document does not go in the grid at all (it is listed under it), and a video tile
 // carries a player — a placeholder that drew either as a square photo would move things on handoff.
 test("a document pick paints no placeholder", async ({ alice, seed }) => {
