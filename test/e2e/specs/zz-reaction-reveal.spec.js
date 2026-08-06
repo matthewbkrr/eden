@@ -190,14 +190,19 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
   const speeds = heights
     .slice(1)
     .map(([t, h], i) => (heights[i][1] - h) / Math.max(1, t - heights[i][0]))
-  const stalled = speeds.findIndex((v) => v < 0.02)
-  const resumed = stalled >= 0 ? speeds.slice(stalled).findIndex((v) => v > 0.1) : -1
-  expect(
-    resumed,
-    `${line} — the space stopped and then dropped (px/ms: ${speeds
-      .map((v) => Math.round(v * 100) / 100)
-      .join(", ")})`,
-  ).toBe(-1)
+  const shown = speeds.map((v) => Math.round(v * 100) / 100).join(", ")
+
+  // Sampling begins BEFORE the tap, so the opening frames are motionless by construction. Looking
+  // for a stall from index 0 would find that stillness and call the animation that follows it a
+  // "resumption" — failing correct code on a slow first frame (#566 review). The stall only counts
+  // once the collapse is actually under way.
+  const started = speeds.findIndex((v) => v > 0.1)
+  expect(started, `${line} — nothing moved at all (px/ms: ${shown})`).toBeGreaterThanOrEqual(0)
+
+  const moving = speeds.slice(started)
+  const stalled = moving.findIndex((v) => v < 0.02)
+  const resumed = stalled >= 0 ? moving.slice(stalled).findIndex((v) => v > 0.1) : -1
+  expect(resumed, `${line} — the space stopped and then dropped (px/ms: ${shown})`).toBe(-1)
 })
 
 // Reacting again while the space is closing (#565 review). Two ways this went wrong: the block was
