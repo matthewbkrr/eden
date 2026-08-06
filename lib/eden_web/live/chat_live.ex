@@ -4342,15 +4342,17 @@ defmodule EdenWeb.ChatLive do
             // Gone the moment the real panel exists — or after a bounded wait, so a reply that
             // never comes cannot leave a shimmer on screen.
             //
-            // Watched where the panel actually lands: both asides — the thread and the threads
-            // list, which share `.ed-thread` — are direct children of the app root, so childList
-            // there is enough. Watching the whole document's subtree meant a callback on every
-            // mutation anywhere for as long as the placeholder lived (#567 review).
+            // Scoped to the app root rather than the whole document (#567 review): the callback
+            // used to run on every mutation anywhere on the page for as long as the placeholder
+            // lived. Subtree is kept on purpose — both asides are direct children of the root
+            // TODAY, and a version of this that depended on that would fail silently the day one
+            // of them gains a wrapper, leaving a shimmer up until the backstop (#567 review, second
+            // round). The callback is one selector query; the scope is what makes it cheap.
             const host = document.querySelector(".ed-root") || document.body
             this.threadMo = new MutationObserver(() => {
               if (document.querySelector(".ed-thread")) this.threadSkelDismiss()
             })
-            this.threadMo.observe(host, { childList: true })
+            this.threadMo.observe(host, { childList: true, subtree: true })
             this.threadTimer = setTimeout(() => this.threadSkelDismiss(), 8000)
           },
           threadSkelDismiss() {
