@@ -58,7 +58,16 @@ test("a picked photo appears without waiting for the server", async ({ alice, se
 // Early is only half of it. The placeholder is a stand-in for a box the server is about to draw, so
 // the handoff has to be a swap, not a jump — otherwise the photo lands, then shifts, and the
 // abruptness moves rather than goes away.
-test("the photo does not move when the real overlay takes over", async ({ alice, seed }, testInfo) => {
+// Three shapes, because the placeholder and .ImgPreview clamp the box by different routes and only
+// agree by construction: `max-width: 100%` against `body.clientWidth - 28`, and `max-height: 60vh`
+// against `innerHeight * 0.6`. 900x600 is clamped by neither, 2600x2600 by width, 600x1600 by
+// height — one fixture would have proved only the easy case (#569 review).
+for (const [file, shape] of [
+  ["sample1.png", "900x600, clamped by neither"],
+  ["big-photo.png", "2600x2600, clamped by width"],
+  ["tall-photo.png", "600x1600, clamped by height"],
+])
+test(`the photo does not move when the real overlay takes over (${shape})`, async ({ alice, seed }, testInfo) => {
   test.setTimeout(120_000)
 
   await alice.goto(`/app/c/${seed.dm_id}`)
@@ -90,7 +99,7 @@ test("the photo does not move when the real overlay takes over", async ({ alice,
     requestAnimationFrame(tick)
   })
 
-  await alice.setInputFiles(MAIN_INPUT, fixture("sample1.png"))
+  await alice.setInputFiles(MAIN_INPUT, fixture(file))
   await alice.waitForSelector("[data-upload-preview] .ed-compose__img")
   await expect(alice.locator(".ed-compose-skel")).toHaveCount(0, { timeout: 10_000 })
   // Past the grow-in the real overlay would run on its own: if it still ran, the photo would be
@@ -111,7 +120,7 @@ test("the photo does not move when the real overlay takes over", async ({ alice,
 
   expect(skel, "the placeholder never painted a photo").not.toBeNull()
   const drift = ["x", "y", "w", "h"].map((k) => Math.abs(real.img[k] - skel.img[k]))
-  const line = `handoff drift: photo ${drift.join("/")}px (x/y/w/h), panel ${Math.abs(real.panel.h - skel.panel.h)}px tall`
+  const line = `handoff drift (${shape}): photo ${drift.join("/")}px (x/y/w/h), panel ${Math.abs(real.panel.h - skel.panel.h)}px tall`
   console.log(line, JSON.stringify({ skel, real }))
   testInfo.annotations.push({ type: "measurement", description: line })
 
@@ -157,7 +166,17 @@ test("a multi-photo pick lands in the same grid the server draws", async ({ alic
     const tick = () => {
       const tiles = [...document.querySelectorAll(".ed-compose-skel .ed-compose__tile")]
       if (tiles.length === 3 && tiles.every((t) => t.offsetWidth > 0)) {
-        window.__skel = { tiles: tiles.map(rect), panel: rect(document.querySelector(".ed-compose-skel .ed-compose__panel")) }
+        window.__skel = {
+          tiles: tiles.map(rect),
+          panel: rect(document.querySelector(".ed-compose-skel .ed-compose__panel")),
+          // A box is not a picture: opacity 0 has a rect too, and only the lone-photo case gets an
+          // explicit rule for it (#569 review).
+          painted: [...document.querySelectorAll(".ed-compose-skel .ed-compose__img")].map((im) => ({
+            opacity: Number(getComputedStyle(im).opacity),
+            decoded: im.complete && im.naturalWidth > 0,
+            w: im.getBoundingClientRect().width,
+          })),
+        }
         return
       }
       requestAnimationFrame(tick)
@@ -185,6 +204,12 @@ test("a multi-photo pick lands in the same grid the server draws", async ({ alic
   await alice.evaluate(() => window.liveSocket.disableLatencySim())
 
   expect(skel, "the placeholder never laid out three tiles").not.toBeNull()
+  expect(skel.painted.length, "a tile without a photo in it").toBe(3)
+  for (const im of skel.painted) {
+    expect(im.opacity, `a placeholder tile is transparent: ${JSON.stringify(skel.painted)}`).toBe(1)
+    expect(im.decoded, `a placeholder tile never decoded: ${JSON.stringify(skel.painted)}`).toBe(true)
+    expect(im.w, `a placeholder tile has no width: ${JSON.stringify(skel.painted)}`).toBeGreaterThan(0)
+  }
   const drift = skel.tiles.flatMap((t, i) => ["x", "y", "w", "h"].map((k) => Math.abs(real.tiles[i][k] - t[k])))
   const line = `3-photo handoff drift: tiles ${Math.max(...drift)}px, panel ${Math.abs(real.panel.h - skel.panel.h)}px`
   console.log(line, JSON.stringify({ skel, real }))
