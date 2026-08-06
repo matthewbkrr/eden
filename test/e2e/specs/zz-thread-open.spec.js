@@ -68,3 +68,33 @@ test("the thread panel shows something before the server answers", async ({
     "the placeholder stayed on screen under the real panel",
   ).toHaveCount(0)
 })
+
+// The threads LIST shares the same panel class and the same placeholder, so it has to dismiss it
+// too — raised in review as a suspicion; checked here rather than argued (#567 review).
+test("the threads list also clears the placeholder", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+  await alice.setViewportSize({ width: 1280, height: 880 })
+
+  await alice.goto(room(seed))
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.waitForTimeout(800)
+
+  const has = await alice.evaluate(() => !!document.querySelector('[phx-click="open_threads"]'))
+  test.skip(!has, "no threads-list control on this stand")
+
+  await alice.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
+  const early = await alice.evaluate(() => {
+    document.querySelector('[phx-click="open_threads"]').click()
+    return !!document.querySelector(".ed-thread-skel")
+  })
+  expect(early, "the threads list opened with nothing on screen").toBe(true)
+
+  await expect(alice.locator(".ed-thread")).toBeVisible({ timeout: 10_000 })
+  await alice.waitForTimeout(500)
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  await expect(
+    alice.locator(".ed-thread-skel"),
+    "the placeholder stayed under the threads list",
+  ).toHaveCount(0)
+})
