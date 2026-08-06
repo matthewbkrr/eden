@@ -1,7 +1,8 @@
 // What typing costs the socket (#521 tail).
 //
-// The composer form is `phx-change="composer_changed"` with no debounce, so every character is a
-// message to the server — and the server echoes `value` back into the input it came from.
+// #521 claimed the composer sends an event per character. It does not: the input carries
+// `phx-debounce="250"`, and twenty-five characters cost one event. This file exists to keep it
+// that way — the debounce is a single attribute, and losing it is silent.
 const { test, expect } = require("../helpers/fixtures")
 
 test("typing does not send a message per character", async ({ alice, seed }, testInfo) => {
@@ -34,7 +35,11 @@ test("typing does not send a message per character", async ({ alice, seed }, tes
   console.log(line)
   testInfo.annotations.push({ type: "measurement", description: line })
 
-  expect(pushes, `${line} — one round trip per keystroke`).toBeLessThan(text.length)
+  // A bound tied to the debounce, not to the length of the word (#568 review): `< text.length`
+  // still passes at one event short of per-character, which is the very thing being guarded
+  // against. Typing at 45ms/char through a 250ms debounce settles at one or two events; five is
+  // room for a slow stand, and nowhere near per-character.
+  expect(pushes, `${line} — the composer is sending per keystroke again`).toBeLessThanOrEqual(5)
 
   // ...and the server has to hold the WHOLE string, not just the last batch. Counting events alone
   // would pass on a debounce that drops characters — the comment here used to claim this check and

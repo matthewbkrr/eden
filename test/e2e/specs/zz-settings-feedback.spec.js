@@ -15,12 +15,19 @@ test("saving a profile shows the button working", async ({ alice }, testInfo) =>
 
   await alice.evaluate(() => window.liveSocket.enableLatencySim(600))
 
-  // Read once, immediately: the point is what the button looks like BEFORE the answer.
-  const during = await alice.evaluate(() => {
+  // Read while the request is still in flight — but polled, not snapped in the same tick as the
+  // click (#568 review): whether `phx-disable-with` lands before the handler returns is LiveView's
+  // business, and a test that assumes it is testing that instead of the button. The window is a
+  // fraction of the simulated latency, so "before the server answered" still holds.
+  const during = await alice.evaluate(async () => {
     const btn = [...document.querySelectorAll('button[type="submit"]')].find((b) =>
       /Save|Сохранить/.test(b.textContent),
     )
     btn.click()
+    const until = performance.now() + 200
+    while (!btn.disabled && performance.now() < until) {
+      await new Promise((r) => requestAnimationFrame(r))
+    }
     return { disabled: btn.disabled, text: btn.textContent.trim() }
   })
   console.log(`while saving: disabled=${during.disabled}, label="${during.text}"`)
