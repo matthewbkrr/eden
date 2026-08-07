@@ -353,3 +353,34 @@ test("a message arriving during selection gets an overlay too (#multiselect)", a
   await expect(alice.locator(".ed-selbar__count")).toContainText("2")
   await expect(row).toHaveClass(/ed-msg--selected/)
 })
+
+// The accessible label is built on the client from the row's own text, and a message body is not a
+// safe replacement string: `$&`, `` $` `` and `$'` are substitution patterns (#570 review). In a
+// workplace chat those arrive in pasted shell and regex.
+test("a message full of $-patterns still gets a readable select label (#multiselect)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  const body = `sed -e 's/x/$&/' $\` $' ${Date.now()}`
+  await send(alice, body)
+
+  // The full body, not a fragment of it: this DM keeps every message previous runs sent, so a short
+  // needle matches the oldest one instead of the message this test just posted.
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: body }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await expect(alice.locator(".ed-selbar")).toBeVisible()
+
+  const label = await alice
+    .locator(".ed-msg", { hasText: body })
+    .first()
+    .locator(".ed-select-hit")
+    .getAttribute("aria-label")
+  console.log("LABEL", JSON.stringify(label))
+  // The body as typed, up to the 40 characters the label keeps — not a re-inserted "{}" or a
+  // fragment of the template.
+  expect(label).toContain(body.slice(0, 30))
+  expect(label, "the placeholder survived into the label").not.toContain("{}")
+})

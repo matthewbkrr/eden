@@ -59,6 +59,14 @@ async function openMenu(page, messageLocator) {
   // as we act) just retries and re-resolves the locator, instead of failing on a stale handle.
   await base.expect(async () => {
     await messageLocator.scrollIntoViewIfNeeded().catch(() => {})
+    // The host has to be a REAL row first. A just-sent message is an optimistic clone for a beat
+    // — same classes, same text, no hook and no `data-message-id` — and a `contextmenu` dispatched
+    // at it lands on nothing at all. Measured: the first dispatch after a send was a no-op (the
+    // menu never even flickered), the next one 250ms later opened it.
+    await base
+      .expect(messageLocator)
+      .toHaveAttribute("data-message-id", /\d+/, { timeout: 2000 })
+      .catch(() => {}) // flat rows and non-message hosts carry it elsewhere; the retry covers them
     await messageLocator.dispatchEvent("contextmenu", { bubbles: true })
     await base.expect(menu).toBeVisible({ timeout: 700 })
   }).toPass({ timeout: 12_000 })

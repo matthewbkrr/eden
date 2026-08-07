@@ -55,8 +55,10 @@ const census = (page) =>
       selection: root.querySelectorAll(".ed-select-hit, .ed-select-check").length,
       // What the instant-nav cache has to serialise, parse and store: MsgCache.put silently
       // drops anything over 1 MB, so the feed's markup decides when a scrolled chat quietly
-      // stops being cached at all. Reported, not gated.
-      bytes: root.innerHTML.length,
+      // stops being cached at all. Measured with the cache's OWN instrument — `new Blob([html])
+      // .size`, UTF-8 bytes — because `.length` would count UTF-16 code units and a Russian feed
+      // is nearly two bytes per one of those (#570 review). Reported, not gated.
+      bytes: new Blob([root.innerHTML]).size,
     }
   })
 

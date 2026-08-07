@@ -13899,7 +13899,10 @@ defmodule EdenWeb.ChatLive do
             b.setAttribute(
               "aria-label",
               text
-                ? (d.labelSelectPreview || "").replace("{}", text.slice(0, 40))
+                // A function, not a string: in a replacement string `$&`, `$\`` and `$'` are
+                // substitution patterns, and this text is a message body — in a workplace chat,
+                // one that regularly holds shell and regex snippets (#570 review).
+                ? (d.labelSelectPreview || "").replace("{}", () => text.slice(0, 40))
                 : d.labelSelect || "",
             )
             b.innerHTML =
