@@ -378,9 +378,9 @@ test("a message full of $-patterns still gets a readable select label (#multisel
     .first()
     .locator(".ed-select-hit")
     .getAttribute("aria-label")
-  console.log("LABEL", JSON.stringify(label))
   // The body as typed, up to the 40 characters the label keeps — not a re-inserted "{}" or a
-  // fragment of the template.
+  // fragment of the template. No console.log: a failing `toContain` already prints the label it
+  // got, and this file reports behaviour, not measurements.
   expect(label).toContain(body.slice(0, 30))
   expect(label, "the placeholder survived into the label").not.toContain("{}")
 })
