@@ -283,3 +283,73 @@ test("forwarding from a thread carries into the room, not back into the thread (
   await expect(alice.locator("#messages .ed-flat", { hasText: rep })).toHaveCount(before + 1, { timeout: 10000 })
   await expect(alice.locator(".ed-reply-bar--forward")).toHaveCount(0)
 })
+
+// The overlays are built by .SelectSync while the mode lives, not rendered into every row (#561).
+// Two things that used to come for free from server markup now have to be arranged, and these are
+// the two.
+
+// A row can be re-streamed by something unrelated — a reaction, a read tick, an edit — and comes
+// back from the server without an overlay. The click has to keep working in that window, or a tap
+// lands on the lightbox underneath instead.
+test("a row that lost its overlay still selects, and gets it back (#multiselect)", async ({
+  alice,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  const a = `lost-a ${Date.now()}`
+  const b = `lost-b ${Date.now()}`
+  await send(alice, a)
+  await send(alice, b)
+
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: a }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+
+  const rowB = alice.locator(".ed-msg", { hasText: b }).first()
+  await expect(rowB.locator(".ed-select-hit")).toHaveCount(1)
+
+  // Both in ONE task: the observer restores the overlay on the next frame, so removing it and
+  // clicking in separate steps would land on a restored one and prove nothing.
+  await rowB.evaluate((r) => {
+    r.querySelector(".ed-select-hit").remove()
+    r.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
+  })
+
+  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(rowB).toHaveClass(/ed-msg--selected/)
+  // ...and the row is whole again, with its state, not just clickable.
+  await expect(rowB.locator(".ed-select-hit")).toHaveCount(1)
+  await expect(rowB.locator(".ed-select-hit")).toHaveAttribute("aria-pressed", "true")
+})
+
+// A message that arrives DURING the mode never passed through the render that used to carry the
+// overlay.
+test("a message arriving during selection gets an overlay too (#multiselect)", async ({
+  alice,
+  bob,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await bob.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await bob.waitForFunction(() => window.liveSocket?.isConnected())
+
+  const mine = `during-mine ${Date.now()}`
+  await send(alice, mine)
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: mine }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await expect(alice.locator(".ed-selbar")).toBeVisible()
+
+  const theirs = `during-theirs ${Date.now()}`
+  await send(bob, theirs)
+
+  const row = alice.locator(".ed-msg", { hasText: theirs }).first()
+  await expect(row).toBeVisible({ timeout: 8000 })
+  await expect(row.locator(".ed-select-hit")).toHaveCount(1, { timeout: 5000 })
+
+  await row.locator(".ed-select-hit").click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(row).toHaveClass(/ed-msg--selected/)
+})

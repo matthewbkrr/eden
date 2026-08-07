@@ -53,6 +53,10 @@ const census = (page) =>
       hooked: root.querySelectorAll("[phx-hook]").length,
       hooks,
       selection: root.querySelectorAll(".ed-select-hit, .ed-select-check").length,
+      // What the instant-nav cache has to serialise, parse and store: MsgCache.put silently
+      // drops anything over 1 MB, so the feed's markup decides when a scrolled chat quietly
+      // stops being cached at all. Reported, not gated.
+      bytes: root.innerHTML.length,
     }
   })
 
@@ -65,7 +69,7 @@ test("the feed does not carry a hook and a selection widget per row", async ({
 
   const c = await census(alice)
   const perRow = (n) => Math.round((n / c.rows) * 100) / 100
-  const line = `${c.rows} rows: ${c.nodes} nodes (${perRow(c.nodes)}/row), ${c.hooked} hooked (${perRow(c.hooked)}/row) ${JSON.stringify(c.hooks)}, ${c.selection} selection nodes`
+  const line = `${c.rows} rows: ${c.nodes} nodes (${perRow(c.nodes)}/row), ${Math.round(c.bytes / 1024)} KB of markup, ${c.hooked} hooked (${perRow(c.hooked)}/row) ${JSON.stringify(c.hooks)}, ${c.selection} selection nodes`
   console.log(line)
   testInfo.annotations.push({ type: "measurement", description: line })
 
@@ -77,12 +81,42 @@ test("the feed does not carry a hook and a selection widget per row", async ({
   // chat opens. One delegating formatter does the same work.
   expect(c.hooks.LocalTime || 0, `${line} — a time hook per row is back`).toBe(0)
 
-  // The 900 selection nodes are REPORTED, not gated. Rendering them only in selection mode cannot
-  // be done from the server: the rows live in `phx-update="stream"` and do not re-render on a
-  // plain assign change — that is why `.SelectSync` exists at all — so turning the mode on would
-  // leave every already-streamed row without its overlay. Doing it properly means creating the
-  // overlays in the hook, which is the multi-select gesture code, and that deserves its own pass.
-  expect(c.selection, "the selection overlay disappeared entirely").toBeGreaterThan(0)
+  // Measured before: 1300 of the feed's 9441 nodes were the selection overlay — two classed nodes
+  // per row, four counting the check's icon — for a mode switched on rarely. The server cannot
+  // render them on demand (stream rows don't re-render on a plain assign change, which is why
+  // `.SelectSync` exists), so the hook that owns the mode builds them (#561).
+  expect(c.selection, `${line} — the selection overlay is back in every row`).toBe(0)
+
+  // ...and they exist when the mode is on, or this would pass on a feature that simply stopped
+  // working. Through the server's own event: reaching the menu item would test the menu instead.
+  const entered = await alice.evaluate(() => {
+    const row = document.querySelector("#messages [id^=messages-]")
+    const id = row && /-(\d+)$/.exec(row.id)
+    if (!id) return null
+    window.liveSocket.execJS(
+      document.body,
+      JSON.stringify([["push", { event: "enter_select", value: { id: id[1] } }]]),
+    )
+    return id[1]
+  })
+  expect(entered, "no row to enter selection mode from").not.toBeNull()
+  await expect(alice.locator(".ed-selbar")).toBeVisible({ timeout: 10_000 })
+  await alice.waitForTimeout(300)
+
+  const inMode = await census(alice)
+  const inLine = `in selection mode: ${inMode.selection} selection nodes over ${inMode.rows} rows`
+  console.log(inLine)
+  testInfo.annotations.push({ type: "measurement", description: inLine })
+  expect(inMode.selection, `${inLine} — the mode has no overlays at all`).toBeGreaterThan(
+    inMode.rows,
+  )
+
+  // Leaving takes them off the page rather than hiding them, or nothing was saved.
+  await alice.keyboard.press("Escape")
+  await expect(alice.locator(".ed-selbar")).toHaveCount(0, { timeout: 10_000 })
+  await alice.waitForTimeout(200)
+  const after = await census(alice)
+  expect(after.selection, `${after.selection} selection nodes stayed behind after exit`).toBe(0)
 })
 
 // The point of cutting them: the switch is script-bound, and the script is per row.
