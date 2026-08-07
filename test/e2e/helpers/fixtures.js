@@ -70,10 +70,22 @@ async function openMenu(page, messageLocator) {
 // focus/timing quirks that differ between the bubble and flat composers.
 async function send(page, text) {
   // The composer can be visible before the LiveView socket connects; a submit fired
-  // pre-connect has no phx-submit to handle and is silently dropped. Wait for connect.
-  await page.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
-    timeout: 10_000,
-  })
+  // pre-connect has no phx-submit to handle and is silently dropped.
+  //
+  // Connected is not enough, though: the connected render REPLACES the dead-render form, and a
+  // submit fired in that window goes with it. Measured — submitting the instant `isConnected()`
+  // turns true, the message never arrived in ten seconds; after the composer had settled it
+  // arrived in 21-47ms. The composer's own hook having run is the signal that the form on screen
+  // is the live one (`edenVideoUrls` is set in .SendQueue's mounted()), and it is what nine
+  // specs in this harness were silently failing on.
+  await page.waitForFunction(
+    () => {
+      const f = document.getElementById("composer")
+      return !!(window.liveSocket && window.liveSocket.isConnected() && f && f.edenVideoUrls)
+    },
+    null,
+    { timeout: 10_000 },
+  )
   await page.fill("#composer-body", text)
   await page.locator("#composer").evaluate((f) => f.requestSubmit())
 }
