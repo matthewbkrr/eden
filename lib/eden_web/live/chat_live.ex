@@ -6816,6 +6816,21 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".ScrollBottom">
+        // How long a jumped-to message stays lit, from the stylesheet that animates it
+        // (`--ed-hold-focus`). Two timers used to carry the number themselves and had already
+        // drifted apart — 2200 here, 1600 in the lightbox's "show in chat" — so the lightbox's
+        // flash went out by a frame in the middle of its own fade (#517). Read once: the token is
+        // on :root and cannot change without a stylesheet reload.
+        let holdMs = 0
+        window.__edFocusHold = () => {
+          if (!holdMs) {
+            holdMs =
+              parseFloat(
+                getComputedStyle(document.documentElement).getPropertyValue("--ed-hold-focus"),
+              ) || 2200
+          }
+          return holdMs
+        }
         export default {
           mounted() {
             // Remember which conversation we're pinned to; a switch is a patch (no
@@ -7088,7 +7103,7 @@ defmodule EdenWeb.ChatLive do
                 return this.pushEvent("message_unavailable")
               }
               el.classList.add("ed-msg--focus")
-              this.focusUntil = Date.now() + 2200
+              this.focusUntil = Date.now() + window.__edFocusHold()
               const holdUntil = Date.now() + 800
               const hold = () => {
                 const node = document.getElementById(domId)
@@ -7113,7 +7128,7 @@ defmodule EdenWeb.ChatLive do
                 this.focusUntil = 0
                 this.focusId = null
                 document.getElementById(domId)?.classList.remove("ed-msg--focus")
-              }, 2200)
+              }, window.__edFocusHold())
             }
             requestAnimationFrame(go)
           },
@@ -11785,9 +11800,19 @@ defmodule EdenWeb.ChatLive do
                 setTimeout(() => {
                   const row = document.getElementById(`messages-${id}`)
                   if (!row) return
-                  row.scrollIntoView({ block: "center", behavior: "smooth" })
+                  // "auto" for anyone who asked for no motion — the two other jump-to-a-message
+                  // scrollers already scroll instantly, this one alone glided (#517).
+                  row.scrollIntoView({
+                    block: "center",
+                    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+                      ? "auto"
+                      : "smooth",
+                  })
                   row.classList.add("ed-msg--focus")
-                  setTimeout(() => row.classList.remove("ed-msg--focus"), 1600)
+                  // The token, not 1600: the flash is a 2200ms animation whose fade lives in its
+                  // last third, so stripping the class early switched the ring off by a frame
+                  // instead of letting it go out (#517).
+                  setTimeout(() => row.classList.remove("ed-msg--focus"), window.__edFocusHold())
                 }, 180)
                 return
               }
