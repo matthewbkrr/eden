@@ -13751,42 +13751,6 @@ defmodule EdenWeb.ChatLive do
     gettext("%{names} and %{last}", names: Enum.join(leading, ", "), last: last)
   end
 
-  attr :id, :any, required: true
-  attr :preview, :string, default: nil
-
-  # Multi-select click-catcher (Telegram-style): a full-row overlay that toggles this message's
-  # selection — suppressing the normal click (lightbox, reactions, profile) — with a leading
-  # checkbox. Rendered ALWAYS but hidden (`display:none`) until the #messages container carries
-  # `.selecting` (server-driven), which flips it to `display:block`; the row's `--selected` wash
-  # + the check glyph + the button's aria-pressed are reflected onto the row by the .SelectSync
-  # hook, because phx-update="stream" rows don't re-render on a plain @selection change.
-  defp select_overlay(assigns) do
-    ~H"""
-    <button
-      type="button"
-      class="ed-select-hit"
-      phx-click="toggle_select"
-      phx-value-id={@id}
-      data-select-id={@id}
-      aria-pressed="false"
-      aria-label={
-        (@preview && gettext("Select: %{preview}", preview: @preview)) ||
-          gettext("Select message")
-      }
-    >
-      <span class="ed-select-check" aria-hidden="true">
-        <.icon name="hero-check-micro" class="size-3" />
-      </span>
-    </button>
-    """
-  end
-
-  # A short body preview for the select overlay's accessible label (media/empty → generic).
-  defp select_preview(%{body: body}) when is_binary(body) and body != "",
-    do: String.slice(body, 0, 40)
-
-  defp select_preview(_), do: nil
-
   attr :selection, :any, required: true
   attr :confirming, :boolean, default: false
   attr :container, :string, default: "#messages"
@@ -13796,6 +13760,11 @@ defmodule EdenWeb.ChatLive do
 
   # The bottom action bar shown in place of the composer while selecting (Telegram-style):
   # a count + the actions on the selected messages (forward / copy / delete).
+  #
+  # It also carries what the .SelectSync hook needs to BUILD the per-row select overlays (#561),
+  # which the server no longer renders: the sprite href for the check glyph, and the two
+  # accessible labels. The preview label keeps the msgid translators already have and is handed
+  # over with a `{}` where the text goes — only the client can read a rendered row.
   defp selection_bar(assigns) do
     assigns = assign(assigns, :count, MapSet.size(assigns.selection))
 
@@ -13806,6 +13775,9 @@ defmodule EdenWeb.ChatLive do
       phx-hook=".SelectSync"
       data-container={@container}
       data-selected={Jason.encode!(MapSet.to_list(@selection))}
+      data-check-icon={~p"/images/icons.svg" <> "#hero-check-micro"}
+      data-label-select={gettext("Select message")}
+      data-label-select-preview={gettext("Select: %{preview}", preview: "{}")}
       phx-window-keydown={not @confirming && "exit_select"}
       phx-key="Escape"
       role="toolbar"
@@ -13822,15 +13794,28 @@ defmodule EdenWeb.ChatLive do
             // The stream container this bar drives (#messages OR #thread-replies).
             this.c = this.el.dataset.container || "#messages"
             this.anchor = null
-            // Shift-click a row → select the whole range from the last-clicked row to this one.
-            // Capture phase so we can pre-empt the overlay's normal toggle for a shift-click.
+            // The overlays are BUILT here, not rendered by the server (#561). One button + check
+            // + icon per row measured 2600 of a 671-row feed's 9441 nodes — 27% — for a mode
+            // that is switched on rarely. They cannot simply be rendered on demand instead: the
+            // rows live in phx-update="stream" and do not re-render on a plain @selection change
+            // (the same reason sync() exists at all), so a server-side :if would leave every
+            // already-streamed row without one. The hook that already owns selection state owns
+            // their lifetime too, and it lives exactly as long as the mode does.
+            this.ensure()
+            // Every click inside a row belongs to selection while this hook lives. Not just
+            // clicks on the overlay: a row re-streamed by an unrelated event (a reaction, a read
+            // tick, a thumbnail swap) comes back from the server WITHOUT one until the observer
+            // below re-adds it, and a tap landing in that frame must not reach the lightbox
+            // underneath. Capture phase, so it pre-empts LiveView's own click handling.
             this.onClick = (e) => {
-              const hit = e.target.closest(this.c + " .ed-select-hit")
-              if (!hit) return
-              const id = hit.dataset.selectId
+              const row = e.target.closest(this.rowSel())
+              if (!row) return
+              const id = this.rowId(row)
+              if (!id) return
+              e.preventDefault()
+              e.stopImmediatePropagation()
               if (e.shiftKey && this.anchor && this.anchor !== id) {
-                e.preventDefault()
-                e.stopImmediatePropagation()
+                // Shift-click a row → select the whole range from the last-clicked row to this one.
                 this.pushEvent("select_range", { ids: this.range(this.anchor, id) })
               } else {
                 // Paint the tick NOW, before the server answers (#521). The selection lives on
@@ -13840,49 +13825,112 @@ defmodule EdenWeb.ChatLive do
                 // Guessing is safe here precisely because sync() is authoritative: it repaints
                 // from `data-selected` on the very next patch, so a wrong guess (a rejected
                 // toggle, a race) corrects itself within one round trip and never persists.
-                this.paint(hit, hit.getAttribute("aria-pressed") !== "true")
+                this.paint(row, !this.selected(row))
+                this.pushEvent("toggle_select", { id })
               }
               this.anchor = id
             }
             document.addEventListener("click", this.onClick, true)
             // A selected row can be re-streamed by an INDEPENDENT event (a reaction, a read tick,
             // a thumbnail swap, an edit): morphdom then rebuilds it from the server markup, which
-            // always renders aria-pressed="false" and no --selected wash, dropping the highlight.
-            // #selbar only re-renders on a @selection/@confirming change, so its own updated()
-            // sync() won't fire. Watch the stream container (like .DateRail) and re-apply the
-            // highlight on any row mutation; rAF-coalesced so a burst of patches is one sync.
+            // carries neither the overlay nor the highlight. #selbar only re-renders on a
+            // @selection/@confirming change, so its own updated() won't fire. Watch the stream
+            // container (like .DateRail) and restore both; rAF-coalesced so a burst of patches is
+            // one pass, and ensure() is idempotent so our own insertions settle immediately.
             const container = document.querySelector(this.c)
             if (container) {
               this.mo = new MutationObserver(() => {
                 if (this._raf) return
-                this._raf = requestAnimationFrame(() => { this._raf = null; this.sync() })
+                this._raf = requestAnimationFrame(() => {
+                  this._raf = null
+                  this.ensure()
+                  this.sync()
+                })
               })
               this.mo.observe(container, { childList: true, subtree: true })
             }
             this.sync()
           },
-          updated() { this.sync() },
+          updated() {
+            this.ensure()
+            this.sync()
+          },
           destroyed() {
             document.removeEventListener("click", this.onClick, true)
             this.mo && this.mo.disconnect()
             if (this._raf) cancelAnimationFrame(this._raf)
             this.clear()
+            // Removed, not hidden: hiding them would keep every node this change exists to drop.
+            this.strip()
+          },
+          rowSel() {
+            return this.c + " .ed-msg, " + this.c + " .ed-flat"
+          },
+          rows() {
+            return [...document.querySelectorAll(this.rowSel())]
+          },
+          // The message id, from the stream's dom id (`messages-12` / `thread-12`). Digits only:
+          // an unexpected prefix must yield nothing rather than push a nonsense id at the server.
+          rowId(row) {
+            const m = /-(\d+)$/.exec(row.id || "")
+            return m && m[1]
+          },
+          ensure() {
+            for (const row of this.rows()) {
+              if (row.querySelector(":scope > .ed-select-hit")) continue
+              const id = this.rowId(row)
+              if (id) row.prepend(this.buildHit(row, id))
+            }
+          },
+          // The overlay, exactly as the server used to render it: a full-row click-catcher with
+          // a leading checkbox. No phx-click — the capture handler above pushes the event, and
+          // both would fire on the same tap.
+          buildHit(row, id) {
+            const d = this.el.dataset
+            const b = document.createElement("button")
+            b.type = "button"
+            b.className = "ed-select-hit"
+            b.dataset.selectId = id
+            b.setAttribute("aria-pressed", "false")
+            // The same element the selection bar's Copy reads, so a row's text has one definition.
+            const text = (
+              row.querySelector(".ed-flat__body, .ed-bubble__cap .break-words")?.textContent || ""
+            ).trim()
+            b.setAttribute(
+              "aria-label",
+              text
+                // A function, not a string: in a replacement string `$&`, `$\`` and `$'` are
+                // substitution patterns, and this text is a message body — in a workplace chat,
+                // one that regularly holds shell and regex snippets (#570 review).
+                ? (d.labelSelectPreview || "").replace("{}", () => text.slice(0, 40))
+                : d.labelSelect || "",
+            )
+            b.innerHTML =
+              '<span class="ed-select-check" aria-hidden="true">' +
+              `<svg class="ed-icon size-3" aria-hidden="true" focusable="false"><use href="${d.checkIcon}"></use></svg>` +
+              "</span>"
+            return b
+          },
+          strip() {
+            document.querySelectorAll(this.c + " .ed-select-hit").forEach((h) => h.remove())
           },
           range(a, b) {
-            const hits = [...document.querySelectorAll(this.c + " .ed-select-hit")]
-            const ids = hits.map((h) => h.dataset.selectId)
+            const ids = this.rows().map((r) => this.rowId(r))
             let i = ids.indexOf(a), j = ids.indexOf(b)
             if (i < 0 || j < 0) return [b]
             if (i > j) [i, j] = [j, i]
-            return ids.slice(i, j + 1)
+            return ids.slice(i, j + 1).filter(Boolean)
           },
-          // One row's highlight, exactly as sync() paints it — the optimistic path and the
-          // authoritative one must agree on the markup or the tick would flicker between them.
-          paint(hit, on) {
-            const row = hit.closest(".ed-msg, .ed-flat")
-            if (!row) return
+          selected(row) {
+            return row.classList.contains("ed-msg--selected") || row.classList.contains("ed-flat--selected")
+          },
+          // One row's highlight, from the row itself: the optimistic path and the authoritative
+          // one must agree on the markup or the tick would flicker between them — and the row is
+          // the only thing both can count on, since the overlay may be a frame behind a re-stream.
+          paint(row, on) {
             row.classList.toggle(row.classList.contains("ed-flat") ? "ed-flat--selected" : "ed-msg--selected", on)
-            hit.setAttribute("aria-pressed", on ? "true" : "false")
+            const hit = row.querySelector(":scope > .ed-select-hit")
+            if (hit) hit.setAttribute("aria-pressed", on ? "true" : "false")
           },
           sync() {
             let ids = []
@@ -13890,22 +13938,10 @@ defmodule EdenWeb.ChatLive do
             // Seed the shift-range anchor from the message that entered select mode.
             if (!this.anchor && ids.length) this.anchor = String(ids[ids.length - 1])
             const set = new Set(ids.map(String))
-            const mark = (sel, cls) =>
-              document.querySelectorAll(this.c + " " + sel).forEach((r) => {
-                const hit = r.querySelector(".ed-select-hit")
-                const on = !!hit && set.has(String(hit.dataset.selectId))
-                r.classList.toggle(cls, on)
-                if (hit) hit.setAttribute("aria-pressed", on ? "true" : "false")
-              })
-            mark(".ed-msg", "ed-msg--selected")
-            mark(".ed-flat", "ed-flat--selected")
+            for (const row of this.rows()) this.paint(row, set.has(String(this.rowId(row))))
           },
           clear() {
-            document.querySelectorAll(this.c + " .ed-select-hit[aria-pressed=true]")
-              .forEach((h) => h.setAttribute("aria-pressed", "false"))
-            document
-              .querySelectorAll(this.c + " .ed-msg--selected, " + this.c + " .ed-flat--selected")
-              .forEach((r) => r.classList.remove("ed-msg--selected", "ed-flat--selected"))
+            for (const row of this.rows()) this.paint(row, false)
           },
         }
       </script>
@@ -14104,7 +14140,6 @@ defmodule EdenWeb.ChatLive do
           menu_attrs(@message, @mine, @me, @conversation_id, threads: true, in_thread: @in_thread)) ||
          []}
     >
-      <.select_overlay id={@message.id} preview={select_preview(@message)} />
       <div class="ed-flat__gutter">
         <button
           :if={!@message.compact && @message.sender}
@@ -14272,7 +14307,6 @@ defmodule EdenWeb.ChatLive do
       data-group-id={@message.group_id}
       data-ts={@message.inserted_at && DateTime.to_unix(@message.inserted_at)}
     >
-      <.select_overlay id={@message.id} preview={select_preview(@message)} />
       <%!-- Bubble + reactions stack in a column so reactions hang UNDER the bubble
             (aligned to its side), not inside it (#107). Inside the bubble their chip
             outline + count blended into the bubble fill and read as a bare emoji. --%>

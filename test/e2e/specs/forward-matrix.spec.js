@@ -26,7 +26,16 @@ const destStreamSel = (dest) => (dest === "thread" ? "#thread-replies" : "#messa
 
 let seq = 0
 const tok = () => `fm${Date.now()}_${seq++}`
-const connect = (page) => page.waitForFunction(() => window.liveSocket?.isConnected())
+// Connected is not the same as ready to post: the connected render REPLACES the dead-render
+// composer, and a submit fired in that window goes with it — the whole matrix was failing at its
+// first message for exactly this (the same defect the `send` helper in ../helpers/fixtures.js
+// carries a longer note about). The composer's own hook having run says the live form is the one
+// on screen; `edenVideoUrls` is set in .SendQueue's mounted().
+const connect = (page) =>
+  page.waitForFunction(() => {
+    const f = document.getElementById("composer")
+    return !!(window.liveSocket?.isConnected() && f && f.edenVideoUrls)
+  })
 
 const comp = (surface) =>
   surface === "thread"
@@ -196,7 +205,10 @@ for (const src of ["dm", "room", "thread"])
       const menu = await openMenu(alice, sourceRow(alice, src, a))
       await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
       await expect(alice.locator(".ed-selbar")).toBeVisible()
-      const rows = alice.locator(`${streamSel(src)} ${rowSel(src)}`)
+      // The selection overlay covers the whole ROW, and in a DM the row is `.ed-msg` — `.ed-bubble`
+      // sits inside it, so looking for the overlay there finds nothing (it never did; the file was
+      // red for the reason fixed in `connect` above, so this never got as far as being noticed).
+      const rows = alice.locator(`${streamSel(src)} ${src === "dm" ? ".ed-msg" : rowSel(src)}`)
       const total = await rows.count()
       for (const i of [total - 2, total - 1]) await rows.nth(i).locator(".ed-select-hit").click()
       await expect(alice.locator(".ed-selbar__count")).toContainText("3")

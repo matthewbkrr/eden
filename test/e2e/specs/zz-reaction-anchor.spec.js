@@ -19,7 +19,11 @@ test("an optimistic reaction lands where the server puts it", async ({ alice, se
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  // From the row's own stream dom id (`messages-123`). It used to be scraped off any
+  // `[phx-value-id]` inside the row — which was the select overlay, and since #561 that exists
+  // only while selection mode is on. A row's identity is its stream id; the overlay never was.
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
+  expect(id, "the row carries no stream id to react to").not.toBeNull()
 
   // Paint it, and record the parent the CLIENT chose — read once, before any answer can arrive.
   const optimistic = await alice.evaluate(([mid]) => {

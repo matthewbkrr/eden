@@ -20,7 +20,7 @@ test("the space under a message opens gradually, not in one step", async ({ alic
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
 
   // The feed suppresses motion for the frame a batch lands in. Wait it out — a person reacting
   // does too.
@@ -80,7 +80,7 @@ test("reduced motion gets the space without the animation", async ({ alice, seed
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
 
   const state = await alice.evaluate(([mid]) => {
     window.__edReact(mid, "👍")
@@ -111,7 +111,7 @@ test("the space closes gradually when the last reaction goes", async ({ alice, s
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
 
   // Through the SERVER, so the chip is real: an optimistic one is wiped by the next re-render of
   // the row (a read tick is enough), and the close would then be measured from an already-closed
@@ -219,7 +219,7 @@ test("a reaction that arrives mid-close reopens the space cleanly", async ({ ali
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
 
   await alice.evaluate(() => window.liveSocket.enableLatencySim(600))
 
@@ -286,7 +286,7 @@ test("opening a chat does not play the reveal on every message", async ({ alice,
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const seedRow = alice.locator("#messages .ed-msg", { hasText: seedBody }).first()
   await expect(seedRow).toBeVisible()
-  const seedId = await seedRow.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const seedId = await seedRow.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
   await alice.evaluate(
     ([mid]) =>
       window.liveSocket.execJS(
@@ -319,7 +319,7 @@ test("opening a chat does not play the reveal on every message", async ({ alice,
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
   await alice.waitForTimeout(400)
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
 
   await alice.evaluate(([mid]) => window.__edReact(mid, "👍"), [id])
   await alice.waitForTimeout(300)
@@ -401,7 +401,7 @@ test("the feed does not twitch while a reaction collapses", async ({ alice, seed
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
   const row = alice.locator("#messages .ed-msg", { hasText: body }).first()
   await expect(row).toBeVisible()
-  const id = await row.locator("[phx-value-id]").first().getAttribute("phx-value-id")
+  const id = await row.evaluate((r) => (/-(\d+)$/.exec(r.id) || [])[1] || null)
 
   await alice.evaluate(
     ([mid]) =>
