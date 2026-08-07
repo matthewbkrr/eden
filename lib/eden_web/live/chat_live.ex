@@ -6824,10 +6824,14 @@ defmodule EdenWeb.ChatLive do
         let holdMs = 0
         window.__edFocusHold = () => {
           if (!holdMs) {
-            holdMs =
-              parseFloat(
-                getComputedStyle(document.documentElement).getPropertyValue("--ed-hold-focus"),
-              ) || 2200
+            // Unit-aware: `2.2s` and `2200ms` are the same duration, and a bare parseFloat would
+            // turn the first into a two-millisecond flash (#571 review). The stylesheet is free to
+            // write either.
+            const raw = getComputedStyle(document.documentElement)
+              .getPropertyValue("--ed-hold-focus")
+              .trim()
+            const n = parseFloat(raw)
+            holdMs = !n ? 2200 : /ms$/.test(raw) ? n : n * 1000
           }
           return holdMs
         }
@@ -11800,12 +11804,14 @@ defmodule EdenWeb.ChatLive do
                 setTimeout(() => {
                   const row = document.getElementById(`messages-${id}`)
                   if (!row) return
-                  // "auto" for anyone who asked for no motion — the two other jump-to-a-message
-                  // scrollers already scroll instantly, this one alone glided (#517).
+                  // "instant", not "auto", for anyone who asked for no motion: "auto" DELEGATES to
+                  // the container's computed `scroll-behavior`, so it only happens to be instant
+                  // while no scroller in this app sets `smooth` (#571 review). The two other
+                  // jump-to-a-message scrollers already skip the glide; this one alone did not.
                   row.scrollIntoView({
                     block: "center",
                     behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
-                      ? "auto"
+                      ? "instant"
                       : "smooth",
                   })
                   row.classList.add("ed-msg--focus")

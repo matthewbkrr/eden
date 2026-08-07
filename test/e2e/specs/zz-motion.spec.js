@@ -90,6 +90,64 @@ test("everything that clocks the focus flash reads the same number", async ({ al
   )
 })
 
+// The check above proves the numbers agree; it says nothing about the timers actually using them —
+// a call site could hardcode 1600 again and it would stay green (#571 review). This one watches the
+// class the flash lives on, through the very path that had drifted.
+test("the flash from the viewer lasts as long as its animation", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+  test.skip(!seed.portrait_msg_id, "no seeded photo on this stand")
+
+  await alice.goto(`/app/c/${seed.dm_id}/m/${seed.portrait_msg_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.locator(`#messages-${seed.portrait_msg_id}`).waitFor({ timeout: 15_000 })
+  // The permalink lights the message on arrival; wait that flash out, or the observer below would
+  // clock its tail instead of the jump's.
+  await alice.waitForFunction(() => !document.querySelector(".ed-msg--focus"), null, {
+    timeout: 15_000,
+  })
+
+  const tile = alice.locator(`#messages-${seed.portrait_msg_id} .ed-photo`).first()
+  await tile.click()
+  await alice.waitForFunction(() => document.getElementById("ed-lightbox")?.open)
+  await alice.waitForTimeout(500)
+
+  await alice.evaluate(() => {
+    window.__hold = { added: null, removed: null }
+    const seen = () => !!document.querySelector(".ed-msg--focus")
+    window.__holdMo = new MutationObserver(() => {
+      const t = performance.now()
+      if (seen() && window.__hold.added === null) window.__hold.added = t
+      else if (!seen() && window.__hold.added !== null && window.__hold.removed === null) {
+        window.__hold.removed = t
+      }
+    })
+    window.__holdMo.observe(document.getElementById("messages"), {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class"],
+    })
+  })
+
+  await alice.locator("#ed-lightbox .ed-lightbox__more").click()
+  await alice.locator('#ed-lightbox [data-act="show"]').click()
+  await alice.waitForTimeout(3500)
+
+  const hold = await alice.evaluate(() => {
+    window.__holdMo?.disconnect()
+    return window.__hold
+  })
+  const lasted =
+    hold.added !== null && hold.removed !== null ? Math.round(hold.removed - hold.added) : null
+  console.log(`viewer jump: flash lasted ${lasted}ms`)
+
+  expect(hold.added, "the jump never lit the message").not.toBeNull()
+  expect(lasted, "the flash never went out").not.toBeNull()
+  // The animation is 2200ms. 1600 was the drift this exists to catch, so the window is tight
+  // enough to separate them and loose enough for a busy frame.
+  expect(lasted, `the flash lasted ${lasted}ms, the animation runs 2200ms`).toBeGreaterThan(2000)
+  expect(lasted, `the flash lasted ${lasted}ms, the animation runs 2200ms`).toBeLessThan(2800)
+})
+
 // Jumping to a message from the photo viewer glided there; the two other jump-to-a-message
 // scrollers already scroll instantly. Under reduced motion a glide is the thing to drop.
 test("jumping to a message from the viewer does not glide under reduced motion", async ({

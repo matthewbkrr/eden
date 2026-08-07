@@ -99,8 +99,10 @@ html {
   --ed-ease: cubic-bezier(0.22, 1, 0.36, 1);
   /* How long a jumped-to message stays lit. A duration two JS timers also have to know: they used
      to hardcode it, and one of them had already drifted to 1600ms — cutting the flash off inside
-     its own fade (#517). Anything that clocks this animation reads the token. */
-  --ed-hold-focus: 2200ms;
+     its own fade (#517). Anything that clocks this animation reads the token.
+     Written in seconds like every other duration in this file — which also keeps the JS reader
+     honest: a bare parseFloat would take `2.2s` for two milliseconds (#571 review). */
+  --ed-hold-focus: 2.2s;
   --ed-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --ed-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
