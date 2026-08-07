@@ -3202,6 +3202,20 @@ defmodule EdenWeb.ChatLive do
             // Capture phase so we paint BEFORE LiveView's click handling kicks off the patch.
             this.onClick = (e) => this.maybeStart(e)
             document.addEventListener("click", this.onClick, true)
+            // A pick is not a click — it lands on the upload input, and only the main `attachment`
+            // channel opens the staging overlay (the resend and sequential channels are internal).
+            //
+            // `input`, NOT `change`: LiveView's uploader takes the files on the `input` event and
+            // empties the element, so a `change` listener — even in the capture phase — is handed
+            // `files.length === 0` and has nothing to paint. Measured, not assumed: the same probe
+            // reads `input:attachment:1` then `change:attachment:0`.
+            this.onPick = (e) => {
+              const input = e.target
+              if (input && input.type === "file" && input.name === "attachment") {
+                this.pickPreview(input)
+              }
+            }
+            document.addEventListener("input", this.onPick, true)
             // .ScrollBottom fires this once the real stream for a conversation is in the DOM:
             // snapshot it into the cache (so the NEXT open paints instantly), then, if this is the
             // conversation we're transitioning to, drop the overlay.
@@ -4308,6 +4322,132 @@ defmodule EdenWeb.ChatLive do
             this.asideOv = ov
             this.asideTimer = setTimeout(() => this.asideDismiss(), 15000)
           },
+          // A picked photo, on screen before the server has heard about it (#521). The staging
+          // overlay is gated on `live_entries(...)` — the SERVER's list — so between closing the
+          // picker and seeing a thumbnail there was a full round trip: measured at 1060ms with the
+          // socket at 500ms, on a file that is already on the device.
+          //
+          // Same shape as the thread placeholder below: paint now, step aside when the real one
+          // arrives. Two rules keep the handoff invisible rather than merely early:
+          //
+          //   * the placeholder carries the panel's chrome as empty blocks, so the box it draws is
+          //     the box the real overlay draws (the e2e asserts the photo does not move);
+          //   * it stays until the real preview has actually painted, and marks the overlay
+          //     `--handoff` on the way out — the lone-photo grow-in exists to cover the decode, and
+          //     replaying it under a photo already on screen would read as a flinch.
+          //
+          // Images only. A video or a document changes the panel's anatomy (film tile, file list),
+          // and a placeholder that guesses that wrong would move things on handoff — worse than the
+          // wait it saves.
+          pickPreview(input) {
+            const files = [...(input.files || [])]
+            if (!files.length || !files.every((f) => /^image\//.test(f.type || ""))) return
+            if (document.querySelector("[data-upload-preview]")) return
+            // One composer, read once, used for both the cap and the object-URL store below: only
+            // the main `attachment` channel reaches here, and it renders inside #composer (the
+            // thread's own tray is `thread_attachment`, which this listener never sees).
+            const composer = input.closest("#composer")
+            // A pick past the staging cap is stopped dead by SendQueue (stopImmediatePropagation +
+            // a cleared input, #193): nothing stages, so no overlay is ever coming and a
+            // placeholder would be a photo that vanishes a few seconds later. Same number, read
+            // from the same attribute.
+            if (files.length > (Number(composer?.dataset.maxStaged) || 50)) return
+            this.pickDismiss()
+
+            // The object URL SendQueue would mint anyway, keyed the way it keys them: filling the
+            // shared store here means one URL per file rather than two, its owner still revokes it,
+            // and .ImgPreview reads back the very URL already decoded for this placeholder — so the
+            // real preview paints from a warm cache.
+            const store = composer?.edenVideoUrls
+            const mine = []
+            // Every picked file, not the first ten: the overlay shows all of them (albums of ten
+            // are a SEND-side split), so a truncated placeholder would resize the panel on handoff.
+            const tiles = files
+              .map((f) => {
+                const key = `${f.name}:${f.size}:${f.lastModified}`
+                let url
+                if (store) {
+                  if (!store.has(key)) store.set(key, URL.createObjectURL(f))
+                  url = store.get(key)
+                } else {
+                  url = URL.createObjectURL(f)
+                  mine.push(url)
+                }
+                return `<div class="ed-compose__tile"><img class="ed-compose__img" src="${url}" alt=""></div>`
+              })
+              .join("")
+
+            // album_cols/1, in the same order the server uses.
+            const n = files.length
+            const cols = n <= 3 ? n : n === 4 ? 2 : 3
+            const grid = `ed-compose__grid ed-album--${cols}${n === 1 ? " ed-compose__grid--single" : ""}`
+
+            const ov = document.createElement("div")
+            ov.className = "ed-compose ed-compose-skel"
+            ov.setAttribute("aria-hidden", "true")
+            ov.innerHTML =
+              '<div class="ed-compose__scrim"></div>' +
+              '<div class="ed-compose__panel">' +
+              '<div class="ed-compose__head"></div>' +
+              `<div class="ed-compose__body"><div class="${grid}">${tiles}</div></div>` +
+              '<div class="ed-compose__foot"></div>' +
+              "</div>"
+            // It looks modal, so it behaves modally: a tap lands HERE rather than falling through
+            // to a message underneath (#569 review P1) — and dismisses, so a placeholder whose
+            // answer never comes can never hold the screen hostage either.
+            //
+            // On release, not on press: the placeholder has to still be under the finger when the
+            // press is delivered, or the press retargets to whatever was beneath and focuses it —
+            // the fall-through this listener exists to stop.
+            ov.addEventListener("pointerup", () => this.pickDismiss())
+            document.body.appendChild(ov)
+            this.pickOv = ov
+            this.pickUrls = mine
+
+            // Polled rather than observed: what ends the placeholder is an image finishing its
+            // decode, which is not a DOM mutation.
+            const t0 = performance.now()
+            const poll = () => {
+              if (this.pickOv !== ov) return
+              const real = document.querySelector("[data-upload-preview]")
+              const imgs = real ? [...real.querySelectorAll(".ed-compose__img")] : []
+              // Settled, not decoded (#569 review): a file that says image/png and is not one ends
+              // with `naturalWidth === 0` forever, and waiting for a decode that will never come
+              // parked a dead placeholder over the live overlay for the whole ceiling. A src it has
+              // finished with — succeeded or failed — is the real signal, and .ImgPreview sizes the
+              // box before it assigns one either way, so this cannot hand off early.
+              const painted = imgs.length > 0 && imgs.every((im) => !!im.getAttribute("src") && im.complete)
+              if (painted) {
+                real.classList.add("ed-compose--handoff")
+                this.pickDismiss()
+              } else if (!window.liveSocket?.isConnected()) {
+                // The answer is not merely late, it is not coming: a pick made across a dropped
+                // socket is lost with the cleared input, there is nothing to resume. Better an
+                // empty screen than a modal that answers nothing.
+                this.pickDismiss()
+              } else if (performance.now() - t0 < 10_000) {
+                // Ten seconds, not three (#569 review): what the placeholder waits for is one round
+                // trip, not the upload, but on a bad mobile link that round trip can still be
+                // seconds — and a slow link is exactly where the placeholder is worth the most.
+                this.pickRaf = requestAnimationFrame(poll)
+              } else {
+                this.pickDismiss()
+              }
+            }
+            this.pickRaf = requestAnimationFrame(poll)
+          },
+          pickDismiss() {
+            const ov = this.pickOv
+            cancelAnimationFrame(this.pickRaf)
+            this.pickOv = null
+            if (ov) ov.remove()
+            // Off the page first, then let the URLs go — nothing can be asked to paint one that has
+            // just been revoked. And only what this placeholder minted alone: a URL that went into
+            // the shared store is revoked by its owner, and pulling it out from under .ImgPreview
+            // would blank the preview it is about to hand over to.
+            ;(this.pickUrls || []).forEach((u) => URL.revokeObjectURL(u))
+            this.pickUrls = null
+          },
           // The thread panel's shape, painted before the server has said anything. Same skeleton
           // parts as the sidebar overlay above — the same idea aimed at a different rectangle:
           // full screen on a phone, the 24rem column on desktop.
@@ -4475,6 +4615,8 @@ defmodule EdenWeb.ChatLive do
           },
           destroyed() {
             this.threadSkelDismiss()
+            this.pickDismiss()
+            this.onPick && document.removeEventListener("input", this.onPick, true)
             window.__edInstantNavReady = false
             document.removeEventListener("click", this.onClick, true)
             window.__edNavBusy = false

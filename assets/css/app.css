@@ -2424,6 +2424,31 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The picked-photo placeholder (#521): the same box as the real staging overlay, minus every
+     control — it stands in for one round trip. The head/foot heights stand in for chrome this box does not draw; zz-pick-preview asserts the
+     photo does not move when the real overlay takes over, so they cannot drift unnoticed.
+     It catches pointers like the real overlay does (a scrim that lets taps through to the chat
+     underneath would be a lie) — the hook dismisses on one. */
+  .ed-compose-skel .ed-compose__head {
+    min-height: 3.3125rem;
+  }
+  .ed-compose-skel .ed-compose__foot {
+    min-height: 3.8125rem;
+  }
+  /* A lone photo is sized by .ImgPreview in the real overlay and grows in from nothing; here there
+     is no hook, so the browser sizes it from the file and it is simply on screen. */
+  .ed-compose-skel .ed-compose__grid--single .ed-compose__img {
+    width: auto;
+    height: auto;
+    opacity: 1;
+    transition: none;
+  }
+  /* Handed over from a placeholder: the photo is already on screen, so the grow-in has nothing left
+     to cover and would only make it flinch. */
+  .ed-compose--handoff .ed-compose__grid--single .ed-compose__img {
+    opacity: 1;
+    transition: none;
+  }
   .ed-compose__panel {
     position: relative;
     display: flex;
