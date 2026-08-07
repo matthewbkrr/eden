@@ -177,7 +177,16 @@ test("a multi-photo pick lands in the same grid the server draws", async ({ alic
     }
     const tick = () => {
       const tiles = [...document.querySelectorAll(".ed-compose-skel .ed-compose__tile")]
-      if (tiles.length === 3 && tiles.every((t) => t.offsetWidth > 0)) {
+      const imgs = [...document.querySelectorAll(".ed-compose-skel .ed-compose__img")]
+      // The tile is a CSS square from the first frame, the photo inside it is not: snapshot once
+      // all three have decoded, or the probe races the decode and reports a tile as blank when it
+      // was merely early (a flake this test had, not a defect it caught).
+      if (
+        tiles.length === 3 &&
+        tiles.every((t) => t.offsetWidth > 0) &&
+        imgs.length === 3 &&
+        imgs.every((im) => im.complete && im.naturalWidth > 0)
+      ) {
         window.__skel = {
           tiles: tiles.map(rect),
           panel: rect(document.querySelector(".ed-compose-skel .ed-compose__panel")),
@@ -315,6 +324,49 @@ test("a pick past the staging cap paints no placeholder", async ({ alice, seed }
   await alice.waitForTimeout(1500)
   expect(await alice.locator(".ed-compose-skel").count(), "an over-cap pick drew a placeholder").toBe(0)
   expect(await alice.locator("[data-upload-preview]").count(), "an over-cap pick staged after all").toBe(0)
+})
+
+// A file can say image/png and not be one. The real preview then never decodes, and a placeholder
+// that waits for a decode sits dead over the live overlay for the whole ceiling — with the pointer
+// fix above, on top of it (#569 review).
+test("a file that lies about being a photo still hands off", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(600)
+
+  await alice.evaluate(() => {
+    window.__seen = null
+    window.__gone = null
+    const t0 = performance.now()
+    const tick = () => {
+      const n = document.querySelectorAll(".ed-compose-skel").length
+      if (n && window.__seen === null) window.__seen = performance.now() - t0
+      if (window.__seen !== null && !n) {
+        window.__gone = performance.now() - t0
+        return
+      }
+      if (performance.now() - t0 < 12_000) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+
+  await alice.setInputFiles(MAIN_INPUT, {
+    name: "not-really.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("this is not a PNG, whatever the extension says"),
+  })
+  await expect(alice.locator("[data-upload-preview]")).toHaveCount(1, { timeout: 10_000 })
+  await alice.waitForTimeout(1500)
+
+  const { seen, gone } = await alice.evaluate(() => ({ seen: window.__seen, gone: window.__gone }))
+  console.log(`undecodable pick: placeholder painted at ${seen && Math.round(seen)}ms, gone at ${gone && Math.round(gone)}ms`)
+  expect(seen, "the placeholder never painted, so its exit proves nothing").not.toBeNull()
+  expect(gone, "the placeholder waited for a decode that never comes").not.toBeNull()
+  // Well inside the ten-second ceiling: the point is that it hands off on the overlay, not that it
+  // eventually times out.
+  expect(gone, `the placeholder sat over the real overlay for ${gone}ms`).toBeLessThan(5000)
 })
 
 // A placeholder is a promise the server has to keep. When the socket is down the pick is lost with

@@ -4343,19 +4343,22 @@ defmodule EdenWeb.ChatLive do
             const files = [...(input.files || [])]
             if (!files.length || !files.every((f) => /^image\//.test(f.type || ""))) return
             if (document.querySelector("[data-upload-preview]")) return
+            // One composer, read once, used for both the cap and the object-URL store below: only
+            // the main `attachment` channel reaches here, and it renders inside #composer (the
+            // thread's own tray is `thread_attachment`, which this listener never sees).
+            const composer = input.closest("#composer")
             // A pick past the staging cap is stopped dead by SendQueue (stopImmediatePropagation +
             // a cleared input, #193): nothing stages, so no overlay is ever coming and a
             // placeholder would be a photo that vanishes a few seconds later. Same number, read
             // from the same attribute.
-            const max = Number(input.closest("#composer")?.dataset.maxStaged) || 50
-            if (files.length > max) return
+            if (files.length > (Number(composer?.dataset.maxStaged) || 50)) return
             this.pickDismiss()
 
             // The object URL SendQueue would mint anyway, keyed the way it keys them: filling the
             // shared store here means one URL per file rather than two, its owner still revokes it,
             // and .ImgPreview reads back the very URL already decoded for this placeholder — so the
             // real preview paints from a warm cache.
-            const store = input.closest("#composer, #reply-composer")?.edenVideoUrls
+            const store = composer?.edenVideoUrls
             const mine = []
             // Every picked file, not the first ten: the overlay shows all of them (albums of ten
             // are a SEND-side split), so a truncated placeholder would resize the panel on handoff.
@@ -4408,9 +4411,12 @@ defmodule EdenWeb.ChatLive do
               if (this.pickOv !== ov) return
               const real = document.querySelector("[data-upload-preview]")
               const imgs = real ? [...real.querySelectorAll(".ed-compose__img")] : []
-              const painted =
-                imgs.length > 0 &&
-                imgs.every((im) => im.complete && im.naturalWidth > 0 && im.offsetWidth > 0)
+              // Settled, not decoded (#569 review): a file that says image/png and is not one ends
+              // with `naturalWidth === 0` forever, and waiting for a decode that will never come
+              // parked a dead placeholder over the live overlay for the whole ceiling. A src it has
+              // finished with — succeeded or failed — is the real signal, and .ImgPreview sizes the
+              // box before it assigns one either way, so this cannot hand off early.
+              const painted = imgs.length > 0 && imgs.every((im) => !!im.getAttribute("src") && im.complete)
               if (painted) {
                 real.classList.add("ed-compose--handoff")
                 this.pickDismiss()
