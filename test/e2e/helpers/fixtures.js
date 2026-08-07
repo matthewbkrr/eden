@@ -54,7 +54,21 @@ const test = base.test.extend({
 // message's hook can attach a beat after paint. Every message renders its own hidden
 // .ed-menu, so the returned locator is scoped to the visible one.
 async function openMenu(page, messageLocator) {
-  const menu = page.locator(".ed-menu:visible").first()
+  // The menu this host owns, not "the first visible .ed-menu on the page". Since #508/#541 the
+  // menus are shared page-level nodes and several exist at once (message, room, conversation,
+  // folder, member); the sidebar ones sit EARLIER in the document, so `.first()` could hand back a
+  // menu with no Select in it and the caller would wait out its whole timeout on an item that was
+  // never going to appear. Mirrors `sharedMenuId()` in the .ContextMenu hook.
+  const menuId = await messageLocator
+    .evaluate((el) => {
+      const host = el.closest("[phx-hook]") || el
+      if (host.dataset.messageId) return "message-menu"
+      if (host.dataset.room) return "room-menu"
+      if (host.classList.contains("ed-convo-wrap")) return "convo-menu"
+      return null
+    })
+    .catch(() => null)
+  const menu = menuId ? page.locator(`#${menuId}`) : page.locator(".ed-menu:visible").first()
   // Everything inside toPass so a detach (the optimistic node swapping to the real row right
   // as we act) just retries and re-resolves the locator, instead of failing on a stale handle.
   await base.expect(async () => {
