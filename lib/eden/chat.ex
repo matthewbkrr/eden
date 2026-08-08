@@ -2328,11 +2328,35 @@ defmodule Eden.Chat do
 
     known = survivors |> Enum.map(&String.downcase(&1.handle)) |> MapSet.new()
     fresh = Enum.reject(handles, &MapSet.member?(known, &1))
+    rows = mention_rows_for(message, fresh)
+    insert_mentions(message, rows)
 
-    insert_mentions(message, mention_rows_for(message, fresh))
+    # Someone named by an EDIT has to hear it (#577 review). Without this a person added to a
+    # message after the fact is named on screen and told nothing — the one case where the chip
+    # and the ping disagree. Only the newly added rows ring; the people who were already named
+    # were already told, and an edit is not a reason to ring them again.
+    notify_edit_mentions(message, rows)
   end
 
   defp reresolve_mentions(_), do: :ok
+
+  defp notify_edit_mentions(_message, []), do: :ok
+
+  defp notify_edit_mentions(message, rows) do
+    added = rows |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    message = Repo.preload(message, :sender)
+    conv = Repo.get(Conversation, message.conversation_id)
+
+    # The same gates the send path applies to a mention: everyone except the author, the departed,
+    # do-not-disturb and deactivated accounts — mute stays pierced, that is what a mention is.
+    recipients = message |> mention_recipient_ids() |> Enum.filter(&(&1 in added))
+
+    if recipients != [] do
+      Notifications.deliver(recipients, %{notify_payload(message, conv) | kind: "mention"})
+    end
+
+    :ok
+  end
 
   defp insert_mentions(_message, []), do: :ok
 

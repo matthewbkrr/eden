@@ -244,6 +244,23 @@ defmodule Eden.ChatMentionsTest do
              "the mention names a person, and no rename by anyone can hand it to someone else"
     end
 
+    test "the person added by an edit is told" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bob ping"})
+      Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{carol.id}:notify")
+      Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{bob.id}:notify")
+
+      {:ok, _} = Chat.edit_message(scope(alice), message.id, "@bob @carol ping")
+
+      assert_receive {:notify, %{kind: "mention"}}, 500
+      # Bob was named before the edit and has already been told; an edit is not a second ring.
+      refute_receive {:notify, _}, 300
+    end
+
     test "a handle added by an edit still resolves" do
       alice = user_fixture(%{username: "alice"})
       bob = user_fixture(%{username: "bob"})
