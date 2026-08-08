@@ -2284,11 +2284,23 @@ defmodule Eden.Chat do
   # is exactly what `is_group`/`channel_id` say, and this runs on the keystroke path where an
   # extra aggregate is a round trip nobody asked for (#577 review).
   defp everyone(%Conversation{} = conv, prefix) do
-    if String.starts_with?(@everyone, prefix) and (conv.is_group or conv.channel_id != nil) do
+    if String.starts_with?(@everyone, prefix) and gathers_everyone?(conv) do
       [%{handle: @everyone, name: nil, everyone: true}]
     else
       []
     end
+  end
+
+  # Is there a room to gather? One rule, asked by the picker (which offers `@all`) and by the
+  # resolver (which honours a hand-typed one), so the two cannot drift apart.
+  defp gathers_everyone?(%Conversation{} = conv), do: conv.is_group or conv.channel_id != nil
+
+  defp gathers_everyone?(conversation_id) when is_integer(conversation_id) do
+    Repo.exists?(
+      from(c in Conversation,
+        where: c.id == ^conversation_id and (c.is_group == true or not is_nil(c.channel_id))
+      )
+    )
   end
 
   # Every `@handle` in the body that names a MEMBER of this conversation, stored as rows (#576).
@@ -2398,7 +2410,11 @@ defmodule Eden.Chat do
     # `@all` is additive, not exclusive: "@all and especially @bob" names the room AND Bob, and
     # each keeps its own row so both spans render as chips. Returning only the everyone-rows left
     # the personal handle unresolved and therefore unchipped (#577 review).
-    if @everyone in handles do
+    #
+    # Only where there IS a room to gather: the picker does not offer `@all` in a 1:1 (there is
+    # nobody to call that the message is not already addressed to), so typing it there by hand
+    # must not become a mention either — it would pierce the other person's mute (#577 review).
+    if @everyone in handles and gathers_everyone?(message.conversation_id) do
       Repo.all(from([m, u] in query, select: {u.id, ^@everyone})) ++ named
     else
       named
@@ -2408,8 +2424,12 @@ defmodule Eden.Chat do
   # `@handle` — the same character set a username may have, so a trailing comma or a full stop
   # ends the handle rather than becoming part of it. Downcased: handles are stored downcased and
   # a person typing `@Matvey` means the same person.
+  #
+  # A handle is a WHOLE word on both sides. Usernames are ASCII, the app's language is not: without
+  # the closing boundary `@bobи` would resolve its ASCII prefix and ring Bob, while the renderer
+  # chipped `@bob` and left the rest dangling (#577 review).
   defp mention_handles(body) do
-    ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})/u
+    ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})(?![\p{L}\p{N}_])/u
     |> Regex.scan(body)
     |> Enum.map(fn [_, handle] -> String.downcase(handle) end)
     |> Enum.uniq()

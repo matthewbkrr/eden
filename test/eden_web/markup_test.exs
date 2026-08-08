@@ -98,6 +98,11 @@ defmodule EdenWeb.MarkupTest do
       assert render("@nobody hi") == "@nobody hi"
     end
 
+    test "an ASCII prefix of a longer word is not a handle" do
+      assert render("@bobи привет", [mention("bob", "bob")]) == "@bobи привет",
+             "chipping the ASCII head would cut a word in half on screen — and the context resolves by the same rule, so it would have rung Bob as well"
+    end
+
     test "a handle inside code is left alone" do
       html = render("`@bob` and @bob", [mention("bob", "bob")])
 

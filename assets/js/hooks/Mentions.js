@@ -8,6 +8,9 @@
 // The insertion is what makes the feature honest: a handle typed by hand can be misspelt and then
 // names nobody (the server resolves against members and silently leaves it as text). Picking from
 // the list guarantees the handle exists.
+// Keys that move the caret without changing the text, and therefore fire no `input` event.
+const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"])
+
 export default {
   mounted() {
     this.items = []
@@ -55,21 +58,34 @@ export default {
         e.preventDefault()
         e.stopImmediatePropagation()
         this.close()
+      } else if (CARET_KEYS.has(e.key)) {
+        // Steering the caret is not steering the list — it is left to the field, and the list
+        // catches up (or closes) once the caret has actually moved.
+        setTimeout(this.resync, 0)
       }
+    }
+
+    // The caret can move without the text changing — a click elsewhere in the field, an arrow key,
+    // Home/End — and none of those fire `input`. The open list and `start` then describe where the
+    // caret USED to be, and Enter would splice the handle in at that stale point (#577 review).
+    this.resync = () => {
+      if (this.el.hidden) return
+      const q = this.query(this.input)
+      // Out of the handle, or in a DIFFERENT one: the list on screen answers the old question, so
+      // it is closed rather than left standing in front of a caret it no longer describes.
+      if (q === null || q !== this.pending) return this.close()
+      this.start = this.input.value.lastIndexOf("@", this.input.selectionStart - 1)
     }
 
     this.onDoc = (e) => {
       if (this.el.contains(e.target)) return
-      // A click INSIDE the composer moves the caret, and `start` was computed for where the caret
-      // used to be — inserting from a stale point splices the handle into the middle of a word
-      // (#577 review). Re-read the caret: still inside a handle, keep going; otherwise close.
       if (this.isComposer(e.target)) {
         if (this.el.hidden) return
-        setTimeout(() => {
-          const q = this.query(this.input)
-          if (q === null) return this.close()
-          this.start = this.input.value.lastIndexOf("@", this.input.selectionStart - 1)
-        }, 0)
+        // A click into the OTHER composer: the list belongs to the field that was being typed in,
+        // and Enter there must send that message rather than insert a mention into this one
+        // (#577 review).
+        if (e.target !== this.input) return this.close()
+        setTimeout(this.resync, 0)
         return
       }
       this.close()

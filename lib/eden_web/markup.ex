@@ -24,7 +24,7 @@ defmodule EdenWeb.Markup do
   # character set a username may have (`validate_username`) so a trailing comma or full stop ends
   # it. The same rule the CONTEXT resolves by — when the two drifted, `thanks @bob.` was resolved
   # and notified server-side while rendering as plain text (#577 review).
-  @mention ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})/u
+  @mention ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})(?![\p{L}\p{N}_])/u
 
   @inline ~r/(\*\*(?!\s).+?(?<!\s)\*\*|`[^`]+`|(?<![\p{L}\p{N}_])_(?!\s).+?(?<!\s)_(?![\p{L}\p{N}_])|\*(?!\s).+?(?<!\s)\*|https?:\/\/[^\s<]+)/u
 

@@ -382,4 +382,30 @@ defmodule Eden.ChatMentionsTest do
       assert mentions_of(message) == ["alice", "carol"]
     end
   end
+
+  describe "a handle is a whole word" do
+    test "an ASCII prefix of a longer word names nobody" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      conv = dm(alice, bob)
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bobи привет"})
+
+      assert mentions_of(message) == [],
+             "usernames are ASCII and the language is not: resolving the prefix would ring Bob for a word that is not his handle, and the renderer would chip only part of it"
+    end
+  end
+
+  describe "@all where there is nobody to gather" do
+    test "a 1:1 leaves it as text" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      conv = dm(alice, bob)
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@all"})
+
+      assert mentions_of(message) == [],
+             "the picker does not offer @all in a 1:1 — a hand-typed one must not pierce the other person's mute either"
+    end
+  end
 end
