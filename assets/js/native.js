@@ -20,6 +20,61 @@ export function initNativeShell() {
   wireKeyboard();
   wireFileViewer();
   wireAppState();
+  wireHaptics();
+  hideSplash();
+}
+
+// The one signal the web can't fake (#518). In an iOS WKWebView `navigator.vibrate` does not
+// exist at all, so a long press, a swipe-reply and an edge-swipe back all landed with no feedback
+// whatsoever — 450ms of holding a message and nothing until the menu appears. Exposed as a global
+// the way the rest of the client's shared helpers are (`__edReact`, `__edMs`), so a colocated hook
+// can tap it without importing anything; a no-op off-device, which is why the call sites need no
+// guard of their own.
+function wireHaptics() {
+  const haptics = cap.Plugins?.Haptics;
+  if (!haptics) return;
+  // ImpactStyle is a plugin enum; the strings are its values, so the plugin can be called without
+  // importing the enum into a shell that has no bundler.
+  window.__edTap = (style = "light") => {
+    try {
+      // The plugin call is a PROMISE: a bridge that rejects would otherwise surface as an
+      // unhandled rejection in the middle of a gesture, and the sync catch would never see it
+      // (#574 review). Both halves are needed — the sync one for a plugin that throws on call.
+      haptics.impact({ style: style === "medium" ? "MEDIUM" : "LIGHT" })?.catch?.(() => {});
+    } catch (_e) {
+      // A missing plugin must never break the gesture it decorates.
+    }
+  };
+}
+
+// The cold start is otherwise a flat colour for the whole of DNS + TLS + GET + assets + connect
+// (#518). The splash comes down when the app has actually painted — not on a timer, and not on
+// DOMContentLoaded, which fires before LiveView has mounted anything.
+function hideSplash() {
+  const splash = cap.Plugins?.SplashScreen;
+  if (!splash?.hide) return;
+  const done = () => {
+    try {
+      // Promise, same as the haptics call above: an asynchronous failure here must not become an
+      // unhandled rejection at launch (#574 review).
+      splash.hide({ fadeOutDuration: 200 })?.catch?.(() => {});
+    } catch (_e) {}
+  };
+  // `.ed-root` is the app shell; on the login page it is the form's own container. Either way,
+  // once it is on screen there is something to look at. The timeout is the backstop: a page that
+  // never renders must not leave the splash up (`launchAutoHide` covers the process-level case).
+  if (document.querySelector(".ed-root, .ed-auth")) return done();
+  const mo = new MutationObserver(() => {
+    if (document.querySelector(".ed-root, .ed-auth")) {
+      mo.disconnect();
+      done();
+    }
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => {
+    mo.disconnect();
+    done();
+  }, 4000);
 }
 
 // Broadcast one "the app is going away" beacon (#493). The web layer already listens for
@@ -71,8 +126,11 @@ function wireFileViewer() {
         .then(({ url }) => browser.open({ url: location.origin + url }))
         // The default action IS the trap, so it stays prevented — but a failed mint
         // (network blip, expired session) must not read as a dead tap (#468 review).
-        // System alert; RU-fixed like the push copy (native.js has no gettext).
-        .catch(() => alert("Не удалось открыть файл. Проверьте соединение."));
+        // The app's own toast, not a system alert titled with the origin (#518). RU-fixed like
+        // the push copy (native.js has no gettext).
+        .catch(() =>
+          (window.__edNotice || alert)("Не удалось открыть файл. Проверьте соединение."),
+        );
     },
     true,
   );
@@ -195,7 +253,23 @@ function wirePush() {
       const path = data.channel_id
         ? `/channels/${data.channel_id}/r/${data.conversation_id}`
         : `/app/c/${data.conversation_id}`;
-      window.location.assign(path);
+      // Every authed route lives in one live_session, so with the socket up this can be a patch
+      // (~200ms) instead of a full document load (~1.5s, #518).
+      //
+      // Through a link, not through `liveSocket.historyRedirect(...)`: that method is internal,
+      // undocumented and positional — passing its `linkState` wrong is a TypeError thrown
+      // asynchronously inside the redirect, i.e. past any try/catch here (#574 review). A link
+      // carrying LiveView's own attributes is the documented contract (`<.link navigate={...}>`
+      // renders exactly this), and it needs no fallback of its own: with no socket the click is
+      // just a link, and the browser does the full load that a cold start needs anyway.
+      const a = document.createElement("a");
+      a.href = path;
+      a.setAttribute("data-phx-link", "redirect");
+      a.setAttribute("data-phx-link-state", "push");
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     });
 
     push.addListener("registration", ({ value }) => {
@@ -260,5 +334,13 @@ function wireStatusBar() {
   new MutationObserver(apply).observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["data-theme"],
+  });
+
+  // The photo viewer is a near-black scrim in EITHER theme, and its chrome runs under the notch
+  // (#518): on a light theme the status bar kept dark glyphs and became invisible on black. While
+  // it is open the bar follows the viewer, not the theme; closing hands the theme its bar back.
+  window.addEventListener("ed:lightbox", (e) => {
+    if (e.detail?.open) bar.setStyle({ style: "DARK" }).catch(() => {});
+    else apply();
   });
 }

@@ -3502,6 +3502,9 @@ defmodule EdenWeb.ChatLive do
                 this._backing = true
                 this.announceNav()
                 document.activeElement?.blur?.() // keyboard drops with the slide (#439)
+                // The gesture committed — the third of the three points that had no feedback at
+                // all on the phone (#518).
+                window.__edTap?.()
                 s.main.style.transform = ""
                 s.main.classList.add("ed-main-pop--out")
                 const anchor = document.querySelector("[data-nav-back]")
@@ -8052,12 +8055,21 @@ defmodule EdenWeb.ChatLive do
               case "enter_select":
                 this.pushEvent(btn.dataset.act, { id, surface })
                 break
-              case "delete_for_both":
+              case "delete_for_both": {
                 // `data-confirm` is a phx-click feature and these items push directly, so the
-                // confirmation is asked here — with the server-rendered, localized text.
-                if (btn.dataset.confirmText && !window.confirm(btn.dataset.confirmText)) return
-                this.pushEvent("delete_for_both", { id })
-                break
+                // confirmation is asked here — with the server-rendered, localized text, and in
+                // the app's own sheet rather than the system alert titled with the origin (#518).
+                // The menu closes first: the question belongs over the chat, not over a menu on
+                // its way out.
+                const text = btn.dataset.confirmText
+                this.close()
+                if (!text) {
+                  this.pushEvent("delete_for_both", { id })
+                  return
+                }
+                window.__edConfirm(text).then((ok) => ok && this.pushEvent("delete_for_both", { id }))
+                return
+              }
               default:
                 this.pushEvent(btn.dataset.act, { id })
             }
@@ -8070,6 +8082,8 @@ defmodule EdenWeb.ChatLive do
           // `const fireReply = this._fireReply = …` as belonging to some other hook).
           fireReply() {
             if (!this.el.dataset.messageId) return
+            // The swipe crossed its threshold — the same confirmation a native app gives (#518).
+            window.__edTap?.()
             const event = this.el.dataset.replyEvent || "reply"
             this.pushEvent(event, { id: this.el.dataset.messageId })
             const sel = event === "reply_in_thread" ? "#reply-body" : "#composer-body"
@@ -8119,6 +8133,10 @@ defmodule EdenWeb.ChatLive do
             // paints another message's item set.
             if (this.el.dataset.messageId) this.fill()
             else if (this.sharedMenuId()) this.fillSidebar()
+            // The press that opened it gets its tap back (#518): 450ms of holding with no signal
+            // at all was the single most "web page" moment left on the phone. A no-op in a
+            // browser, where the helper is not defined.
+            window.__edTap?.("medium")
             // Disarmed until a press lands on the menu itself — see the capture listener in bind().
             delete this.menu.dataset.armed
             // A re-open inside the previous exit cancels it outright, or the menu would come back
@@ -11521,7 +11539,12 @@ defmodule EdenWeb.ChatLive do
             clearTimeout(box.__closeTimer)
             box.__closing = false
             box.classList.remove("ed-lightbox--out")
-            if (!box.open) box.showModal()
+            if (!box.open) {
+              box.showModal()
+              // The native shell owns the status bar and cannot see into this dialog; the viewer
+              // is a near-black scrim in either theme, so it says so and the bar follows (#518).
+              window.dispatchEvent(new CustomEvent("ed:lightbox", { detail: { open: true } }))
+            }
             // Take focus off the back arrow (#554). `showModal()` hands it to the first focusable
             // child, and WebKit counts that as focus-visible: on an iPhone the viewer opened with a
             // ring drawn around a control nobody had touched. The container is the right holder
@@ -11829,6 +11852,7 @@ defmodule EdenWeb.ChatLive do
               menu.hidden = !menu.hidden
               more.setAttribute("aria-expanded", String(!menu.hidden))
             })
+            // async: the delete action asks in the app's own dialog, which resolves a promise (#518).
             menu.addEventListener("click", (e) => {
               const item = e.target.closest("[data-act]")
               if (!item) return
@@ -11935,7 +11959,8 @@ defmodule EdenWeb.ChatLive do
 
             // Menu actions (#465). Reply/Forward/Delete reuse the message context-menu's
             // own server events; "Show in chat" and "Save" are client-side.
-            box.__act = (act) => {
+            // async: the delete action asks in the app's own dialog, which resolves a promise (#518).
+            box.__act = async (act) => {
               const m = box.__meta || {}
               const id = m.msg
               if (!id) return
@@ -12005,7 +12030,8 @@ defmodule EdenWeb.ChatLive do
                 return
               }
               if (act === "del-all") {
-                if (!window.confirm(lbl.lbDelConfirm || "Delete this message for everyone?")) return
+                if (!(await window.__edConfirm(lbl.lbDelConfirm || "Delete this message for everyone?")))
+                  return
                 close()
                 push("delete_for_both", { id })
               }
@@ -12019,6 +12045,7 @@ defmodule EdenWeb.ChatLive do
                 box.classList.remove("ed-lightbox--out")
                 box.__closing = false
                 try { box.close() } catch (_e) { /* already closed */ }
+                window.dispatchEvent(new CustomEvent("ed:lightbox", { detail: { open: false } }))
                 document.body.style.overflow = ""
                 document.removeEventListener("keydown", box.__onKey)
                 zoomReset()

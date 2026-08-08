@@ -29,6 +29,10 @@ const config: CapacitorConfig = {
   server: {
     url: server.url,
     cleartext: server.cleartext,
+    // The page to show when the WebView cannot reach the server at all (#518). It has been
+    // written since the shell was built (mobile/www/index.html) and was simply never wired: a
+    // dropped network gave a blank WebView.
+    errorPath: 'index.html',
   },
   // First-paint seam (#439): the WKWebView shows this color between the launch screen and
   // the page's own CSS — the default white read as a flash after the splash. --ed-bg (light).
@@ -49,6 +53,27 @@ const config: CapacitorConfig = {
       // itself via a CSS transition on the Capacitor keyboardWillShow/Hide events, matching
       // the keyboard's own glide (the instant frame resize read as a harsh jump).
       resize: 'none',
+      // The strip behind the keyboard takes its colour from the DOM rather than the SYSTEM theme
+      // (#518): the app's theme lives in `data-theme` and can differ from the OS one, which showed
+      // as a light strip under a dark app. The plugin reads <body>'s background — which is why
+      // app.css now sets it on body as well as .ed-root; without that it would read `transparent`
+      // and fall back to black.
+      autoBackdropColor: 'dom',
+    },
+    SplashScreen: {
+      // The cold start is otherwise a plain background colour for the whole of DNS + TLS + GET +
+      // assets + LiveView connect (#518). Hidden by the CLIENT once the app has actually painted,
+      // so `launchAutoHide` has to be off: left on, the native side drops the splash after
+      // `launchShowDuration` (~0.5s) — long before a remote page over a slow link has painted
+      // anything, which defeats the point (#574 review).
+      //
+      // The "splash forever" risk that buys is covered on both paths that exist: the app's own JS
+      // hides it on paint with a 4s backstop, and the offline page (server.errorPath, loaded when
+      // the WebView cannot reach the server at all) hides it inline — see mobile/www/index.html.
+      launchAutoHide: false,
+      launchFadeOutDuration: 200,
+      backgroundColor: '#fdfdfe',
+      showSpinner: false,
     },
     PushNotifications: {
       // No OS banner while the app is FOREGROUND (#419): the in-app Web
