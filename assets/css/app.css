@@ -982,7 +982,7 @@ html {
     color: inherit;
     text-decoration: none;
     background: color-mix(in oklch, currentColor 10%, transparent);
-    transition: background var(--ed-dur, var(--ed-dur-quick)) ease;
+    transition: background var(--ed-dur-quick) ease;
   }
   .ed-file:hover {
     background: color-mix(in oklch, currentColor 18%, transparent);
@@ -1178,13 +1178,6 @@ html {
     }
   }
   /* The way OUT (#517). A menu used to appear as a fade and disappear as a cut: `[hidden]` is
-     `display: none`, and nothing animates out of that. The obvious modern answer — transitioning
-     `display` with `allow-discrete` — is not an option here: Firefox 151 reports support and then
-     does not run the exit at all (measured on both an attribute and a class), and Firefox is what
-     this app is used in. So the hook keeps the box painted for one `--ed-dur-quick` after closing,
-     the same way the reaction row and the lightbox already do it. `hidden` is set at once, so the
-     state a screen reader and the hook see is never delayed by the animation. */
-  /* The way OUT (#517). A menu used to appear as a fade and disappear as a cut: `[hidden]` is
      `display: none`, and nothing animates out of that. Two dead ends before this one, both worth
      recording: transitioning `display` with `allow-discrete` is not an option (Firefox 151 reports
      support and then does not run the exit at all — measured), and keeping the box painted while
@@ -1203,6 +1196,12 @@ html {
   @media (prefers-reduced-motion: reduce) {
     .ed-menu {
       animation: none;
+    }
+    /* The exit is motion too. The blanket fallback at the end of this file would catch it anyway,
+       but that is a safety net, not the rule that states the intent — and a net that is narrowed
+       one day should not silently take the exit with it (#572 review). */
+    .ed-menu--closing {
+      transition: none;
     }
   }
   .ed-menu[hidden] {
@@ -4779,7 +4778,7 @@ html {
     color: var(--ed-ink);
     box-shadow: var(--ed-shadow);
     font: 500 0.8125rem/1.2 var(--ed-font);
-    transition: transform var(--ed-dur-move, var(--ed-dur-move)) var(--ed-ease-out);
+    transition: transform var(--ed-dur-move) var(--ed-ease-out);
   }
 
   html.phx-client-error .ed-conn,

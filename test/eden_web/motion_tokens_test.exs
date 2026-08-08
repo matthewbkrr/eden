@@ -19,7 +19,12 @@ defmodule EdenWeb.MotionTokensTest do
     # Delays are not durations: a stagger (`animation-delay: 0.15s`) and the second time in
     # `visibility 0s 0.12s` say WHEN, not HOW LONG.
     |> Enum.reject(&String.match?(&1, ~r/(transition|animation)-delay/))
-    |> Enum.flat_map(&Regex.scan(~r/(?<![\w-])\d*\.?\d+m?s(?![\w-])/, &1))
+    # One duration per comma-separated part: in a shorthand the FIRST time is the duration and a
+    # second one is a delay (`visibility 0s 0.12s` says "switch instantly, 120ms from now"). Taking
+    # both would file delays under a rule about durations (#572 review).
+    |> Enum.flat_map(&String.split(&1, ","))
+    |> Enum.map(&Regex.run(~r/(?<![\w-])\d*\.?\d+m?s(?![\w-])/, &1))
+    |> Enum.reject(&is_nil/1)
     |> List.flatten()
   end
 
