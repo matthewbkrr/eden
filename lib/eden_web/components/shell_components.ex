@@ -65,14 +65,16 @@ defmodule EdenWeb.ShellComponents do
 
         <div :if={@channels != []} class="ed-rail__sep"></div>
 
-        <%!-- Full hook name, not the ".ContextMenu" shorthand: colocated hooks
-            resolve relative to the template's module, and this template
-            compiles in ShellComponents — the hook lives in ChatLive. --%>
+        <%!-- The hook is global since #510 (it lives in assets/js/hooks), so the name is plain.
+            It used to be spelled `EdenWeb.ChatLive.ContextMenu` — a colocated name resolved
+            against the module the hook was declared in — and that spelling survived the move,
+            leaving the rail's context menu inert with `unknown hook found` in the console
+            (#511). `hook_registry_test.exs` now fails on any such name. --%>
         <span
           :for={channel <- @channels}
           id={"rail-channel-#{channel.id}"}
           class="ed-rail__slot"
-          phx-hook="EdenWeb.ChatLive.ContextMenu"
+          phx-hook="ContextMenu"
         >
           <%!-- Desktop reopens the channel's remembered room directly (#81), so
                 switching channels lands where you left off. On mobile that skips
@@ -147,14 +149,12 @@ defmodule EdenWeb.ShellComponents do
 
       <div class="ed-rail__bottom">
         <%!-- Status picker (#102): the "me" avatar opens a left-click popover via
-              the shared ContextMenu hook (full name — colocated hooks resolve in
-              the compiling module; this template is ShellComponents, the hook lives
-              in ChatLive). The menu is viewport-clamped, so it opens upward here. --%>
+              the shared ContextMenu hook (a global name since #510). The menu is viewport-clamped, so it opens upward here. --%>
         <span
           :if={@me}
           id="rail-me"
           class="ed-rail__slot"
-          phx-hook="EdenWeb.ChatLive.ContextMenu"
+          phx-hook="ContextMenu"
         >
           <button
             type="button"
@@ -306,7 +306,7 @@ defmodule EdenWeb.ShellComponents do
           aria-modal="true"
           aria-label={@title}
           id="dlg-channel-form"
-          phx-hook=".FocusTrap"
+          phx-hook="FocusTrap"
           tabindex="-1"
         >
           <div class="flex items-center justify-between">

@@ -6,6 +6,7 @@
   data-icons={~p"/images/icons.svg"}
   data-lbl-ok={gettext("OK")}
   data-lbl-cancel={gettext("Cancel")}
+  data-lazy-js={~p"/assets/js/lazy.js"}
 >
   <head>
     <meta charset="utf-8" />
@@ -23,7 +24,9 @@
     <.live_title default="ihichat" suffix=" · ihichat" phx-no-format>{assigns[:page_title]}</.live_title>
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <%!-- Signed-out pages load a bundle without the chat client (#511): the router assigns
-          `:js_bundle` for them, everything else gets the full one. --%>
+          `:js_bundle` for them, everything else gets the full one. The interaction-only hooks
+          ride a second bundle fetched after boot (`data-lazy-js` above); signed-out pages never
+          ask for it. --%>
     <script
       defer
       phx-track-static

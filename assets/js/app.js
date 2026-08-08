@@ -24,7 +24,7 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/eden"
 // The app's own hooks, extracted from the LiveViews (#510).
-import {edenHooks} from "./hooks"
+import {armDeferredHooks, edenHooks} from "./hooks"
 // Not colocated (#511): the signed-out bundle needs these two, and the generated colocated index
 // hands back all 42 hooks at once, so importing from it would have pulled the whole chat client
 // onto the login page.
@@ -102,6 +102,8 @@ const backoff = (tries) => [250, 500, 1000, 2000, 5000][tries - 1] || 5000
 // landing during connect must not reach LiveView's system dialog either.
 installConfirm()
 
+const hooks = {...colocatedHooks, ...edenHooks, FlashAutoHide, PasswordReveal}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   // Fall back to long-polling if the WebSocket can't establish quickly (the WS
   // upgrade is the fragile part across the border / restrictive networks).
@@ -111,8 +113,14 @@ const liveSocket = new LiveSocket("/live", Socket, {
   reconnectAfterMs: backoff,
   rejoinAfterMs: backoff,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, ...edenHooks, FlashAutoHide, PasswordReveal},
+  hooks,
 })
+
+// #511: the interaction-only hooks are placeholders until the second bundle lands. Arming AFTER
+// the socket is constructed keeps the fetch off the boot path, and passing the same object the
+// socket was handed means every element mounted from then on gets the real hook with no
+// indirection at all.
+armDeferredHooks(hooks)
 
 // Record where a profile trigger (avatar / name / member row) was clicked, so
 // the server-rendered profile popover — which mounts a round-trip later — can

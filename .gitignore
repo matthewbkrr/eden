@@ -69,3 +69,5 @@ npm-debug.log
 # (verified with `git check-ignore` on both).
 /priv/static/**/*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f].*
 /priv/static/**/*.gz
+# The .br siblings the Docker build writes beside them (#511) — build output, never edited by hand.
+/priv/static/**/*.br
