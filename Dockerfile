@@ -10,8 +10,9 @@ FROM ${BUILDER_IMAGE} AS builder
 
 # git: fetch the heroicons GitHub dep. build-essential + curl + ca-certificates:
 # compile NIFs and let vix download its precompiled libvips during deps.compile.
+# brotli: pre-compresses the digested assets (#511) — see the assets.deploy step below.
 RUN apt-get update -y \
-  && apt-get install -y build-essential git curl ca-certificates \
+  && apt-get install -y build-essential git curl ca-certificates brotli \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -38,6 +39,13 @@ COPY assets assets
 # (phoenix-colocated/eden), then build, minify, and digest the assets.
 RUN mix compile
 RUN mix assets.deploy
+
+# Brotli beside the gzip that phx.digest already writes (#511). Plug.Static picks the `.br` for
+# any client that asks for it, which is every browser; -11 is the slowest, smallest setting and it
+# runs once per build rather than per request. Both names are compressed because the digested and
+# the plain file are each served under their own path.
+RUN find priv/static -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' \) \
+  -print0 | xargs -0 -r -P 4 brotli -q 11 -k -f
 
 COPY config/runtime.exs config/
 COPY rel rel

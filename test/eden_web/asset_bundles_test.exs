@@ -72,4 +72,90 @@ defmodule EdenWeb.AssetBundlesTest do
                "Anything added here lands on the first screen a person ever sees."
     end
   end
+
+  describe "the deferred half of the app bundle (#511)" do
+    @deferred_registry "assets/js/hooks/deferred.js"
+    @deferred_entry "assets/js/lazy.js"
+    @boot_index "assets/js/hooks/index.js"
+
+    defp deferred_names do
+      @deferred_registry
+      |> File.read!()
+      |> then(&Regex.run(~r/export const DEFERRED = \[(.*?)\]/s, &1))
+      |> Enum.at(1)
+      # `[A-Za-z0-9]`, not `[A-Za-z]`: ThemeSegA11y has a digit in it, and a name-shaped regex that
+      # quietly skips one entry would have made this test pass on a list it never fully read.
+      |> then(&Regex.scan(~r/"([A-Za-z0-9]+)"/, &1))
+      |> Enum.map(&Enum.at(&1, 1))
+      |> MapSet.new()
+    end
+
+    defp bundled_names do
+      @deferred_entry
+      |> File.read!()
+      |> then(&Regex.scan(~r|^import (\w+) from "\./hooks/(\w+)"|m, &1))
+      |> Enum.map(fn [_, name, file] ->
+        assert name == file, "#{@deferred_entry} imports #{file} under the name #{name}"
+        name
+      end)
+      |> MapSet.new()
+    end
+
+    test "the registered placeholders and the second bundle name the same hooks" do
+      registered = deferred_names()
+      bundled = bundled_names()
+
+      assert registered != MapSet.new(), "no DEFERRED names found — the regex stopped matching"
+
+      # Each half fails in its own silent way: a name registered but not bundled leaves a
+      # placeholder that never hands over (the feature is simply dead), while a hook bundled but
+      # not registered is a `phx-hook` LiveView has never heard of.
+      assert MapSet.difference(registered, bundled) |> Enum.to_list() == [],
+             "registered as deferred but missing from #{@deferred_entry} — those hooks would never load"
+
+      assert MapSet.difference(bundled, registered) |> Enum.to_list() == [],
+             "bundled but not registered — LiveView is never told those names exist"
+    end
+
+    test "the boot bundle does not import a deferred hook" do
+      imported =
+        @boot_index
+        |> File.read!()
+        |> then(&Regex.scan(~r/^import [^"]+ from "\.\/(\w+)"/m, &1))
+        |> Enum.map(&Enum.at(&1, 1))
+        |> MapSet.new()
+
+      # This is the whole saving. An eager import pulls the hook back into app.js AND leaves it in
+      # lazy.js, which is worse than never having split it.
+      assert MapSet.intersection(imported, deferred_names()) |> Enum.to_list() == [],
+             "the boot index imports a hook that is supposed to arrive in the second bundle"
+    end
+  end
+
+  describe "how static files are served" do
+    test "a client that accepts brotli gets the .br sibling", %{conn: conn} do
+      dir = Path.join([File.cwd!(), "priv", "static", "assets", "js"])
+      File.mkdir_p!(dir)
+      name = "brotli_probe_#{System.unique_integer([:positive])}.js"
+      File.write!(Path.join(dir, name), "the plain file")
+      # Not actual brotli: Plug.Static serves the sibling as-is, so distinguishable bytes prove
+      # WHICH file was chosen, which is the only thing this test is about.
+      File.write!(Path.join(dir, name <> ".br"), "the brotli sibling")
+
+      on_exit(fn ->
+        File.rm(Path.join(dir, name))
+        File.rm(Path.join(dir, name <> ".br"))
+      end)
+
+      conn =
+        conn
+        |> put_req_header("accept-encoding", "br, gzip")
+        |> get("/assets/js/#{name}")
+
+      assert get_resp_header(conn, "content-encoding") == ["br"],
+             "the endpoint is not offering brotli — the Docker build's .br files would be dead weight"
+
+      assert response(conn, 200) == "the brotli sibling"
+    end
+  end
 end
