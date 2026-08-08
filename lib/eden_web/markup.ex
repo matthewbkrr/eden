@@ -47,9 +47,13 @@ defmodule EdenWeb.Markup do
   # handle-as-typed => the person's CURRENT handle. Only what the server resolved at send time
   # (#576): a bare `@word` that named nobody, or someone outside the conversation, stays text.
   defp named_handles(mentions) when is_list(mentions) do
-    for %{handle: handle, user: %{username: username}} <- mentions,
-        into: %{},
-        do: {String.downcase(handle), username}
+    for %{handle: handle, user: %{username: username}} <- mentions, into: %{} do
+      down = String.downcase(handle)
+      # `@all` is stored as one row per person (that is how delivery works), but it names the
+      # ROOM, not any of them — so it keeps its own label instead of picking up whichever member
+      # happened to be last (#576).
+      {down, if(down == "all", do: "all", else: username)}
+    end
   end
 
   defp named_handles(_), do: %{}

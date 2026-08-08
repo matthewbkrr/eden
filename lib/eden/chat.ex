@@ -44,6 +44,9 @@ defmodule Eden.Chat do
   @jump_window 300
   # Associations preloaded with every main-stream message (shared by list_messages/3 and
   # list_messages_around/3 so a window load renders identically to a page load).
+  # The one handle that is not a person: `@all` names everyone in the conversation (#576).
+  @everyone "all"
+
   @message_preloads [
     :sender,
     :attachments,
@@ -2240,22 +2243,49 @@ defmodule Eden.Chat do
     if has_access?(%Scope{user: user}, conversation_id) do
       like = escape_like(prefix) <> "%"
 
-      Repo.all(
-        from(m in Membership,
-          join: u in User,
-          on: u.id == m.user_id,
-          where:
-            m.conversation_id == ^conversation_id and is_nil(m.left_at) and
-              u.id != ^user.id and is_nil(u.deleted_at) and u.active == true and
-              (ilike(u.username, ^like) or ilike(u.display_name, ^like)),
-          order_by: [asc: u.username],
-          limit: 8,
-          select: %{handle: u.username, name: u.display_name}
+      everyone(conversation_id, prefix) ++
+        Repo.all(
+          from(m in Membership,
+            join: u in User,
+            on: u.id == m.user_id,
+            where:
+              m.conversation_id == ^conversation_id and is_nil(m.left_at) and
+                u.id != ^user.id and is_nil(u.deleted_at) and u.active == true and
+                (ilike(u.username, ^like) or ilike(u.display_name, ^like)),
+            order_by: [asc: u.username],
+            limit: 8,
+            select: %{
+              handle: u.username,
+              name: u.display_name,
+              id: u.id,
+              avatar_key: u.avatar_key
+            }
+          )
         )
-      )
     else
       []
     end
+  end
+
+  @doc "The handle that names everyone in a conversation (#576)."
+  def everyone_handle, do: @everyone
+
+  # `@all` heads the list where it makes sense: a 1:1 has nobody to gather, so offering it there
+  # would be a control that does nothing. Matched by prefix like any other handle, so typing
+  # `@al` still finds it and `@bo` does not.
+  defp everyone(conversation_id, prefix) do
+    if String.starts_with?(@everyone, prefix) and member_count(conversation_id) > 2 do
+      [%{handle: @everyone, name: nil, everyone: true}]
+    else
+      []
+    end
+  end
+
+  defp member_count(conversation_id) do
+    Repo.aggregate(
+      from(m in Membership, where: m.conversation_id == ^conversation_id and is_nil(m.left_at)),
+      :count
+    )
   end
 
   # Every `@handle` in the body that names a MEMBER of this conversation, stored as rows (#576).
@@ -2268,35 +2298,12 @@ defmodule Eden.Chat do
   # Members only: an `@tag` for someone who is not in the conversation stays plain text, so a
   # message cannot name — or notify — an outsider.
   defp resolve_mentions(%Message{body: body} = message) when is_binary(body) do
-    handles = mention_handles(body)
-
-    rows =
-      if handles == [] do
-        []
-      else
-        Repo.all(
-          from(m in Membership,
-            join: u in User,
-            on: u.id == m.user_id,
-            where:
-              m.conversation_id == ^message.conversation_id and is_nil(m.left_at) and
-                is_nil(u.deleted_at) and u.username in ^handles,
-            select: {u.id, u.username}
-          )
-        )
-      end
-
+    rows = mention_rows_for(message, mention_handles(body))
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     entries =
       Enum.map(rows, fn {id, handle} ->
-        %{
-          message_id: message.id,
-          user_id: id,
-          handle: handle,
-          inserted_at: now,
-          updated_at: now
-        }
+        %{message_id: message.id, user_id: id, handle: handle, inserted_at: now, updated_at: now}
       end)
 
     if entries != [], do: Repo.insert_all(MessageMention, entries, on_conflict: :nothing)
@@ -2304,6 +2311,26 @@ defmodule Eden.Chat do
   end
 
   defp resolve_mentions(_), do: :ok
+
+  defp mention_rows_for(_message, []), do: []
+
+  # `@all` names everyone at once. The rows stay per-person, so delivery — and any future
+  # "mentions of me" — needs no special case beyond this one.
+  defp mention_rows_for(message, handles) do
+    query =
+      from(m in Membership,
+        join: u in User,
+        on: u.id == m.user_id,
+        where: m.conversation_id == ^message.conversation_id and is_nil(m.left_at),
+        where: is_nil(u.deleted_at)
+      )
+
+    if @everyone in handles do
+      Repo.all(from([m, u] in query, select: {u.id, ^@everyone}))
+    else
+      Repo.all(from([m, u] in query, where: u.username in ^handles, select: {u.id, u.username}))
+    end
+  end
 
   # `@handle` — the same character set a username may have, so a trailing comma or a full stop
   # ends the handle rather than becoming part of it. Downcased: handles are stored downcased and

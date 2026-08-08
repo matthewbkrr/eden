@@ -75,6 +75,7 @@ export default {
   },
 
   destroyed() {
+    this.aria?.disconnect()
     document.removeEventListener("input", this.onInput, true)
     document.removeEventListener("keydown", this.onKey, true)
     document.removeEventListener("click", this.onDoc, true)
@@ -93,41 +94,96 @@ export default {
     return m ? m[1] : null
   },
 
+  // A row is a face and two lines: who they are, then how to name them — the shape every
+  // messenger uses for this list, so it needs no learning.
+  //
+  // Built as NODES, never as a markup string: BOTH text fields are user input. The display name
+  // obviously so; the handle is constrained to `[a-z0-9_]` today, but a hole that depends on a
+  // validation rule in another file opens the day that rule is relaxed (#577 review, P0).
   paint() {
-    // Built as NODES, never as a markup string: BOTH fields here are user input. The display
-    // name obviously so; the handle is constrained to `[a-z0-9_]` today, but a hole that depends
-    // on a validation rule somewhere else is a hole that opens the day that rule is relaxed
-    // (#577 review, P0). `setAttribute`/`textContent` cannot break out of anything.
     this.el.replaceChildren()
     this.items.forEach((it, i) => {
       const row = document.createElement("button")
       row.type = "button"
+      row.id = `mention-opt-${i}`
       row.className = "ed-mention-pop__row" + (i === this.active ? " is-active" : "")
       row.setAttribute("role", "option")
       row.setAttribute("aria-selected", String(i === this.active))
       row.dataset.handle = it.handle
+
+      const face = document.createElement("span")
+      face.className = "ed-avatar ed-avatar--sm ed-mention-pop__face"
+      if (it.everyone) {
+        // Everyone is not a person, so the circle carries the handle's own mark instead of a
+        // face. A glyph, not an icon: the sprite is built from what the .ex files reference, and
+        // an icon named only here would silently not be in it.
+        face.classList.add("ed-mention-pop__face--all")
+        face.textContent = "@"
+      } else if (it.avatar) {
+        const img = document.createElement("img")
+        img.src = it.avatar
+        img.alt = ""
+        face.append(img)
+      } else {
+        face.textContent = it.initial || ""
+      }
+
+      const text = document.createElement("span")
+      text.className = "ed-mention-pop__text"
       const name = document.createElement("span")
       name.className = "ed-mention-pop__name"
-      name.textContent = it.name || ""
+      name.textContent = it.everyone ? this.el.dataset.labelAll || "Everyone" : it.name || it.handle
       const handle = document.createElement("span")
       handle.className = "ed-mention-pop__handle"
       handle.textContent = "@" + it.handle
-      row.append(name, handle)
+      text.append(name, handle)
+
+      row.append(face, text)
       this.el.append(row)
     })
     this.el.hidden = false
+    this.describe()
     this.place()
+  },
+
+  // A screen reader follows the arrow keys through `aria-activedescendant`, while focus stays in
+  // the composer where the typing is.
+  //
+  // Re-applied through an observer because the composer is patched on EVERY keystroke
+  // (`composer_changed`) and morphdom removes any attribute the server did not render — so an
+  // attribute set once here survives only until the next patch, which lands milliseconds later.
+  describe() {
+    if (!this.input) return
+    const apply = () => {
+      this.input.setAttribute("aria-activedescendant", `mention-opt-${this.active}`)
+      this.input.setAttribute("aria-expanded", "true")
+    }
+    apply()
+    this.aria?.disconnect()
+    this.aria = new MutationObserver(() => {
+      if (this.el.hidden) return
+      if (!this.input.hasAttribute("aria-activedescendant")) apply()
+    })
+    this.aria.observe(this.input, { attributes: true, attributeFilter: ["aria-activedescendant"] })
   },
 
   place() {
     if (!this.input) return
+    const gap = 8
     const r = this.input.getBoundingClientRect()
     const h = this.el.offsetHeight || 160
-    this.el.style.left = `${Math.round(r.left)}px`
+    const room = window.innerWidth - gap * 2
+    // Wide enough to read a name and a handle, never wider than a comfortable list, never wider
+    // than the screen. On a phone the composer INPUT is narrow (attach and emoji take their share)
+    // — following it verbatim left a 210px column with names cut mid-word, so the list takes the
+    // room it needs instead.
+    const w = Math.round(Math.max(Math.min(room, 240), Math.min(r.width, 320, room)))
+    const left = Math.round(Math.min(Math.max(gap, r.left), window.innerWidth - w - gap))
     // Above the composer: it sits at the bottom of the screen, and a list below it would be off
     // the viewport (and under the keyboard on a phone).
-    this.el.style.top = `${Math.round(Math.max(8, r.top - h - 8))}px`
-    this.el.style.width = `${Math.round(Math.min(r.width, 320))}px`
+    this.el.style.left = `${left}px`
+    this.el.style.top = `${Math.round(Math.max(gap, r.top - h - gap))}px`
+    this.el.style.width = `${w}px`
   },
 
   insert(item) {
@@ -147,6 +203,10 @@ export default {
   },
 
   close() {
+    this.aria?.disconnect()
+    this.aria = null
+    this.input?.removeAttribute("aria-activedescendant")
+    this.input?.setAttribute("aria-expanded", "false")
     this.el.hidden = true
     this.items = []
     this.start = -1

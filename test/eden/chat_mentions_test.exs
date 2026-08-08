@@ -156,4 +156,58 @@ defmodule Eden.ChatMentionsTest do
       assert mentions_of(edited) == []
     end
   end
+
+  describe "@all" do
+    defp group(owner, others) do
+      {:ok, conv} = Chat.create_conversation(scope(owner), Enum.map(others, & &1.id))
+      conv
+    end
+
+    test "names every member, and only where there is a room to gather" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      conv = group(alice, [bob, carol])
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@all standup"})
+
+      # Rows are per-person even for `@all` — delivery and any future "mentions of me" need no
+      # special case beyond the resolution itself.
+      assert length(Repo.preload(message, :mentions).mentions) == 3
+
+      # A 1:1 has nobody to gather: offering it there would be a control that does nothing.
+      dm = dm(alice, bob)
+      refute Enum.any?(Chat.mention_candidates(scope(alice), dm.id, ""), & &1[:everyone])
+      assert Enum.any?(Chat.mention_candidates(scope(alice), conv.id, ""), & &1[:everyone])
+      assert Enum.any?(Chat.mention_candidates(scope(alice), conv.id, "al"), & &1[:everyone])
+      refute Enum.any?(Chat.mention_candidates(scope(alice), conv.id, "bo"), & &1[:everyone])
+    end
+
+    test "reaches someone who muted the conversation" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      conv = group(alice, [bob, carol])
+
+      {:ok, _} = Chat.toggle_conversation_mute(scope(bob), conv.id)
+      Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{bob.id}:notify")
+
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "@all deploy in 5"})
+      assert_receive {:notify, %{kind: "mention"}}, 500
+    end
+
+    test "the candidate list only ever holds people the sender shares the conversation with" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      stranger = user_fixture(%{username: "stranger"})
+      conv = dm(alice, bob)
+
+      handles = Chat.mention_candidates(scope(alice), conv.id, "") |> Enum.map(& &1.handle)
+      assert "bob" in handles
+      refute stranger.username in handles
+
+      assert Chat.mention_candidates(scope(stranger), conv.id, "") == [],
+             "a non-member must not be able to enumerate a conversation through its @ list"
+    end
+  end
 end

@@ -467,6 +467,19 @@ defmodule EdenWeb.ChatLive do
   # #41 access matrix: a room link auto-joins an open room, opens one you're in,
   # or (private, not a member) lands you in the channel. get_room is trusted
   # (no membership filter) — we resolve access explicitly, then materialize.
+  # The row as the client draws it: a picture, not a storage key (the same rule the notification
+  # payload follows, #363/R203), and the initial the avatar falls back to when there is no image.
+  defp mention_item(%{everyone: true} = item), do: %{handle: item.handle, everyone: true}
+
+  defp mention_item(%{handle: handle, name: name, id: id, avatar_key: key}) do
+    %{
+      handle: handle,
+      name: name,
+      initial: String.first(name || handle) |> to_string() |> String.upcase(),
+      avatar: key && EdenWeb.Avatars.user_src(id, key)
+    }
+  end
+
   # The message's resolved mentions, or nothing when the association was not preloaded (an
   # optimistic row, a preview struct) — the renderer then leaves every `@word` as text (#576).
   defp mention_rows(%{mentions: %Ecto.Association.NotLoaded{}}), do: []
@@ -1023,8 +1036,13 @@ defmodule EdenWeb.ChatLive do
   def handle_event("mention_search", %{"q" => q}, socket) when is_binary(q) do
     items =
       case socket.assigns.selected do
-        nil -> []
-        conv -> Chat.mention_candidates(socket.assigns.current_scope, conv.id, q)
+        nil ->
+          []
+
+        conv ->
+          socket.assigns.current_scope
+          |> Chat.mention_candidates(conv.id, q)
+          |> Enum.map(&mention_item/1)
       end
 
     {:noreply, push_event(socket, "mention_candidates", %{items: items})}
@@ -3933,13 +3951,19 @@ defmodule EdenWeb.ChatLive do
                 every message. Positioned + targeted by the .ReactionGrid hook. --%>
           <%!-- Mention autocomplete (#576): ONE popover for the page, driven by the .Mentions hook
                 on whichever composer has focus. The list comes from the server (members of THIS
-                conversation), so a handle can never name someone who is not in the room. --%>
+                conversation), so a handle can never name someone who is not in the room.
+                `phx-update="ignore"`: the rows are drawn by the hook and the composer patches on
+                EVERY keystroke (`composer_changed`) — without it morphdom restores this element's
+                empty, hidden server markup milliseconds after the list opens, and the list
+                flickers out from under the finger. --%>
           <div
             id="mention-pop"
             class="ed-mention-pop"
             phx-hook="Mentions"
+            phx-update="ignore"
             role="listbox"
             aria-label={gettext("Mention someone")}
+            data-label-all={gettext("Everyone")}
             hidden
           >
           </div>
@@ -4223,10 +4247,16 @@ defmodule EdenWeb.ChatLive do
                   class="sr-only"
                 />
               </label>
+              <%!-- The static half of the combobox contract for `@` (#576); the hook supplies the
+                    moving part (`aria-activedescendant`) as the list is steered. --%>
               <input
                 type="text"
                 id="composer-body"
                 name="message[body]"
+                role="combobox"
+                aria-controls="mention-pop"
+                aria-expanded="false"
+                aria-autocomplete="list"
                 value={@composer[:body].value}
                 class={["ed-input", @pending_forward && "opacity-60"]}
                 placeholder={
