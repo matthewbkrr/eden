@@ -142,6 +142,9 @@ export default {
       this.el.append(row)
     })
     this.el.hidden = false
+    // The list scrolls at 14rem, so steering past the fifth row would push the ring out of sight
+    // — the one place where "where am I" stops being answerable at all.
+    this.el.children[this.active]?.scrollIntoView({ block: "nearest" })
     this.describe()
     this.place()
   },
