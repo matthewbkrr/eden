@@ -1,19 +1,25 @@
 // The hooks the boot bundle does not carry (#511, part of the #506 perf epic).
 //
-// Thirty-two of the app's forty-two hooks answer something that has not happened yet: a long-press,
+// Thirty-one of the app's forty-two hooks answer something that has not happened yet: a long-press,
 // a photo tap, a drag, a paste, a video's play button. Their code still had to be parsed and
 // executed before the socket could connect — 25 KB gzip (≈100 KB of source) of main-thread work
 // on the one path that decides how long a cold start feels.
 //
-// They now live in a SECOND bundle (`js/lazy.js`, one request for all thirty-two) that is fetched
-// after boot: at idle, or the moment the first gesture lands, whichever comes first. Until it
-// arrives each name is registered as a placeholder — LiveView demands the hook at the instant the
-// element mounts and has no notion of one arriving later — and the placeholder hands its instance
-// over to the real hook as soon as the bundle lands.
+// They now live in a SECOND bundle (`js/lazy.js`, one request for all thirty-one) fetched right
+// after the first frame. Until it arrives each name is registered as a placeholder — LiveView
+// demands the hook at the instant the element mounts and has no notion of one arriving later — and
+// the placeholder hands its instance over to the real hook as soon as the bundle lands.
 //
 // The split is by NEED, not by size: anything that paints, measures or positions at mount stays in
 // the boot bundle (see `index.js`), because deferring those would trade a faster boot for a
 // visible flicker, which is not a trade this epic is willing to make.
+//
+// The window this leaves is real and deliberately NOT papered over: a gesture that lands before the
+// bundle does is not replayed, so a long-press in that first moment needs a second one. Capturing
+// and re-dispatching it was considered and rejected — synthesized gestures are how this app got its
+// ghost-menu races (#478/#479/#493), and buying back a sliver of one frame is not worth reopening
+// that. The window is bounded by the fetch starting one frame after paint, and `zz-lazy-hooks`
+// pins the behaviour on both sides of it rather than pretending it does not exist.
 
 // Registered as placeholders, built into `js/lazy.js`. The two lists have to agree; the e2e spec
 // asserts that they do, so a hook added to one and forgotten in the other fails a test rather
@@ -53,6 +59,7 @@ export const DEFERRED = [
 ]
 
 let loading = null
+let waiters = []
 
 // One fetch for all of them. `script`, not `import()`: the bundles are built as IIFEs by the one
 // esbuild profile, and the app's CSP is `script-src 'self' 'nonce-…'` — a same-origin src is
@@ -76,7 +83,21 @@ function loadAll() {
     document.head.appendChild(tag)
   })
 
+  loading.then((registry) => {
+    const pending = waiters
+    waiters = []
+    pending.forEach((resolve) => resolve(registry))
+  })
+
   return loading
+}
+
+// Waiting is not asking. A placeholder that called `loadAll()` itself would start the fetch the
+// moment ITS element mounted — and something deferred is in the initial DOM of every page, so the
+// request would go out during LiveView's startup, which is exactly the window this change exists
+// to keep clear (#578 review). The triggers below own WHEN; a placeholder only says it is waiting.
+function whenLoaded() {
+  return loading || new Promise((resolve) => waiters.push(resolve))
 }
 
 // What LiveView mounts while the bundle is still in flight.
@@ -94,14 +115,18 @@ function placeholder(name) {
       this.__queued = []
       this.__gone = false
 
-      loadAll().then((registry) => {
+      whenLoaded().then((registry) => {
         const real = registry[name]
         // Destroyed while the bundle was in flight: mounting now would attach listeners to a node
         // that is no longer in the document, and nothing would ever take them off again.
         if (!real || this.__gone) return
 
+        // Taken BEFORE the assign. A hook with no `mounted` of its own leaves this placeholder's
+        // in place, and calling it again would re-enter the handover — an endless microtask loop
+        // rather than a hook (#578 review).
+        const start = real.mounted
         Object.assign(this, real)
-        this.mounted?.()
+        start?.call(this)
         // Whatever LiveView called in the meantime, in the order it happened.
         for (const cb of this.__queued) this[cb]?.()
         this.__queued = null
@@ -158,6 +183,10 @@ export function armDeferredHooks(map) {
   requestAnimationFrame(() => setTimeout(fetchNow, 0))
 
   for (const type of ["pointerdown", "touchstart", "keydown", "focusin"]) {
-    window.addEventListener(type, fetchNow, { capture: true, once: true, passive: true })
+    window.addEventListener(type, fetchNow, {
+      capture: true,
+      once: true,
+      passive: true,
+    })
   }
 }
