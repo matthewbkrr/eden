@@ -2242,13 +2242,14 @@ defmodule Eden.Chat do
   cannot already see. Anonymized accounts (#303) and the caller themselves are left out — naming
   yourself does nothing, and a deleted account has no name to call.
   """
-  def mention_candidates(%Scope{user: user}, conversation_id, prefix) do
+  def mention_candidates(%Scope{user: user}, %Conversation{} = conv, prefix) do
     prefix = prefix |> to_string() |> String.trim() |> String.downcase()
+    conversation_id = conv.id
 
     if has_access?(%Scope{user: user}, conversation_id) do
       like = escape_like(prefix) <> "%"
 
-      everyone(conversation_id, prefix) ++
+      everyone(conv, prefix) ++
         Repo.all(
           from(m in Membership,
             join: u in User,
@@ -2278,19 +2279,16 @@ defmodule Eden.Chat do
   # `@all` heads the list where it makes sense: a 1:1 has nobody to gather, so offering it there
   # would be a control that does nothing. Matched by prefix like any other handle, so typing
   # `@al` still finds it and `@bo` does not.
-  defp everyone(conversation_id, prefix) do
-    if String.starts_with?(@everyone, prefix) and member_count(conversation_id) > 2 do
+  #
+  # Decided from the conversation itself rather than by counting members: "is there a room here"
+  # is exactly what `is_group`/`channel_id` say, and this runs on the keystroke path where an
+  # extra aggregate is a round trip nobody asked for (#577 review).
+  defp everyone(%Conversation{} = conv, prefix) do
+    if String.starts_with?(@everyone, prefix) and (conv.is_group or conv.channel_id != nil) do
       [%{handle: @everyone, name: nil, everyone: true}]
     else
       []
     end
-  end
-
-  defp member_count(conversation_id) do
-    Repo.aggregate(
-      from(m in Membership, where: m.conversation_id == ^conversation_id and is_nil(m.left_at)),
-      :count
-    )
   end
 
   # Every `@handle` in the body that names a MEMBER of this conversation, stored as rows (#576).
@@ -2330,6 +2328,12 @@ defmodule Eden.Chat do
     fresh = Enum.reject(handles, &MapSet.member?(known, &1))
     rows = mention_rows_for(message, fresh)
     insert_mentions(message, rows)
+
+    # A new ROW is not the same as a newly named PERSON: a message that said `@all` and is edited
+    # to add `@bob` gives Bob a second row, but he was rung by the `@all` on send. Only people who
+    # held no row at all before this edit are new (#577 review).
+    already = MapSet.new(kept, & &1.user_id)
+    rows = Enum.reject(rows, fn {id, _handle} -> MapSet.member?(already, id) end)
 
     # Someone named by an EDIT has to hear it (#577 review). Without this a person added to a
     # message after the fact is named on screen and told nothing — the one case where the chip

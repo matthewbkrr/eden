@@ -77,6 +77,16 @@ export default {
     }
     this.el.addEventListener("click", this.onPick)
 
+    // The popover is fixed and anchored to the composer, and on a phone the composer MOVES: the
+    // keyboard opening shrinks the visual viewport and lifts the bar out from under the list
+    // (#577 review). Re-anchored while it is open, on the events that can move it.
+    this.onReflow = () => {
+      if (!this.el.hidden) this.place()
+    }
+    window.addEventListener("resize", this.onReflow)
+    window.visualViewport?.addEventListener("resize", this.onReflow)
+    window.visualViewport?.addEventListener("scroll", this.onReflow)
+
     document.addEventListener("input", this.onInput, true)
     document.addEventListener("keydown", this.onKey, true)
     document.addEventListener("click", this.onDoc, true)
@@ -92,6 +102,9 @@ export default {
   },
 
   destroyed() {
+    window.removeEventListener("resize", this.onReflow)
+    window.visualViewport?.removeEventListener("resize", this.onReflow)
+    window.visualViewport?.removeEventListener("scroll", this.onReflow)
     this.el.removeEventListener("click", this.onPick)
     this.aria?.disconnect()
     document.removeEventListener("input", this.onInput, true)

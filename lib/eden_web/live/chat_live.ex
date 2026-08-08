@@ -1037,7 +1037,7 @@ defmodule EdenWeb.ChatLive do
 
         conv ->
           socket.assigns.current_scope
-          |> Chat.mention_candidates(conv.id, q)
+          |> Chat.mention_candidates(conv, q)
           |> Enum.map(&mention_item/1)
       end
 

@@ -177,10 +177,10 @@ defmodule Eden.ChatMentionsTest do
 
       # A 1:1 has nobody to gather: offering it there would be a control that does nothing.
       dm = dm(alice, bob)
-      refute Enum.any?(Chat.mention_candidates(scope(alice), dm.id, ""), & &1[:everyone])
-      assert Enum.any?(Chat.mention_candidates(scope(alice), conv.id, ""), & &1[:everyone])
-      assert Enum.any?(Chat.mention_candidates(scope(alice), conv.id, "al"), & &1[:everyone])
-      refute Enum.any?(Chat.mention_candidates(scope(alice), conv.id, "bo"), & &1[:everyone])
+      refute Enum.any?(Chat.mention_candidates(scope(alice), dm, ""), & &1[:everyone])
+      assert Enum.any?(Chat.mention_candidates(scope(alice), conv, ""), & &1[:everyone])
+      assert Enum.any?(Chat.mention_candidates(scope(alice), conv, "al"), & &1[:everyone])
+      refute Enum.any?(Chat.mention_candidates(scope(alice), conv, "bo"), & &1[:everyone])
     end
 
     test "reaches someone who muted the conversation" do
@@ -202,11 +202,11 @@ defmodule Eden.ChatMentionsTest do
       stranger = user_fixture(%{username: "stranger"})
       conv = dm(alice, bob)
 
-      handles = Chat.mention_candidates(scope(alice), conv.id, "") |> Enum.map(& &1.handle)
+      handles = Chat.mention_candidates(scope(alice), conv, "") |> Enum.map(& &1.handle)
       assert "bob" in handles
       refute stranger.username in handles
 
-      assert Chat.mention_candidates(scope(stranger), conv.id, "") == [],
+      assert Chat.mention_candidates(scope(stranger), conv, "") == [],
              "a non-member must not be able to enumerate a conversation through its @ list"
     end
   end
@@ -242,6 +242,23 @@ defmodule Eden.ChatMentionsTest do
 
       assert mentions_of(edited) == ["robert"],
              "the mention names a person, and no rename by anyone can hand it to someone else"
+    end
+
+    test "an edit does not ring someone @all already rang" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@all planning"})
+      Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{bob.id}:notify")
+
+      # A new ROW for Bob (handle "bob" beside his "all" row), but not a newly named person.
+      {:ok, _} = Chat.edit_message(scope(alice), message.id, "@all planning, @bob возьмёшь?")
+
+      refute_receive {:notify, _},
+                     400,
+                     "he was already called by the @all on send; the edit names him again, it does not call him again"
     end
 
     test "the person added by an edit is told" do
@@ -284,6 +301,22 @@ defmodule Eden.ChatMentionsTest do
 
       assert mentions_of(message) == ["bob"],
              "a handle at the end of a sentence is still a handle — the punctuation is not part of it"
+    end
+  end
+
+  describe "case" do
+    test "a mixed-case handle names the same person" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "Bob_Smith"})
+      conv = dm(alice, bob)
+
+      {:ok, m1} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bob_smith ping"})
+      {:ok, m2} = Chat.create_message(scope(alice), conv.id, %{"body" => "@BOB_SMITH ping"})
+
+      # `users.username` is citext, so the comparison is case-insensitive in the database and the
+      # handle does not have to be typed the way it was registered.
+      assert mentions_of(m1) == ["Bob_Smith"]
+      assert mentions_of(m2) == ["Bob_Smith"]
     end
   end
 
