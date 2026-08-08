@@ -2481,7 +2481,11 @@ html {
     position: fixed;
     inset: 0;
     z-index: 30;
-    pointer-events: none;
+    /* It catches the pointer, like the modal it stands for (#573 review). A scrim that dims the
+       screen and lets taps through to the app behind is a lie, and the same lie was fixed in the
+       photo placeholder (#569). Nothing to dismiss on a tap here: the panel is on its way, and a
+       socket that cannot deliver it takes the placeholder off within a frame. */
+    cursor: default;
   }
   .ed-skel-panel__scrim {
     position: absolute;

@@ -4342,7 +4342,10 @@ defmodule EdenWeb.ChatLive do
           // the real one arrives, give up at once if the socket is down.
           panelSkel(kind) {
             this.panelDismiss()
-            if (document.querySelector(this.panelReal(kind))) return
+            // How many of this shape are on screen right now: the placeholder waits for one MORE,
+            // not for "any at all" — a modal opened from inside another modal (add members from a
+            // group's card) would otherwise get no placeholder (#573 review).
+            const before = document.querySelectorAll(this.panelReal(kind)).length
             const ov = document.createElement("div")
             ov.className = "ed-skel-panel"
             ov.dataset.kind = kind
@@ -4368,7 +4371,7 @@ defmodule EdenWeb.ChatLive do
             const t0 = performance.now()
             const poll = () => {
               if (this.panelOv !== ov) return
-              if (document.querySelector(this.panelReal(kind))) this.panelDismiss()
+              if (document.querySelectorAll(this.panelReal(kind)).length > before) this.panelDismiss()
               else if (!window.liveSocket?.isConnected()) this.panelDismiss()
               else if (performance.now() - t0 < 10_000) this.panelRaf = requestAnimationFrame(poll)
               else this.panelDismiss()

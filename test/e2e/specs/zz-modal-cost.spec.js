@@ -245,3 +245,33 @@ test("the placeholder is about as tall as the card it stands for", async ({ alic
   // flip differently.
   expect(Math.abs(realH - skelH), `${line} — they would flip at different anchors`).toBeLessThan(120)
 })
+
+// A scrim that dims the screen and lets taps through to the app behind is a lie — the same one the
+// photo placeholder had (#569), and the modal it stands for traps clicks (#573 review).
+test("the panel placeholder catches taps instead of passing them to the app", async ({
+  alice,
+  seed,
+}) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(400)
+
+  const box = await alice.locator("#composer-body").boundingBox()
+  expect(box, "no composer to tap through to").not.toBeNull()
+  await alice.evaluate(() => document.activeElement?.blur())
+
+  // A full second of round trip, so the tap below is unambiguously the placeholder's.
+  await alice.evaluate(() => window.liveSocket.enableLatencySim(500))
+  await alice.locator('[phx-click="toggle_new"]').first().click()
+  await expect(alice.locator(".ed-skel-panel")).toHaveCount(1)
+
+  await alice.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  const focused = await alice.evaluate(() => document.activeElement?.id || "")
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  expect(focused, "the tap went through the placeholder and landed in the composer").not.toBe(
+    "composer-body",
+  )
+})
