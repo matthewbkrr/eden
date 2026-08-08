@@ -25,7 +25,9 @@ const openViewer = async (page, seed) => {
       }
     }
   })
-  await page.goto(`/app/c/${seed.dm_id}`)
+  // Through the permalink: this DM keeps every message the suite has ever sent, so the seeded
+  // photo is far above the window a plain open loads.
+  await page.goto(`/app/c/${seed.dm_id}/m/${seed.portrait_msg_id}`)
   await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
   const tile = page.locator(`#messages-${seed.portrait_msg_id} .ed-photo`).first()
   await tile.scrollIntoViewIfNeeded()

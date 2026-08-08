@@ -6821,21 +6821,27 @@ defmodule EdenWeb.ChatLive do
         // drifted apart — 2200 here, 1600 in the lightbox's "show in chat" — so the lightbox's
         // flash went out by a frame in the middle of its own fade (#517). Read once: the token is
         // on :root and cannot change without a stylesheet reload.
-        let holdMs = null
-        window.__edFocusHold = () => {
+        // Any JS timer that clocks a CSS animation reads its duration from the stylesheet rather
+        // than carrying a copy (#517). Copies drift: `--ed-hold-focus` already had a 1600 and a
+        // 2200 in two different hooks for one 2200ms animation.
+        const durs = new Map()
+        window.__edMs = (name, fallback) => {
           // `null`, not `0`, as the "not read yet" sentinel — and `Number.isFinite`, not `!n`, to
-          // decide the fallback: `--ed-hold-focus: 0s` is a legitimate value (no hold at all, the
-          // natural way to switch the flash off), and both of the obvious shortcuts would quietly
-          // turn it into 2200ms — the opposite of what was asked (#571 review).
-          if (holdMs === null) {
+          // decide the fallback: `0s` is a legitimate value (no motion at all, the natural way to
+          // switch an animation off), and both of the obvious shortcuts would quietly turn it into
+          // the default — the opposite of what was asked (#571 review).
+          if (!durs.has(name)) {
             // Unit-aware: `2.2s` and `2200ms` are the same duration, and a bare parseFloat would
             // turn the first into a two-millisecond flash. The stylesheet is free to write either.
-            const raw = getComputedStyle(document.documentElement)
-              .getPropertyValue("--ed-hold-focus")
-              .trim()
+            const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
             const n = parseFloat(raw)
-            holdMs = !Number.isFinite(n) ? 2200 : /ms$/.test(raw) ? n : n * 1000
+            durs.set(name, !Number.isFinite(n) ? fallback : /ms$/.test(raw) ? n : n * 1000)
           }
+          return durs.get(name)
+        }
+        let holdMs = null
+        window.__edFocusHold = () => {
+          if (holdMs === null) holdMs = window.__edMs("--ed-hold-focus", 2200)
           return holdMs
         }
         export default {
@@ -8013,6 +8019,11 @@ defmodule EdenWeb.ChatLive do
             else if (this.sharedMenuId()) this.fillSidebar()
             // Disarmed until a press lands on the menu itself — see the capture listener in bind().
             delete this.menu.dataset.armed
+            // A re-open inside the previous exit cancels it outright, or the menu would come back
+            // mid-fade and finish invisible.
+            clearTimeout(this.menu.__closeTimer)
+            this.menu.classList.remove("ed-menu--closing")
+            this.menu.removeAttribute("aria-hidden")
             this.menu.hidden = false
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "true")
@@ -8036,7 +8047,23 @@ defmodule EdenWeb.ChatLive do
             this.longPressed = false
             clearTimeout(this._lpTimer)
             this._lpTarget = null
-            if (this.menu) this.menu.hidden = true
+            if (this.menu) {
+              // Fade it out instead of cutting (#517): the box stays for exactly one
+              // --ed-dur-quick, unclickable and `aria-hidden` from this instant, and only then
+              // becomes `hidden`. Assistive tech and pointers are told at once; only the pixels
+              // take the extra frames.
+              const m = this.menu
+              if (!m.hidden && !m.classList.contains("ed-menu--closing")) {
+                m.classList.add("ed-menu--closing")
+                m.setAttribute("aria-hidden", "true")
+                clearTimeout(m.__closeTimer)
+                m.__closeTimer = setTimeout(() => {
+                  m.hidden = true
+                  m.classList.remove("ed-menu--closing")
+                  m.removeAttribute("aria-hidden")
+                }, window.__edMs("--ed-dur-quick", 160))
+              }
+            }
             const trigger = this.el.querySelector("[data-menu-trigger]")
             if (trigger) trigger.setAttribute("aria-expanded", "false")
             // removeEventListener is a no-op if not attached — safe to call always.

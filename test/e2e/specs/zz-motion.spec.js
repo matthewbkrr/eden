@@ -220,3 +220,90 @@ test("jumping to a message from the viewer does not glide under reduced motion",
   expect(behaviors.length, "the jump never scrolled at all").toBeGreaterThan(0)
   expect(behaviors, `the jump glided under reduced motion: ${behaviors}`).not.toContain("smooth")
 })
+
+// Menus appeared as a fade and disappeared as a cut: `[hidden]` is `display: none`, and nothing
+// animates out of that (#517). The exit is a transition with a discrete `display`, so the box stays
+// on screen long enough to fade and is then dropped.
+test("a menu fades out instead of cutting", async ({ alice, seed }, testInfo) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.waitForTimeout(400)
+
+  // Open the shared message menu the way the app does, on the newest row.
+  const opened = await alice.evaluate(() => {
+    const rows = document.querySelectorAll("#messages .ed-bubble[data-message-id]")
+    const host = rows[rows.length - 1]
+    if (!host) return false
+    host.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }))
+    return !document.getElementById("message-menu").hidden
+  })
+  expect(opened, "the menu did not open, so its exit proves nothing").toBe(true)
+  await alice.waitForTimeout(400) // let the entrance settle at opacity 1
+
+  // Close it, then sample the frames after: the box has to still be painted, and part-way gone.
+  const frames = await alice.evaluate(async () => {
+    const m = document.getElementById("message-menu")
+    // Through the hook's own close, not by setting `hidden` by hand: the exit is the hook's job.
+    document.body.click()
+    const seen = []
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      const cs = getComputedStyle(m)
+      seen.push({ display: cs.display, opacity: Number(cs.opacity), hidden: m.hidden, aria: m.getAttribute("aria-hidden") })
+    }
+    return seen
+  })
+  const line = `menu exit frames: ${JSON.stringify(frames)}`
+  console.log(line)
+  testInfo.annotations.push({ type: "measurement", description: line })
+
+  const mid = frames.filter((f) => f.display !== "none" && f.opacity > 0 && f.opacity < 1)
+  expect(mid.length, `${line} — the menu vanished in one frame`).toBeGreaterThan(0)
+
+  // Only the pixels get the extra frames: a screen reader and the pointer are told at once.
+  expect(mid.every((f) => f.aria === "true"), `${line} — the leaving menu is still exposed`).toBe(
+    true,
+  )
+
+  // ...and it does leave: still displayed a few frames later would mean it never drops out.
+  await alice.waitForTimeout(500)
+  expect(
+    await alice.evaluate(() => getComputedStyle(document.getElementById("message-menu")).display),
+    "the menu stayed in the layout after its exit",
+  ).toBe("none")
+})
+
+// The exit is motion like any other: someone who asked for none gets none.
+test("a menu leaving under reduced motion does not fade", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await reduce(alice)
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.waitForTimeout(400)
+
+  const frames = await alice.evaluate(async () => {
+    const rows = document.querySelectorAll("#messages .ed-bubble[data-message-id]")
+    const host = rows[rows.length - 1]
+    host.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }),
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    const m = document.getElementById("message-menu")
+    document.body.click()
+    const seen = []
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => requestAnimationFrame(r))
+      seen.push(Number(getComputedStyle(m).opacity))
+    }
+    return seen
+  })
+  console.log("menu exit under reduce:", JSON.stringify(frames))
+
+  expect(
+    frames.filter((o) => o > 0 && o < 1).length,
+    `the menu faded out under reduced motion: ${frames}`,
+  ).toBe(0)
+})
