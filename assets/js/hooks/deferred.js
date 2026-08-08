@@ -194,24 +194,34 @@ export function deferredHooks() {
  * floor for a browser where the frame callback never runs (a tab that opens in the background).
  */
 export function armDeferredHooks(map) {
+  const GESTURES = ["pointerdown", "touchstart", "keydown", "focusin"]
+
+  // Taken off as a SET, not one at a time by `once`. `once` only removes the listener that
+  // actually fired, so the other three sat on the window for the life of the page — waking up on
+  // the first keypress long after the bundle had loaded, and stacking a fresh copy on every retry
+  // (#578 review). The four are armed and disarmed together, by the same reference.
+  const arm = () =>
+    GESTURES.forEach((type) =>
+      window.addEventListener(type, onGesture, { capture: true, passive: true }),
+    )
+
+  const disarm = () =>
+    GESTURES.forEach((type) => window.removeEventListener(type, onGesture, { capture: true }))
+
   const fetchNow = () =>
     loadAll().then((registry) => {
-      // Failed: the listeners are spent (`once`), so without re-arming a single dropped request
-      // would leave every interactive hook absent for the life of the page — a flaky moment on a
-      // cross-border link turning into a chat with no menus (#578 review). Re-armed rather than
-      // retried on a timer: the retry rides the next thing the person does.
+      // Failed: without re-arming, a single dropped request would leave every interactive hook
+      // absent for the life of the page — a flaky moment on a cross-border link turning into a
+      // chat with no menus. Re-armed rather than retried on a timer: the retry rides the next
+      // thing the person does.
       if (!registry) return arm()
+      disarm()
       Object.assign(map, registry)
     })
 
-  const arm = () => {
-    for (const type of ["pointerdown", "touchstart", "keydown", "focusin"]) {
-      window.addEventListener(type, fetchNow, {
-        capture: true,
-        once: true,
-        passive: true,
-      })
-    }
+  function onGesture() {
+    disarm()
+    fetchNow()
   }
 
   requestAnimationFrame(() => setTimeout(fetchNow, 0))
