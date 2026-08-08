@@ -23,6 +23,8 @@ import "phoenix_html"
 import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/eden"
+// The app's own hooks, extracted from the LiveViews (#510).
+import {edenHooks} from "./hooks"
 // Not colocated (#511): the signed-out bundle needs these two, and the generated colocated index
 // hands back all 42 hooks at once, so importing from it would have pulled the whole chat client
 // onto the login page.
@@ -109,7 +111,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
   reconnectAfterMs: backoff,
   rejoinAfterMs: backoff,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, FlashAutoHide, PasswordReveal},
+  hooks: {...colocatedHooks, ...edenHooks, FlashAutoHide, PasswordReveal},
 })
 
 // Record where a profile trigger (avatar / name / member row) was clicked, so

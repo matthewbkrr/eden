@@ -2367,7 +2367,9 @@ defmodule EdenWeb.ChatLiveTest do
 
       # The colocated hook name must be REWRITTEN to its full module form — a
       # dynamic phx-hook value would ship ".Lightbox" raw ("unknown hook").
-      assert html =~ ~s(phx-hook="EdenWeb.ChatLive.Lightbox")
+      # A plain name since the hooks left the LiveView (#510): registered globally in app.js
+      # rather than scoped to this module.
+      assert html =~ ~s(phx-hook="Lightbox")
       refute html =~ ~s(phx-hook=".Lightbox")
     end
 

@@ -104,7 +104,9 @@ defmodule EdenWeb.GestureCssTest do
              "#{selector} promotes itself statically — that is a layer per rendered row"
     end
 
-    hooks = File.read!(Path.join(__DIR__, "../../lib/eden_web/live/chat_live.ex"))
+    # The hooks moved out of the LiveView into their own modules (#510); the gesture that promotes
+    # a row is .ContextMenu's.
+    hooks = File.read!(Path.join(__DIR__, "../../assets/js/hooks/ContextMenu.js"))
     assert hooks =~ ~s(this.el.style.willChange = "transform")
     assert hooks =~ ~s(this.el.style.willChange = "")
   end
