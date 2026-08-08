@@ -52,7 +52,20 @@ export default {
     }
 
     this.onDoc = (e) => {
-      if (!this.el.contains(e.target) && !this.isComposer(e.target)) this.close()
+      if (this.el.contains(e.target)) return
+      // A click INSIDE the composer moves the caret, and `start` was computed for where the caret
+      // used to be — inserting from a stale point splices the handle into the middle of a word
+      // (#577 review). Re-read the caret: still inside a handle, keep going; otherwise close.
+      if (this.isComposer(e.target)) {
+        if (this.el.hidden) return
+        setTimeout(() => {
+          const q = this.query(this.input)
+          if (q === null) return this.close()
+          this.start = this.input.value.lastIndexOf("@", this.input.selectionStart - 1)
+        }, 0)
+        return
+      }
+      this.close()
     }
 
     this.el.addEventListener("click", (e) => {

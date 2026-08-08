@@ -2218,6 +2218,11 @@ defmodule Eden.Chat do
       |> Repo.insert()
       |> case do
         {:ok, message} ->
+          # Deliberately after the insert and outside a transaction (#577 review): the message is
+          # the person's own words and must land, while mentions are an index derived from it. A
+          # transaction would trade "a ping was lost" for "the message was lost", which is the
+          # worse failure in a messenger. Nothing observes the gap either — the broadcast that
+          # tells anyone about this message happens in `deliver/2`, after resolution.
           resolve_mentions(message)
           {:ok, deliver(conversation_id, message)}
 
@@ -2356,10 +2361,16 @@ defmodule Eden.Chat do
         where: is_nil(u.deleted_at)
       )
 
-    if @everyone in handles do
-      Repo.all(from([m, u] in query, select: {u.id, ^@everyone}))
-    else
+    named =
       Repo.all(from([m, u] in query, where: u.username in ^handles, select: {u.id, u.username}))
+
+    # `@all` is additive, not exclusive: "@all and especially @bob" names the room AND Bob, and
+    # each keeps its own row so both spans render as chips. Returning only the everyone-rows left
+    # the personal handle unresolved and therefore unchipped (#577 review).
+    if @everyone in handles do
+      Repo.all(from([m, u] in query, select: {u.id, ^@everyone})) ++ named
+    else
+      named
     end
   end
 

@@ -20,9 +20,11 @@ defmodule EdenWeb.Markup do
   # One left-to-right pass; the first complete marker pair (or URL) wins. Bold
   # (`**`) is tried before italic (`*`). Emphasis can't hug whitespace
   # ((?!\s)/(?<!\s)); `_` must sit on word boundaries so snake_case is left alone.
-  # `@handle`, on a word boundary so an address (`me@host`) is not a call. Same character set a
-  # username may have, so a trailing comma or full stop ends it (#576).
-  @mention ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_.-]{2,})/u
+  # `@handle`, on a word boundary so an address (`me@host`) is not a call, and exactly the
+  # character set a username may have (`validate_username`) so a trailing comma or full stop ends
+  # it. The same rule the CONTEXT resolves by — when the two drifted, `thanks @bob.` was resolved
+  # and notified server-side while rendering as plain text (#577 review).
+  @mention ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})/u
 
   @inline ~r/(\*\*(?!\s).+?(?<!\s)\*\*|`[^`]+`|(?<![\p{L}\p{N}_])_(?!\s).+?(?<!\s)_(?![\p{L}\p{N}_])|\*(?!\s).+?(?<!\s)\*|https?:\/\/[^\s<]+)/u
 

@@ -14,9 +14,11 @@ defmodule Eden.Repo.Migrations.CreateMessageMentions do
       timestamps(type: :utc_datetime)
     end
 
-    # One row per (message, person): the same `@tag` twice in one body names the same
-    # person once.
-    create unique_index(:message_mentions, [:message_id, :user_id])
+    # One row per (message, person, handle): the same `@tag` twice in one body names the person
+    # once, but `@all` and `@bob` in the SAME body are two different namings of Bob — one as the
+    # room, one as himself — and each has its own span of text to chip. Keying on the person alone
+    # dropped the second one silently (#577 review).
+    create unique_index(:message_mentions, [:message_id, :user_id, :handle])
     # "Everything that mentions me" — the lookup a future mentions inbox and the unread
     # marker both need, and the one the delete cascade walks.
     create index(:message_mentions, [:user_id])

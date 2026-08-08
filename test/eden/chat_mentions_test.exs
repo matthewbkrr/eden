@@ -269,4 +269,24 @@ defmodule Eden.ChatMentionsTest do
              "a handle at the end of a sentence is still a handle — the punctuation is not part of it"
     end
   end
+
+  describe "@all beside a personal mention" do
+    test "both are named, and both keep a span to render" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+
+      {:ok, message} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "@all и особенно @bob"})
+
+      rows = Repo.preload(message, mentions: :user).mentions
+      handles = rows |> Enum.map(& &1.handle) |> Enum.frequencies()
+
+      assert handles["all"] == 3, "everyone is named"
+
+      assert handles["bob"] == 1,
+             "the personal mention has to survive next to @all — it is a second span of text, and it needs its own row to be rendered as a chip"
+    end
+  end
 end
