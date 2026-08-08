@@ -1,5 +1,12 @@
 <!DOCTYPE html>
-<html lang={Gettext.get_locale()} data-icons={~p"/images/icons.svg"}>
+<%!-- The two labels a client-built dialog needs (#518): it replaces the system confirm, which
+      came translated by the OS, so its buttons have to come translated from here. --%>
+<html
+  lang={Gettext.get_locale()}
+  data-icons={~p"/images/icons.svg"}
+  data-lbl-ok={gettext("OK")}
+  data-lbl-cancel={gettext("Cancel")}
+>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />

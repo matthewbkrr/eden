@@ -27,6 +27,8 @@ import {hooks as colocatedHooks} from "phoenix-colocated/eden"
 // hands back all 42 hooks at once, so importing from it would have pulled the whole chat client
 // onto the login page.
 import {FlashAutoHide, PasswordReveal} from "./shared_hooks"
+// The app's own confirm/notice, in place of the system ones (#518).
+import {installConfirm} from "./dialogs"
 import topbar from "../vendor/topbar"
 // Durable send queue (TG-attachments, phase E): the colocated SendQueue hook reaches it via this
 // global so an in-flight upload survives a page reload (persisted to IndexedDB, resumed on mount).
@@ -93,6 +95,10 @@ window.edSound = {
 // Capped backoff: retry fast at first, then settle at 5s. Keeps recovery quick
 // on a flaky RU↔overseas link without hammering the server during a long outage.
 const backoff = (tries) => [250, 500, 1000, 2000, 5000][tries - 1] || 5000
+
+// Before the socket: the interceptor takes clicks in the capture phase, and a `data-confirm` tap
+// landing during connect must not reach LiveView's system dialog either.
+installConfirm()
 
 const liveSocket = new LiveSocket("/live", Socket, {
   // Fall back to long-polling if the WebSocket can't establish quickly (the WS

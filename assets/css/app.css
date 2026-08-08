@@ -191,6 +191,13 @@ html {
    Components (raw CSS referencing tokens; no @apply per AGENTS.md).
    -------------------------------------------------------------------------- */
 @layer components {
+  /* The keyboard's backdrop strip reads <body>'s background (`autoBackdropColor: 'dom'`, #518),
+     and the app's own background lives on .ed-root — so body carried `transparent` and the strip
+     fell back to black under a light theme. Same token, so nothing changes visually anywhere
+     else; on the body it is simply what the native side can see. */
+  body {
+    background: var(--ed-bg);
+  }
   .ed-root {
     background: var(--ed-bg);
     color: var(--ed-ink);
@@ -2473,6 +2480,59 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The app's own confirm (#518), in place of the system alert a WKWebView titles with the
+     origin. Same box as the server-rendered delete sheet it stands beside — this one is built on
+     the client, for the seventeen `data-confirm` attributes and the two direct calls. */
+  .ed-ask {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    padding: 1rem;
+  }
+  .ed-ask__scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--ed-scrim);
+  }
+  .ed-ask__card {
+    position: relative;
+    width: 100%;
+    max-width: 22rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+    border-radius: var(--ed-radius-lg);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    box-shadow: var(--ed-shadow-pop);
+  }
+  .ed-ask__card:focus-visible {
+    outline: none;
+  }
+  .ed-ask__text {
+    font-weight: 600;
+    line-height: 1.35;
+  }
+  .ed-ask__row {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .ed-ask__row .ed-btn {
+    flex: 1;
+  }
+  /* A one-way notice, in the toast the flash group already uses. */
+  .ed-ask-toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(env(safe-area-inset-bottom) + 1.25rem);
+    transform: translateX(-50%);
+    z-index: 70;
+    max-width: min(28rem, calc(100vw - 2rem));
+  }
+
   /* The panel placeholder (#521): a scrim and a card of the right shape, painted on the tap that
      opens a modal or the profile card, and taken off when the real one lands. It answers the tap
      — nothing else: no controls, no pointer events. Measured before it existed, with the socket at
