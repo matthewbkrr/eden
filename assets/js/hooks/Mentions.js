@@ -8,6 +8,7 @@
 // The insertion is what makes the feature honest: a handle typed by hand can be misspelt and then
 // names nobody (the server resolves against members and silently leaves it as text). Picking from
 // the list guarantees the handle exists.
+
 // Keys that move the caret without changing the text, and therefore fire no `input` event.
 const CARET_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"])
 
@@ -36,8 +37,17 @@ export default {
       // or after Escape — is stale, and inserting from it on Enter would name the wrong person
       // (#577 review).
       this.pending = q
-      this.want = ++this.seq
-      this.pushEvent("mention_search", { q, seq: this.want })
+      const ask = () => {
+        this.want = ++this.seq
+        this.pushEvent("mention_search", { q, seq: this.want })
+      }
+      // The list appears the instant `@` is typed; the letters after it only narrow a list that is
+      // already on screen. Each of those keystrokes costs a server round trip AND a re-render of
+      // the whole LiveView (the very cost #521 went after) for an answer the next keystroke
+      // supersedes — so the opening is on the leading edge and the narrowing on the trailing one.
+      clearTimeout(this.timer)
+      if (q === "") ask()
+      else this.timer = setTimeout(ask, 120)
     }
 
     // Keys are taken in the CAPTURE phase while the list is open: Enter must insert a mention,
@@ -127,6 +137,7 @@ export default {
   },
 
   destroyed() {
+    clearTimeout(this.timer)
     window.removeEventListener("resize", this.onReflow)
     window.visualViewport?.removeEventListener("resize", this.onReflow)
     window.visualViewport?.removeEventListener("scroll", this.onReflow)
@@ -264,6 +275,7 @@ export default {
   },
 
   close() {
+    clearTimeout(this.timer)
     this.aria?.disconnect()
     this.aria = null
     this.input?.removeAttribute("aria-activedescendant")

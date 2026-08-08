@@ -483,8 +483,6 @@ defmodule EdenWeb.ChatLive do
   defp mention_rows(%{mentions: rows}) when is_list(rows), do: rows
   defp mention_rows(_), do: []
 
-  # A short body preview for the select overlay
-
   # #41 access matrix: a room link auto-joins an open room, opens one you're in,
   # or (private, not a member) lands you in the channel. get_room is trusted
   # (no membership filter) — we resolve access explicitly, then materialize.

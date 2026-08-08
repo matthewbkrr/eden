@@ -2430,9 +2430,24 @@ defmodule Eden.Chat do
   # chipped `@bob` and left the rest dangling (#577 review).
   defp mention_handles(body) do
     ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})(?![\p{L}\p{N}_])/u
-    |> Regex.scan(body)
+    |> Regex.scan(literal_spans_blanked(body))
     |> Enum.map(fn [_, handle] -> String.downcase(handle) end)
     |> Enum.uniq()
+  end
+
+  # The renderer leaves a code span literal and turns a URL into a single link, so a handle inside
+  # either is never drawn as a chip — resolving one here would ring somebody for a call they can
+  # never see on screen (#577 review). Blanked rather than cut out, so every other handle in the
+  # body keeps the word boundaries it was written with.
+  #
+  # The two patterns mirror `EdenWeb.Markup`; the context cannot call the web layer, and the pair
+  # has to be changed together, which is what this comment is for.
+  defp literal_spans_blanked(body) do
+    blank = fn match -> String.duplicate(" ", String.length(match)) end
+
+    body
+    |> String.replace(~r/`[^`]+`/u, blank)
+    |> String.replace(~r/https?:\/\/[^\s<]+/u, blank)
   end
 
   # A quote-reply target (#71): keep `raw` only if it references a message that is

@@ -408,4 +408,28 @@ defmodule Eden.ChatMentionsTest do
              "the picker does not offer @all in a 1:1 — a hand-typed one must not pierce the other person's mute either"
     end
   end
+
+  describe "what the renderer never chips" do
+    test "a handle inside a code span or a URL names nobody" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      conv = dm(alice, bob)
+
+      {:ok, code} = Chat.create_message(scope(alice), conv.id, %{"body" => "try `@bob` here"})
+
+      assert mentions_of(code) == [],
+             "a code span renders literally, so resolving it would ring Bob for a call that is never drawn as one"
+
+      {:ok, url} =
+        Chat.create_message(scope(alice), conv.id, %{"body" => "https://example.com/@bob/x"})
+
+      assert mentions_of(url) == [],
+             "a URL renders as one link — the handle inside it was never addressed to anyone"
+
+      {:ok, plain} = Chat.create_message(scope(alice), conv.id, %{"body" => "`code` and @bob"})
+
+      assert mentions_of(plain) == ["bob"],
+             "blanking the literal spans must not cost the handles around them"
+    end
+  end
 end
