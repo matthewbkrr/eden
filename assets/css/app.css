@@ -96,7 +96,19 @@ html {
   --ed-shadow-pop: 0 12px 32px oklch(0 0 0 / 0.3);
   --ed-ring: color-mix(in oklab, var(--ed-primary) 55%, transparent);
   --ed-shadow: 0 1px 2px oklch(0 0 0 / 0.06), 0 4px 16px oklch(0 0 0 / 0.06);
-  --ed-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Motion (#517). The inventory found 29 distinct durations across 122 declarations with one
+     clear favourite (0.16s, 41 uses) — the system already existed, it just had no name. These
+     three name what the app already is rather than re-timing it under cover of a refactor:
+     everything within a few tens of milliseconds of a cluster collapses onto it. */
+  --ed-dur-quick: 0.16s; /* a state changing in place: hover, colour, opacity */
+  --ed-dur-move: 0.2s; /* something moving inside the screen: rows, chips, sheets */
+  --ed-dur-screen: 0.3s; /* a whole screen or panel */
+  /* Entering is decelerating, leaving is accelerating, travelling is symmetric. `--ed-ease` was
+     renamed to `--ed-ease-out` for exactly this reason: a name that reads as "the default easing"
+     ends up on exits too, where the profile has to be the opposite one. */
+  --ed-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ed-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ed-ease-move: cubic-bezier(0.4, 0, 0.2, 1);
   /* How long a jumped-to message stays lit. A duration two JS timers also have to know: they used
      to hardcode it, and one of them had already drifted to 1600ms — cutting the flash off inside
      its own fade (#517). Anything that clocks this animation reads the token.
@@ -204,7 +216,7 @@ html {
   html.ed-native .ed-thread,
   html.ed-native .ed-nav-skel--full {
     padding-bottom: max(env(safe-area-inset-bottom), var(--ed-kb, 0px));
-    transition: padding-bottom 0.32s cubic-bezier(0.36, 0.66, 0.04, 1);
+    transition: padding-bottom var(--ed-dur-screen) cubic-bezier(0.36, 0.66, 0.04, 1);
   }
   @media (prefers-reduced-motion: reduce) {
     html.ed-native .ed-root,
@@ -235,8 +247,8 @@ html {
     font: 550 0.875rem/1 var(--ed-font);
     cursor: pointer;
     white-space: nowrap;
-    transition: background 0.16s var(--ed-ease), border-color 0.16s var(--ed-ease),
-      color 0.16s var(--ed-ease), opacity 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), border-color var(--ed-dur-quick) var(--ed-ease-out),
+      color var(--ed-dur-quick) var(--ed-ease-out), opacity var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-btn:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
   .ed-btn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -274,7 +286,7 @@ html {
     color: var(--ed-muted);
     cursor: pointer;
     flex: none;
-    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), color var(--ed-dur-quick) var(--ed-ease-out);
   }
   /* Every tap lands on the button itself, never a child icon/mask — fixes the
      "tap misses the centre of the icon" hit-area bug, esp. on touch. */
@@ -308,7 +320,7 @@ html {
     color: var(--ed-muted);
     cursor: pointer;
     flex: none;
-    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-btn--affix > * { pointer-events: none; }
   .ed-btn--affix::after { content: ""; position: absolute; inset: -0.5rem; }
@@ -379,7 +391,7 @@ html {
     border-radius: var(--ed-radius);
     color: var(--ed-ink);
     font: 400 0.9375rem/1.4 var(--ed-font);
-    transition: border-color 0.16s var(--ed-ease), box-shadow 0.16s var(--ed-ease);
+    transition: border-color var(--ed-dur-quick) var(--ed-ease-out), box-shadow var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-input::placeholder { color: var(--ed-muted); }
   /* iOS WebKit auto-zooms the WHOLE page when a focused text control computes
@@ -439,7 +451,7 @@ html {
     background: oklch(0 0 0 / 0.42);
     color: #fff;
     opacity: 0;
-    transition: opacity 0.16s var(--ed-ease);
+    transition: opacity var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-avatar-edit:hover .ed-avatar-edit__overlay,
   .ed-avatar-edit:focus-within .ed-avatar-edit__overlay {
@@ -466,7 +478,7 @@ html {
        all sit on --ed-surface now); --ed-bg here left a dark halo on every avatar. */
     box-shadow: 0 0 0 2.5px var(--ed-surface);
     /* Smooth the status recolor (online↔away↔dnd); a state change, not decoration (#102). */
-    transition: background-color 0.18s var(--ed-ease);
+    transition: background-color var(--ed-dur-move) var(--ed-ease-out);
   }
   /* Presence-status dots (#102); base is a solid online-green disc. away/dnd add
      a SHAPE cue (ring / bar) on top of color so the state survives grayscale and
@@ -568,7 +580,7 @@ html {
     /* Swipe-to-reply (#110) snap-back: animates the row easing home even when the
        post-reply re-render wipes the JS-set inline transform (the trackpad path).
        Active drag/wheel sets inline transition:none for an instant 1:1 follow. */
-    transition: transform 0.18s var(--ed-ease);
+    transition: transform var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-bubble--them {
     background: var(--ed-surface);
@@ -697,7 +709,7 @@ html {
     border-radius: var(--ed-radius-full);
     color: #fff;
     background: color-mix(in oklab, black 52%, transparent);
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-editmedia__x::before {
     content: "";
@@ -712,8 +724,8 @@ html {
     background: transparent;
     border: 1px dashed var(--ed-border);
     cursor: pointer;
-    transition: color 0.16s var(--ed-ease), border-color 0.16s var(--ed-ease),
-      background 0.16s var(--ed-ease);
+    transition: color var(--ed-dur-quick) var(--ed-ease-out), border-color var(--ed-dur-quick) var(--ed-ease-out),
+      background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-editmedia__add:hover,
   .ed-editmedia__add:focus-within {
@@ -782,7 +794,7 @@ html {
     box-shadow: var(--ed-shadow);
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.2s var(--ed-ease);
+    transition: opacity var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-date-chip.is-visible {
     opacity: 1;
@@ -875,7 +887,7 @@ html {
     border-radius: var(--ed-radius);
     pointer-events: none;
     background: oklch(0 0 0 / 0.25);
-    transition: opacity 0.15s var(--ed-ease);
+    transition: opacity var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-video-cover--gone {
     opacity: 0;
@@ -946,7 +958,7 @@ html {
     background: oklch(1 0 0 / 0.12);
     color: oklch(0.99 0 0);
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-video-modal__close:hover {
     background: oklch(1 0 0 / 0.2);
@@ -970,7 +982,7 @@ html {
     color: inherit;
     text-decoration: none;
     background: color-mix(in oklch, currentColor 10%, transparent);
-    transition: background var(--ed-dur, 150ms) ease;
+    transition: background var(--ed-dur-quick) ease;
   }
   .ed-file:hover {
     background: color-mix(in oklch, currentColor 18%, transparent);
@@ -1157,7 +1169,7 @@ html {
     box-shadow: var(--ed-shadow-pop);
     /* Anchored at the pointer's top-left, so it should grow from that corner. */
     transform-origin: top left;
-    animation: ed-menu-in 120ms ease-out;
+    animation: ed-menu-in var(--ed-dur-quick) var(--ed-ease-out);
   }
   @keyframes ed-menu-in {
     from {
@@ -1165,9 +1177,31 @@ html {
       transform: scale(0.96);
     }
   }
+  /* The way OUT (#517). A menu used to appear as a fade and disappear as a cut: `[hidden]` is
+     `display: none`, and nothing animates out of that. Two dead ends before this one, both worth
+     recording: transitioning `display` with `allow-discrete` is not an option (Firefox 151 reports
+     support and then does not run the exit at all — measured), and keeping the box painted while
+     `[hidden]` is set cannot win the cascade either (Tailwind's preflight declares
+     `[hidden] { display: none !important }` in @layer base, and an important declaration in an
+     earlier layer beats one in a later layer). So the hook holds `hidden` back for exactly one
+     --ed-dur-quick and marks the menu `aria-hidden` + unclickable while it leaves. */
+  .ed-menu--closing {
+    opacity: 0;
+    transform: scale(0.96);
+    pointer-events: none;
+    transition:
+      opacity var(--ed-dur-quick) var(--ed-ease-in),
+      transform var(--ed-dur-quick) var(--ed-ease-in);
+  }
   @media (prefers-reduced-motion: reduce) {
     .ed-menu {
       animation: none;
+    }
+    /* The exit is motion too. The blanket fallback at the end of this file would catch it anyway,
+       but that is a safety net, not the rule that states the intent — and a net that is narrowed
+       one day should not silently take the exit with it (#572 review). */
+    .ed-menu--closing {
+      transition: none;
     }
   }
   .ed-menu[hidden] {
@@ -1254,8 +1288,8 @@ html {
     visibility: hidden;
     transform: translateX(-0.25rem);
     transition:
-      opacity 0.12s var(--ed-ease),
-      transform 0.12s var(--ed-ease),
+      opacity var(--ed-dur-quick) var(--ed-ease-out),
+      transform var(--ed-dur-quick) var(--ed-ease-out),
       visibility 0s 0.12s;
   }
   .ed-miniprofile__status:hover .ed-miniprofile__substatus,
@@ -1264,8 +1298,8 @@ html {
     visibility: visible;
     transform: none;
     transition:
-      opacity 0.12s var(--ed-ease),
-      transform 0.12s var(--ed-ease),
+      opacity var(--ed-dur-quick) var(--ed-ease-out),
+      transform var(--ed-dur-quick) var(--ed-ease-out),
       visibility 0s;
   }
   @media (prefers-reduced-motion: reduce) {
@@ -1289,7 +1323,7 @@ html {
     }
   }
   .ed-msg--enter {
-    animation: ed-msg-in 0.2s var(--ed-ease);
+    animation: ed-msg-in var(--ed-dur-move) var(--ed-ease-out);
     transform-origin: center bottom;
   }
   /* Rows inside a merged file group (#144) rise in WITHOUT the scale: scale(0.96) shrinks each
@@ -1316,7 +1350,7 @@ html {
      shift the box, so the optimistic→real swap is seamless. The faded bubble (0.55) is the
      "sending" indicator; the swap then resolves it to full opacity. */
   .ed-msg--sent {
-    animation: ed-msg-send-in 0.28s var(--ed-ease);
+    animation: ed-msg-send-in var(--ed-dur-screen) var(--ed-ease-out);
     transform-origin: center bottom;
   }
   @keyframes ed-msg-send-in {
@@ -1332,7 +1366,7 @@ html {
      carries the whole transform matrix, so scale is safe mid-swap now.) */
   @media (pointer: coarse) {
     .ed-msg--sent {
-      animation: ed-msg-send-in-touch 0.34s var(--ed-ease);
+      animation: ed-msg-send-in-touch var(--ed-dur-screen) var(--ed-ease-out);
     }
   }
   @keyframes ed-msg-send-in-touch {
@@ -1385,7 +1419,7 @@ html {
     padding: 0;
     color: var(--ed-danger-strong);
     cursor: pointer;
-    transition: opacity 0.14s var(--ed-ease);
+    transition: opacity var(--ed-dur-quick) var(--ed-ease-out);
   }
   /* On YOUR own message the meta sits on the cobalt fill (.ed-bubble--me), where red danger is ~1.3:1
      and the ●! is invisible (#364/R065). Paint it white (--ed-on-primary, ~4.8:1) — the exclamation
@@ -1430,9 +1464,9 @@ html {
        step, exactly as reported. Measured: 42.5px collapsed, 37.8px hidden. */
     margin-top: 0.3rem;
     transition:
-      grid-template-rows 0.18s var(--ed-ease),
-      margin-top 0.18s var(--ed-ease),
-      opacity 0.18s var(--ed-ease);
+      grid-template-rows var(--ed-dur-move) var(--ed-ease-out),
+      margin-top var(--ed-dur-move) var(--ed-ease-out),
+      opacity var(--ed-dur-move) var(--ed-ease-out);
   }
   @starting-style {
     .ed-reactions {
@@ -1484,7 +1518,7 @@ html {
     font-size: 0.8125rem;
     line-height: 1.4;
     cursor: pointer;
-    transition: border-color 0.16s var(--ed-ease), background 0.16s var(--ed-ease);
+    transition: border-color var(--ed-dur-quick) var(--ed-ease-out), background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-react:hover {
     border-color: var(--ed-primary);
@@ -1522,7 +1556,7 @@ html {
     border-radius: var(--ed-radius-sm);
     font-size: 1.375rem;
     line-height: 1;
-    transition: background 0.14s var(--ed-ease), transform 0.14s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), transform var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-menu__react:hover {
     background: var(--ed-surface-2);
@@ -1594,7 +1628,7 @@ html {
     border: 1px solid transparent;
     font-size: 1.5rem;
     line-height: 1;
-    transition: background 0.14s var(--ed-ease), border-color 0.14s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), border-color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-qr:hover {
     background: var(--ed-surface-2);
@@ -1680,7 +1714,7 @@ html {
     border-radius: var(--ed-radius-sm);
     background: color-mix(in oklab, currentColor 12%, transparent);
     cursor: pointer;
-    transition: background 0.14s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-quote:hover {
     background: color-mix(in oklab, currentColor 20%, transparent);
@@ -1910,7 +1944,7 @@ html {
     border: 1px solid var(--ed-border);
     background: var(--ed-surface);
     box-shadow: var(--ed-shadow-pop);
-    animation: ed-pop-in 0.14s var(--ed-ease);
+    animation: ed-pop-in var(--ed-dur-quick) var(--ed-ease-out);
   }
   /* Focused programmatically (tabindex=-1) for AT — no ring around the card. */
   .ed-popover:focus {
@@ -1940,7 +1974,7 @@ html {
       border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
       border-bottom: none;
       padding-bottom: max(1.25rem, env(safe-area-inset-bottom));
-      animation: ed-sheet-in 0.18s var(--ed-ease);
+      animation: ed-sheet-in var(--ed-dur-move) var(--ed-ease-out);
     }
   }
   @keyframes ed-sheet-in {
@@ -1999,7 +2033,7 @@ html {
   }
   .ed-lightbox[open] {
     display: grid;
-    animation: ed-lb-in 0.14s var(--ed-ease);
+    animation: ed-lb-in var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-lightbox::backdrop {
     background: oklch(0 0 0 / calc(0.85 * var(--ed-lb-fade, 1)));
@@ -2017,7 +2051,7 @@ html {
   }
   .ed-lightbox--out,
   .ed-lightbox--out::backdrop {
-    animation: ed-lb-out 0.15s var(--ed-ease) forwards;
+    animation: ed-lb-out var(--ed-dur-quick) var(--ed-ease-in) forwards;
   }
   @keyframes ed-lb-in {
     from {
@@ -2072,7 +2106,7 @@ html {
     background: oklch(1 0 0 / 0.12);
     color: oklch(0.99 0 0);
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-lightbox__btn:hover {
     background: oklch(1 0 0 / 0.22);
@@ -2126,7 +2160,7 @@ html {
     /* `--ed-shadow-lg` never existed; every other popover in this file uses this token. */
     box-shadow: var(--ed-shadow-pop);
     z-index: var(--ed-z-menu);
-    animation: ed-lb-menu-in 0.14s var(--ed-ease);
+    animation: ed-lb-menu-in var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-lightbox__menu[hidden] {
     display: none;
@@ -2136,6 +2170,15 @@ html {
       opacity: 0;
       transform: translateY(-6px);
     }
+  }
+  /* Same exit as .ed-menu, for the same reason. */
+  .ed-lightbox__menu.ed-menu--closing {
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    transition:
+      opacity var(--ed-dur-quick) var(--ed-ease-in),
+      transform var(--ed-dur-quick) var(--ed-ease-in);
   }
   .ed-lightbox__item {
     display: block;
@@ -2185,7 +2228,7 @@ html {
     --ed-lb-foot: calc(env(safe-area-inset-bottom) + var(--ed-lb-chrome) + 0.65rem);
   }
   .ed-lightbox--settling .ed-lightbox__stage {
-    transition: transform 0.26s var(--ed-ease);
+    transition: transform var(--ed-dur-screen) var(--ed-ease-out);
   }
   /* The chrome is not part of the photo: it fades where the photo travels. */
   .ed-lightbox--dismissing .ed-lightbox__bar,
@@ -2289,7 +2332,7 @@ html {
     background: oklch(1 0 0 / 0.12);
     color: oklch(0.99 0 0);
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-lightbox__nav svg {
     width: 1.625rem;
@@ -2329,8 +2372,8 @@ html {
     opacity: 0.55;
     cursor: pointer;
     transition:
-      opacity 0.16s var(--ed-ease),
-      outline-color 0.16s var(--ed-ease);
+      opacity var(--ed-dur-quick) var(--ed-ease-out),
+      outline-color var(--ed-dur-quick) var(--ed-ease-out);
     outline: 2px solid transparent;
     outline-offset: 1px;
   }
@@ -2564,9 +2607,9 @@ html {
     background: var(--ed-surface-2);
     border-radius: var(--ed-radius);
     transition:
-      width 0.22s var(--ed-ease),
-      height 0.22s var(--ed-ease),
-      opacity 0.22s var(--ed-ease);
+      width var(--ed-dur-move) var(--ed-ease-out),
+      height var(--ed-dur-move) var(--ed-ease-out),
+      opacity var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-compose__grid--single .ed-compose__img.is-ready,
   .ed-compose__grid--single .ed-compose__video.is-ready {
@@ -2589,7 +2632,7 @@ html {
     border-radius: var(--ed-radius-full);
     background: oklch(0 0 0 / 0.6);
     color: oklch(0.99 0 0);
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-compose__remove:hover {
     background: oklch(0 0 0 / 0.8);
@@ -2639,7 +2682,7 @@ html {
     text-align: left;
     cursor: pointer;
     border: none;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   /* The sidebar sits on --ed-surface (depth ramp), so the row states step up from
      there: a neutral --ed-surface-2 hover, and a cobalt wash for the selected chat
@@ -2788,7 +2831,7 @@ html {
     border: 2px solid var(--ed-border);
     background: var(--ed-surface);
     color: transparent;
-    transition: background 0.14s var(--ed-ease), border-color 0.14s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), border-color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-msg--selected .ed-select-check,
   .ed-flat--selected .ed-select-check {
@@ -2982,11 +3025,11 @@ html {
      close_thread(s) after the slide. */
   @media (max-width: 767px) {
     .ed-thread {
-      animation: ed-nav-push 0.32s var(--ed-ease);
+      animation: ed-nav-push var(--ed-dur-screen) var(--ed-ease-out);
     }
     .ed-thread--out {
       transform: translateX(100%);
-      transition: transform 0.28s var(--ed-ease);
+      transition: transform var(--ed-dur-screen) var(--ed-ease-in);
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -3016,7 +3059,7 @@ html {
   /* Entrance: a subtle slide-in on desktop; on mobile the panel is a full-screen overlay,
      so it sheets up from the bottom (reusing eden's ed-sheet-in — the bottom-sheet idiom). */
   .ed-profile {
-    animation: ed-panel-in 0.18s var(--ed-ease);
+    animation: ed-panel-in var(--ed-dur-move) var(--ed-ease-out);
   }
   @keyframes ed-panel-in {
     from {
@@ -3080,7 +3123,7 @@ html {
     background: oklch(0.6 0.16 261 / 0.12);
     pointer-events: none; /* the drop must land on the pane, not the overlay */
     opacity: 0;
-    transition: opacity 0.16s var(--ed-ease);
+    transition: opacity var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-dropzone--over .ed-dropzone__overlay {
     opacity: 1;
@@ -3104,7 +3147,7 @@ html {
     font-weight: 600;
     font-size: 0.9375rem;
     transform: translateY(6px) scale(0.98);
-    transition: transform 0.16s var(--ed-ease);
+    transition: transform var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-dropzone--over .ed-dropzone__inner {
     transform: none;
@@ -3145,7 +3188,7 @@ html {
     border-bottom: 2px solid transparent;
     white-space: nowrap;
     cursor: pointer;
-    transition: color 0.16s var(--ed-ease);
+    transition: color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-gallery-tab:hover {
     color: var(--ed-ink);
@@ -3165,8 +3208,8 @@ html {
     opacity: 0;
     transform: translateX(0);
     transition:
-      transform 0.18s var(--ed-ease),
-      width 0.18s var(--ed-ease);
+      transform var(--ed-dur-move) var(--ed-ease-out),
+      width var(--ed-dur-move) var(--ed-ease-out);
     pointer-events: none;
   }
   .ed-gallery-grid {
@@ -3209,7 +3252,7 @@ html {
   .ed-photo,
   .ed-album__tile,
   .ed-gallery-tile {
-    transition: filter 0.2s var(--ed-ease);
+    transition: filter var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-photo:active,
   .ed-album__tile:active,
@@ -3252,7 +3295,7 @@ html {
     font-size: 0.875rem;
     font-weight: 550;
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-gallery-more:hover {
     background: var(--ed-surface-2);
@@ -3293,7 +3336,7 @@ html {
     padding: 0.5rem;
     text-align: left;
     border-radius: var(--ed-radius);
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-member-row:hover {
     background: var(--ed-surface-2);
@@ -3308,7 +3351,7 @@ html {
     color: var(--ed-primary-strong-text);
     font-weight: 550;
     font-size: 0.8125rem;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-member-add:hover {
     background: var(--ed-surface-2);
@@ -3426,7 +3469,7 @@ html {
     padding: 0.625rem 1rem;
     text-align: left;
     cursor: pointer;
-    transition: background 0.14s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-thread-row:hover {
     background: var(--ed-surface-2);
@@ -3516,10 +3559,12 @@ html {
     background: var(--ed-bg);
     overflow: hidden;
     opacity: 1;
-    transition: opacity 150ms var(--ed-ease);
+    transition: opacity var(--ed-dur-quick) var(--ed-ease-out);
     pointer-events: none;
   }
   .ed-page-skel--out {
+    /* Leaving accelerates (#517). */
+    transition-timing-function: var(--ed-ease-in);
     opacity: 0;
   }
   .ed-page-skel__shell {
@@ -3552,10 +3597,12 @@ html {
     display: flex;
     flex-direction: column;
     opacity: 1;
-    transition: opacity 150ms var(--ed-ease);
+    transition: opacity var(--ed-dur-quick) var(--ed-ease-out);
     pointer-events: none; /* rows are a still frame — taps land after the handoff */
   }
   .ed-aside-skel--out {
+    /* Leaving accelerates (#517). */
+    transition-timing-function: var(--ed-ease-in);
     opacity: 0;
   }
   /* The thread panel's placeholder sits above the pane but below the chat nav overlay, like the
@@ -3590,7 +3637,7 @@ html {
        so the header's border-bottom can't poke through the rounded corners. */
     overflow: hidden;
     opacity: 1;
-    transition: opacity 180ms var(--ed-ease);
+    transition: opacity var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-nav-skel--full {
     inset: 0;
@@ -3601,12 +3648,12 @@ html {
     /* TG-style push (#432): the full-screen chat "card" slides in from the right. Transform-only
        (GPU); the .InstantNav hook holds the dismissal fade until this finishes, so a fast server
        can't fade the overlay mid-slide. */
-    animation: ed-nav-push 0.32s var(--ed-ease);
+    animation: ed-nav-push var(--ed-dur-screen) var(--ed-ease-out);
   }
   /* Desktop (pane variant): the sidebar stays visible, so a full page-slide would be foreign —
      a barely-there drift + fade keeps the open feeling alive without slowing perception (#432). */
   .ed-nav-skel:not(.ed-nav-skel--full) {
-    animation: ed-nav-in 0.15s var(--ed-ease);
+    animation: ed-nav-in var(--ed-dur-quick) var(--ed-ease-out);
   }
   @keyframes ed-nav-push {
     from {
@@ -3622,6 +3669,8 @@ html {
   /* Once the real stream has landed the overlay only fades — let taps fall through to the
      now-interactive chat underneath instead of being swallowed during the ~180ms fade. */
   .ed-nav-skel--out {
+    /* Leaving accelerates (#517). */
+    transition-timing-function: var(--ed-ease-in);
     opacity: 0;
     pointer-events: none;
   }
@@ -3706,7 +3755,7 @@ html {
   }
   .ed-nav-skel__body--cache img.ed-imgwait.ed-imgin {
     opacity: 1;
-    transition: opacity 0.18s var(--ed-ease);
+    transition: opacity var(--ed-dur-move) var(--ed-ease-out);
   }
   @media (prefers-reduced-motion: reduce) {
     .ed-nav-skel__body--cache img.ed-imgwait.ed-imgin {
@@ -3796,7 +3845,7 @@ html {
       var(--ed-surface) 70%
     );
     background-size: 300% 100%;
-    animation: ed-skel-sweep 1.3s var(--ed-ease) infinite;
+    animation: ed-skel-sweep 1.3s var(--ed-ease-out) infinite;
   }
   @keyframes ed-skel-sweep {
     from {
@@ -3838,9 +3887,11 @@ html {
       z-index: 15; /* over the list; under the thread sheet (20) and nav overlay (40) */
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
-      transition: transform 0.28s var(--ed-ease);
+      transition: transform var(--ed-dur-screen) var(--ed-ease-in);
     }
     .ed-main-pop--out {
+      /* Leaving accelerates (#517). */
+      transition-timing-function: var(--ed-ease-in);
       transform: translateX(100%);
     }
     /* Finger-tracked drag (edge swipe-back): the transform follows the touch directly,
@@ -4067,9 +4118,9 @@ html {
     color: var(--ed-ink);
     font: 600 0.8125rem/1 var(--ed-font);
     transition:
-      border-radius 0.18s var(--ed-ease),
-      background 0.18s var(--ed-ease),
-      color 0.18s var(--ed-ease);
+      border-radius var(--ed-dur-move) var(--ed-ease-out),
+      background var(--ed-dur-move) var(--ed-ease-out),
+      color var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-rail__btn:hover,
   .ed-rail__btn:active {
@@ -4105,7 +4156,7 @@ html {
     border-radius: 0 var(--ed-radius-full) var(--ed-radius-full) 0;
     background: var(--ed-ink);
     transform: translateY(-50%) scaleY(1);
-    animation: ed-pill-in 0.18s var(--ed-ease);
+    animation: ed-pill-in var(--ed-dur-move) var(--ed-ease-out);
   }
   @keyframes ed-pill-in {
     from {
@@ -4194,7 +4245,7 @@ html {
     border-radius: var(--ed-radius);
     background: var(--ed-surface-2);
     color: var(--ed-muted);
-    transition: box-shadow 0.16s var(--ed-ease);
+    transition: box-shadow var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-search:focus-within {
     box-shadow: inset 0 0 0 1.5px var(--ed-primary);
@@ -4261,7 +4312,7 @@ html {
     background: var(--ed-surface-2);
     opacity: 0;
     transform: translate(0, 0);
-    transition: transform 0.18s var(--ed-ease), width 0.18s var(--ed-ease);
+    transition: transform var(--ed-dur-move) var(--ed-ease-out), width var(--ed-dur-move) var(--ed-ease-out);
     pointer-events: none;
     z-index: 0;
   }
@@ -4277,7 +4328,7 @@ html {
     white-space: nowrap;
     color: var(--ed-muted);
     font: 600 0.8125rem/1 var(--ed-font);
-    transition: color 0.16s var(--ed-ease);
+    transition: color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-folder-tab:hover,
   .ed-folder-tab:active {
@@ -4385,7 +4436,7 @@ html {
     height: 0.4rem;
     border-radius: var(--ed-radius-full);
     background: var(--ed-muted);
-    animation: ed-typing 1.2s infinite var(--ed-ease);
+    animation: ed-typing 1.2s infinite var(--ed-ease-out);
   }
   .ed-typing span:nth-child(2) { animation-delay: 0.15s; }
   .ed-typing span:nth-child(3) { animation-delay: 0.3s; }
@@ -4451,7 +4502,7 @@ html {
     stroke-linecap: round;
     stroke-dasharray: 100.53;
     stroke-dashoffset: 100.53;
-    transition: stroke-dashoffset 0.25s var(--ed-ease);
+    transition: stroke-dashoffset var(--ed-dur-move) var(--ed-ease-out);
   }
   /* Single-photo optimistic node (#95 review): match attachment_view — a plain
      natural-aspect image (NOT a square album tile), so the swap doesn't reflow. */
@@ -4606,7 +4657,7 @@ html {
     background: oklch(0 0 0 / 0.6);
     color: oklch(0.99 0 0);
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-sending-cancel > * {
     pointer-events: none;
@@ -4669,7 +4720,9 @@ html {
     height: 1rem !important;
   }
   .ed-tile--out {
-    transition: opacity 0.15s ease-out, transform 0.15s ease-out;
+    transition:
+      opacity var(--ed-dur-quick) var(--ed-ease-in),
+      transform var(--ed-dur-quick) var(--ed-ease-in);
     opacity: 0;
     transform: scale(0.86);
   }
@@ -4735,7 +4788,7 @@ html {
     color: var(--ed-ink);
     box-shadow: var(--ed-shadow);
     font: 500 0.8125rem/1.2 var(--ed-font);
-    transition: transform var(--ed-dur-move, 220ms) var(--ed-ease);
+    transition: transform var(--ed-dur-move) var(--ed-ease-out);
   }
 
   html.phx-client-error .ed-conn,
@@ -4937,7 +4990,7 @@ html {
     border-radius: var(--ed-radius-sm);
     color: var(--ed-muted);
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-toast__close:hover { background: var(--ed-surface-2); color: var(--ed-ink); }
   .ed-toast__close:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
@@ -4973,8 +5026,8 @@ html {
     border: 1px solid var(--ed-border);
     cursor: pointer;
     transition:
-      background 0.18s var(--ed-ease),
-      border-color 0.18s var(--ed-ease);
+      background var(--ed-dur-move) var(--ed-ease-out),
+      border-color var(--ed-dur-move) var(--ed-ease-out);
   }
   .ed-switch::after {
     content: "";
@@ -4990,7 +5043,7 @@ html {
     border: 1px solid var(--ed-border);
     box-shadow: 0 1px 2px oklch(0 0 0 / 0.18);
     transform: translateY(-50%);
-    transition: transform 0.18s var(--ed-ease);
+    transition: transform var(--ed-dur-move) var(--ed-ease-out);
   }
   /* Coarse pointers (touch): keep the 24px pill visual but grow the tap target to the
      44px min via a transparent overlay — cheaper than padding the label, no reflow (#266). */
@@ -5039,7 +5092,7 @@ html {
     font: 550 0.75rem/1 var(--ed-font);
     white-space: nowrap;
     cursor: pointer;
-    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), color var(--ed-dur-quick) var(--ed-ease-out);
   }
   @media (min-width: 640px) {
     .ed-seg { display: inline-flex; width: auto; }
@@ -5091,7 +5144,7 @@ html {
     color: var(--ed-ink);
     font: 550 0.9375rem/1.2 var(--ed-font);
     text-decoration: none;
-    transition: background 0.16s var(--ed-ease), color 0.16s var(--ed-ease);
+    transition: background var(--ed-dur-quick) var(--ed-ease-out), color var(--ed-dur-quick) var(--ed-ease-out);
   }
   .ed-settings-nav__item:hover { background: var(--ed-surface-2); }
   .ed-settings-nav__item:focus-visible { outline: 2px solid var(--ed-ring); outline-offset: 2px; }
@@ -5146,7 +5199,7 @@ html {
 /* Admin people list (#174): selectable rows. Lift on hover / selection (surface-2,
    then a cobalt wash) — never darken into the background. Declared BEFORE the
    reduced-motion block below so that block's `transition: none` override wins. */
-.ed-admin-row { transition: background 0.16s var(--ed-ease); }
+.ed-admin-row { transition: background var(--ed-dur-quick) var(--ed-ease-out); }
 .ed-admin-row:hover { background: var(--ed-surface-2); }
 .ed-admin-row.is-selected { background: color-mix(in oklch, var(--ed-primary) 14%, transparent); }
 /* Нажатие (#512): глубже ховера, и отдельно для выделенной строки. */
