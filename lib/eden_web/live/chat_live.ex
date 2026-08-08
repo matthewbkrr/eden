@@ -11960,7 +11960,7 @@ defmodule EdenWeb.ChatLive do
             // Menu actions (#465). Reply/Forward/Delete reuse the message context-menu's
             // own server events; "Show in chat" and "Save" are client-side.
             // async: the delete action asks in the app's own dialog, which resolves a promise (#518).
-        box.__act = async (act) => {
+            box.__act = async (act) => {
               const m = box.__meta || {}
               const id = m.msg
               if (!id) return

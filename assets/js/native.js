@@ -37,7 +37,10 @@ function wireHaptics() {
   // importing the enum into a shell that has no bundler.
   window.__edTap = (style = "light") => {
     try {
-      haptics.impact({ style: style === "medium" ? "MEDIUM" : "LIGHT" });
+      // The plugin call is a PROMISE: a bridge that rejects would otherwise surface as an
+      // unhandled rejection in the middle of a gesture, and the sync catch would never see it
+      // (#574 review). Both halves are needed — the sync one for a plugin that throws on call.
+      haptics.impact({ style: style === "medium" ? "MEDIUM" : "LIGHT" })?.catch?.(() => {});
     } catch (_e) {
       // A missing plugin must never break the gesture it decorates.
     }
@@ -52,7 +55,9 @@ function hideSplash() {
   if (!splash?.hide) return;
   const done = () => {
     try {
-      splash.hide({ fadeOutDuration: 200 });
+      // Promise, same as the haptics call above: an asynchronous failure here must not become an
+      // unhandled rejection at launch (#574 review).
+      splash.hide({ fadeOutDuration: 200 })?.catch?.(() => {});
     } catch (_e) {}
   };
   // `.ed-root` is the app shell; on the login page it is the form's own container. Either way,
@@ -248,23 +253,23 @@ function wirePush() {
       const path = data.channel_id
         ? `/channels/${data.channel_id}/r/${data.conversation_id}`
         : `/app/c/${data.conversation_id}`;
-      // Every authed route lives in one live_session, so with the socket up this is a patch
-      // (~200ms) instead of a full document load (~1.5s, #518). `location.assign` stays as the
-      // fallback: a cold start taps before the socket exists, which is exactly when a full load
-      // is the only thing that works.
-      const live = window.liveSocket;
-      if (live && live.isConnected() && typeof live.historyRedirect === "function") {
-        try {
-          // `"push"` is not decoration: LiveView does `history[linkState + "State"](...)`, so a
-          // null there is a TypeError thrown asynchronously inside the redirect — past this
-          // try/catch, with the navigation already half-started (#574 review).
-          live.historyRedirect({}, path, "push", null, null);
-          return;
-        } catch (_e) {
-          // fall through to the full load
-        }
-      }
-      window.location.assign(path);
+      // Every authed route lives in one live_session, so with the socket up this can be a patch
+      // (~200ms) instead of a full document load (~1.5s, #518).
+      //
+      // Through a link, not through `liveSocket.historyRedirect(...)`: that method is internal,
+      // undocumented and positional — passing its `linkState` wrong is a TypeError thrown
+      // asynchronously inside the redirect, i.e. past any try/catch here (#574 review). A link
+      // carrying LiveView's own attributes is the documented contract (`<.link navigate={...}>`
+      // renders exactly this), and it needs no fallback of its own: with no socket the click is
+      // just a link, and the browser does the full load that a cold start needs anyway.
+      const a = document.createElement("a");
+      a.href = path;
+      a.setAttribute("data-phx-link", "redirect");
+      a.setAttribute("data-phx-link-state", "push");
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     });
 
     push.addListener("registration", ({ value }) => {
