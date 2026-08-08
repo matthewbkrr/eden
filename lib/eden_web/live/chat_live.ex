@@ -4354,10 +4354,14 @@ defmodule EdenWeb.ChatLive do
             ov.innerHTML =
               '<div class="ed-skel-panel__scrim"></div>' +
               `<div class="ed-skel-panel__card ed-skel-panel__card--${kind}">${rows}</div>`
-            document.body.appendChild(ov)
             // An anchored card lands where the real one will, through the same placement the
             // .Popover hook uses — a placeholder that appears somewhere else would only move the
-            // jump, not remove it.
+            // jump, not remove it. Without that function there is nothing to place it by, and an
+            // unplaced card stays `visibility: hidden`: better no placeholder at all than an
+            // invisible one that answers nothing (#573 review — and #511 proposes loading the
+            // interaction hooks lazily, which would make this reachable).
+            if (kind === "popover" && !window.__edPlacePopover) return
+            document.body.appendChild(ov)
             if (kind === "popover") window.__edPlacePopover(ov.querySelector(".ed-skel-panel__card"))
             this.panelOv = ov
 
@@ -4515,7 +4519,14 @@ defmodule EdenWeb.ChatLive do
           // profile aside when this stands in for that (#521). Same column, same shimmer, one
           // painter — a second copy of it would drift.
           threadSkel(waitFor = ".ed-thread") {
-            if (this.threadOv) return
+            // A placeholder already up widens what it waits for instead of being ignored: tapping
+            // the thread and then the profile (or the other way round) must not leave a shimmer
+            // waiting for a panel that is no longer the one coming (#573 review).
+            if (this.threadOv) {
+              this.threadWaitFor = `${this.threadWaitFor}, ${waitFor}`
+              return
+            }
+            this.threadWaitFor = waitFor
             const wide = window.matchMedia("(min-width: 768px)").matches
             const ov = document.createElement("div")
             let rows = ""
@@ -4553,9 +4564,16 @@ defmodule EdenWeb.ChatLive do
             // round). The callback is one selector query; the scope is what makes it cheap.
             const host = document.querySelector(".ed-root") || document.body
             this.threadMo = new MutationObserver(() => {
-              if (document.querySelector(waitFor)) this.threadSkelDismiss()
+              if (document.querySelector(this.threadWaitFor)) this.threadSkelDismiss()
             })
             this.threadMo.observe(host, { childList: true, subtree: true })
+            // F2: the socket is what decides, not only the clock. A pane asked for across a
+            // dropped socket is not late, it is not coming — and the observer would never fire to
+            // notice, because nothing mutates (#573 review). Checked on a coarse interval; the
+            // arrival itself is still the observer's job, which is instant.
+            this.threadPoll = setInterval(() => {
+              if (!window.liveSocket?.isConnected()) this.threadSkelDismiss()
+            }, 250)
             this.threadTimer = setTimeout(() => this.threadSkelDismiss(), 8000)
           },
           threadSkelDismiss() {
@@ -4563,6 +4581,7 @@ defmodule EdenWeb.ChatLive do
             if (!ov) return
             this.threadOv = null
             clearTimeout(this.threadTimer)
+            clearInterval(this.threadPoll)
             this.threadMo && this.threadMo.disconnect()
             if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return ov.remove()
             ov.classList.add("ed-aside-skel--out")

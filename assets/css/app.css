@@ -2509,6 +2509,10 @@ html {
   }
   .ed-skel-panel__card--popover {
     width: 17rem;
+    /* As tall as the card it stands for, not as tall as its three lines: the placement flips the
+       card above the anchor when it would not fit below, and a short placeholder would answer that
+       question differently and then jump on handoff (#573 review). */
+    min-height: 15rem;
     visibility: hidden;
   }
   @media (max-width: 767px) {

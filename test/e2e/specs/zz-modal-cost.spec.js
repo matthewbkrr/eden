@@ -199,3 +199,49 @@ test("a panel placeholder gives up at once when the socket is down", async ({ al
   expect(gone, "the placeholder is still dimming the screen with the socket down").not.toBeNull()
   expect(gone, `it sat for ${gone}ms`).toBeLessThan(1500)
 })
+
+// The placement asks "does the card fit below the anchor?", and the answer depends on the card's
+// HEIGHT. A stand-in three lines tall answers it differently near the bottom of a screen — it sits
+// below, the real card flips above, and the jump is back (#573 review). The flip itself cannot be
+// staged on this stand (the newest row sits ~70px from the top of even a 460px viewport, so
+// everything fits below either way), so what is asserted here is the property the flip decision
+// rests on: the two boxes are close enough in height to answer that question the same way.
+test("the placeholder is about as tall as the card it stands for", async ({ alice, seed }, testInfo) => {
+  test.setTimeout(180_000)
+
+  await alice.setViewportSize({ width: 1280, height: 880 })
+  await alice.goto(`/channels/${seed.channel_id}/r/${seed.general_room_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(500)
+  await alice.evaluate((ms) => window.liveSocket.enableLatencySim(ms), LATENCY)
+
+  await alice.evaluate(() => {
+    window.__skelH = null
+    const tick = () => {
+      const card = document.querySelector(".ed-skel-panel__card--popover")
+      if (card && card.offsetHeight) {
+        window.__skelH = card.offsetHeight
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+
+  await alice.locator('#messages [data-opens="popover"]').first().click()
+  await alice.locator(".ed-popover").waitFor({ timeout: 15_000 })
+  await alice.waitForTimeout(400)
+
+  const realH = await alice.evaluate(() => document.querySelector(".ed-popover").offsetHeight)
+  const skelH = await alice.evaluate(() => window.__skelH)
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  const line = `card heights: placeholder ${skelH}px, panel ${realH}px`
+  console.log(line)
+  testInfo.annotations.push({ type: "measurement", description: line })
+
+  expect(skelH, "the placeholder never painted").not.toBeNull()
+  // Three lines of shimmer come to ~90px; the card is ~250px. Anything in that gap decides the
+  // flip differently.
+  expect(Math.abs(realH - skelH), `${line} — they would flip at different anchors`).toBeLessThan(120)
+})
