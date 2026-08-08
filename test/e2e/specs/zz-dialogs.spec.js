@@ -69,13 +69,16 @@ test("Escape cancels, and the keyboard cannot leave the dialog", async ({ alice,
   })
   await expect(alice.locator(".ed-ask")).toBeVisible()
 
-  // Tab round-trips inside the card rather than walking out into the chat behind it.
+  // Backwards FIRST: the dialog opens with focus on the card, which is not one of its buttons, so
+  // Shift+Tab from there is the step that used to walk straight out of the modal (#574 review).
   const inside = []
+  await alice.keyboard.press("Shift+Tab")
+  inside.push(await alice.evaluate(() => !!document.activeElement?.closest(".ed-ask")))
   for (let i = 0; i < 4; i++) {
     await alice.keyboard.press("Tab")
     inside.push(await alice.evaluate(() => !!document.activeElement?.closest(".ed-ask")))
   }
-  expect(inside, `focus left the dialog: ${inside}`).toEqual([true, true, true, true])
+  expect(inside, `focus left the dialog: ${inside}`).toEqual([true, true, true, true, true])
 
   await alice.keyboard.press("Escape")
   await expect(alice.locator(".ed-ask")).toHaveCount(0)

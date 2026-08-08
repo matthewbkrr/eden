@@ -62,10 +62,15 @@ const config: CapacitorConfig = {
     },
     SplashScreen: {
       // The cold start is otherwise a plain background colour for the whole of DNS + TLS + GET +
-      // assets + LiveView connect (#518). Hidden by the client as soon as the app has painted —
-      // `launchAutoHide` stays true as the backstop, so a page that never loads cannot leave the
-      // splash up for good.
-      launchAutoHide: true,
+      // assets + LiveView connect (#518). Hidden by the CLIENT once the app has actually painted,
+      // so `launchAutoHide` has to be off: left on, the native side drops the splash after
+      // `launchShowDuration` (~0.5s) — long before a remote page over a slow link has painted
+      // anything, which defeats the point (#574 review).
+      //
+      // The "splash forever" risk that buys is covered on both paths that exist: the app's own JS
+      // hides it on paint with a 4s backstop, and the offline page (server.errorPath, loaded when
+      // the WebView cannot reach the server at all) hides it inline — see mobile/www/index.html.
+      launchAutoHide: false,
       launchFadeOutDuration: 200,
       backgroundColor: '#fdfdfe',
       showSpinner: false,

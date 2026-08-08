@@ -28,5 +28,11 @@
   </head>
   <body>
     <p>Нет соединения с сервером ihichat. Проверьте сеть и откройте приложение заново.</p>
+    <script>
+      // This page is what the WebView shows when the server is unreachable (server.errorPath), and
+      // `launchAutoHide` is off — so without this the splash would sit on top of it for good
+      // (#518/#574 review). The bridge is present here: this is a local Capacitor page.
+      window.Capacitor?.Plugins?.SplashScreen?.hide?.({ fadeOutDuration: 200 });
+    </script>
   </body>
 </html>

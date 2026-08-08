@@ -255,7 +255,10 @@ function wirePush() {
       const live = window.liveSocket;
       if (live && live.isConnected() && typeof live.historyRedirect === "function") {
         try {
-          live.historyRedirect({}, path, null, null, null);
+          // `"push"` is not decoration: LiveView does `history[linkState + "State"](...)`, so a
+          // null there is a TypeError thrown asynchronously inside the redirect — past this
+          // try/catch, with the navigation already half-started (#574 review).
+          live.historyRedirect({}, path, "push", null, null);
           return;
         } catch (_e) {
           // fall through to the full load

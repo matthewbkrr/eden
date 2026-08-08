@@ -41,10 +41,15 @@ function onKey(e) {
   if (!items.length) return
   const first = items[0]
   const last = items[items.length - 1]
-  if (e.shiftKey && document.activeElement === first) {
+  const at = document.activeElement
+  // The dialog opens with focus on the CARD, which is not one of the items: Shift+Tab from there
+  // would step to whatever precedes the dialog in the document, i.e. straight out of the modal
+  // (#574 review). Anything outside the item list is treated as "at the edge" in both directions.
+  const outside = !items.includes(at)
+  if (e.shiftKey && (outside || at === first)) {
     e.preventDefault()
     last.focus()
-  } else if (!e.shiftKey && document.activeElement === last) {
+  } else if (!e.shiftKey && (outside || at === last)) {
     e.preventDefault()
     first.focus()
   }
@@ -109,25 +114,41 @@ export function installConfirm() {
   window.__edConfirm = edConfirm
   window.__edNotice = edNotice
 
+  const intercept = (e, find, replay) => {
+    const el = find(e)
+    if (!el || el.dataset.edAsking === "replay") return
+    const text = el.getAttribute("data-confirm")
+    if (!text) return
+    e.preventDefault()
+    e.stopImmediatePropagation()
+    edConfirm(text).then((ok) => {
+      if (!ok) return
+      // Replay with the attribute off for exactly that dispatch, then put it back so the next
+      // time asks again.
+      el.dataset.edAsking = "replay"
+      el.removeAttribute("data-confirm")
+      replay(el)
+      el.setAttribute("data-confirm", text)
+      delete el.dataset.edAsking
+    })
+  }
+
   document.addEventListener(
     "click",
-    (e) => {
-      const el = e.target.closest?.("[data-confirm]")
-      if (!el || el.dataset.edAsking === "replay") return
-      const text = el.getAttribute("data-confirm")
-      if (!text) return
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      edConfirm(text).then((ok) => {
-        if (!ok) return
-        // Replay: the attribute is put back straight after, so the next click asks again.
-        el.dataset.edAsking = "replay"
-        el.removeAttribute("data-confirm")
-        el.click()
-        el.setAttribute("data-confirm", text)
-        delete el.dataset.edAsking
-      })
-    },
+    (e) => intercept(e, (ev) => ev.target.closest?.("[data-confirm]"), (el) => el.click()),
+    true,
+  )
+  // LiveView honours `data-confirm` on a FORM too, and a form is submitted by Enter as often as by
+  // a click — that path would have gone straight to the system dialog (#574 review). No such form
+  // exists in the app today; the listener is here so that the first one does not reintroduce it.
+  document.addEventListener(
+    "submit",
+    (e) =>
+      intercept(
+        e,
+        (ev) => (ev.target?.matches?.("[data-confirm]") ? ev.target : null),
+        (el) => el.requestSubmit(),
+      ),
     true,
   )
 }
