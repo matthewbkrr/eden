@@ -2473,6 +2473,79 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The panel placeholder (#521): a scrim and a card of the right shape, painted on the tap that
+     opens a modal or the profile card, and taken off when the real one lands. It answers the tap
+     — nothing else: no controls, no pointer events. Measured before it existed, with the socket at
+     500ms: the profile card first painted at 1191ms, the new-chat modal at 1067ms. */
+  .ed-skel-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    /* It catches the pointer, like the modal it stands for (#573 review). A scrim that dims the
+       screen and lets taps through to the app behind is a lie, and the same lie was fixed in the
+       photo placeholder (#569). Nothing to dismiss on a tap here: the panel is on its way, and a
+       socket that cannot deliver it takes the placeholder off within a frame. */
+    cursor: default;
+  }
+  .ed-skel-panel__scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--ed-scrim);
+  }
+  /* The anchored card does not dim the screen on desktop — its own scrim is transparent, a
+     click-catcher and nothing more — so a placeholder that dimmed would flash the whole screen
+     grey for a round trip and then undim (#573 review). On mobile that card IS a bottom sheet with
+     a real scrim, and the placeholder follows. */
+  .ed-skel-panel[data-kind="popover"] .ed-skel-panel__scrim {
+    background: transparent;
+  }
+  @media (max-width: 767px) {
+    .ed-skel-panel[data-kind="popover"] .ed-skel-panel__scrim {
+      background: var(--ed-scrim);
+    }
+  }
+  .ed-skel-panel__card {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    border-radius: var(--ed-radius-lg);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    box-shadow: var(--ed-shadow-pop);
+  }
+  /* The centred modals (`max-w-sm`, `p-5`) and the anchored profile card (17rem wide, placed by
+     the same code that places the real one). */
+  .ed-skel-panel__card--modal {
+    left: 50%;
+    top: 50%;
+    width: min(24rem, calc(100vw - 2rem));
+    transform: translate(-50%, -50%);
+  }
+  .ed-skel-panel__card--popover {
+    width: 17rem;
+    /* As tall as the card it stands for, not as tall as its three lines: the placement flips the
+       card above the anchor when it would not fit below, and a short placeholder would answer that
+       question differently and then jump on handoff (#573 review). */
+    min-height: 15rem;
+    visibility: hidden;
+  }
+  @media (max-width: 767px) {
+    .ed-skel-panel__card--popover {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: auto;
+      visibility: visible;
+      border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
+    }
+  }
+  .ed-skel-panel__line {
+    height: 0.75rem;
+    border-radius: var(--ed-radius-full);
+  }
+
   /* The picked-photo placeholder (#521): the same box as the real staging overlay, minus every
      control — it stands in for one round trip. The head/foot heights stand in for chrome this box does not draw; zz-pick-preview asserts the
      photo does not move when the real overlay takes over, so they cannot drift unnoticed.
