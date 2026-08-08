@@ -271,6 +271,19 @@ defmodule Eden.ChatMentionsTest do
   end
 
   describe "@all beside a personal mention" do
+    test "a person named twice is notified once" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+
+      Phoenix.PubSub.subscribe(Eden.PubSub, "user:#{bob.id}:notify")
+      {:ok, _} = Chat.create_message(scope(alice), conv.id, %{"body" => "@all и особенно @bob"})
+
+      assert_receive {:notify, %{kind: "mention"}}, 500
+      refute_receive {:notify, _}, 300, "being named twice is not being rung twice"
+    end
+
     test "both are named, and both keep a span to render" do
       alice = user_fixture(%{username: "alice"})
       bob = user_fixture(%{username: "bob"})

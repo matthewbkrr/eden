@@ -4418,6 +4418,10 @@ defmodule Eden.Chat do
       as: :user,
       on: u.id == mn.user_id,
       where: mn.message_id == ^message.id,
+      # DISTINCT because one person can hold two rows on one message since `@all` became additive
+      # (`@all и особенно @bob` names Bob twice, deliberately, so both spans render) — and being
+      # named twice is not being notified twice (#577 review).
+      distinct: true,
       select: mn.user_id
     )
     |> delivery_gates(message, mute: false)

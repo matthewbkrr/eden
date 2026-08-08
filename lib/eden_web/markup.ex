@@ -119,10 +119,14 @@ defmodule EdenWeb.Markup do
 
   defp token(t, named) do
     cond do
-      wrapped?(t, "**") -> wrap("strong", slice(t, 2))
+      # Emphasis carries the mention through: the server resolves `**@bob**` from the raw body and
+      # notifies him, so rendering it as styled TEXT would ping a person who then cannot see that
+      # he was named (#577 review). Code spans are the exception on purpose — inside backticks
+      # everything is literal.
+      wrapped?(t, "**") -> wrap("strong", slice(t, 2), named)
       wrapped?(t, "`") -> wrap("code", slice(t, 1))
-      wrapped?(t, "_") -> wrap("em", slice(t, 1))
-      wrapped?(t, "*") -> wrap("em", slice(t, 1))
+      wrapped?(t, "_") -> wrap("em", slice(t, 1), named)
+      wrapped?(t, "*") -> wrap("em", slice(t, 1), named)
       String.starts_with?(t, "http://") or String.starts_with?(t, "https://") -> link(t)
       true -> mentions(t, named)
     end
@@ -136,6 +140,8 @@ defmodule EdenWeb.Markup do
   defp slice(t, n), do: String.slice(t, n, String.length(t) - 2 * n)
 
   defp wrap(tag, inner), do: ["<", tag, ">", escape(inner), "</", tag, ">"]
+
+  defp wrap(tag, inner, named), do: ["<", tag, ">", mentions(inner, named), "</", tag, ">"]
 
   defp escape(text) do
     {:safe, escaped} = Phoenix.HTML.html_escape(text)

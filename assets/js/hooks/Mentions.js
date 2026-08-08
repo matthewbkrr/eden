@@ -68,10 +68,14 @@ export default {
       this.close()
     }
 
-    this.el.addEventListener("click", (e) => {
+    // Named, so `destroyed()` can take it off again: the element carries `phx-update="ignore"`
+    // and therefore outlives patches, so a re-mounted hook would otherwise stack a second
+    // listener on it and insert twice per click (#577 review).
+    this.onPick = (e) => {
       const row = e.target.closest("[data-handle]")
       if (row) this.insert({ handle: row.dataset.handle })
-    })
+    }
+    this.el.addEventListener("click", this.onPick)
 
     document.addEventListener("input", this.onInput, true)
     document.addEventListener("keydown", this.onKey, true)
@@ -88,6 +92,7 @@ export default {
   },
 
   destroyed() {
+    this.el.removeEventListener("click", this.onPick)
     this.aria?.disconnect()
     document.removeEventListener("input", this.onInput, true)
     document.removeEventListener("keydown", this.onKey, true)

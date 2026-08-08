@@ -112,6 +112,16 @@ defmodule EdenWeb.MarkupTest do
       refute html =~ "<button", "there is no single person to open"
     end
 
+    test "emphasis does not hide a mention" do
+      html = render("**@bob** и _@bob_", [mention("bob", "bob")])
+
+      assert html =~ "<strong>", "the emphasis is still emphasis"
+      # The server resolves and notifies from the raw body, so a mention inside emphasis must be
+      # visible as one — otherwise a person is pinged by a message that shows them nothing.
+      assert length(String.split(html, ~s(class="ed-mention"))) == 3,
+             "both emphasised mentions became chips"
+    end
+
     test "the chip escapes what it renders" do
       html = render("@xy", [mention("xy", ~s(a"><script>))])
 
