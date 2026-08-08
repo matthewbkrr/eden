@@ -6821,17 +6821,20 @@ defmodule EdenWeb.ChatLive do
         // drifted apart — 2200 here, 1600 in the lightbox's "show in chat" — so the lightbox's
         // flash went out by a frame in the middle of its own fade (#517). Read once: the token is
         // on :root and cannot change without a stylesheet reload.
-        let holdMs = 0
+        let holdMs = null
         window.__edFocusHold = () => {
-          if (!holdMs) {
+          // `null`, not `0`, as the "not read yet" sentinel — and `Number.isFinite`, not `!n`, to
+          // decide the fallback: `--ed-hold-focus: 0s` is a legitimate value (no hold at all, the
+          // natural way to switch the flash off), and both of the obvious shortcuts would quietly
+          // turn it into 2200ms — the opposite of what was asked (#571 review).
+          if (holdMs === null) {
             // Unit-aware: `2.2s` and `2200ms` are the same duration, and a bare parseFloat would
-            // turn the first into a two-millisecond flash (#571 review). The stylesheet is free to
-            // write either.
+            // turn the first into a two-millisecond flash. The stylesheet is free to write either.
             const raw = getComputedStyle(document.documentElement)
               .getPropertyValue("--ed-hold-focus")
               .trim()
             const n = parseFloat(raw)
-            holdMs = !n ? 2200 : /ms$/.test(raw) ? n : n * 1000
+            holdMs = !Number.isFinite(n) ? 2200 : /ms$/.test(raw) ? n : n * 1000
           }
           return holdMs
         }

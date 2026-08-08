@@ -148,6 +148,35 @@ test("the flash from the viewer lasts as long as its animation", async ({ alice,
   expect(lasted, `the flash lasted ${lasted}ms, the animation runs 2200ms`).toBeLessThan(2800)
 })
 
+// A zero hold is a real value — the plain way to switch the flash off from the stylesheet — and it
+// is exactly the value the obvious guards swallow: `!n` and a falsy memo both read it as "nothing
+// there" and substitute the 2200ms default, which is the opposite of what was asked (#571 review).
+test("a zero hold in the stylesheet is honoured, not replaced by the default", async ({
+  alice,
+  seed,
+}) => {
+  test.setTimeout(120_000)
+
+  // Before any hook runs: the helper reads the token once and remembers it.
+  await alice.addInitScript(() => {
+    const set = () => document.documentElement.style.setProperty("--ed-hold-focus", "0s")
+    if (document.documentElement) set()
+    else document.addEventListener("DOMContentLoaded", set)
+  })
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+
+  const hold = await alice.evaluate(() => ({
+    token: getComputedStyle(document.documentElement).getPropertyValue("--ed-hold-focus").trim(),
+    js: window.__edFocusHold(),
+  }))
+  console.log("ZERO HOLD", JSON.stringify(hold))
+
+  expect(hold.token, "the override never landed, so this measures nothing").toBe("0s")
+  expect(hold.js, `the stylesheet asked for ${hold.token}, the timer says ${hold.js}ms`).toBe(0)
+})
+
 // Jumping to a message from the photo viewer glided there; the two other jump-to-a-message
 // scrollers already scroll instantly. Under reduced motion a glide is the thing to drop.
 test("jumping to a message from the viewer does not glide under reduced motion", async ({
