@@ -275,3 +275,47 @@ test("the panel placeholder catches taps instead of passing them to the app", as
     "composer-body",
   )
 })
+
+// The anchored card does not dim the screen on desktop — its own scrim is a transparent
+// click-catcher — so a placeholder that dimmed would flash the whole screen grey for a round trip
+// and then undim (#573 review).
+test("the anchored card's placeholder does not dim the screen", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.setViewportSize({ width: 1280, height: 880 })
+  await alice.goto(`/channels/${seed.channel_id}/r/${seed.general_room_id}`)
+  await ready(alice)
+  await alice.waitForTimeout(400)
+
+  await alice.evaluate(() => {
+    window.__scrims = null
+    const tick = () => {
+      const skel = document.querySelector('.ed-skel-panel[data-kind="popover"] .ed-skel-panel__scrim')
+      if (skel) {
+        window.__scrims = { placeholder: getComputedStyle(skel).backgroundColor }
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+
+  await alice.evaluate(() => window.liveSocket.enableLatencySim(500))
+  await alice.locator('#messages [data-opens="popover"]').first().click()
+  await alice.locator(".ed-popover").waitFor({ timeout: 15_000 })
+  await alice.waitForTimeout(300)
+
+  const real = await alice.evaluate(
+    () => getComputedStyle(document.querySelector(".ed-popover__scrim")).backgroundColor,
+  )
+  const seen = await alice.evaluate(() => window.__scrims)
+  await alice.evaluate(() => window.liveSocket.disableLatencySim())
+
+  const line = `popover scrims: placeholder ${seen && seen.placeholder}, panel ${real}`
+  console.log(line)
+  expect(seen, "the placeholder never painted").not.toBeNull()
+  // Both transparent: whatever the real card does, the stand-in does the same.
+  const transparent = (v) => v === "rgba(0, 0, 0, 0)" || v === "transparent"
+  expect(transparent(real), `${line} — the real card dims after all, so this test is wrong`).toBe(true)
+  expect(transparent(seen.placeholder), `${line} — the placeholder dimmed the screen`).toBe(true)
+})

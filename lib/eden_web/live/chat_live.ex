@@ -4342,10 +4342,11 @@ defmodule EdenWeb.ChatLive do
           // the real one arrives, give up at once if the socket is down.
           panelSkel(kind) {
             this.panelDismiss()
-            // How many of this shape are on screen right now: the placeholder waits for one MORE,
-            // not for "any at all" — a modal opened from inside another modal (add members from a
-            // group's card) would otherwise get no placeholder (#573 review).
-            const before = document.querySelectorAll(this.panelReal(kind)).length
+            // WHICH of this shape are on screen right now, not how many: the placeholder waits for
+            // one it has not seen. "None at all" would skip a modal opened from inside another
+            // (add members from a group's card), and counting would miss the case where LiveView
+            // replaces one with another and the count never moves (#573 review, two rounds).
+            const before = new Set(document.querySelectorAll(this.panelReal(kind)))
             const ov = document.createElement("div")
             ov.className = "ed-skel-panel"
             ov.dataset.kind = kind
@@ -4371,7 +4372,10 @@ defmodule EdenWeb.ChatLive do
             const t0 = performance.now()
             const poll = () => {
               if (this.panelOv !== ov) return
-              if (document.querySelectorAll(this.panelReal(kind)).length > before) this.panelDismiss()
+              const fresh = [...document.querySelectorAll(this.panelReal(kind))].some(
+                (n) => !before.has(n),
+              )
+              if (fresh) this.panelDismiss()
               else if (!window.liveSocket?.isConnected()) this.panelDismiss()
               else if (performance.now() - t0 < 10_000) this.panelRaf = requestAnimationFrame(poll)
               else this.panelDismiss()
@@ -4527,6 +4531,10 @@ defmodule EdenWeb.ChatLive do
             // waiting for a panel that is no longer the one coming (#573 review).
             if (this.threadOv) {
               this.threadWaitFor = `${this.threadWaitFor}, ${waitFor}`
+              // ...and the backstop counts from THIS request: the first one's clock would expire
+              // mid-wait for a panel asked for seconds later (#573 review).
+              clearTimeout(this.threadTimer)
+              this.threadTimer = setTimeout(() => this.threadSkelDismiss(), 8000)
               return
             }
             this.threadWaitFor = waitFor

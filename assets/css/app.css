@@ -2492,6 +2492,18 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The anchored card does not dim the screen on desktop — its own scrim is transparent, a
+     click-catcher and nothing more — so a placeholder that dimmed would flash the whole screen
+     grey for a round trip and then undim (#573 review). On mobile that card IS a bottom sheet with
+     a real scrim, and the placeholder follows. */
+  .ed-skel-panel[data-kind="popover"] .ed-skel-panel__scrim {
+    background: transparent;
+  }
+  @media (max-width: 767px) {
+    .ed-skel-panel[data-kind="popover"] .ed-skel-panel__scrim {
+      background: var(--ed-scrim);
+    }
+  }
   .ed-skel-panel__card {
     position: absolute;
     display: flex;
