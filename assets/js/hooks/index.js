@@ -12,6 +12,7 @@
 // bundle — see `deferred.js`.
 
 import { armDeferredHooks, deferredHooks } from "./deferred"
+import FocusTrap from "./FocusTrap"
 import FolderTabs from "./FolderTabs"
 import ForwardCarry from "./ForwardCarry"
 import InstantNav from "./InstantNav"
@@ -27,6 +28,7 @@ export { armDeferredHooks }
 
 export const edenHooks = {
   ...deferredHooks(),
+  FocusTrap,
   FolderTabs,
   ForwardCarry,
   InstantNav,

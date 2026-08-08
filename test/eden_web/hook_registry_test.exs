@@ -12,28 +12,37 @@ defmodule EdenWeb.HookRegistryTest do
   # behaviour.
   use ExUnit.Case, async: true
 
-  @registries [
-    "assets/js/hooks/index.js",
-    "assets/js/hooks/deferred.js",
-    "assets/js/shared_hooks.js"
-  ]
+  @imports ["assets/js/hooks/index.js", "assets/js/shared_hooks.js"]
+  @deferred "assets/js/hooks/deferred.js"
 
-  # Names registered in JavaScript: the eager map, the deferred list, and the two hooks the
-  # signed-out bundle carries.
+  # Names registered in JavaScript: what the eager index imports, what the signed-out bundle
+  # exports, and the deferred list.
   defp global_names do
-    @registries
-    |> Enum.flat_map(fn path ->
-      source = File.read!(path)
+    imported =
+      Enum.flat_map(@imports, fn path ->
+        source = File.read!(path)
 
-      Regex.scan(~r/^import (\w+) from "\.\/(?:hooks\/)?\w+"/m, source)
-      |> Enum.map(&Enum.at(&1, 1))
-      |> Enum.concat(
-        Regex.scan(~r/^export (?:const|function) (\w+)/m, source)
+        Regex.scan(~r/^import (\w+) from "\.\/(?:hooks\/)?\w+"/m, source)
         |> Enum.map(&Enum.at(&1, 1))
-      )
-      |> Enum.concat(Regex.scan(~r/^\s*"([A-Za-z0-9]+)",$/m, source) |> Enum.map(&Enum.at(&1, 1)))
-    end)
-    |> MapSet.new()
+        |> Enum.concat(
+          Regex.scan(~r/^export (?:const|function) (\w+)/m, source)
+          |> Enum.map(&Enum.at(&1, 1))
+        )
+      end)
+
+    MapSet.new(imported ++ deferred_names())
+  end
+
+  # Read from the DEFERRED array alone, not from the file. Scanning every quoted string on its own
+  # line took the gesture names (`"pointerdown"`, `"keydown"`, …) for registered hooks, so
+  # `phx-hook="keydown"` would have passed this test (#578 review).
+  defp deferred_names do
+    @deferred
+    |> File.read!()
+    |> then(&Regex.run(~r/export const DEFERRED = \[(.*?)\]/s, &1))
+    |> Enum.at(1)
+    |> then(&Regex.scan(~r/"([A-Za-z0-9]+)"/, &1))
+    |> Enum.map(&Enum.at(&1, 1))
   end
 
   # Colocated hooks still declared in an .ex file, under their full LiveView-resolved name

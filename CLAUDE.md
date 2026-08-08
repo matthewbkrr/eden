@@ -18,13 +18,15 @@ must also be followed.
 - **Tailwind v4** + **esbuild** for assets. **Three JS bundles** (#511): `app.js` is the boot
   client; `auth.js` is what a SIGNED-OUT page loads (login, the 2FA challenge, invite
   acceptance) — the LiveView runtime plus the only two hooks such a page uses, 44.5 KB gzip
-  against 80.1; `lazy.js` carries the 31 hooks that only answer an INTERACTION (the lightbox,
+  against 80.1; `lazy.js` carries the 30 hooks that only answer an INTERACTION (the lightbox,
   the context menu, the send queue, the pickers, the sortables), fetched right after the first
-  frame rather than before the socket connects — boot went 87.9 → 59.8 KB gzip. LiveView
-  demands a hook at the instant its element mounts, so every deferred name is registered as a
-  placeholder (`assets/js/hooks/deferred.js`) that hands its ViewHook instance to the real hook
-  when the bundle lands; anything that paints, measures or positions at MOUNT stays eager
-  (`assets/js/hooks/index.js`) — deferring those would trade boot time for a visible flicker.
+  frame rather than before the socket connects — boot went 87.9 → 60.2 KB gzip, 52.9 with brotli.
+  LiveView demands a hook at the instant its element mounts, so every deferred name is registered
+  as a placeholder (`assets/js/hooks/deferred.js`) that hands its ViewHook instance to the real
+  hook when the bundle lands; anything that paints, measures or positions at MOUNT stays eager
+  (`assets/js/hooks/index.js`) — deferring those would trade boot time for a visible flicker, and
+  `FocusTrap` is eager for the mirror reason: an `aria-modal` guarantee must not depend on a
+  fetch.
   `hook_registry_test.exs` asserts every `phx-hook` in the templates names something a registry
   provides: an unregistered name does not fail to compile or render, it just makes the element
   inert (three sites shipped that way after #510's rename). Prod also ships **brotli**: the

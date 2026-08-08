@@ -1,18 +1,21 @@
 // The hooks the boot bundle does not carry (#511, part of the #506 perf epic).
 //
-// Thirty-one of the app's forty-two hooks answer something that has not happened yet: a long-press,
+// Thirty of the app's forty-two hooks answer something that has not happened yet: a long-press,
 // a photo tap, a drag, a paste, a video's play button. Their code still had to be parsed and
 // executed before the socket could connect — 25 KB gzip (≈100 KB of source) of main-thread work
 // on the one path that decides how long a cold start feels.
 //
-// They now live in a SECOND bundle (`js/lazy.js`, one request for all thirty-one) fetched right
+// They now live in a SECOND bundle (`js/lazy.js`, one request for all thirty) fetched right
 // after the first frame. Until it arrives each name is registered as a placeholder — LiveView
 // demands the hook at the instant the element mounts and has no notion of one arriving later — and
 // the placeholder hands its instance over to the real hook as soon as the bundle lands.
 //
 // The split is by NEED, not by size: anything that paints, measures or positions at mount stays in
 // the boot bundle (see `index.js`), because deferring those would trade a faster boot for a
-// visible flicker, which is not a trade this epic is willing to make.
+// visible flicker, which is not a trade this epic is willing to make. `FocusTrap` is eager for the
+// same reason read the other way — it is what keeps a keyboard inside an `aria-modal` dialog, and
+// an accessibility guarantee that depends on a network fetch having succeeded is not one (#578
+// review). It costs 0.4 KB.
 //
 // The window this leaves is real and deliberately NOT papered over: a gesture that lands before the
 // bundle does is not replayed, so a long-press in that first moment needs a second one. Capturing
@@ -31,7 +34,6 @@ export const DEFERRED = [
   "DateRail",
   "DropZone",
   "EmojiPicker",
-  "FocusTrap",
   "GalleryMonths",
   "GalleryTabs",
   "IdleTracker",

@@ -13,7 +13,6 @@ import CopyUrl from "./hooks/CopyUrl"
 import DateRail from "./hooks/DateRail"
 import DropZone from "./hooks/DropZone"
 import EmojiPicker from "./hooks/EmojiPicker"
-import FocusTrap from "./hooks/FocusTrap"
 import GalleryMonths from "./hooks/GalleryMonths"
 import GalleryTabs from "./hooks/GalleryTabs"
 import IdleTracker from "./hooks/IdleTracker"
@@ -46,7 +45,6 @@ window.__edenLazyHooks = {
   DateRail,
   DropZone,
   EmojiPicker,
-  FocusTrap,
   GalleryMonths,
   GalleryTabs,
   IdleTracker,
