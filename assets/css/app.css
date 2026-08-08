@@ -2473,6 +2473,59 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The panel placeholder (#521): a scrim and a card of the right shape, painted on the tap that
+     opens a modal or the profile card, and taken off when the real one lands. It answers the tap
+     — nothing else: no controls, no pointer events. Measured before it existed, with the socket at
+     500ms: the profile card first painted at 1191ms, the new-chat modal at 1067ms. */
+  .ed-skel-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    pointer-events: none;
+  }
+  .ed-skel-panel__scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--ed-scrim);
+  }
+  .ed-skel-panel__card {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    border-radius: var(--ed-radius-lg);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    box-shadow: var(--ed-shadow-pop);
+  }
+  /* The centred modals (`max-w-sm`, `p-5`) and the anchored profile card (17rem wide, placed by
+     the same code that places the real one). */
+  .ed-skel-panel__card--modal {
+    left: 50%;
+    top: 50%;
+    width: min(24rem, calc(100vw - 2rem));
+    transform: translate(-50%, -50%);
+  }
+  .ed-skel-panel__card--popover {
+    width: 17rem;
+    visibility: hidden;
+  }
+  @media (max-width: 767px) {
+    .ed-skel-panel__card--popover {
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: auto;
+      visibility: visible;
+      border-radius: var(--ed-radius-lg) var(--ed-radius-lg) 0 0;
+    }
+  }
+  .ed-skel-panel__line {
+    height: 0.75rem;
+    border-radius: var(--ed-radius-full);
+  }
+
   /* The picked-photo placeholder (#521): the same box as the real staging overlay, minus every
      control — it stands in for one round trip. The head/foot heights stand in for chrome this box does not draw; zz-pick-preview asserts the
      photo does not move when the real overlay takes over, so they cannot drift unnoticed.

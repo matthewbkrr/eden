@@ -3200,7 +3200,18 @@ defmodule EdenWeb.ChatLive do
               }
             }
             // Capture phase so we paint BEFORE LiveView's click handling kicks off the patch.
-            this.onClick = (e) => this.maybeStart(e)
+            this.onClick = (e) => {
+              // A tap that opens a panel gets its placeholder in the same gesture (#521).
+              const opener = e.target.closest?.("[data-opens]")
+              if (opener) {
+                const kind = opener.dataset.opens
+                // The profile ASIDE is the same column the thread panel uses, so it stands in with
+                // the same skeleton rather than a second one shaped like it.
+                if (kind === "aside") this.threadSkel(".ed-profile")
+                else this.panelSkel(kind)
+              }
+              this.maybeStart(e)
+            }
             document.addEventListener("click", this.onClick, true)
             // A pick is not a click — it lands on the upload input, and only the main `attachment`
             // channel opens the staging overlay (the resend and sequential channels are internal).
@@ -4322,6 +4333,55 @@ defmodule EdenWeb.ChatLive do
             this.asideOv = ov
             this.asideTimer = setTimeout(() => this.asideDismiss(), 15000)
           },
+          // A panel, on screen before the server has heard about the tap (#521). Every one of
+          // these is `:if={@assign}` — it does not exist in the DOM until the diff lands, and the
+          // handlers put their queries on top of the round trip. Measured with the socket at
+          // 500ms: the profile card first painted at 1191ms, the new-chat modal at 1067ms.
+          //
+          // Same contract as the thread and photo placeholders below: paint now, step aside when
+          // the real one arrives, give up at once if the socket is down.
+          panelSkel(kind) {
+            this.panelDismiss()
+            if (document.querySelector(this.panelReal(kind))) return
+            const ov = document.createElement("div")
+            ov.className = "ed-skel-panel"
+            ov.dataset.kind = kind
+            ov.setAttribute("aria-hidden", "true")
+            const rows =
+              '<div class="ed-skel-panel__line ed-skel-shimmer"></div>' +
+              '<div class="ed-skel-panel__line ed-skel-shimmer" style="width:70%"></div>' +
+              '<div class="ed-skel-panel__line ed-skel-shimmer" style="width:45%"></div>'
+            ov.innerHTML =
+              '<div class="ed-skel-panel__scrim"></div>' +
+              `<div class="ed-skel-panel__card ed-skel-panel__card--${kind}">${rows}</div>`
+            document.body.appendChild(ov)
+            // An anchored card lands where the real one will, through the same placement the
+            // .Popover hook uses — a placeholder that appears somewhere else would only move the
+            // jump, not remove it.
+            if (kind === "popover") window.__edPlacePopover(ov.querySelector(".ed-skel-panel__card"))
+            this.panelOv = ov
+
+            const t0 = performance.now()
+            const poll = () => {
+              if (this.panelOv !== ov) return
+              if (document.querySelector(this.panelReal(kind))) this.panelDismiss()
+              else if (!window.liveSocket?.isConnected()) this.panelDismiss()
+              else if (performance.now() - t0 < 10_000) this.panelRaf = requestAnimationFrame(poll)
+              else this.panelDismiss()
+            }
+            this.panelRaf = requestAnimationFrame(poll)
+          },
+          // What "the real one arrived" means for each shape. The modals share no class, so the
+          // marker is the scrim every one of them renders.
+          panelReal(kind) {
+            return kind === "popover" ? ".ed-popover" : "[data-modal]"
+          },
+          panelDismiss() {
+            const ov = this.panelOv
+            cancelAnimationFrame(this.panelRaf)
+            this.panelOv = null
+            if (ov) ov.remove()
+          },
           // A picked photo, on screen before the server has heard about it (#521). The staging
           // overlay is gated on `live_entries(...)` — the SERVER's list — so between closing the
           // picker and seeing a thumbnail there was a full round trip: measured at 1060ms with the
@@ -4451,7 +4511,10 @@ defmodule EdenWeb.ChatLive do
           // The thread panel's shape, painted before the server has said anything. Same skeleton
           // parts as the sidebar overlay above — the same idea aimed at a different rectangle:
           // full screen on a phone, the 24rem column on desktop.
-          threadSkel() {
+          // `waitFor` is what counts as "the real thing arrived": the thread panel by default, the
+          // profile aside when this stands in for that (#521). Same column, same shimmer, one
+          // painter — a second copy of it would drift.
+          threadSkel(waitFor = ".ed-thread") {
             if (this.threadOv) return
             const wide = window.matchMedia("(min-width: 768px)").matches
             const ov = document.createElement("div")
@@ -4490,7 +4553,7 @@ defmodule EdenWeb.ChatLive do
             // round). The callback is one selector query; the scope is what makes it cheap.
             const host = document.querySelector(".ed-root") || document.body
             this.threadMo = new MutationObserver(() => {
-              if (document.querySelector(".ed-thread")) this.threadSkelDismiss()
+              if (document.querySelector(waitFor)) this.threadSkelDismiss()
             })
             this.threadMo.observe(host, { childList: true, subtree: true })
             this.threadTimer = setTimeout(() => this.threadSkelDismiss(), 8000)
@@ -4615,6 +4678,7 @@ defmodule EdenWeb.ChatLive do
           },
           destroyed() {
             this.threadSkelDismiss()
+            this.panelDismiss()
             this.pickDismiss()
             this.onPick && document.removeEventListener("input", this.onPick, true)
             window.__edInstantNavReady = false
@@ -4906,6 +4970,7 @@ defmodule EdenWeb.ChatLive do
           <span class="font-semibold tracking-tight">{gettext("Chats")}</span>
           <button
             class="ed-btn--icon"
+            data-opens="modal"
             phx-click="toggle_new"
             aria-label={gettext("New chat")}
           >
@@ -5033,7 +5098,7 @@ defmodule EdenWeb.ChatLive do
               </p>
             <% else %>
               <p style="font-weight:600;">{gettext("No chats yet")}</p>
-              <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
+              <button class="ed-btn ed-btn--primary" data-opens="modal" phx-click="toggle_new">
                 <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New chat")}
               </button>
             <% end %>
@@ -5163,6 +5228,7 @@ defmodule EdenWeb.ChatLive do
               type="button"
               class="flex items-center gap-3 min-w-0 flex-1 text-left -ml-1.5 px-1.5 py-1 rounded-[var(--ed-radius)] transition-colors hover:bg-[var(--ed-surface)]"
               data-profile-trigger
+              data-opens="aside"
               phx-click="open_profile"
               aria-label={gettext("View profile")}
             >
@@ -5778,7 +5844,7 @@ defmodule EdenWeb.ChatLive do
               <p style="color: var(--ed-muted); font-size:0.875rem;">
                 {gettext("Pick a chat or start a new one.")}
               </p>
-              <button class="ed-btn ed-btn--primary" phx-click="toggle_new">
+              <button class="ed-btn ed-btn--primary" data-opens="modal" phx-click="toggle_new">
                 <.icon name="hero-pencil-square-micro" class="size-4" /> {gettext("New chat")}
               </button>
             </div>
@@ -6533,6 +6599,28 @@ defmodule EdenWeb.ChatLive do
         }
       </script>
       <script :type={Phoenix.LiveView.ColocatedHook} name=".Popover">
+        // Where an anchored card goes, in one place: the real profile card and the placeholder
+        // that stands in for it while the server answers (#521) have to agree, or the card would
+        // jump on handoff.
+        window.__edPlacePopover = (el) => {
+          if (window.innerWidth < 768) return // CSS bottom sheet
+          const w = el.offsetWidth, h = el.offsetHeight, gap = 8
+          const a = window.__edAnchor
+          let left, top
+          if (a) {
+            left = Math.max(gap, Math.min(a.left, window.innerWidth - w - gap))
+            top = a.bottom + gap
+            if (top + h > window.innerHeight - gap) top = Math.max(gap, a.top - h - gap)
+          } else {
+            // No recorded anchor (e.g. a trigger missing data-profile-trigger):
+            // center it rather than leave the card invisible.
+            left = Math.max(gap, (window.innerWidth - w) / 2)
+            top = Math.max(gap, (window.innerHeight - h) / 2)
+          }
+          el.style.left = `${left}px`
+          el.style.top = `${top}px`
+          el.style.visibility = "visible"
+        }
         // Positions the profile card at the clicked avatar/name (window.__edAnchor,
         // recorded in app.js before the round-trip). Below-and-left-aligned to the
         // trigger, clamped to the viewport, flipping above if it would overflow.
@@ -6549,23 +6637,7 @@ defmodule EdenWeb.ChatLive do
           // never ends up hidden (place() always restores visibility).
           updated() { this.place() },
           place() {
-            if (window.innerWidth < 768) return  // CSS bottom sheet
-            const w = this.el.offsetWidth, h = this.el.offsetHeight, gap = 8
-            const a = window.__edAnchor
-            let left, top
-            if (a) {
-              left = Math.max(gap, Math.min(a.left, window.innerWidth - w - gap))
-              top = a.bottom + gap
-              if (top + h > window.innerHeight - gap) top = Math.max(gap, a.top - h - gap)
-            } else {
-              // No recorded anchor (e.g. a trigger missing data-profile-trigger):
-              // center it rather than leave the card invisible.
-              left = Math.max(gap, (window.innerWidth - w) / 2)
-              top = Math.max(gap, (window.innerHeight - h) / 2)
-            }
-            this.el.style.left = `${left}px`
-            this.el.style.top = `${top}px`
-            this.el.style.visibility = "visible"
+            window.__edPlacePopover(this.el)
           }
         }
       </script>
@@ -12959,7 +13031,7 @@ defmodule EdenWeb.ChatLive do
   # (the context re-checks every action).
   defp channel_members_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div class="fixed inset-0 z-30" data-modal>
       <button
         class="absolute inset-0 w-full h-full"
         style="background: var(--ed-scrim);"
@@ -13004,6 +13076,7 @@ defmodule EdenWeb.ChatLive do
                 type="button"
                 class="flex items-center gap-3 flex-1 min-w-0 text-left"
                 data-profile-trigger
+                data-opens="popover"
                 phx-click="show_profile"
                 phx-value-id={user.id}
                 aria-label={gettext("View profile")}
@@ -13174,6 +13247,7 @@ defmodule EdenWeb.ChatLive do
       type="button"
       class="ed-member-row__main"
       data-profile-trigger
+      data-opens="popover"
       phx-click="show_profile"
       phx-value-id={@m.user.id}
       aria-label={gettext("View profile")}
@@ -13208,7 +13282,7 @@ defmodule EdenWeb.ChatLive do
   # one-shot invite link.
   defp room_add_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div class="fixed inset-0 z-30" data-modal>
       <button
         class="absolute inset-0 w-full h-full"
         style="background: var(--ed-scrim);"
@@ -13323,7 +13397,7 @@ defmodule EdenWeb.ChatLive do
 
   defp add_members_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div class="fixed inset-0 z-30" data-modal>
       <button
         class="absolute inset-0 w-full h-full"
         style="background: var(--ed-scrim);"
@@ -13410,7 +13484,7 @@ defmodule EdenWeb.ChatLive do
 
   defp invites_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div class="fixed inset-0 z-30" data-modal>
       <button
         class="absolute inset-0 w-full h-full"
         style="background: var(--ed-scrim);"
@@ -14218,6 +14292,7 @@ defmodule EdenWeb.ChatLive do
           type="button"
           class="ed-flat__avatar-btn"
           data-profile-trigger
+          data-opens="popover"
           phx-click="show_profile"
           phx-value-id={@message.sender_id}
           aria-label={gettext("View profile")}
@@ -14238,6 +14313,7 @@ defmodule EdenWeb.ChatLive do
             type="button"
             class="ed-flat__name ed-flat__name-btn"
             data-profile-trigger
+            data-opens="popover"
             phx-click="show_profile"
             phx-value-id={@message.sender_id}
           >
@@ -15054,7 +15130,7 @@ defmodule EdenWeb.ChatLive do
 
   defp new_conversation_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div class="fixed inset-0 z-30" data-modal>
       <button
         class="absolute inset-0 w-full h-full"
         style="background: var(--ed-scrim);"
@@ -15156,7 +15232,7 @@ defmodule EdenWeb.ChatLive do
   # not listed. Folders are created/managed in Settings.
   defp folder_modal(assigns) do
     ~H"""
-    <div class="fixed inset-0 z-30">
+    <div class="fixed inset-0 z-30" data-modal>
       <button
         class="absolute inset-0 w-full h-full"
         style="background: var(--ed-scrim);"
