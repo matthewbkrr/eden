@@ -464,9 +464,6 @@ defmodule EdenWeb.ChatLive do
      |> assign(selected: nil)}
   end
 
-  # #41 access matrix: a room link auto-joins an open room, opens one you're in,
-  # or (private, not a member) lands you in the channel. get_room is trusted
-  # (no membership filter) — we resolve access explicitly, then materialize.
   # The row as the client draws it: a picture, not a storage key (the same rule the notification
   # payload follows, #363/R203), and the initial the avatar falls back to when there is no image.
   defp mention_item(%{everyone: true} = item), do: %{handle: item.handle, everyone: true}
@@ -488,6 +485,9 @@ defmodule EdenWeb.ChatLive do
 
   # A short body preview for the select overlay
 
+  # #41 access matrix: a room link auto-joins an open room, opens one you're in,
+  # or (private, not a member) lands you in the channel. get_room is trusted
+  # (no membership filter) — we resolve access explicitly, then materialize.
   defp open_room(socket, channel, room_id, message_id) do
     user_id = socket.assigns.current_scope.user.id
     room = Chat.get_room(room_id)
@@ -1023,13 +1023,13 @@ defmodule EdenWeb.ChatLive do
     {:noreply, assign(socket, show_new: false)}
   end
 
-  # Open a profile popover. Your own card opens too (no Message button — an
-  # "Edit profile" link instead); others are authorized by a shared conversation
-  # in the context. The members modal (if open) stays open underneath.
   # Who the composer may name (#576): members of the OPEN conversation whose handle or display
   # name starts with what has been typed. Scoped by the conversation, so the list itself is the
   # authorization — the client never learns of anyone the sender cannot already see.
-  def handle_event("mention_search", %{"q" => q}, socket) when is_binary(q) do
+  #
+  # `seq` is the client's question number, echoed untouched: the same prefix can be outstanding
+  # from two composers at once, and the answer has to say which one it answers (#577 review).
+  def handle_event("mention_search", %{"q" => q} = params, socket) when is_binary(q) do
     items =
       case socket.assigns.selected do
         nil ->
@@ -1041,11 +1041,14 @@ defmodule EdenWeb.ChatLive do
           |> Enum.map(&mention_item/1)
       end
 
-    {:noreply, push_event(socket, "mention_candidates", %{items: items})}
+    {:noreply, push_event(socket, "mention_candidates", %{items: items, seq: params["seq"]})}
   end
 
   def handle_event("mention_search", _params, socket), do: {:noreply, socket}
 
+  # Open a profile popover. Your own card opens too (no Message button — an
+  # "Edit profile" link instead); others are authorized by a shared conversation
+  # in the context. The members modal (if open) stays open underneath.
   def handle_event("show_profile", %{"id" => id}, socket) do
     scope = socket.assigns.current_scope
 

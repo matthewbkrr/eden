@@ -2386,7 +2386,10 @@ defmodule Eden.Chat do
         join: u in User,
         on: u.id == m.user_id,
         where: m.conversation_id == ^message.conversation_id and is_nil(m.left_at),
-        where: is_nil(u.deleted_at)
+        # The same people the picker offers (#577 review): a deactivated account is not on that
+        # list, so typing their handle by hand must not mint a row either — that would chip a
+        # name and ring an account that can no longer read it.
+        where: is_nil(u.deleted_at) and u.active == true
       )
 
     named =

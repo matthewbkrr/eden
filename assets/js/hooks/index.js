@@ -14,7 +14,6 @@ import DropZone from "./DropZone"
 import EmojiPicker from "./EmojiPicker"
 import FocusTrap from "./FocusTrap"
 import FolderTabs from "./FolderTabs"
-import Mentions from "./Mentions"
 import ForwardCarry from "./ForwardCarry"
 import GalleryMonths from "./GalleryMonths"
 import GalleryTabs from "./GalleryTabs"
@@ -25,6 +24,7 @@ import LastSeen from "./LastSeen"
 import Lightbox from "./Lightbox"
 import LocalTime from "./LocalTime"
 import LocalTimes from "./LocalTimes"
+import Mentions from "./Mentions"
 import NewConvGate from "./NewConvGate"
 import NotifyPerm from "./NotifyPerm"
 import PasteUpload from "./PasteUpload"
@@ -57,7 +57,6 @@ export const edenHooks = {
   EmojiPicker,
   FocusTrap,
   FolderTabs,
-  Mentions,
   ForwardCarry,
   GalleryMonths,
   GalleryTabs,
@@ -68,6 +67,7 @@ export const edenHooks = {
   Lightbox,
   LocalTime,
   LocalTimes,
+  Mentions,
   NewConvGate,
   NotifyPerm,
   PasteUpload,

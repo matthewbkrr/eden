@@ -15,6 +15,12 @@ export default {
     this.input = null
     this.start = -1
     this.pending = null
+    // Which question is outstanding. Two people can be typed the same prefix in two places — the
+    // main composer and the thread's, or the same word after switching chats — so matching the
+    // reply on its TEXT alone lets an answer scoped to one conversation paint the other one's
+    // list (#577 review). The counter makes each question distinguishable from every other.
+    this.seq = 0
+    this.want = null
 
     this.onInput = (e) => {
       const el = e.target
@@ -27,7 +33,8 @@ export default {
       // or after Escape — is stale, and inserting from it on Enter would name the wrong person
       // (#577 review).
       this.pending = q
-      this.pushEvent("mention_search", { q })
+      this.want = ++this.seq
+      this.pushEvent("mention_search", { q, seq: this.want })
     }
 
     // Keys are taken in the CAPTURE phase while the list is open: Enter must insert a mention,
@@ -91,10 +98,12 @@ export default {
     document.addEventListener("keydown", this.onKey, true)
     document.addEventListener("click", this.onDoc, true)
 
-    this.handleEvent("mention_candidates", ({ items }) => {
-      // Still the question that was asked? `pending` is cleared by close(), so an answer landing
-      // after Escape is dropped rather than reopening the list.
-      if (this.pending === null || this.pending !== this.query(this.input)) return
+    this.handleEvent("mention_candidates", ({ items, seq }) => {
+      // Still the question that was asked? `want` is cleared by close(), so an answer landing
+      // after Escape is dropped rather than reopening the list; the query is re-read because the
+      // caret can move without asking anything new (an arrow key fires no `input`).
+      if (this.want === null || seq !== this.want) return
+      if (this.pending !== this.query(this.input)) return
       this.items = items || []
       this.active = 0
       this.items.length ? this.paint() : this.close()
@@ -247,5 +256,6 @@ export default {
     this.items = []
     this.start = -1
     this.pending = null
+    this.want = null
   },
 }

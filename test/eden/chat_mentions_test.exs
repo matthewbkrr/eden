@@ -352,4 +352,34 @@ defmodule Eden.ChatMentionsTest do
              "the personal mention has to survive next to @all — it is a second span of text, and it needs its own row to be rendered as a chip"
     end
   end
+
+  describe "a deactivated account" do
+    test "is neither offered nor resolvable by hand" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+      Repo.update!(Ecto.Changeset.change(bob, active: false))
+
+      handles = Chat.mention_candidates(scope(alice), conv, "") |> Enum.map(& &1.handle)
+      refute "bob" in handles
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bob @carol"})
+
+      assert mentions_of(message) == ["carol"],
+             "the picker does not offer a deactivated account, so typing the handle must not resolve one either — it would chip a name and ring an account that can no longer read it"
+    end
+
+    test "@all passes them over" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+      Repo.update!(Ecto.Changeset.change(bob, active: false))
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@all"})
+
+      assert mentions_of(message) == ["alice", "carol"]
+    end
+  end
 end
