@@ -20,21 +20,39 @@ defmodule EdenWeb.Markup do
   # One left-to-right pass; the first complete marker pair (or URL) wins. Bold
   # (`**`) is tried before italic (`*`). Emphasis can't hug whitespace
   # ((?!\s)/(?<!\s)); `_` must sit on word boundaries so snake_case is left alone.
+  # `@handle`, on a word boundary so an address (`me@host`) is not a call. Same character set a
+  # username may have, so a trailing comma or full stop ends it (#576).
+  @mention ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_.-]{2,})/u
+
   @inline ~r/(\*\*(?!\s).+?(?<!\s)\*\*|`[^`]+`|(?<![\p{L}\p{N}_])_(?!\s).+?(?<!\s)_(?![\p{L}\p{N}_])|\*(?!\s).+?(?<!\s)\*|https?:\/\/[^\s<]+)/u
 
   @doc """
   Renders a message body to safe iodata: a heading wrapper when the body starts
   with `#`/`##`/`###`, otherwise inline formatting only.
   """
-  def to_iodata(text) when is_binary(text) do
+  def to_iodata(text, mentions \\ [])
+
+  def to_iodata(text, mentions) when is_binary(text) do
+    named = named_handles(mentions)
+
     case Regex.run(@heading, text) do
       [_, hashes, rest] ->
-        {:safe, [~s(<span class="ed-md-h#{byte_size(hashes)}">), inline(rest), "</span>"]}
+        {:safe, [~s(<span class="ed-md-h#{byte_size(hashes)}">), inline(rest, named), "</span>"]}
 
       nil ->
-        {:safe, inline(text)}
+        {:safe, inline(text, named)}
     end
   end
+
+  # handle-as-typed => the person's CURRENT handle. Only what the server resolved at send time
+  # (#576): a bare `@word` that named nobody, or someone outside the conversation, stays text.
+  defp named_handles(mentions) when is_list(mentions) do
+    for %{handle: handle, user: %{username: username}} <- mentions,
+        into: %{},
+        do: {String.downcase(handle), username}
+  end
+
+  defp named_handles(_), do: %{}
 
   @doc """
   Plain text with markdown markers removed — for the sidebar preview and search
@@ -49,20 +67,51 @@ defmodule EdenWeb.Markup do
     |> String.replace(~r/\*(?!\s)(.+?)(?<!\s)\*/u, "\\1")
   end
 
-  defp inline(text) do
+  defp inline(text, named) do
     @inline
     |> Regex.split(text, include_captures: true)
-    |> Enum.map(&token/1)
+    |> Enum.map(&token(&1, named))
   end
 
-  defp token(t) do
+  # A resolved `@handle` becomes a chip that opens the person's profile — the same event the
+  # avatar uses. Applied only to PLAIN text, so a handle inside code or a URL is left alone.
+  defp mentions(text, named) when map_size(named) == 0, do: escape(text)
+
+  defp mentions(text, named) do
+    @mention
+    |> Regex.split(text, include_captures: true)
+    |> Enum.map(&mention_part(&1, named))
+  end
+
+  # A part is a mention only when it IS the whole match and the handle was resolved; anything
+  # else is text.
+  defp mention_part(part, named) do
+    with [^part, handle] <- Regex.run(@mention, part) || [],
+         {:ok, username} <- Map.fetch(named, String.downcase(handle)) do
+      chip(username)
+    else
+      _ -> escape(part)
+    end
+  end
+
+  defp chip(username) do
+    [
+      ~s(<button type="button" class="ed-mention" phx-click="show_profile_by_handle" phx-value-handle="),
+      escape(username),
+      ~s(">@),
+      escape(username),
+      "</button>"
+    ]
+  end
+
+  defp token(t, named) do
     cond do
       wrapped?(t, "**") -> wrap("strong", slice(t, 2))
       wrapped?(t, "`") -> wrap("code", slice(t, 1))
       wrapped?(t, "_") -> wrap("em", slice(t, 1))
       wrapped?(t, "*") -> wrap("em", slice(t, 1))
       String.starts_with?(t, "http://") or String.starts_with?(t, "https://") -> link(t)
-      true -> escape(t)
+      true -> mentions(t, named)
     end
   end
 

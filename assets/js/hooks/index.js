@@ -14,6 +14,7 @@ import DropZone from "./DropZone"
 import EmojiPicker from "./EmojiPicker"
 import FocusTrap from "./FocusTrap"
 import FolderTabs from "./FolderTabs"
+import Mentions from "./Mentions"
 import ForwardCarry from "./ForwardCarry"
 import GalleryMonths from "./GalleryMonths"
 import GalleryTabs from "./GalleryTabs"
@@ -56,6 +57,7 @@ export const edenHooks = {
   EmojiPicker,
   FocusTrap,
   FolderTabs,
+  Mentions,
   ForwardCarry,
   GalleryMonths,
   GalleryTabs,

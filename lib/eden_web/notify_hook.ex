@@ -120,6 +120,15 @@ defmodule EdenWeb.NotifyHook do
   # media-only keeps the bare marker, and a plain text message shows its (stripped, fitted) body.
   defp notify_body(%{kind: "knock"}), do: gettext("Requested to join")
 
+  # Being named reads differently from a message that merely arrived — it is why this one got
+  # past a mute (#576). The preview still follows, so the line says both what happened and what
+  # was said.
+  defp notify_body(%{kind: "mention", preview: preview})
+       when is_binary(preview) and preview != "",
+       do: gettext("Mentioned you: %{preview}", preview: preview)
+
+  defp notify_body(%{kind: "mention"}), do: gettext("Mentioned you")
+
   # `display_preview/1` already fits the caption to the 140-char banner budget, so prepending the
   # marker would push the combined body a few chars over (#363 review); trim the WHOLE thing once
   # more — the marker leads, so only a max-length caption's tail is lost, never "Photo,".

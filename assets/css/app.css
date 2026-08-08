@@ -2480,6 +2480,77 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The `@` autocomplete (#576): one popover for the page, placed above whichever composer is
+     being typed in — below would be off-screen on a phone, and under the keyboard at that. */
+  .ed-mention-pop {
+    position: fixed;
+    z-index: 62;
+    max-height: 14rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.25rem;
+    border-radius: var(--ed-radius);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    box-shadow: var(--ed-shadow-pop);
+  }
+  .ed-mention-pop__row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    border: 0;
+    border-radius: var(--ed-radius-sm);
+    background: none;
+    color: var(--ed-ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ed-mention-pop__row:hover,
+  .ed-mention-pop__row.is-active {
+    background: var(--ed-surface-2);
+  }
+  .ed-mention-pop__name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ed-mention-pop__handle {
+    color: var(--ed-muted);
+    font-size: 0.8125rem;
+  }
+
+  /* A mention chip (#576): the person's handle inside a message body, tappable to their profile.
+     Not a link — it opens the same panel the avatar does — so it is a button styled as text with
+     the cobalt that already means "person" elsewhere in the app. */
+  .ed-mention {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: 600;
+    color: var(--ed-primary-strong-text);
+    cursor: pointer;
+    border-radius: var(--ed-radius-sm);
+  }
+  .ed-mention:hover {
+    text-decoration: underline;
+  }
+  .ed-mention:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 1px;
+  }
+  /* In your own bubble the body is white on cobalt, so the chip cannot be cobalt too. */
+  .ed-bubble--me .ed-mention {
+    color: var(--ed-on-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
   /* The app's own confirm (#518), in place of the system alert a WKWebView titles with the
      origin. Same box as the server-rendered delete sheet it stands beside — this one is built on
      the client, for the seventeen `data-confirm` attributes and the two direct calls. */

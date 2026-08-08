@@ -467,6 +467,14 @@ defmodule EdenWeb.ChatLive do
   # #41 access matrix: a room link auto-joins an open room, opens one you're in,
   # or (private, not a member) lands you in the channel. get_room is trusted
   # (no membership filter) — we resolve access explicitly, then materialize.
+  # The message's resolved mentions, or nothing when the association was not preloaded (an
+  # optimistic row, a preview struct) — the renderer then leaves every `@word` as text (#576).
+  defp mention_rows(%{mentions: %Ecto.Association.NotLoaded{}}), do: []
+  defp mention_rows(%{mentions: rows}) when is_list(rows), do: rows
+  defp mention_rows(_), do: []
+
+  # A short body preview for the select overlay
+
   defp open_room(socket, channel, room_id, message_id) do
     user_id = socket.assigns.current_scope.user.id
     room = Chat.get_room(room_id)
@@ -1005,6 +1013,32 @@ defmodule EdenWeb.ChatLive do
   # Open a profile popover. Your own card opens too (no Message button — an
   # "Edit profile" link instead); others are authorized by a shared conversation
   # in the context. The members modal (if open) stays open underneath.
+  # A mention chip carries the handle, not an id (#576): the body is rendered from stored rows,
+  # and putting an id in the markup would mean re-rendering every message that names someone
+  # whenever that person changes. The handle resolves through the same authorization as any other
+  # profile view — `get_shared_user/2` refuses anyone the viewer shares no conversation with.
+  # Who the composer may name (#576): members of the OPEN conversation whose handle or display
+  # name starts with what has been typed. Scoped by the conversation, so the list itself is the
+  # authorization — the client never learns of anyone the sender cannot already see.
+  def handle_event("mention_search", %{"q" => q}, socket) when is_binary(q) do
+    items =
+      case socket.assigns.selected do
+        nil -> []
+        conv -> Chat.mention_candidates(socket.assigns.current_scope, conv.id, q)
+      end
+
+    {:noreply, push_event(socket, "mention_candidates", %{items: items})}
+  end
+
+  def handle_event("mention_search", _params, socket), do: {:noreply, socket}
+
+  def handle_event("show_profile_by_handle", %{"handle" => handle}, socket) do
+    case Accounts.get_user_by_username(handle) do
+      %{id: id} -> handle_event("show_profile", %{"id" => to_string(id)}, socket)
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_event("show_profile", %{"id" => id}, socket) do
     scope = socket.assigns.current_scope
 
@@ -3897,6 +3931,18 @@ defmodule EdenWeb.ChatLive do
           <%!-- Shared full-emoji grid (#72): ONE popover for the page, opened by a
                 message menu's "more" chevron, instead of a 39-button grid hidden in
                 every message. Positioned + targeted by the .ReactionGrid hook. --%>
+          <%!-- Mention autocomplete (#576): ONE popover for the page, driven by the .Mentions hook
+                on whichever composer has focus. The list comes from the server (members of THIS
+                conversation), so a handle can never name someone who is not in the room. --%>
+          <div
+            id="mention-pop"
+            class="ed-mention-pop"
+            phx-hook="Mentions"
+            role="listbox"
+            aria-label={gettext("Mention someone")}
+            hidden
+          >
+          </div>
           <div
             id="reaction-grid"
             class="ed-react-grid"
@@ -6452,7 +6498,7 @@ defmodule EdenWeb.ChatLive do
           mine={@mine}
         />
         <div :if={@message.body != ""} class="break-words ed-flat__body">
-          {Markup.to_iodata(@message.body)}
+          {Markup.to_iodata(@message.body, mention_rows(@message))}
         </div>
         <button
           :if={@message.reply_count > 0 and not @in_thread}
@@ -6635,7 +6681,9 @@ defmodule EdenWeb.ChatLive do
               </span>
             </div>
             <div :if={@message.body != ""} class="ed-bubble__cap ed-bubble__cap--media">
-              <span class="break-words">{Markup.to_iodata(@message.body)}</span>
+              <span class="break-words">
+                {Markup.to_iodata(@message.body, mention_rows(@message))}
+              </span>
               <span class="ed-bubble__meta">
                 <.msg_meta
                   at={@message.inserted_at}
@@ -6675,7 +6723,7 @@ defmodule EdenWeb.ChatLive do
                   rows drop the cap entirely so the cards stack flush). --%>
             <div :if={@message.body != "" or @grp in [nil, :last]} class="ed-bubble__cap">
               <span :if={@message.body != ""} class="break-words">
-                {Markup.to_iodata(@message.body)}
+                {Markup.to_iodata(@message.body, mention_rows(@message))}
               </span>
               <span :if={@grp in [nil, :last]} class="ed-bubble__meta">
                 <.msg_meta

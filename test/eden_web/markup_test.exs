@@ -72,4 +72,39 @@ defmodule EdenWeb.MarkupTest do
       assert Markup.strip("plain text") == "plain text"
     end
   end
+
+  describe "mentions (#576)" do
+    defp mention(handle, username), do: %{handle: handle, user: %{username: username}}
+
+    defp render(text, mentions \\ []) do
+      {:safe, io} = Markup.to_iodata(text, mentions)
+      IO.iodata_to_binary(io)
+    end
+
+    test "a resolved handle becomes a chip labelled with the person's CURRENT name" do
+      html = render("@bob ping", [mention("bob", "robert")])
+
+      assert html =~ ~s(class="ed-mention")
+      assert html =~ "@robert", "the chip carries the current handle, not the one typed"
+      refute html =~ "@bob ", "the typed handle must not survive as text next to the chip"
+    end
+
+    test "an unresolved handle stays plain text" do
+      assert render("@nobody hi") == "@nobody hi"
+    end
+
+    test "a handle inside code is left alone" do
+      html = render("`@bob` and @bob", [mention("bob", "bob")])
+
+      assert html =~ "<code>@bob</code>", "code spans are literal"
+      assert html =~ ~s(class="ed-mention"), "the one outside the code span is still a chip"
+    end
+
+    test "the chip escapes what it renders" do
+      html = render("@xy", [mention("xy", ~s(a"><script>))])
+
+      refute html =~ "<script>"
+      assert html =~ "&lt;script&gt;"
+    end
+  end
 end
