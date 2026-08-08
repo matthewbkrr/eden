@@ -191,6 +191,20 @@ design — built incrementally as features land.)
     `#`/`##`/`###` headings, inline `**bold**`/`*italic*`/`` `code` `` and bare-URL
     links, emitted as escaped iodata (whitelist tags only, no HTML-injection path);
     previews/snippets strip the markers. The composer has a built-in emoji picker.
+    **Mentions** (`MessageMention`, #576) are who a message names with an `@`. Resolved
+    ONCE, at send/edit, against the conversation's members — a handle for someone who
+    isn't in it stays plain text, so a message can neither name nor notify an outsider.
+    The row stores the **person** (`user_id`), not the text: `username` is the public
+    `@tag` and is renameable (#173), so text kept as text would follow the handle rather
+    than the human; `handle` rides along only to tell the renderer which span of the body
+    to chip, and the chip is labelled from the person's CURRENT name (a rename re-labels
+    every past mention without touching stored bodies). Delivery is its own path
+    (`mention_recipient_ids/1`): a mention **passes mute** — being called by name is the
+    point of `@` — while DND, leaving and deactivation still silence it. The badge
+    invariant is untouched: rail/folder badges still respect mute, because that is
+    counting, not delivery. Autocomplete is one page-level popover (the `#reaction-grid`
+    pattern of #72) fed by `Chat.mention_candidates/3`, which is scoped to the
+    conversation, so the client never learns of anyone the sender can't already see.
     **Reactions** (`MessageReaction`, #67) are emoji a member toggles on a message
     (`toggle_reaction/3`; one row per member+emoji, `unique_index`); raw rows are
     preloaded and aggregated to chips in the web layer so each viewer computes
