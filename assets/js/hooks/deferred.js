@@ -80,6 +80,9 @@ function loadAll() {
     // a waiter can tell "it never arrived" from "it arrived without your name" — and drop `loading`
     // so a later trigger can try the whole thing again.
     tag.onerror = () => {
+      // Taken back out: a retry appends another, and a flaky link would otherwise leave the head
+      // collecting one dead <script> per attempt (#578 review).
+      tag.remove()
       loading = null
       resolve(null)
     }
@@ -155,6 +158,11 @@ function placeholder(name) {
     },
     // Each of these survives the handover only when the real hook does NOT define it — then the
     // queue is already null and the push is a no-op.
+    //
+    // The connection pair is queued and replayed on purpose. A socket that drops while the bundle
+    // is in flight would otherwise hand over to a hook that believes it is online — SendQueue would
+    // keep marking sends as live with nothing carrying them (#578 review). Replayed in the order
+    // they happened, so a drop-and-recover ends where reality is.
     beforeUpdate() {
       this.__queued?.push("beforeUpdate")
     },
