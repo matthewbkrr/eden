@@ -781,7 +781,7 @@ defmodule EdenWeb.SettingsLive do
                       role="group"
                       aria-label={gettext("Theme")}
                       id="theme-seg"
-                      phx-hook=".ThemeSegA11y"
+                      phx-hook="ThemeSegA11y"
                     >
                       <button
                         class="ed-seg__btn"
@@ -1029,7 +1029,7 @@ defmodule EdenWeb.SettingsLive do
                         <button
                           type="button"
                           id={"sound-preview-#{key}"}
-                          phx-hook=".SoundPreview"
+                          phx-hook="SoundPreview"
                           data-sound-key={key}
                           class="ed-btn--icon"
                           aria-label={gettext("Play %{name}", name: sound_label(key))}
@@ -1039,24 +1039,6 @@ defmodule EdenWeb.SettingsLive do
                         </button>
                       </li>
                     </ul>
-                    <script :type={Phoenix.LiveView.ColocatedHook} name=".SoundPreview">
-                      // Preview a chime preset (#289) client-side. The click is a user
-                      // gesture, so it can create / resume the shared AudioContext; the
-                      // synth + preset table live on window.edSound (shared with Notifier).
-                      export default {
-                        mounted() {
-                          this.el.addEventListener("click", () => {
-                            const AC = window.AudioContext || window.webkitAudioContext
-                            if (!AC) return
-                            if (!window.__edAudio) window.__edAudio = new AC()
-                            const ctx = window.__edAudio
-                            const go = () => window.edSound && window.edSound.play(ctx, this.el.dataset.soundKey)
-                            if (ctx.state === "suspended") ctx.resume().then(go).catch(() => {})
-                            else go()
-                          })
-                        }
-                      }
-                    </script>
                   </div>
 
                   <div
@@ -1075,7 +1057,7 @@ defmodule EdenWeb.SettingsLive do
                     <button
                       type="button"
                       id="notify-desktop-switch"
-                      phx-hook=".NotifyPerm"
+                      phx-hook="NotifyPerm"
                       role="switch"
                       aria-checked={to_string(@notify_desktop)}
                       aria-label={gettext("Desktop notifications")}
@@ -1100,7 +1082,7 @@ defmodule EdenWeb.SettingsLive do
                     )}
                   </p>
 
-                  <ul id="folder-list" phx-hook=".Sortable" class="space-y-1.5">
+                  <ul id="folder-list" phx-hook="Sortable" class="space-y-1.5">
                     <%= for row <- @folder_rows do %>
                       <li
                         :if={row == :all}
@@ -1150,7 +1132,7 @@ defmodule EdenWeb.SettingsLive do
                             class="ed-folder-row__name"
                             aria-label={gettext("Folder name")}
                             draggable="false"
-                            phx-hook=".SelectOnFocus"
+                            phx-hook="SelectOnFocus"
                             phx-blur="rename_folder"
                             phx-value-folder_id={row.id}
                           />
@@ -1199,115 +1181,6 @@ defmodule EdenWeb.SettingsLive do
                       {gettext("Add")}
                     </button>
                   </form>
-
-                  <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectOnFocus">
-                    // Select the whole value on focus, so clicking a folder name makes
-                    // it obvious the entire name is being edited (Finder-style).
-                    export default {
-                      mounted() { this.el.addEventListener("focus", () => this.el.select()) }
-                    }
-                  </script>
-                  <script :type={Phoenix.LiveView.ColocatedHook} name=".NotifyPerm">
-                    // Desktop-notifications toggle (#214). Notification.requestPermission() must be
-                    // called INSIDE the user gesture (Safari is strict; a server round-trip wouldn't
-                    // count), so the click is handled here — not via phx-click — and only the RESULT
-                    // is pushed. data-on reflects the current pref so we know which way we're toggling.
-                    export default {
-                      mounted() {
-                        this.el.addEventListener("click", async () => {
-                          const on = this.el.dataset.on === "true"
-                          if (!("Notification" in window)) {
-                            this.pushEvent("set_notify_desktop", { on: false, perm: "unsupported" })
-                            return
-                          }
-                          // Only an ON pref that's ALSO granted on THIS origin toggles off. A pref that's
-                          // "on" but ungranted here — e.g. the same account on a new domain (prod vs the
-                          // dev origin), where browser permission is per-origin — (re)requests instead,
-                          // so re-enabling is one click, not off-then-on.
-                          if (on && Notification.permission === "granted") {
-                            this.pushEvent("set_notify_desktop", { on: false })
-                            return
-                          }
-                          // Safari ≤15 has only the callback form of requestPermission(); the
-                          // promise resolves to undefined there, so `perm === "granted"` fails and
-                          // the toggle flips on with a SECOND click after the grant (the catch
-                          // fallback reads Notification.permission). Negligible audience in 2026 —
-                          // recorded, not worked around (#273).
-                          let perm
-                          try { perm = await Notification.requestPermission() }
-                          catch (_e) { perm = Notification.permission }
-                          this.pushEvent("set_notify_desktop", { on: perm === "granted", perm })
-                        })
-                      }
-                    }
-                  </script>
-                  <script :type={Phoenix.LiveView.ColocatedHook} name=".ThemeSegA11y">
-                    // Theme is client-driven (data-theme on <html>), so aria-pressed on the
-                    // theme segments can't be server-rendered — sync it here and on change.
-                    export default {
-                      mounted() {
-                        this._sync = () => {
-                          const cur = document.documentElement.getAttribute("data-theme") || "system"
-                          this.el.querySelectorAll("[data-phx-theme]").forEach((b) =>
-                            b.setAttribute("aria-pressed", String(b.dataset.phxTheme === cur)))
-                        }
-                        this._sync()
-                        this._obs = new MutationObserver(this._sync)
-                        this._obs.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] })
-                      },
-                      destroyed() { this._obs && this._obs.disconnect() }
-                    }
-                  </script>
-                  <script :type={Phoenix.LiveView.ColocatedHook} name=".Sortable">
-                    // HTML5 drag-and-drop reorder. Items rearrange live as you drag; on
-                    // drop we push the new id order to the server. Handlers bind once per
-                    // node (guarded), so they survive LiveView re-renders.
-                    export default {
-                      mounted() { this.bind() },
-                      updated() { this.bind() },
-                      bind() {
-                        this.el.querySelectorAll("li[draggable=true]").forEach((item) => {
-                          if (item._dnd) return
-                          item._dnd = true
-                          item.addEventListener("dragstart", (e) => {
-                            this.dragging = item
-                            this.startOrder = this.order().join()
-                            item.classList.add("ed-dragging")
-                            e.dataTransfer.effectAllowed = "move"
-                          })
-                          item.addEventListener("dragend", () => {
-                            item.classList.remove("ed-dragging")
-                            this.commit()
-                          })
-                        })
-                        if (this._listBound) return
-                        this._listBound = true
-                        this.el.addEventListener("dragover", (e) => {
-                          e.preventDefault()
-                          if (!this.dragging) return
-                          const after = this.afterElement(e.clientY)
-                          if (after == null) this.el.appendChild(this.dragging)
-                          else this.el.insertBefore(this.dragging, after)
-                        })
-                      },
-                      afterElement(y) {
-                        const items = [...this.el.querySelectorAll("li[draggable=true]:not(.ed-dragging)")]
-                        return items.find((item) => {
-                          const box = item.getBoundingClientRect()
-                          return y < box.top + box.height / 2
-                        }) || null
-                      },
-                      commit() {
-                        this.dragging = null
-                        const ids = this.order()
-                        // A click on the handle or a cancelled drag isn't a reorder.
-                        if (ids.join() !== this.startOrder) this.pushEvent("reorder_folders", { ids })
-                      },
-                      order() {
-                        return [...this.el.querySelectorAll("li[draggable=true]")].map((i) => i.dataset.id)
-                      }
-                    }
-                  </script>
                 </section>
               </div>
             </div>

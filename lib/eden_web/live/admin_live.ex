@@ -409,7 +409,7 @@ defmodule EdenWeb.AdminLive do
                 id="invite-url-copy"
                 value={@new_invite_url}
                 readonly
-                phx-hook=".SelectAllOnClick"
+                phx-hook="SelectAllOnClick"
                 class="ed-input flex-1"
                 style="font-size:0.75rem;"
                 aria-label={gettext("Invite link")}
@@ -618,7 +618,7 @@ defmodule EdenWeb.AdminLive do
                   id="reset-link-copy"
                   value={@reset_link}
                   readonly
-                  phx-hook=".SelectAllOnClick"
+                  phx-hook="SelectAllOnClick"
                   class="ed-input"
                   style="font-size:0.75rem;"
                   aria-label={gettext("Reset link")}
@@ -713,13 +713,6 @@ defmodule EdenWeb.AdminLive do
     <%!-- Click-to-select for the copy-once link inputs (#304 review P3). The old
           onclick="this.select()" is dead under the nonce CSP (no inline handlers); a colocated
           hook restores select-all-on-click so "Copy it now" is a single gesture. --%>
-    <script :type={Phoenix.LiveView.ColocatedHook} name=".SelectAllOnClick">
-      export default {
-        mounted() {
-          this.el.addEventListener("click", () => this.el.select())
-        },
-      }
-    </script>
     """
   end
 
