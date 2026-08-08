@@ -63,26 +63,45 @@ test("an element mounted before the bundle landed still answers afterwards", asy
 }) => {
   test.setTimeout(120_000)
 
+  // The first request for the bundle is refused, which pins the ordering the test needs instead of
+  // hoping for it: the messages mount, the person presses, and the hooks genuinely are not there
+  // yet. Waiting for the socket and then for the bundle proved nothing — the real hook could have
+  // registered before the row ever mounted (#578 review). Refused, not delayed: a held request is
+  // at the mercy of the browser deciding the connection is no longer worth fulfilling.
+  let refuse = true
+  await alice.route("**/assets/js/lazy.js*", (route) =>
+    refuse ? route.abort("failed") : route.continue(),
+  )
+
   await alice.goto(`/app/c/${seed.dm_id}`)
   await ready(alice)
 
-  // The messages are on screen the moment the view connects, which is BEFORE the bundle is even
-  // asked for — so every one of these rows mounted against a placeholder. That is the path being
-  // tested: not the arrival of the bundle, but the handover to an instance that already existed.
-  //
-  // It does not test the window itself. A gesture inside it is not replayed (see `deferred.js` for
-  // why re-dispatching was rejected), and an earlier version of this test claimed to cover that
-  // race while its own timing meant the bundle had always landed first (#578 review). Delaying the
-  // response to force the ordering was tried and does not survive this harness's request
-  // interception, so the honest thing is a test that says what it checks.
-  await loaded(alice)
-
   const message = alice.locator("[id^='messages-'] [data-message-id]").last()
   await expect(message).toBeVisible({ timeout: 10_000 })
-  await message.click({ button: "right" })
+  const menu = alice.locator("#message-menu")
 
+  expect(
+    await alice.evaluate(() => !!window.__edenLazyHooks),
+    "the bundle arrived anyway — this test is no longer testing the window it names",
+  ).toBe(false)
+
+  // Inside the window: the element is mounted against a placeholder and the press does nothing.
+  // That is the documented cost of deferring — the gesture is not queued and not replayed, because
+  // synthesizing gestures is what gave this app its ghost-menu races.
+  await message.click({ button: "right" })
+  await alice.waitForTimeout(300)
+  await expect(menu, "the menu opened with no hook behind it").toBeHidden()
+
+  // A refused fetch re-arms the triggers, so the next gesture tries again — otherwise one dropped
+  // request would leave a chat with no menus until reload.
+  refuse = false
+  await alice.mouse.click(4, 4)
+  await loaded(alice)
+
+  // Out the other side: the SAME element, mounted long before any of this, now answers.
+  await message.click({ button: "right" })
   await expect(
-    alice.locator("#message-menu"),
+    menu,
     "the context menu never opened — the placeholder never handed the element over",
   ).toBeVisible({ timeout: 5000 })
 })

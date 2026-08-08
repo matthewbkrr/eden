@@ -74,11 +74,12 @@ function loadAll() {
     const tag = document.createElement("script")
     tag.src = src
     tag.onload = () => resolve(window.__edenLazyHooks || {})
-    // A failed fetch must not wedge the page: resolve empty (the interactive extras stay absent
-    // rather than the app hanging on a promise) and let the next trigger try again.
+    // A failed fetch must not wedge the page: resolve `null` — distinct from an empty registry, so
+    // a waiter can tell "it never arrived" from "it arrived without your name" — and drop `loading`
+    // so a later trigger can try the whole thing again.
     tag.onerror = () => {
       loading = null
-      resolve({})
+      resolve(null)
     }
     document.head.appendChild(tag)
   })
@@ -115,11 +116,22 @@ function placeholder(name) {
       this.__queued = []
       this.__gone = false
 
-      whenLoaded().then((registry) => {
-        const real = registry[name]
+      const attach = (registry) => {
         // Destroyed while the bundle was in flight: mounting now would attach listeners to a node
         // that is no longer in the document, and nothing would ever take them off again.
-        if (!real || this.__gone) return
+        if (this.__gone) return
+
+        const real = registry && registry[name]
+
+        if (!real) {
+          // Nothing to hand over to — the fetch failed, or this bundle does not carry the name.
+          // Either way the queue has to stop growing: left as an array it would collect a string
+          // on every patch for the life of the page (#578 review). A failed fetch can still be
+          // retried by a later gesture, so this instance goes back to waiting.
+          this.__queued = null
+          if (!registry) whenLoaded().then(attach)
+          return
+        }
 
         // Taken BEFORE the assign. A hook with no `mounted` of its own leaves this placeholder's
         // in place, and calling it again would re-enter the handover — an endless microtask loop
@@ -127,10 +139,17 @@ function placeholder(name) {
         const start = real.mounted
         Object.assign(this, real)
         start?.call(this)
-        // Whatever LiveView called in the meantime, in the order it happened.
-        for (const cb of this.__queued) this[cb]?.()
+
+        // Cleared BEFORE the replay, and iterated from a snapshot. A queued callback the real hook
+        // does not define still resolves to the placeholder's own method, which pushes the name
+        // back onto the queue — replaying from the live array meant `for...of` picking up what it
+        // had just appended, forever, freezing the tab (#578 review, P0).
+        const queued = this.__queued || []
         this.__queued = null
-      })
+        for (const cb of queued) this[cb]?.()
+      }
+
+      whenLoaded().then(attach)
     },
     // Each of these survives the handover only when the real hook does NOT define it — then the
     // queue is already null and the push is a no-op.
@@ -177,16 +196,24 @@ export function deferredHooks() {
 export function armDeferredHooks(map) {
   const fetchNow = () =>
     loadAll().then((registry) => {
+      // Failed: the listeners are spent (`once`), so without re-arming a single dropped request
+      // would leave every interactive hook absent for the life of the page — a flaky moment on a
+      // cross-border link turning into a chat with no menus (#578 review). Re-armed rather than
+      // retried on a timer: the retry rides the next thing the person does.
+      if (!registry) return arm()
       Object.assign(map, registry)
     })
 
-  requestAnimationFrame(() => setTimeout(fetchNow, 0))
-
-  for (const type of ["pointerdown", "touchstart", "keydown", "focusin"]) {
-    window.addEventListener(type, fetchNow, {
-      capture: true,
-      once: true,
-      passive: true,
-    })
+  const arm = () => {
+    for (const type of ["pointerdown", "touchstart", "keydown", "focusin"]) {
+      window.addEventListener(type, fetchNow, {
+        capture: true,
+        once: true,
+        passive: true,
+      })
+    }
   }
+
+  requestAnimationFrame(() => setTimeout(fetchNow, 0))
+  arm()
 }
