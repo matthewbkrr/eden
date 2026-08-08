@@ -4343,19 +4343,18 @@ defmodule Eden.Chat do
   # The badge invariant is untouched: this is delivery, not counting. Rail and folder badges
   # still respect mute exactly as documented.
   defp mention_recipient_ids(message) do
-    Repo.all(
-      from(mn in MessageMention,
-        join: m in Membership,
-        on: m.conversation_id == ^message.conversation_id and m.user_id == mn.user_id,
-        join: u in User,
-        on: u.id == mn.user_id,
-        where:
-          mn.message_id == ^message.id and mn.user_id != ^message.sender_id and
-            is_nil(m.left_at) and u.presence_status != "dnd" and u.active == true and
-            is_nil(u.deleted_at),
-        select: mn.user_id
-      )
+    from(mn in MessageMention,
+      join: m in Membership,
+      as: :membership,
+      on: m.conversation_id == ^message.conversation_id and m.user_id == mn.user_id,
+      join: u in User,
+      as: :user,
+      on: u.id == mn.user_id,
+      where: mn.message_id == ^message.id,
+      select: mn.user_id
     )
+    |> delivery_gates(message, mute: false)
+    |> Repo.all()
   end
 
   # Notify-once per file group: true when an EARLIER row of the same group already exists,
@@ -4421,12 +4420,25 @@ defmodule Eden.Chat do
   # (`delete_user_permanently/2`), so `u.active == true` also excludes anonymized rows —
   # recipient gating is the one place ADR-0001 filters delivery, so every future push
   # transport inherits the deactivation for free (#363/R150).
-  defp common_gates(query, message) do
-    from([membership: m, user: u] in query,
-      where:
-        m.user_id != ^message.sender_id and is_nil(m.left_at) and
-          is_nil(m.muted_at) and u.presence_status != "dnd" and u.active == true
-    )
+  defp common_gates(query, message), do: delivery_gates(query, message, mute: true)
+
+  # The rules every delivery passes, in ONE place (#577 review): the sender never hears their own
+  # message, someone who left is gone, DND means silence, a deactivated (or anonymized, #303)
+  # account hears nothing. `mute:` is the only knob — a mention passes it (#576), because being
+  # called by name is the point of `@`; everything else stands.
+  defp delivery_gates(query, message, opts) do
+    query =
+      from([membership: m, user: u] in query,
+        where:
+          m.user_id != ^message.sender_id and is_nil(m.left_at) and
+            u.presence_status != "dnd" and u.active == true
+      )
+
+    if Keyword.get(opts, :mute, true) do
+      from([membership: m] in query, where: is_nil(m.muted_at))
+    else
+      query
+    end
   end
 
   # #271: for a room message, drop anyone who muted the CHANNEL — that's Channels data,

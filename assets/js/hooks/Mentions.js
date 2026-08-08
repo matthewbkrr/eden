@@ -14,6 +14,7 @@ export default {
     this.active = 0
     this.input = null
     this.start = -1
+    this.pending = null
 
     this.onInput = (e) => {
       const el = e.target
@@ -22,6 +23,10 @@ export default {
       const q = this.query(el)
       if (q === null) return this.close()
       this.start = el.value.lastIndexOf("@", el.selectionStart - 1)
+      // What this answer will be an answer TO. A reply that arrives after the caret moved on —
+      // or after Escape — is stale, and inserting from it on Enter would name the wrong person
+      // (#577 review).
+      this.pending = q
       this.pushEvent("mention_search", { q })
     }
 
@@ -60,6 +65,9 @@ export default {
     document.addEventListener("click", this.onDoc, true)
 
     this.handleEvent("mention_candidates", ({ items }) => {
+      // Still the question that was asked? `pending` is cleared by close(), so an answer landing
+      // after Escape is dropped rather than reopening the list.
+      if (this.pending === null || this.pending !== this.query(this.input)) return
       this.items = items || []
       this.active = 0
       this.items.length ? this.paint() : this.close()
@@ -79,23 +87,33 @@ export default {
   // The word being typed after an `@`, or null when the caret is not in one. The `@` has to start
   // a word — `me@host` is an address, the same rule the server parses bodies with.
   query(el) {
+    if (!el) return null
     const upto = el.value.slice(0, el.selectionStart)
     const m = /(?:^|[^\p{L}\p{N}_])@([a-zA-Z0-9_.-]*)$/u.exec(upto)
     return m ? m[1] : null
   },
 
   paint() {
-    this.el.innerHTML = this.items
-      .map(
-        (it, i) =>
-          `<button type="button" class="ed-mention-pop__row${i === this.active ? " is-active" : ""}" role="option" data-handle="${it.handle}">` +
-          `<span class="ed-mention-pop__name"></span><span class="ed-mention-pop__handle"></span></button>`,
-      )
-      .join("")
-    // Text through the DOM, never through the markup above: a display name is user input.
-    this.el.querySelectorAll("[data-handle]").forEach((row, i) => {
-      row.querySelector(".ed-mention-pop__name").textContent = this.items[i].name || ""
-      row.querySelector(".ed-mention-pop__handle").textContent = "@" + this.items[i].handle
+    // Built as NODES, never as a markup string: BOTH fields here are user input. The display
+    // name obviously so; the handle is constrained to `[a-z0-9_]` today, but a hole that depends
+    // on a validation rule somewhere else is a hole that opens the day that rule is relaxed
+    // (#577 review, P0). `setAttribute`/`textContent` cannot break out of anything.
+    this.el.replaceChildren()
+    this.items.forEach((it, i) => {
+      const row = document.createElement("button")
+      row.type = "button"
+      row.className = "ed-mention-pop__row" + (i === this.active ? " is-active" : "")
+      row.setAttribute("role", "option")
+      row.setAttribute("aria-selected", String(i === this.active))
+      row.dataset.handle = it.handle
+      const name = document.createElement("span")
+      name.className = "ed-mention-pop__name"
+      name.textContent = it.name || ""
+      const handle = document.createElement("span")
+      handle.className = "ed-mention-pop__handle"
+      handle.textContent = "@" + it.handle
+      row.append(name, handle)
+      this.el.append(row)
     })
     this.el.hidden = false
     this.place()
@@ -132,5 +150,6 @@ export default {
     this.el.hidden = true
     this.items = []
     this.start = -1
+    this.pending = null
   },
 }
