@@ -1026,10 +1026,6 @@ defmodule EdenWeb.ChatLive do
   # Open a profile popover. Your own card opens too (no Message button — an
   # "Edit profile" link instead); others are authorized by a shared conversation
   # in the context. The members modal (if open) stays open underneath.
-  # A mention chip carries the handle, not an id (#576): the body is rendered from stored rows,
-  # and putting an id in the markup would mean re-rendering every message that names someone
-  # whenever that person changes. The handle resolves through the same authorization as any other
-  # profile view — `get_shared_user/2` refuses anyone the viewer shares no conversation with.
   # Who the composer may name (#576): members of the OPEN conversation whose handle or display
   # name starts with what has been typed. Scoped by the conversation, so the list itself is the
   # authorization — the client never learns of anyone the sender cannot already see.
@@ -1049,13 +1045,6 @@ defmodule EdenWeb.ChatLive do
   end
 
   def handle_event("mention_search", _params, socket), do: {:noreply, socket}
-
-  def handle_event("show_profile_by_handle", %{"handle" => handle}, socket) do
-    case Accounts.get_user_by_username(handle) do
-      %{id: id} -> handle_event("show_profile", %{"id" => to_string(id)}, socket)
-      _ -> {:noreply, socket}
-    end
-  end
 
   def handle_event("show_profile", %{"id" => id}, socket) do
     scope = socket.assigns.current_scope

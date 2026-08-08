@@ -74,7 +74,8 @@ defmodule EdenWeb.MarkupTest do
   end
 
   describe "mentions (#576)" do
-    defp mention(handle, username), do: %{handle: handle, user: %{username: username}}
+    defp mention(handle, username, id \\ 7),
+      do: %{handle: handle, user: %{id: id, username: username}}
 
     defp render(text, mentions \\ []) do
       {:safe, io} = Markup.to_iodata(text, mentions)
@@ -85,6 +86,10 @@ defmodule EdenWeb.MarkupTest do
       html = render("@bob ping", [mention("bob", "robert")])
 
       assert html =~ ~s(class="ed-mention")
+
+      assert html =~ ~s(phx-value-id="7"),
+             "the chip opens a profile by id, not by a renameable name"
+
       assert html =~ "@robert", "the chip carries the current handle, not the one typed"
       refute html =~ "@bob ", "the typed handle must not survive as text next to the chip"
     end
@@ -98,6 +103,13 @@ defmodule EdenWeb.MarkupTest do
 
       assert html =~ "<code>@bob</code>", "code spans are literal"
       assert html =~ ~s(class="ed-mention"), "the one outside the code span is still a chip"
+    end
+
+    test "@all is a label, not a control" do
+      html = render("@all standup", [%{handle: "all", user: %{id: 1, username: "someone"}}])
+
+      assert html =~ "@all", "the room's own handle, not a member's name"
+      refute html =~ "<button", "there is no single person to open"
     end
 
     test "the chip escapes what it renders" do

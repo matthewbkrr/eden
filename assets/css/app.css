@@ -2598,6 +2598,12 @@ html {
     outline: 2px solid var(--ed-ring);
     outline-offset: 1px;
   }
+  /* `@all` names the room, so it is a label rather than a control: the colour still says
+     "mention", but nothing invites a tap that would open nobody. */
+  .ed-mention--all {
+    cursor: default;
+  }
+
   /* In your own bubble the body is white on cobalt, so the chip cannot be cobalt too. */
   .ed-bubble--me .ed-mention {
     color: var(--ed-on-primary);

@@ -90,7 +90,9 @@ export default {
   query(el) {
     if (!el) return null
     const upto = el.value.slice(0, el.selectionStart)
-    const m = /(?:^|[^\p{L}\p{N}_])@([a-zA-Z0-9_.-]*)$/u.exec(upto)
+    // The same character class the server parses bodies with: a handle is `[a-zA-Z0-9_]`, so a
+    // full stop ends it rather than joining it (#577 review).
+    const m = /(?:^|[^\p{L}\p{N}_])@([a-zA-Z0-9_]*)$/u.exec(upto)
     return m ? m[1] : null
   },
 

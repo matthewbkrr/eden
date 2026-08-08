@@ -2298,7 +2298,40 @@ defmodule Eden.Chat do
   # Members only: an `@tag` for someone who is not in the conversation stays plain text, so a
   # message cannot name — or notify — an outsider.
   defp resolve_mentions(%Message{body: body} = message) when is_binary(body) do
-    rows = mention_rows_for(message, mention_handles(body))
+    insert_mentions(message, mention_rows_for(message, mention_handles(body)))
+    :ok
+  end
+
+  defp resolve_mentions(_), do: :ok
+
+  # An edit re-decides only what the edit changed (#577 review).
+  #
+  # Re-resolving everything from scratch looks equivalent and is not: `username` is renameable, so
+  # a mention written as `@bob` for a person who has since become `@robert` would find nobody and
+  # be DELETED by an edit that never touched it — and if someone else has taken `@bob` in the
+  # meantime, it would silently start naming THEM. A row that is still literally in the body keeps
+  # the person it always named; only handles that are new to the body get resolved.
+  defp reresolve_mentions(%Message{body: body} = message) when is_binary(body) do
+    handles = mention_handles(body)
+    kept = Repo.all(from(mn in MessageMention, where: mn.message_id == ^message.id))
+
+    {survivors, gone} = Enum.split_with(kept, &(String.downcase(&1.handle) in handles))
+
+    if gone != [] do
+      Repo.delete_all(from(mn in MessageMention, where: mn.id in ^Enum.map(gone, & &1.id)))
+    end
+
+    known = survivors |> Enum.map(&String.downcase(&1.handle)) |> MapSet.new()
+    fresh = Enum.reject(handles, &MapSet.member?(known, &1))
+
+    insert_mentions(message, mention_rows_for(message, fresh))
+  end
+
+  defp reresolve_mentions(_), do: :ok
+
+  defp insert_mentions(_message, []), do: :ok
+
+  defp insert_mentions(message, rows) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     entries =
@@ -2306,11 +2339,9 @@ defmodule Eden.Chat do
         %{message_id: message.id, user_id: id, handle: handle, inserted_at: now, updated_at: now}
       end)
 
-    if entries != [], do: Repo.insert_all(MessageMention, entries, on_conflict: :nothing)
+    Repo.insert_all(MessageMention, entries, on_conflict: :nothing)
     :ok
   end
-
-  defp resolve_mentions(_), do: :ok
 
   defp mention_rows_for(_message, []), do: []
 
@@ -2336,7 +2367,7 @@ defmodule Eden.Chat do
   # ends the handle rather than becoming part of it. Downcased: handles are stored downcased and
   # a person typing `@Matvey` means the same person.
   defp mention_handles(body) do
-    ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_.-]{2,})/u
+    ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})/u
     |> Regex.scan(body)
     |> Enum.map(fn [_, handle] -> String.downcase(handle) end)
     |> Enum.uniq()
@@ -2891,10 +2922,8 @@ defmodule Eden.Chat do
     |> case do
       {:ok, edited} ->
         # The body changed, so the set of people it names may have too (#576): a mention added by
-        # an edit becomes real, one edited away stops existing. Re-resolved from scratch rather
-        # than diffed — the body is the truth, and this runs once per edit.
-        Repo.delete_all(from(mn in MessageMention, where: mn.message_id == ^edited.id))
-        resolve_mentions(edited)
+        # an edit becomes real, one edited away stops existing.
+        reresolve_mentions(edited)
         edited = Repo.preload(edited, @message_preloads, force: true)
         broadcast(message.conversation_id, {:message_edited, edited})
         {:ok, edited}

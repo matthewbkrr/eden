@@ -47,12 +47,13 @@ defmodule EdenWeb.Markup do
   # handle-as-typed => the person's CURRENT handle. Only what the server resolved at send time
   # (#576): a bare `@word` that named nobody, or someone outside the conversation, stays text.
   defp named_handles(mentions) when is_list(mentions) do
-    for %{handle: handle, user: %{username: username}} <- mentions, into: %{} do
+    for %{handle: handle, user: %{id: id, username: username}} <- mentions, into: %{} do
       down = String.downcase(handle)
       # `@all` is stored as one row per person (that is how delivery works), but it names the
-      # ROOM, not any of them — so it keeps its own label instead of picking up whichever member
-      # happened to be last (#576).
-      {down, if(down == "all", do: "all", else: username)}
+      # ROOM, not any of them — so it keeps its own label and opens nobody's profile (#576).
+      if down == "all",
+        do: {down, {"all", nil}},
+        else: {down, {username, id}}
     end
   end
 
@@ -91,17 +92,23 @@ defmodule EdenWeb.Markup do
   # else is text.
   defp mention_part(part, named) do
     with [^part, handle] <- Regex.run(@mention, part) || [],
-         {:ok, username} <- Map.fetch(named, String.downcase(handle)) do
-      chip(username)
+         {:ok, {label, id}} <- Map.fetch(named, String.downcase(handle)) do
+      chip(label, id)
     else
       _ -> escape(part)
     end
   end
 
-  defp chip(username) do
+  # The chip opens a profile by the person's ID, not by the name printed on it (#577 review): the
+  # handle is renameable, so a click resolved by name could land on whoever holds that name at the
+  # moment of the click. `@all` names the room rather than a person, so it is a label, not a
+  # control — nothing to open.
+  defp chip("all", nil), do: [~s(<span class="ed-mention ed-mention--all">@all</span>)]
+
+  defp chip(username, id) do
     [
-      ~s(<button type="button" class="ed-mention" phx-click="show_profile_by_handle" phx-value-handle="),
-      escape(username),
+      ~s(<button type="button" class="ed-mention" phx-click="show_profile" phx-value-id="),
+      Integer.to_string(id),
       ~s(">@),
       escape(username),
       "</button>"

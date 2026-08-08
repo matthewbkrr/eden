@@ -210,4 +210,63 @@ defmodule Eden.ChatMentionsTest do
              "a non-member must not be able to enumerate a conversation through its @ list"
     end
   end
+
+  describe "editing after a rename" do
+    test "an untouched mention keeps the person it named, even when the handle is gone" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      conv = dm(alice, bob)
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bob ping"})
+      {:ok, _} = Accounts.update_username(bob, %{"username" => "robert"})
+
+      # The body still literally says "@bob" — that is what was typed. Re-resolving from scratch
+      # would find nobody under that handle and quietly delete the mention.
+      {:ok, edited} = Chat.edit_message(scope(alice), message.id, "@bob ping!")
+
+      assert mentions_of(edited) == ["robert"],
+             "an edit that never touched the mention must not un-name the person"
+    end
+
+    test "the old handle taken by someone else does not steal a historical mention" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bob ping"})
+      {:ok, _} = Accounts.update_username(bob, %{"username" => "robert"})
+      {:ok, _} = Accounts.update_username(carol, %{"username" => "bob"})
+
+      {:ok, edited} = Chat.edit_message(scope(alice), message.id, "@bob ping!")
+
+      assert mentions_of(edited) == ["robert"],
+             "the mention names a person, and no rename by anyone can hand it to someone else"
+    end
+
+    test "a handle added by an edit still resolves" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      carol = user_fixture(%{username: "carol"})
+      {:ok, conv} = Chat.create_conversation(scope(alice), [bob.id, carol.id])
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "@bob ping"})
+      {:ok, edited} = Chat.edit_message(scope(alice), message.id, "@bob @carol ping")
+
+      assert mentions_of(edited) == ["bob", "carol"]
+    end
+  end
+
+  describe "handle boundaries" do
+    test "a full stop ends the handle" do
+      alice = user_fixture(%{username: "alice"})
+      bob = user_fixture(%{username: "bob"})
+      conv = dm(alice, bob)
+
+      {:ok, message} = Chat.create_message(scope(alice), conv.id, %{"body" => "спроси у @bob."})
+
+      assert mentions_of(message) == ["bob"],
+             "a handle at the end of a sentence is still a handle — the punctuation is not part of it"
+    end
+  end
 end
