@@ -8054,6 +8054,17 @@ defmodule EdenWeb.ChatLive do
               // take the extra frames.
               const m = this.menu
               if (!m.hidden && !m.classList.contains("ed-menu--closing")) {
+                // Focus leaves before the menu is marked hidden from assistive tech (#572 review):
+                // activating an item with the keyboard leaves focus INSIDE the menu, and
+                // `aria-hidden` over the focused element is exactly the state the attribute must
+                // never be in. Back to whatever opened it, or the host row.
+                if (m.contains(document.activeElement)) {
+                  // Back to whatever opened it — and if that was not a focusable thing (a menu
+                  // opened by right-click has no trigger to return to), simply out: calling
+                  // focus() on a plain <div> does nothing, and focus would have stayed put.
+                  if (this.opener && this.opener.isConnected) this.opener.focus()
+                  else document.activeElement.blur()
+                }
                 m.classList.add("ed-menu--closing")
                 m.setAttribute("aria-hidden", "true")
                 clearTimeout(m.__closeTimer)

@@ -2051,7 +2051,7 @@ html {
   }
   .ed-lightbox--out,
   .ed-lightbox--out::backdrop {
-    animation: ed-lb-out var(--ed-dur-quick) var(--ed-ease-out) forwards;
+    animation: ed-lb-out var(--ed-dur-quick) var(--ed-ease-in) forwards;
   }
   @keyframes ed-lb-in {
     from {
@@ -3029,7 +3029,7 @@ html {
     }
     .ed-thread--out {
       transform: translateX(100%);
-      transition: transform var(--ed-dur-screen) var(--ed-ease-out);
+      transition: transform var(--ed-dur-screen) var(--ed-ease-in);
     }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -3563,6 +3563,8 @@ html {
     pointer-events: none;
   }
   .ed-page-skel--out {
+    /* Leaving accelerates (#517). */
+    transition-timing-function: var(--ed-ease-in);
     opacity: 0;
   }
   .ed-page-skel__shell {
@@ -3599,6 +3601,8 @@ html {
     pointer-events: none; /* rows are a still frame — taps land after the handoff */
   }
   .ed-aside-skel--out {
+    /* Leaving accelerates (#517). */
+    transition-timing-function: var(--ed-ease-in);
     opacity: 0;
   }
   /* The thread panel's placeholder sits above the pane but below the chat nav overlay, like the
@@ -3665,6 +3669,8 @@ html {
   /* Once the real stream has landed the overlay only fades — let taps fall through to the
      now-interactive chat underneath instead of being swallowed during the ~180ms fade. */
   .ed-nav-skel--out {
+    /* Leaving accelerates (#517). */
+    transition-timing-function: var(--ed-ease-in);
     opacity: 0;
     pointer-events: none;
   }
@@ -3881,9 +3887,11 @@ html {
       z-index: 15; /* over the list; under the thread sheet (20) and nav overlay (40) */
       padding-top: env(safe-area-inset-top);
       padding-bottom: env(safe-area-inset-bottom);
-      transition: transform var(--ed-dur-screen) var(--ed-ease-out);
+      transition: transform var(--ed-dur-screen) var(--ed-ease-in);
     }
     .ed-main-pop--out {
+      /* Leaving accelerates (#517). */
+      transition-timing-function: var(--ed-ease-in);
       transform: translateX(100%);
     }
     /* Finger-tracked drag (edge swipe-back): the transform follows the touch directly,
@@ -4712,7 +4720,9 @@ html {
     height: 1rem !important;
   }
   .ed-tile--out {
-    transition: opacity var(--ed-dur-quick) ease-out, transform var(--ed-dur-quick) ease-out;
+    transition:
+      opacity var(--ed-dur-quick) var(--ed-ease-in),
+      transform var(--ed-dur-quick) var(--ed-ease-in);
     opacity: 0;
     transform: scale(0.86);
   }

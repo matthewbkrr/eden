@@ -307,3 +307,42 @@ test("a menu leaving under reduced motion does not fade", async ({ alice, seed }
     `the menu faded out under reduced motion: ${frames}`,
   ).toBe(0)
 })
+
+// `aria-hidden` over the element that holds focus is the one state the attribute must never be in,
+// and a keyboard user activating an item leaves focus inside the menu (#572 review).
+test("focus leaves the menu before it is hidden from assistive tech", async ({ alice, seed }) => {
+  test.setTimeout(120_000)
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  await alice.waitForTimeout(400)
+
+  const state = await alice.evaluate(async () => {
+    const rows = document.querySelectorAll("#messages .ed-bubble[data-message-id]")
+    const host = rows[rows.length - 1]
+    host.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 300 }),
+    )
+    await new Promise((r) => setTimeout(r, 300))
+    const m = document.getElementById("message-menu")
+    const focusedInside = m.contains(document.activeElement)
+    document.body.click()
+    await new Promise((r) => requestAnimationFrame(r))
+    return {
+      focusedInsideWhileOpen: focusedInside,
+      aria: m.getAttribute("aria-hidden"),
+      focusStillInside: m.contains(document.activeElement),
+      active: document.activeElement?.className?.slice?.(0, 40) || document.activeElement?.tagName,
+    }
+  })
+  console.log("MENU FOCUS", JSON.stringify(state))
+
+  expect(
+    state.focusedInsideWhileOpen,
+    "the open menu never held focus, so its release proves nothing",
+  ).toBe(true)
+  expect(state.aria, "the leaving menu is not marked hidden at all").toBe("true")
+  expect(state.focusStillInside, `aria-hidden was set over the focused element (${state.active})`).toBe(
+    false,
+  )
+})

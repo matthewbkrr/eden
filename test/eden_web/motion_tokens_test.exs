@@ -47,6 +47,24 @@ defmodule EdenWeb.MotionTokensTest do
            """
   end
 
+  test "what leaves accelerates: no exit state names the entrance curve" do
+    css = File.read!(@css) |> String.replace(~r{/\*.*?\*/}s, "")
+
+    # A rule whose selector says the element is on its way out, up to its closing brace.
+    offenders =
+      Regex.scan(~r/([^{}]*(?:--out|--closing|--dismissing)[^{}]*)\{([^}]*)\}/, css)
+      |> Enum.filter(fn [_, _sel, body] -> String.contains?(body, "--ed-ease-out") end)
+      |> Enum.map(fn [_, sel, _] -> String.trim(sel) end)
+
+    assert offenders == [],
+           """
+           exit states easing like an entrance: #{inspect(offenders)}
+
+           Leaving accelerates — use var(--ed-ease-in). The old `--ed-ease` name is what put an
+           entrance curve on exits in the first place (#517).
+           """
+  end
+
   test "the token system itself is three durations and three curves" do
     css = File.read!(@css)
 
