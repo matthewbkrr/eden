@@ -41,6 +41,9 @@ defmodule Eden.Chat.Message do
     # Emoji reactions (#67); raw rows, aggregated to chips (emoji → count + mine)
     # in the web layer so each viewer computes "mine" from their own id.
     has_many :reactions, Eden.Chat.MessageReaction
+    # Who this message names with an `@` (#576). Rows, not text: `username` is renameable, so
+    # the person is the id and the chip is labelled from their CURRENT handle.
+    has_many :mentions, Eden.Chat.MessageMention
 
     # Telegram-style file grouping: the file messages of one send share a
     # server-minted `group_id` (TG-attachments epic). Set ONLY on the struct by the

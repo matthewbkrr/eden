@@ -24,6 +24,7 @@ import LastSeen from "./LastSeen"
 import Lightbox from "./Lightbox"
 import LocalTime from "./LocalTime"
 import LocalTimes from "./LocalTimes"
+import Mentions from "./Mentions"
 import NewConvGate from "./NewConvGate"
 import NotifyPerm from "./NotifyPerm"
 import PasteUpload from "./PasteUpload"
@@ -66,6 +67,7 @@ export const edenHooks = {
   Lightbox,
   LocalTime,
   LocalTimes,
+  Mentions,
   NewConvGate,
   NotifyPerm,
   PasteUpload,

@@ -23,6 +23,7 @@ defmodule Eden.Chat do
     Membership,
     Message,
     MessageDeletion,
+    MessageMention,
     MessageReaction,
     SystemMessage,
     ThreadMembership,
@@ -43,9 +44,14 @@ defmodule Eden.Chat do
   @jump_window 300
   # Associations preloaded with every main-stream message (shared by list_messages/3 and
   # list_messages_around/3 so a window load renders identically to a page load).
+  # The one handle that is not a person: `@all` names everyone in the conversation (#576).
+  @everyone "all"
+
   @message_preloads [
     :sender,
     :attachments,
+    # The mentioned person comes with the row so the chip can carry their CURRENT handle (#576).
+    mentions: :user,
     reactions: :user,
     reply_to: [:sender, :attachments],
     forwarded_from: :sender
@@ -2211,12 +2217,237 @@ defmodule Eden.Chat do
       |> Message.changeset(attrs)
       |> Repo.insert()
       |> case do
-        {:ok, message} -> {:ok, deliver(conversation_id, message)}
-        {:error, changeset} -> resolve_insert_error(changeset, user.id)
+        {:ok, message} ->
+          # Deliberately after the insert and outside a transaction (#577 review): the message is
+          # the person's own words and must land, while mentions are an index derived from it. A
+          # transaction would trade "a ping was lost" for "the message was lost", which is the
+          # worse failure in a messenger. Nothing observes the gap either — the broadcast that
+          # tells anyone about this message happens in `deliver/2`, after resolution.
+          resolve_mentions(message)
+          {:ok, deliver(conversation_id, message)}
+
+        {:error, changeset} ->
+          resolve_insert_error(changeset, user.id)
       end
     else
       {:error, :not_found}
     end
+  end
+
+  @doc """
+  Members of `conversation_id` whose handle or name starts with `prefix` — the autocomplete
+  source for `@` (#576).
+
+  Scoped: a non-member gets nothing, so the list cannot be used to enumerate people the caller
+  cannot already see. Anonymized accounts (#303) and the caller themselves are left out — naming
+  yourself does nothing, and a deleted account has no name to call.
+  """
+  def mention_candidates(%Scope{user: user}, %Conversation{} = conv, prefix) do
+    prefix = prefix |> to_string() |> String.trim() |> String.downcase()
+    conversation_id = conv.id
+
+    if has_access?(%Scope{user: user}, conversation_id) do
+      like = escape_like(prefix) <> "%"
+
+      everyone(conv, prefix) ++
+        Repo.all(
+          from(m in Membership,
+            join: u in User,
+            on: u.id == m.user_id,
+            where:
+              m.conversation_id == ^conversation_id and is_nil(m.left_at) and
+                u.id != ^user.id and is_nil(u.deleted_at) and u.active == true and
+                (ilike(u.username, ^like) or ilike(u.display_name, ^like)),
+            order_by: [asc: u.username],
+            limit: 8,
+            select: %{
+              handle: u.username,
+              name: u.display_name,
+              id: u.id,
+              avatar_key: u.avatar_key
+            }
+          )
+        )
+    else
+      []
+    end
+  end
+
+  @doc "The handle that names everyone in a conversation (#576)."
+  def everyone_handle, do: @everyone
+
+  # `@all` heads the list where it makes sense: a 1:1 has nobody to gather, so offering it there
+  # would be a control that does nothing. Matched by prefix like any other handle, so typing
+  # `@al` still finds it and `@bo` does not.
+  #
+  # Decided from the conversation itself rather than by counting members: "is there a room here"
+  # is exactly what `is_group`/`channel_id` say, and this runs on the keystroke path where an
+  # extra aggregate is a round trip nobody asked for (#577 review).
+  defp everyone(%Conversation{} = conv, prefix) do
+    if String.starts_with?(@everyone, prefix) and gathers_everyone?(conv) do
+      [%{handle: @everyone, name: nil, everyone: true}]
+    else
+      []
+    end
+  end
+
+  # Is there a room to gather? One rule, asked by the picker (which offers `@all`) and by the
+  # resolver (which honours a hand-typed one), so the two cannot drift apart.
+  defp gathers_everyone?(%Conversation{} = conv), do: conv.is_group or conv.channel_id != nil
+
+  defp gathers_everyone?(conversation_id) when is_integer(conversation_id) do
+    Repo.exists?(
+      from(c in Conversation,
+        where: c.id == ^conversation_id and (c.is_group == true or not is_nil(c.channel_id))
+      )
+    )
+  end
+
+  # Every `@handle` in the body that names a MEMBER of this conversation, stored as rows (#576).
+  #
+  # Resolved once, here, rather than at render: `username` is the public `@tag` and is renameable
+  # (#173), so text kept as text would follow the handle instead of the person — after a rename it
+  # would point at whoever took the name, or at nobody. The row keeps the person; the handle is
+  # kept beside it only so the renderer knows which span of the body to turn into a chip.
+  #
+  # Members only: an `@tag` for someone who is not in the conversation stays plain text, so a
+  # message cannot name — or notify — an outsider.
+  defp resolve_mentions(%Message{body: body} = message) when is_binary(body) do
+    insert_mentions(message, mention_rows_for(message, mention_handles(body)))
+    :ok
+  end
+
+  defp resolve_mentions(_), do: :ok
+
+  # An edit re-decides only what the edit changed (#577 review).
+  #
+  # Re-resolving everything from scratch looks equivalent and is not: `username` is renameable, so
+  # a mention written as `@bob` for a person who has since become `@robert` would find nobody and
+  # be DELETED by an edit that never touched it — and if someone else has taken `@bob` in the
+  # meantime, it would silently start naming THEM. A row that is still literally in the body keeps
+  # the person it always named; only handles that are new to the body get resolved.
+  defp reresolve_mentions(%Message{body: body} = message) when is_binary(body) do
+    handles = mention_handles(body)
+    kept = Repo.all(from(mn in MessageMention, where: mn.message_id == ^message.id))
+
+    {survivors, gone} = Enum.split_with(kept, &(String.downcase(&1.handle) in handles))
+
+    if gone != [] do
+      Repo.delete_all(from(mn in MessageMention, where: mn.id in ^Enum.map(gone, & &1.id)))
+    end
+
+    known = survivors |> Enum.map(&String.downcase(&1.handle)) |> MapSet.new()
+    fresh = Enum.reject(handles, &MapSet.member?(known, &1))
+    rows = mention_rows_for(message, fresh)
+    insert_mentions(message, rows)
+
+    # A new ROW is not the same as a newly named PERSON: a message that said `@all` and is edited
+    # to add `@bob` gives Bob a second row, but he was rung by the `@all` on send. Only people who
+    # held no row at all before this edit are new (#577 review).
+    already = MapSet.new(kept, & &1.user_id)
+    rows = Enum.reject(rows, fn {id, _handle} -> MapSet.member?(already, id) end)
+
+    # Someone named by an EDIT has to hear it (#577 review). Without this a person added to a
+    # message after the fact is named on screen and told nothing — the one case where the chip
+    # and the ping disagree. Only the newly added rows ring; the people who were already named
+    # were already told, and an edit is not a reason to ring them again.
+    notify_edit_mentions(message, rows)
+  end
+
+  defp reresolve_mentions(_), do: :ok
+
+  defp notify_edit_mentions(_message, []), do: :ok
+
+  defp notify_edit_mentions(message, rows) do
+    added = rows |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    message = Repo.preload(message, :sender)
+    conv = Repo.get(Conversation, message.conversation_id)
+
+    # The same gates the send path applies to a mention: everyone except the author, the departed,
+    # do-not-disturb and deactivated accounts — mute stays pierced, that is what a mention is.
+    recipients = message |> mention_recipient_ids() |> Enum.filter(&(&1 in added))
+
+    if recipients != [] do
+      Notifications.deliver(recipients, %{notify_payload(message, conv) | kind: "mention"})
+    end
+
+    :ok
+  end
+
+  defp insert_mentions(_message, []), do: :ok
+
+  defp insert_mentions(message, rows) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    entries =
+      Enum.map(rows, fn {id, handle} ->
+        %{message_id: message.id, user_id: id, handle: handle, inserted_at: now, updated_at: now}
+      end)
+
+    Repo.insert_all(MessageMention, entries, on_conflict: :nothing)
+    :ok
+  end
+
+  defp mention_rows_for(_message, []), do: []
+
+  # `@all` names everyone at once. The rows stay per-person, so delivery — and any future
+  # "mentions of me" — needs no special case beyond this one.
+  defp mention_rows_for(message, handles) do
+    query =
+      from(m in Membership,
+        join: u in User,
+        on: u.id == m.user_id,
+        where: m.conversation_id == ^message.conversation_id and is_nil(m.left_at),
+        # The same people the picker offers (#577 review): a deactivated account is not on that
+        # list, so typing their handle by hand must not mint a row either — that would chip a
+        # name and ring an account that can no longer read it.
+        where: is_nil(u.deleted_at) and u.active == true
+      )
+
+    named =
+      Repo.all(from([m, u] in query, where: u.username in ^handles, select: {u.id, u.username}))
+
+    # `@all` is additive, not exclusive: "@all and especially @bob" names the room AND Bob, and
+    # each keeps its own row so both spans render as chips. Returning only the everyone-rows left
+    # the personal handle unresolved and therefore unchipped (#577 review).
+    #
+    # Only where there IS a room to gather: the picker does not offer `@all` in a 1:1 (there is
+    # nobody to call that the message is not already addressed to), so typing it there by hand
+    # must not become a mention either — it would pierce the other person's mute (#577 review).
+    if @everyone in handles and gathers_everyone?(message.conversation_id) do
+      Repo.all(from([m, u] in query, select: {u.id, ^@everyone})) ++ named
+    else
+      named
+    end
+  end
+
+  # `@handle` — the same character set a username may have, so a trailing comma or a full stop
+  # ends the handle rather than becoming part of it. Downcased: handles are stored downcased and
+  # a person typing `@Matvey` means the same person.
+  #
+  # A handle is a WHOLE word on both sides. Usernames are ASCII, the app's language is not: without
+  # the closing boundary `@bobи` would resolve its ASCII prefix and ring Bob, while the renderer
+  # chipped `@bob` and left the rest dangling (#577 review).
+  defp mention_handles(body) do
+    ~r/(?<![\p{L}\p{N}_])@([a-zA-Z0-9_]{2,})(?![\p{L}\p{N}_])/u
+    |> Regex.scan(literal_spans_blanked(body))
+    |> Enum.map(fn [_, handle] -> String.downcase(handle) end)
+    |> Enum.uniq()
+  end
+
+  # The renderer leaves a code span literal and turns a URL into a single link, so a handle inside
+  # either is never drawn as a chip — resolving one here would ring somebody for a call they can
+  # never see on screen (#577 review). Blanked rather than cut out, so every other handle in the
+  # body keeps the word boundaries it was written with.
+  #
+  # The two patterns mirror `EdenWeb.Markup`; the context cannot call the web layer, and the pair
+  # has to be changed together, which is what this comment is for.
+  defp literal_spans_blanked(body) do
+    blank = fn match -> String.duplicate(" ", String.length(match)) end
+
+    body
+    |> String.replace(~r/`[^`]+`/u, blank)
+    |> String.replace(~r/https?:\/\/[^\s<]+/u, blank)
   end
 
   # A quote-reply target (#71): keep `raw` only if it references a message that is
@@ -2767,7 +2998,10 @@ defmodule Eden.Chat do
     |> Repo.update(stale_error_field: :id)
     |> case do
       {:ok, edited} ->
-        edited = Repo.preload(edited, @message_preloads)
+        # The body changed, so the set of people it names may have too (#576): a mention added by
+        # an edit becomes real, one edited away stops existing.
+        reresolve_mentions(edited)
+        edited = Repo.preload(edited, @message_preloads, force: true)
         broadcast(message.conversation_id, {:message_edited, edited})
         {:ok, edited}
 
@@ -4220,12 +4454,44 @@ defmodule Eden.Chat do
       :ok
     else
       conv = Repo.get(Conversation, message.conversation_id)
+      mentioned = mention_recipient_ids(message)
+      others = notify_recipient_ids(message, conv) -- mentioned
 
-      case notify_recipient_ids(message, conv) do
-        [] -> :ok
-        recipients -> Notifications.deliver(recipients, notify_payload(message, conv))
+      if others != [], do: Notifications.deliver(others, notify_payload(message, conv))
+
+      if mentioned != [] do
+        Notifications.deliver(mentioned, %{notify_payload(message, conv) | kind: "mention"})
       end
+
+      :ok
     end
+  end
+
+  # Being named is not the same as being in the room, so a mention is delivered on its own terms
+  # (#576): it goes through every gate in `common_gates/2` EXCEPT mute. Someone who muted a busy
+  # channel still wants to hear that they were called by name — that is the whole point of the
+  # `@`. DND still silences (it means "not now, whoever you are"), a person who left is gone, and
+  # a deactivated account never hears anything.
+  #
+  # The badge invariant is untouched: this is delivery, not counting. Rail and folder badges
+  # still respect mute exactly as documented.
+  defp mention_recipient_ids(message) do
+    from(mn in MessageMention,
+      join: m in Membership,
+      as: :membership,
+      on: m.conversation_id == ^message.conversation_id and m.user_id == mn.user_id,
+      join: u in User,
+      as: :user,
+      on: u.id == mn.user_id,
+      where: mn.message_id == ^message.id,
+      # DISTINCT because one person can hold two rows on one message since `@all` became additive
+      # (`@all и особенно @bob` names Bob twice, deliberately, so both spans render) — and being
+      # named twice is not being notified twice (#577 review).
+      distinct: true,
+      select: mn.user_id
+    )
+    |> delivery_gates(message, mute: false)
+    |> Repo.all()
   end
 
   # Notify-once per file group: true when an EARLIER row of the same group already exists,
@@ -4291,12 +4557,25 @@ defmodule Eden.Chat do
   # (`delete_user_permanently/2`), so `u.active == true` also excludes anonymized rows —
   # recipient gating is the one place ADR-0001 filters delivery, so every future push
   # transport inherits the deactivation for free (#363/R150).
-  defp common_gates(query, message) do
-    from([membership: m, user: u] in query,
-      where:
-        m.user_id != ^message.sender_id and is_nil(m.left_at) and
-          is_nil(m.muted_at) and u.presence_status != "dnd" and u.active == true
-    )
+  defp common_gates(query, message), do: delivery_gates(query, message, mute: true)
+
+  # The rules every delivery passes, in ONE place (#577 review): the sender never hears their own
+  # message, someone who left is gone, DND means silence, a deactivated (or anonymized, #303)
+  # account hears nothing. `mute:` is the only knob — a mention passes it (#576), because being
+  # called by name is the point of `@`; everything else stands.
+  defp delivery_gates(query, message, opts) do
+    query =
+      from([membership: m, user: u] in query,
+        where:
+          m.user_id != ^message.sender_id and is_nil(m.left_at) and
+            u.presence_status != "dnd" and u.active == true
+      )
+
+    if Keyword.get(opts, :mute, true) do
+      from([membership: m] in query, where: is_nil(m.muted_at))
+    else
+      query
+    end
   end
 
   # #271: for a room message, drop anyone who muted the CHANNEL — that's Channels data,

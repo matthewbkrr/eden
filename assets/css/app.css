@@ -2480,6 +2480,137 @@ html {
     inset: 0;
     background: var(--ed-scrim);
   }
+  /* The `@` autocomplete (#576): one popover for the page, placed above whichever composer is
+     being typed in — below would be off-screen on a phone, and under the keyboard at that. */
+  .ed-mention-pop {
+    position: fixed;
+    z-index: 62;
+    /* It appears where a finger is already heading, so it arrives rather than pops: 140ms, the
+       app's `quick`, with the same ease-out every entrance uses. */
+    animation: ed-mention-in var(--ed-dur-quick) var(--ed-ease-out);
+    max-height: 14rem;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0.25rem;
+    border-radius: var(--ed-radius);
+    border: 1px solid var(--ed-border);
+    background: var(--ed-surface);
+    box-shadow: var(--ed-shadow-pop);
+  }
+  @keyframes ed-mention-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ed-mention-pop {
+      animation: none;
+    }
+  }
+  .ed-mention-pop__row {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    width: 100%;
+    padding: 0.375rem 0.5rem;
+    border: 0;
+    border-radius: var(--ed-radius-sm);
+    background: none;
+    color: var(--ed-ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ed-mention-pop__row:hover {
+    background: var(--ed-surface-2);
+  }
+  /* Where the keyboard is. Not the reference's solid cobalt fill — cobalt stays ≤10% of a
+     surface here — but strong enough that the position is never in doubt while arrowing: at 16%
+     (the selected-message wash) the row barely separated from its neighbours, which is fine for a
+     row you clicked and wrong for one you are steering. */
+  .ed-mention-pop__row.is-active {
+    /* Two signals, because one is not enough for "you are here": the wash gives warmth, the ring
+       gives contrast. Measured — the wash alone separated the row from the panel by only 1.4:1,
+       under the 3:1 that a state indicator owes (WCAG 1.4.11), and colour is never the only
+       signal in this product. */
+    background: color-mix(in oklab, var(--ed-primary) 34%, var(--ed-surface));
+    box-shadow: inset 0 0 0 1.5px var(--ed-primary);
+  }
+  .ed-mention-pop__row.is-active .ed-mention-pop__handle {
+    color: var(--ed-ink);
+  }
+  .ed-mention-pop__row:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: -2px;
+  }
+  /* On a finger the row is a target before it is a line of text: 44px, the size the rest of the
+     app uses for tap targets. A mouse does not need the extra height, and a list of five rows is
+     easier to scan when it is compact. */
+  @media (pointer: coarse) {
+    .ed-mention-pop__row {
+      padding: 0.5rem;
+    }
+  }
+  .ed-mention-pop__face--all {
+    background: color-mix(in oklab, var(--ed-primary) 22%, var(--ed-surface-2));
+    color: var(--ed-primary-strong-text);
+    font-weight: 700;
+  }
+  .ed-mention-pop__text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+  }
+  .ed-mention-pop__name {
+    font-weight: 550;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ed-mention-pop__handle {
+    color: var(--ed-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* A mention chip (#576): the person's handle inside a message body, tappable to their profile.
+     Not a link — it opens the same panel the avatar does — so it is a button styled as text with
+     the cobalt that already means "person" elsewhere in the app. */
+  .ed-mention {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-weight: 600;
+    color: var(--ed-primary-strong-text);
+    cursor: pointer;
+    border-radius: var(--ed-radius-sm);
+  }
+  .ed-mention:hover {
+    text-decoration: underline;
+  }
+  .ed-mention:focus-visible {
+    outline: 2px solid var(--ed-ring);
+    outline-offset: 1px;
+  }
+  /* `@all` names the room, so it is a label rather than a control: the colour still says
+     "mention", but nothing invites a tap that would open nobody. */
+  .ed-mention--all {
+    cursor: default;
+  }
+
+  /* In your own bubble the body is white on cobalt, so the chip cannot be cobalt too. */
+  .ed-bubble--me .ed-mention {
+    color: var(--ed-on-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
   /* The app's own confirm (#518), in place of the system alert a WKWebView titles with the
      origin. Same box as the server-rendered delete sheet it stands beside — this one is built on
      the client, for the seventeen `data-confirm` attributes and the two direct calls. */

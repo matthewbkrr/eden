@@ -72,4 +72,66 @@ defmodule EdenWeb.MarkupTest do
       assert Markup.strip("plain text") == "plain text"
     end
   end
+
+  describe "mentions (#576)" do
+    defp mention(handle, username, id \\ 7),
+      do: %{handle: handle, user: %{id: id, username: username}}
+
+    defp render(text, mentions \\ []) do
+      {:safe, io} = Markup.to_iodata(text, mentions)
+      IO.iodata_to_binary(io)
+    end
+
+    test "a resolved handle becomes a chip labelled with the person's CURRENT name" do
+      html = render("@bob ping", [mention("bob", "robert")])
+
+      assert html =~ ~s(class="ed-mention")
+
+      assert html =~ ~s(phx-value-id="7"),
+             "the chip opens a profile by id, not by a renameable name"
+
+      assert html =~ "@robert", "the chip carries the current handle, not the one typed"
+      refute html =~ "@bob ", "the typed handle must not survive as text next to the chip"
+    end
+
+    test "an unresolved handle stays plain text" do
+      assert render("@nobody hi") == "@nobody hi"
+    end
+
+    test "an ASCII prefix of a longer word is not a handle" do
+      assert render("@bobи привет", [mention("bob", "bob")]) == "@bobи привет",
+             "chipping the ASCII head would cut a word in half on screen — and the context resolves by the same rule, so it would have rung Bob as well"
+    end
+
+    test "a handle inside code is left alone" do
+      html = render("`@bob` and @bob", [mention("bob", "bob")])
+
+      assert html =~ "<code>@bob</code>", "code spans are literal"
+      assert html =~ ~s(class="ed-mention"), "the one outside the code span is still a chip"
+    end
+
+    test "@all is a label, not a control" do
+      html = render("@all standup", [%{handle: "all", user: %{id: 1, username: "someone"}}])
+
+      assert html =~ "@all", "the room's own handle, not a member's name"
+      refute html =~ "<button", "there is no single person to open"
+    end
+
+    test "emphasis does not hide a mention" do
+      html = render("**@bob** и _@bob_", [mention("bob", "bob")])
+
+      assert html =~ "<strong>", "the emphasis is still emphasis"
+      # The server resolves and notifies from the raw body, so a mention inside emphasis must be
+      # visible as one — otherwise a person is pinged by a message that shows them nothing.
+      assert length(String.split(html, ~s(class="ed-mention"))) == 3,
+             "both emphasised mentions became chips"
+    end
+
+    test "the chip escapes what it renders" do
+      html = render("@xy", [mention("xy", ~s(a"><script>))])
+
+      refute html =~ "<script>"
+      assert html =~ "&lt;script&gt;"
+    end
+  end
 end
