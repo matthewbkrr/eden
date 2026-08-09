@@ -511,7 +511,7 @@ maps the task to the right one:
 `.claude/skills/ATTRIBUTION.md`. Note **Oban IS a dependency**: it runs in the
 supervision tree (`lib/eden/application.ex`) with a `:media` queue
 (`Eden.Chat.ThumbnailWorker`), a `:default` queue (`Eden.DeletedUserScrubWorker`,
-the #303 right-to-erasure scrub enqueued transactionally, #357) and a daily
+the #303 right-to-erasure scrub enqueued transactionally, #357) and two daily
 `Oban.Plugins.Cron` jobs (`Eden.Accounts.TokenPruner`, #238, and `Eden.Chat.BlobReaper`,
 #385/R128 — the only reconciler for blobs nothing references: every other cleanup path hangs off
 a delete that happened, so a crash between storing bytes and committing the row leaks forever. A

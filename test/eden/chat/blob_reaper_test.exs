@@ -120,4 +120,38 @@ defmodule Eden.Chat.BlobReaperTest do
     @impl true
     def exists?(_key), do: false
   end
+
+  test "a stored blob whose own name looks like a variant is still protected by its reference" do
+    user = user_fixture()
+    # Not a rendition of anything: this IS the referenced key, and it merely happens to be shaped
+    # like one. Reading it only as a variant would delete a blob the database points at.
+    key = store("avatars/looks-like@192.webp", 30 * @day)
+    Repo.update!(Ecto.Changeset.change(user, avatar_key: key))
+
+    run()
+
+    assert Storage.exists?(key),
+           "a referenced key was reaped because its name resembled a variant"
+  end
+
+  test "a delete the store refuses is not counted as reclaimed" do
+    key = store("attachments/undeletable.jpg", 2 * @day)
+    {:ok, path} = Storage.local_path(key)
+
+    # Read-only directory: the file cannot be unlinked, so the sweep must report the failure rather
+    # than claim the orphan is gone.
+    dir = Path.dirname(path)
+    File.chmod!(dir, 0o500)
+    on_exit(fn -> File.chmod(dir, 0o700) end)
+
+    log = ExUnit.CaptureLog.capture_log(fn -> run() end)
+
+    File.chmod!(dir, 0o700)
+
+    assert Storage.exists?(key),
+           "the blob is gone — this test no longer exercises a failed delete"
+
+    assert log =~ "could not be deleted", "a refused delete was reported as a reclaimed orphan"
+    refute log =~ "1 orphan(s) of", "the count claimed a removal that never happened"
+  end
 end

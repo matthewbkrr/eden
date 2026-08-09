@@ -84,8 +84,10 @@ defmodule Eden.Storage.Local do
       |> Path.join("**/*")
       |> Path.wildcard()
       # A temp file is a write in progress, not a blob: it has no key, and the rename that gives
-      # it one may still be coming (see atomic_write/2).
-      |> Enum.reject(&(File.dir?(&1) or String.contains?(Path.basename(&1), ".tmp-")))
+      # it one may still be coming (see atomic_write/2). Matched as the SUFFIX atomic_write appends
+      # rather than anywhere in the name, so a legitimate key that merely contains those characters
+      # is not skipped and then reaped as unknown (#584 review).
+      |> Enum.reject(&(File.dir?(&1) or Regex.match?(~r/\.tmp-[\w-]+$/, &1)))
       |> Enum.flat_map(fn file ->
         case File.stat(file, time: :posix) do
           {:ok, %{mtime: mtime}} -> [{Path.relative_to(file, root), mtime}]

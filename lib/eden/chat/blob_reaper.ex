@@ -66,12 +66,26 @@ defmodule Eden.Chat.BlobReaper do
           not kept?(key, referenced),
           do: key
 
-    Enum.each(orphans, &Storage.delete/1)
+    # Counted by what the store actually did, not by what was asked of it. A delete that failed
+    # (a lock, a permission, a vanished mount) leaves the blob exactly where it was, and a log
+    # line claiming otherwise is worse than no log at all: the leak stays, and the one place that
+    # would have shown it says everything is fine (#584 review).
+    {removed, failed} =
+      Enum.reduce(orphans, {0, 0}, fn key, {ok, bad} ->
+        case Storage.delete(key) do
+          :ok -> {ok + 1, bad}
+          {:error, _reason} -> {ok, bad + 1}
+        end
+      end)
 
     Logger.info(
-      "blob reap: #{length(orphans)} orphan(s) of #{length(keys)} key(s) removed " <>
+      "blob reap: #{removed} orphan(s) of #{length(keys)} key(s) removed " <>
         "(#{MapSet.size(referenced.keys)} referenced)"
     )
+
+    if failed > 0 do
+      Logger.warning("blob reap: #{failed} orphan(s) could not be deleted and remain in storage")
+    end
 
     :ok
   end
@@ -80,21 +94,27 @@ defmodule Eden.Chat.BlobReaper do
   # variant was rendered from. The variant only carries its source's STEM, so that is what both
   # sides are compared by.
   defp kept?(key, %{keys: keys, stems: stems}) do
-    case Regex.named_captures(@variant, key) do
-      %{"stem" => stem} -> MapSet.member?(stems, stem)
-      nil -> MapSet.member?(keys, key)
-    end
+    # The exact set is consulted for EVERY key, variant-shaped or not: a stored blob whose own name
+    # happens to end in `@<n>.webp` is referenced by that name, and reading it only as a rendition
+    # of something else would delete a blob the database is pointing at (#584 review).
+    MapSet.member?(keys, key) or
+      case Regex.named_captures(@variant, key) do
+        %{"stem" => stem} -> MapSet.member?(stems, stem)
+        nil -> false
+      end
   end
 
   defp referenced_keys do
-    attachment_keys = Repo.all(from a in Attachment, select: a.storage_key)
-
-    thumbnail_keys =
-      Repo.all(from a in Attachment, where: not is_nil(a.thumbnail_key), select: a.thumbnail_key)
+    # One pass over attachments for both columns: they live in the same row, and the table is the
+    # big one here (#584 review).
+    attachment_keys =
+      from(a in Attachment, select: {a.storage_key, a.thumbnail_key})
+      |> Repo.all()
+      |> Enum.flat_map(fn {storage, thumb} -> Enum.reject([storage, thumb], &is_nil/1) end)
 
     avatar_keys = Repo.all(from u in User, where: not is_nil(u.avatar_key), select: u.avatar_key)
 
-    keys = attachment_keys ++ thumbnail_keys ++ avatar_keys
+    keys = attachment_keys ++ avatar_keys
 
     %{keys: MapSet.new(keys), stems: MapSet.new(keys, &Path.rootname/1)}
   end
