@@ -23,6 +23,10 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
   # The two aggregates, by the tables they read.
   @aggregates ["chat_folders", "channels"]
 
+  # The coalescing window this env runs with, so the settle below can outlast it by construction
+  # rather than by a number someone has to remember to keep in step.
+  @window_ms Application.compile_env(:eden, :badge_coalesce_ms, 40)
+
   setup %{conn: conn} do
     alice = user_fixture()
     bob = user_fixture()
@@ -83,14 +87,18 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
 
   defp await_badge(view, _timeout), do: render(view)
 
-  # Waits for the recompute rather than sleeping through the window: it returns the moment the
-  # first aggregate query lands, so the test costs what the mechanism costs instead of a fixed
-  # second of wall clock (#583 review). The short settle after it is for a possible second window.
+  # Waits for the first recompute instead of sleeping through the window, then settles for LONGER
+  # than a whole window.
+  #
+  # The settle is not padding: a late event schedules its own window, and detaching the handler
+  # before that window elapses would leave those queries uncounted — the test would report a
+  # smaller number than actually happened, which is the one direction a measurement must never be
+  # wrong in (#583 review).
   defp await_recompute(timeout) do
     receive do
       {:aggregate_query, source} ->
         send(self(), {:aggregate_query, source})
-        Process.sleep(60)
+        Process.sleep(@window_ms + 100)
     after
       timeout -> :timeout
     end
@@ -117,24 +125,23 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
         render(view)
       end)
 
-    # Both bounds matter, and each catches a different way of being wrong.
-    #
-    # The upper one is no longer a guess about machine speed: the window is widened in the test env
-    # (`config/test.exs`), so ten inserts and their broadcasts land inside ONE of them on any box,
-    # and the coalesced answer is a small constant. Four leaves room for the read broadcast to
-    # arrive in a second window without ever admitting one recompute per message (#583 review).
-    #
-    # The lower one is not a formality: an upper bound alone is satisfied by deleting the recompute
-    # altogether, which is the same vacuous shape this file was already caught in once.
-    assert queries >= 1,
-           "no aggregate query ran at all — the badges are not being refreshed"
+    # The bound is MEASURED, not chosen. How many statements one recompute runs is
+    # `refresh_folders/1` and `refresh_rail/1`'s business, and pinning a number here would make
+    # this test fail the day either grows a query — while saying nothing about coalescing (#583
+    # review). So the same workload is measured for ONE message, and ten are required to cost no
+    # more than two of those passes.
+    unit =
+      count_aggregate_queries(fn ->
+        {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "unit"})
+        render(view)
+        await_recompute(2_000)
+        render(view)
+      end)
 
-    # Counted in QUERIES, not recomputes — the two are related by however many statements
-    # `refresh_folders/1` and `refresh_rail/1` happen to run, which is not this test's business
-    # (#583 review). One coalesced pass measures 2; forty-two is what ten uncoalesced messages
-    # measured. Four sits between them with room on both sides.
-    assert queries <= 4,
-           "#{queries} aggregate queries for ten messages — the burst is not being coalesced"
+    assert unit >= 1, "no aggregate query ran at all — the badges are not being refreshed"
+
+    assert queries <= 2 * unit,
+           "ten messages cost #{queries} aggregate queries against #{unit} for one — the burst is not being coalesced"
   end
 
   test "the badge itself catches up after the window", %{view: view, alice: alice, bob: bob} do
