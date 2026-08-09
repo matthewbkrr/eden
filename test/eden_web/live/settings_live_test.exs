@@ -342,6 +342,25 @@ defmodule EdenWeb.SettingsLiveTest do
              "the move button did not reorder the folders"
     end
 
+    test "the virtual All Chats row moves too (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      assert Chat.all_chats_position(scope) == 0
+
+      # "All Chats" is a movable row with no folder behind it — the reorder speaks about it through
+      # the "all" sentinel, and its place is remembered per user rather than as a row order.
+      view
+      |> element(~s|button[phx-value-id="all"][phx-value-dir="down"]|)
+      |> render_click()
+
+      assert Chat.all_chats_position(scope) == 1,
+             "moving All Chats did nothing — its position is stored separately and was not written"
+    end
+
     test "the row at the end offers no move past it (#366/R093)", %{conn: conn} do
       user = user_fixture()
       conn = log_in_user(conn, user)
