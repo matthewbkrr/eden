@@ -2165,28 +2165,8 @@ defmodule EdenWeb.ChatLive do
   # Follow / unfollow the open thread; reflects in the header bell + unread badges.
   def handle_event("toggle_follow_thread", _params, socket) do
     case socket.assigns.thread_root do
-      %{} = root ->
-        scope = socket.assigns.current_scope
-
-        {following, unreads} =
-          if socket.assigns.thread_following do
-            Chat.unfollow_thread(scope, root.id)
-            {false, Map.delete(socket.assigns.thread_unreads, root.id)}
-          else
-            Chat.follow_thread(scope, root.id)
-            {true, Map.put_new(socket.assigns.thread_unreads, root.id, 0)}
-          end
-
-        # No root re-stream: the footer pill only shows when unread > 0, and the
-        # thread is already read (unread 0) by the time its bell is reachable —
-        # so toggling follow never changes the footer.
-        {:noreply,
-         socket
-         |> assign(thread_following: following, thread_unreads: unreads)
-         |> ThreadPanel.refresh_thread_list()}
-
-      _ ->
-        {:noreply, socket}
+      %{} = root -> toggle_follow(socket, root)
+      _ -> {:noreply, socket}
     end
   end
 
@@ -4268,6 +4248,7 @@ defmodule EdenWeb.ChatLive do
                 type="text"
                 id="composer-body"
                 name="message[body]"
+                aria-label={gettext("Message")}
                 role="combobox"
                 aria-controls="mention-pop"
                 aria-expanded="false"
@@ -8616,6 +8597,48 @@ defmodule EdenWeb.ChatLive do
   #
   # The sidebar row itself never waits either way — its own handler updates it on the spot. Only
   # the two AGGREGATES are on this path.
+  defp toggle_follow(socket, root) do
+    scope = socket.assigns.current_scope
+    following? = socket.assigns.thread_following
+
+    result =
+      if following?,
+        do: Chat.unfollow_thread(scope, root.id),
+        else: Chat.follow_thread(scope, root.id)
+
+    follow_result(socket, root, following?, result)
+  end
+
+  defp follow_result(socket, root, following?, {:ok, _}) do
+    unreads =
+      if following?,
+        do: Map.delete(socket.assigns.thread_unreads, root.id),
+        else: Map.put_new(socket.assigns.thread_unreads, root.id, 0)
+
+    # No root re-stream: the footer pill only shows when unread > 0, and the thread is already read
+    # (unread 0) by the time its bell is reachable — so toggling follow never changes the footer.
+    {:noreply,
+     socket
+     |> assign(thread_following: not following?, thread_unreads: unreads)
+     |> ThreadPanel.refresh_thread_list()}
+  end
+
+  # The server refused — the root is a tombstone, or the thread is gone (#366/R174). The bell used
+  # to flip anyway, leaving the person believing they had subscribed while nothing had changed.
+  # Same treatment the reply path gives the same error.
+  #
+  # This is the RACE, not the common path: a root deleted while the panel stands open closes it
+  # through `{:message_deleted}` well before anyone can reach the bell. What is left here is the
+  # toggle that overtakes that broadcast — which is why there is no test for it: the scenario
+  # cannot be staged without suppressing the broadcast, and a test that staged something else
+  # would only look like coverage.
+  defp follow_result(socket, _root, _following?, {:error, _reason}) do
+    {:noreply,
+     socket
+     |> assign(thread_root: nil)
+     |> put_flash(:error, gettext("Thread not found."))}
+  end
+
   defp stale_badges(socket) do
     cond do
       # A window is open and already knows there is more to settle.

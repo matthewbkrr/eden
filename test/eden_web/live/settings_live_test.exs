@@ -319,6 +319,54 @@ defmodule EdenWeb.SettingsLiveTest do
       refute html =~ "No folders yet"
     end
 
+    test "folders reorder without a mouse (#366/R093, R094)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Family"}) |> render_submit()
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == ["Work", "Family"]
+
+      [work, _family] = Chat.list_folders(scope)
+
+      # The control a keyboard reaches by Tab and a finger reaches by tapping. Reordering used to
+      # be native HTML5 drag and nothing else, which is neither.
+      view
+      |> element(~s|button[phx-value-id="#{work.id}"][phx-value-dir="down"]|)
+      |> render_click()
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == ["Family", "Work"],
+             "the move button did not reorder the folders"
+    end
+
+    test "the row at the end offers no move past it (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Only"}) |> render_submit()
+
+      last = List.last(Chat.list_folders(Scope.for_user(user)))
+
+      # Disabled, not absent: a control that vanishes at the edge of a list moves the row out from
+      # under the finger pressing it. "All Chats" sits above and keeps its own controls — it is a
+      # movable row too, just not a deletable one.
+      assert has_element?(
+               view,
+               ~s|button[phx-value-id="#{last.id}"][phx-value-dir="down"][disabled]|
+             ),
+             "the last row offers a move past the end of the list"
+
+      assert has_element?(
+               view,
+               ~s|button[phx-value-id="#{last.id}"][phx-value-dir="up"]:not([disabled])|
+             ),
+             "the last row cannot be moved up either — the controls are inert"
+    end
+
     test "create, rename, delete, and reorder", %{conn: conn} do
       user = user_fixture()
       scope = Scope.for_user(user)

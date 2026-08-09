@@ -708,9 +708,13 @@ defmodule EdenWeb.SettingsLive do
                       {gettext("Scan this with your authenticator app, then enter the code it shows.")}
                     </p>
                     <div class="flex flex-wrap items-start gap-4">
+                      <%!-- aria-hidden like the same block in welcome (#366/R197): the QR is a
+                            picture of the secret, and the secret is offered as text right beside
+                            it — a screen reader announcing the raw SVG reads noise. --%>
                       <div
                         class="rounded-[var(--ed-radius)] p-2"
                         style="background:#fff; width:184px;"
+                        aria-hidden="true"
                       >
                         {Phoenix.HTML.raw(@totp_setup.qr)}
                       </div>
@@ -1096,6 +1100,7 @@ defmodule EdenWeb.SettingsLive do
                         >
                           <.icon name="hero-bars-3-micro" class="size-4" />
                         </span>
+                        <.folder_move id="all" label={gettext("All Chats")} rows={@folder_rows} />
                         <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
                           {gettext("All Chats")}
                         </span>
@@ -1115,6 +1120,7 @@ defmodule EdenWeb.SettingsLive do
                         >
                           <.icon name="hero-bars-3-micro" class="size-4" />
                         </span>
+                        <.folder_move id={to_string(row.id)} label={row.name} rows={@folder_rows} />
                         <%!-- Renames save on Enter AND on blur (clicking away / leaving
                         the page), with a flash confirming the change. Focusing
                         selects the whole name so it's clearly being edited. --%>
@@ -1441,6 +1447,26 @@ defmodule EdenWeb.SettingsLive do
     {:noreply, reload_folders(socket)}
   end
 
+  # Move one row a step, for everyone who cannot drag (#366/R093, R094).
+  #
+  # Reordering was HTML5 drag-and-drop and nothing else: no keyboard path at all, and native DnD
+  # does not fire on touch — so on the phones PRODUCT.md says people mostly use, the copy promised
+  # a gesture that could not work. Two buttons answer both, through the SAME context call the drag
+  # commits, so there is one ordering path rather than two that can disagree.
+  def handle_event("move_folder", %{"id" => id, "dir" => dir}, socket) do
+    ids = Enum.map(socket.assigns.folder_rows, &row_id/1)
+    at = Enum.find_index(ids, &(&1 == id))
+    to = if dir == "up", do: (at || 0) - 1, else: (at || 0) + 1
+
+    if (at && to >= 0) and to < length(ids) do
+      moved = ids |> List.delete_at(at) |> List.insert_at(to, id)
+      Chat.reorder_folders(socket.assigns.current_scope, moved)
+      {:noreply, reload_folders(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Toggle one emoji in the personal quick-react row (#67): present → remove,
   # absent → append (kept in pick order). Clearing all reverts to the default set.
   def handle_event("toggle_quick_reaction", %{"emoji" => emoji}, socket) do
@@ -1528,6 +1554,58 @@ defmodule EdenWeb.SettingsLive do
   end
 
   def handle_event("set_notify_desktop", _params, socket), do: {:noreply, socket}
+  # The id the reorder speaks in: "all" is the virtual row, everything else is a folder id.
+  defp row_id(:all), do: "all"
+  defp row_id(folder), do: to_string(folder.id)
+
+  attr :id, :string, required: true
+
+  attr :label, :string,
+    required: true,
+    doc: "the folder's name, so each button says what it moves"
+
+  attr :rows, :list, required: true
+
+  # The keyboard and touch path to reordering (#366/R093, R094). Buttons rather than a
+  # pointer-events drag implementation: a drag needs a gesture recogniser, an autoscroll, a drop
+  # indicator and a screen-reader story of its own, while two buttons are reachable by Tab,
+  # announceable, and land on a phone without any of that.
+  #
+  # Disabled at the ends rather than hidden: a control that disappears at the edge of a list makes
+  # the row jump under the finger that is using it.
+  defp folder_move(assigns) do
+    ids = Enum.map(assigns.rows, &row_id/1)
+    at = Enum.find_index(ids, &(&1 == assigns.id))
+
+    assigns = assign(assigns, first?: at == 0, last?: at == length(ids) - 1)
+
+    ~H"""
+    <span class="ed-folder-row__move">
+      <button
+        type="button"
+        class="ed-folder-row__move-btn"
+        phx-click="move_folder"
+        phx-value-id={@id}
+        phx-value-dir="up"
+        disabled={@first?}
+        aria-label={gettext("Move %{name} up", name: @label)}
+      >
+        <.icon name="hero-chevron-up-micro" class="size-4" />
+      </button>
+      <button
+        type="button"
+        class="ed-folder-row__move-btn"
+        phx-click="move_folder"
+        phx-value-id={@id}
+        phx-value-dir="down"
+        disabled={@last?}
+        aria-label={gettext("Move %{name} down", name: @label)}
+      >
+        <.icon name="hero-chevron-down-micro" class="size-4" />
+      </button>
+    </span>
+    """
+  end
 
   defp reload_folders(socket), do: assign_folders(socket)
 
