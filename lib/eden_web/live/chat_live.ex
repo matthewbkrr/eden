@@ -276,6 +276,8 @@ defmodule EdenWeb.ChatLive do
         room_search: "",
         room_results: nil,
         # Set while a coalesced badge recompute is already on its way to this process (#372/R059).
+        # Server-side only: LiveView diffs RENDERED content, and no template reads this, so it
+        # costs nothing on the wire (#583 review).
         badges_pending: false
       )
       |> stream(:thread, [])

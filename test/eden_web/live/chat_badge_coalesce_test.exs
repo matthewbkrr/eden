@@ -50,8 +50,14 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
       nil
     )
 
-    fun.()
-    :telemetry.detach(handler)
+    # `after`, not a plain call: a raising body would otherwise leave the handler attached for the
+    # rest of the suite, counting queries in tests that never asked (#583 review).
+    try do
+      fun.()
+    after
+      :telemetry.detach(handler)
+    end
+
     drain(0)
   end
 
@@ -82,10 +88,20 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
         render(view)
       end)
 
-    # Twenty before this change (ten messages × two events × the two aggregates). A handful is the
-    # coalesced shape; an exact number would only pin the number of internal events, which is not
-    # what this guards.
-    assert queries <= 6,
+    # Both bounds matter, and each catches a different way of being wrong.
+    #
+    # The upper one is deliberately loose. Ten inserts and their broadcasts can straddle more than
+    # one coalescing window on a slow machine, and that is coalescing working, not failing — so the
+    # bound is set against the BROKEN number (42 measured with the coalescer removed) rather than
+    # against the best case (2), leaving room for a few windows without ever admitting one
+    # recompute per message (#583 review).
+    #
+    # The lower one is not a formality: an upper bound alone is satisfied by deleting the recompute
+    # altogether, which is the same vacuous shape this file was already caught in once.
+    assert queries >= 1,
+           "the badges were never recomputed at all — the aggregates are not being refreshed"
+
+    assert queries <= 14,
            "the badges were recomputed #{queries} times for ten messages — the burst is not being coalesced"
   end
 
