@@ -1,0 +1,172 @@
+defmodule EdenWeb.ChatBadgeCoalesceTest do
+  @moduledoc """
+  Folder tabs and the channel rail are recomputed once per burst, not once per event (#372/R059).
+
+  One incoming message reaches a viewer as several badge-changing events — the conversation's
+  activity, and the read that auto-marking the open chat produces — and each of them used to
+  recompute both aggregates on the spot. Measured before this: three `list_folders` and three
+  `list_channels` per message, thirty of each for a burst of ten. That is per viewer, on the path
+  every message in the product takes.
+
+  This test counts the queries themselves through Ecto's telemetry rather than trusting a comment,
+  because the whole change is invisible to the rendered output: a broken coalescer looks exactly
+  like a working one until you count.
+  """
+  use EdenWeb.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+  import Eden.AccountsFixtures
+
+  alias Eden.Accounts.Scope
+  alias Eden.{Channels, Chat}
+
+  # The two aggregates, by the tables they read.
+  @aggregates ["chat_folders", "channels"]
+
+  # The coalescing window this env runs with, so the settle below can outlast it by construction
+  # rather than by a number someone has to remember to keep in step.
+  @window_ms Application.compile_env(:eden, :badge_coalesce_ms, 40)
+
+  setup %{conn: conn} do
+    alice = user_fixture()
+    bob = user_fixture()
+    {:ok, channel} = Channels.create_channel(Scope.for_user(alice), %{"name" => "Coalesce"})
+    {:ok, _} = Channels.ensure_member(Scope.for_user(bob), channel.id)
+    Chat.join_general(channel.id, bob.id)
+    [room | _] = Chat.list_rooms(Scope.for_user(alice), channel.id)
+
+    {:ok, view, _html} =
+      conn |> log_in_user(alice) |> live(~p"/channels/#{channel.id}/r/#{room.id}")
+
+    %{view: view, room: room, alice: alice, bob: bob}
+  end
+
+  # A named capture, not an inline closure: :telemetry warns about local anonymous handlers because
+  # it cannot optimize them, and a warning printed by every run of this file is noise that teaches
+  # people to ignore warnings (#583 review).
+  #
+  # Counted only when the query comes from the LiveView itself. The handler is global, and the test
+  # process does its own share of work against these tables (creating messages, the fixtures) —
+  # counting that too would measure the test rather than the mechanism (#583 review).
+  def handle_query(_event, _measure, meta, {test_pid, view_pid}) do
+    if self() == view_pid and meta[:source] in @aggregates do
+      send(test_pid, {:aggregate_query, meta[:source]})
+    end
+  end
+
+  defp count_aggregate_queries(view, fun) do
+    handler = {__MODULE__, System.unique_integer()}
+
+    :telemetry.attach(
+      handler,
+      [:eden, :repo, :query],
+      &__MODULE__.handle_query/4,
+      {self(), view.pid}
+    )
+
+    # Drained INSIDE the try, and to silence rather than to a deadline: a settle pass scheduled by
+    # a late event lands a whole window after the last query, and detaching before it would report
+    # a smaller number than actually happened — the one direction a measurement must never be
+    # wrong in (#583 review). Waiting for quiet cannot undercount; a fixed sleep could.
+    try do
+      fun.()
+      drain_until_quiet(0)
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  defp drain_until_quiet(n) do
+    receive do
+      {:aggregate_query, _} -> drain_until_quiet(n + 1)
+    after
+      @window_ms + 100 -> n
+    end
+  end
+
+  # Re-renders until the rail badge carries its count, or gives up. Cheaper than a fixed sleep, and
+  # it fails with the render in hand rather than with a bare timeout.
+  defp await_badge(view, timeout) when timeout > 0 do
+    html = render(view)
+
+    if html =~ ~r/ed-rail__badge[^>]*>\s*1\s*</ do
+      html
+    else
+      Process.sleep(25)
+      await_badge(view, timeout - 25)
+    end
+  end
+
+  defp await_badge(view, _timeout), do: render(view)
+
+  test "a burst costs a constant number of recomputes, not one per message", %{
+    view: view,
+    room: room,
+    bob: bob
+  } do
+    scope = Scope.for_user(bob)
+
+    queries =
+      count_aggregate_queries(view, fn ->
+        for i <- 1..10 do
+          {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "burst #{i}"})
+        end
+
+        render(view)
+      end)
+
+    # The bound is MEASURED, not chosen. How many statements one recompute runs is
+    # `refresh_folders/1` and `refresh_rail/1`'s business, and pinning a number here would make
+    # this test fail the day either grows a query — while saying nothing about coalescing (#583
+    # review). So the same workload is measured for ONE message, and ten are required to cost no
+    # more than two of those passes.
+    #
+    # Why 2× and not tighter, in numbers rather than by feel (#583 review, third pass at this one):
+    #
+    #   ideal      ten messages inside one window = leading + settle = 2 passes = 1× unit
+    #   allowed    a burst spilling into a second window = 4 passes = 2× unit
+    #   forbidden  one recompute per message = ~10 passes = 5× unit
+    #
+    # The bound sits above what a slow machine can legitimately produce and far below the failure
+    # this test exists for. Tightening it to 1× would make the suite fail on window spillover,
+    # which is the machine being slow rather than the coalescer being broken — the exact trade
+    # this file already got wrong once, in the other direction.
+    unit =
+      count_aggregate_queries(view, fn ->
+        {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "unit"})
+        render(view)
+      end)
+
+    # BOTH sides need a floor. Moving the lower bound onto `unit` last round left the burst itself
+    # with none: a burst that recomputed nothing at all would sail through `0 <= 2 * unit` — the
+    # same vacuous shape this file has now been caught in twice (#583 review).
+    assert queries >= 1,
+           "the burst recomputed nothing at all — the badges are not being refreshed"
+
+    assert unit >= 1, "a single message recomputed nothing — the measurement has no baseline"
+
+    assert queries <= 2 * unit,
+           "ten messages cost #{queries} aggregate queries against #{unit} for one — the burst is not being coalesced"
+  end
+
+  test "the badge itself catches up after the window", %{view: view, alice: alice, bob: bob} do
+    # A DM, NOT the open room: a message in the room the viewer is looking at is auto-read, so its
+    # badge would legitimately stay at zero and prove nothing. The messenger badge on the rail is
+    # an aggregate this session must recompute to learn about.
+    {:ok, dm} = Chat.create_conversation(Scope.for_user(bob), [alice.id])
+    refute render(view) =~ "ed-rail__badge"
+
+    {:ok, _} = Chat.create_message(Scope.for_user(bob), dm.id, %{"body" => "unread one"})
+    # Polled, not slept through: the badge is the observable end of the recompute, so waiting for
+    # IT costs what the mechanism costs (#583 review).
+    await_badge(view, 2_000)
+
+    # The VALUE, not the container. Asserting the rail markup exists proved nothing — it renders
+    # whether or not anything was recomputed, so the test passed with the recompute deleted, which
+    # is the one failure it was written to catch (#583 review, unanimous).
+    html = render(view)
+
+    assert html =~ ~r/ed-rail__badge[^>]*>\s*1\s*</,
+           "the rail badge does not read 1 after one unread DM — the aggregate was never recomputed"
+  end
+end

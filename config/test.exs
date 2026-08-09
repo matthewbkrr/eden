@@ -61,3 +61,8 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Badge coalescing window (#372/R059): wide enough that a burst of test messages lands inside ONE
+# window on any machine, so the test that counts recomputes measures the mechanism instead of the
+# CI box's mood. Production keeps the 40 ms default.
+config :eden, :badge_coalesce_ms, 300
