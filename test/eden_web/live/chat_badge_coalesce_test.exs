@@ -69,6 +69,34 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     end
   end
 
+  # Re-renders until the rail badge carries its count, or gives up. Cheaper than a fixed sleep, and
+  # it fails with the render in hand rather than with a bare timeout.
+  defp await_badge(view, timeout) when timeout > 0 do
+    html = render(view)
+
+    if html =~ ~r/ed-rail__badge[^>]*>\s*1\s*</ do
+      html
+    else
+      Process.sleep(25)
+      await_badge(view, timeout - 25)
+    end
+  end
+
+  defp await_badge(view, _timeout), do: render(view)
+
+  # Waits for the recompute rather than sleeping through the window: it returns the moment the
+  # first aggregate query lands, so the test costs what the mechanism costs instead of a fixed
+  # second of wall clock (#583 review). The short settle after it is for a possible second window.
+  defp await_recompute(timeout) do
+    receive do
+      {:aggregate_query, source} ->
+        send(self(), {:aggregate_query, source})
+        Process.sleep(60)
+    after
+      timeout -> :timeout
+    end
+  end
+
   test "a burst of messages recomputes the badges once, not once per message", %{
     view: view,
     room: room,
@@ -84,8 +112,9 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
 
         render(view)
 
-        # Past the coalescing window (widened in config/test.exs so the burst lands in ONE of them).
-        Process.sleep(600)
+        # The window is widened in config/test.exs so the burst lands in ONE of them; this returns
+        # the moment that recompute has run, instead of sleeping through a fixed second.
+        await_recompute(2_000)
         render(view)
       end)
 
@@ -113,7 +142,9 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     refute render(view) =~ "ed-rail__badge"
 
     {:ok, _} = Chat.create_message(Scope.for_user(bob), dm.id, %{"body" => "unread one"})
-    Process.sleep(600)
+    # Polled, not slept through: the badge is the observable end of the recompute, so waiting for
+    # IT costs what the mechanism costs (#583 review).
+    await_badge(view, 2_000)
 
     # The VALUE, not the container. Asserting the rail markup exists proved nothing — it renders
     # whether or not anything was recomputed, so the test passed with the recompute deleted, which
