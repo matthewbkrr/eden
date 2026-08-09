@@ -258,6 +258,19 @@ defmodule Eden.Chat.BlobReaperTest do
            "an orphan survived because its stem was read as a LIKE pattern — `a_b` matched `aXb`"
   end
 
+  test "two renditions of one source are both kept" do
+    user = user_fixture()
+    source = store("avatars/shared.jpg", 30 * @day)
+    small = store("avatars/shared@64.webp", 30 * @day)
+    large = store("avatars/shared@192.webp", 30 * @day)
+    Repo.update!(Ecto.Changeset.change(user, avatar_key: source))
+
+    run()
+
+    assert Storage.exists?(small) and Storage.exists?(large),
+           "renditions of one source share a stem — keying them by it drops all but one"
+  end
+
   test "an adapter that cannot enumerate sweeps nothing" do
     key = store("attachments/unknowable.jpg", 2 * @day)
 

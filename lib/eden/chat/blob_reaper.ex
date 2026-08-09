@@ -169,19 +169,35 @@ defmodule Eden.Chat.BlobReaper do
   defp still_referenced([]), do: []
 
   defp still_referenced(keys) do
+    # Grouped, not mapped: two renditions of one source (`ab@64.webp` and `ab@192.webp`) share a
+    # stem, and keying by it kept only the last — the others fell out of the batch pass entirely
+    # (#584 review). They were still caught by the per-key check before deletion, so nothing was
+    # ever wrongly deleted; the pre-filter simply did less than it claimed.
     stems =
-      for key <- keys, captures = Regex.named_captures(@variant, key), into: %{} do
-        {captures["stem"], key}
-      end
+      keys
+      |> Enum.flat_map(fn key ->
+        case Regex.named_captures(@variant, key) do
+          %{"stem" => stem} -> [{stem, key}]
+          nil -> []
+        end
+      end)
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
 
     # Asked ONCE for the whole candidate list, then filtered in memory. Written as a filter over a
     # function that queried, this ran the full set of per-source queries for every candidate — the
     # batch pass doing N times the work of the per-key pass it was introduced to replace (#584
     # review).
+    # Chunked: every key in an `in` is a bound parameter, and PostgreSQL takes 65535 of them. The
+    # run where that matters is the FIRST one on a box that has been leaking for months — the exact
+    # run this module exists for, which would otherwise crash instead of reclaiming anything
+    # (#584 review).
     referenced_now =
-      sources()
-      |> Enum.flat_map(fn {schema, field} ->
-        Repo.all(from(s in schema, where: field(s, ^field) in ^keys, select: field(s, ^field)))
+      keys
+      |> Enum.chunk_every(1_000)
+      |> Enum.flat_map(fn chunk ->
+        Enum.flat_map(sources(), fn {schema, field} ->
+          Repo.all(from(s in schema, where: field(s, ^field) in ^chunk, select: field(s, ^field)))
+        end)
       end)
       |> MapSet.new()
 
@@ -190,7 +206,10 @@ defmodule Eden.Chat.BlobReaper do
     # Stems still need one query each: a rendition's source is not in the candidate list, so no
     # single `in` covers them. There are only as many as there are variant-shaped candidates.
     from_stems =
-      for {stem, key} <- stems, referenced_like?(escape_like(stem) <> ".%"), do: key
+      for {stem, sharing} <- stems,
+          referenced_like?(escape_like(stem) <> ".%"),
+          key <- sharing,
+          do: key
 
     Enum.uniq(exact ++ from_stems)
   end
