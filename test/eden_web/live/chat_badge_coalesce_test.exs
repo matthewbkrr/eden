@@ -37,18 +37,17 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     %{view: view, room: room, alice: alice, bob: bob}
   end
 
+  # A named capture, not an inline closure: :telemetry warns about local anonymous handlers because
+  # it cannot optimize them, and a warning printed by every run of this file is noise that teaches
+  # people to ignore warnings (#583 review).
+  def handle_query(_event, _measure, meta, test_pid) do
+    if meta[:source] in @aggregates, do: send(test_pid, {:aggregate_query, meta[:source]})
+  end
+
   defp count_aggregate_queries(fun) do
-    test_pid = self()
     handler = {__MODULE__, System.unique_integer()}
 
-    :telemetry.attach(
-      handler,
-      [:eden, :repo, :query],
-      fn _event, _measure, meta, _cfg ->
-        if meta[:source] in @aggregates, do: send(test_pid, {:aggregate_query, meta[:source]})
-      end,
-      nil
-    )
+    :telemetry.attach(handler, [:eden, :repo, :query], &__MODULE__.handle_query/4, self())
 
     # `after`, not a plain call: a raising body would otherwise leave the handler attached for the
     # rest of the suite, counting queries in tests that never asked (#583 review).
@@ -128,10 +127,14 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     # The lower one is not a formality: an upper bound alone is satisfied by deleting the recompute
     # altogether, which is the same vacuous shape this file was already caught in once.
     assert queries >= 1,
-           "the badges were never recomputed at all — the aggregates are not being refreshed"
+           "no aggregate query ran at all — the badges are not being refreshed"
 
+    # Counted in QUERIES, not recomputes — the two are related by however many statements
+    # `refresh_folders/1` and `refresh_rail/1` happen to run, which is not this test's business
+    # (#583 review). One coalesced pass measures 2; forty-two is what ten uncoalesced messages
+    # measured. Four sits between them with room on both sides.
     assert queries <= 4,
-           "the badges were recomputed #{queries} times for ten messages — the burst is not being coalesced"
+           "#{queries} aggregate queries for ten messages — the burst is not being coalesced"
   end
 
   test "the badge itself catches up after the window", %{view: view, alice: alice, bob: bob} do
