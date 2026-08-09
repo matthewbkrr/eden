@@ -168,6 +168,16 @@ test("Delete for everyone asks first, then tombstones the message", async ({ ali
   expect(asked, "no confirmation was asked before deleting for everyone").toBeGreaterThan(0);
 });
 
+// A full leftward swipe: past the 56px threshold, axis-dominant, from the trailing edge.
+async function swipeReply(page, bubble) {
+  const box = await bubble.boundingBox();
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width - 12, y);
+  await page.mouse.down();
+  for (const dx of [20, 45, 75, 100]) await page.mouse.move(box.x + box.width - 12 - dx, y);
+  await page.mouse.up();
+}
+
 test("swipe-to-reply still runs the same path as the menu item", async ({
   alice,
   seed,
@@ -199,4 +209,86 @@ test("swipe-to-reply still runs the same path as the menu item", async ({
 
   await expect(alice.locator(".ed-reply-bar").first()).toBeVisible({ timeout: 5000 });
   await expect(alice.locator("#composer-body")).toBeFocused();
+});
+
+// The other half of the gesture (#393/R062): what must NOT open a reply. A swipe recogniser that
+// only ever gets tested on the motion it is supposed to catch will happily catch everything — and
+// the cost lands on the two motions people make constantly over a message: selecting text, and
+// scrolling the feed.
+//
+// Only the reply half is asserted. Whether the drag still SELECTS is not observable here: a
+// synthetic mouse drag does not drive native selection in this harness at all — probed with a
+// plain horizontal drag inside a bubble whose computed `user-select` is `auto`, which also came
+// back empty (#581 review). Claiming it in a title would have been a promise the test cannot keep.
+test("a vertical drag over a message does not open a reply", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/mobile/.test(testInfo.project.name), "desktop drag path");
+  await ready(alice);
+  await openDm(alice, seed);
+
+  const mark = `swipe-neg-${Date.now()}`;
+  await send(alice, mark);
+  const bubble = alice.locator("#messages .ed-bubble", { hasText: mark }).last();
+  await expect(bubble).toBeVisible();
+
+  const box = await bubble.boundingBox();
+  const x = box.x + box.width - 12;
+
+  // Axis-dominant DOWN, past the same distance that would open a reply sideways.
+  await alice.mouse.move(x, box.y + 4);
+  await alice.mouse.down();
+  for (const dy of [20, 45, 75, 100]) await alice.mouse.move(x, box.y + 4 + dy);
+  await alice.mouse.up();
+
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "a vertical drag opened the reply bar — text selection and scrolling would both quote by accident",
+  ).toBeHidden();
+
+  // `toBeHidden` is also satisfied by a gesture layer that is simply dead, which would make this
+  // whole test a green light over a broken feature (#581 review). So the same message is then
+  // swiped for real: if the recogniser answers that, the silence above was a decision.
+  await swipeReply(alice, bubble);
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "the recogniser did not answer a real swipe either — the negative above proved nothing",
+  ).toBeVisible({ timeout: 5000 });
+});
+
+test("a short sideways nudge does not reach the reply threshold", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/mobile/.test(testInfo.project.name), "desktop drag path");
+  await ready(alice);
+  await openDm(alice, seed);
+
+  const mark = `swipe-short-${Date.now()}`;
+  await send(alice, mark);
+  const bubble = alice.locator("#messages .ed-bubble", { hasText: mark }).last();
+  await expect(bubble).toBeVisible();
+
+  const box = await bubble.boundingBox();
+  const y = box.y + box.height / 2;
+
+  // Half the 56px threshold: the gesture is deliberately hard to trigger by accident, and the
+  // number that makes it so is worth a test of its own.
+  await alice.mouse.move(box.x + box.width - 12, y);
+  await alice.mouse.down();
+  for (const dx of [10, 20, 28]) await alice.mouse.move(box.x + box.width - 12 - dx, y);
+  await alice.mouse.up();
+
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "half a swipe opened a reply — the threshold is not being applied",
+  ).toBeHidden();
+
+  // Same reason as above: a threshold that rejects everything is not a threshold. Cross it.
+  await swipeReply(alice, bubble);
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "a full swipe opened nothing either — the gesture path is dead, so the nudge proved nothing",
+  ).toBeVisible({ timeout: 5000 });
 });

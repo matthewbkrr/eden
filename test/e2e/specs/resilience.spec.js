@@ -98,4 +98,68 @@ test.describe("resilience", () => {
     await expect(alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${cid}"]`)).toHaveCount(0)
     expect(alice.__diag.pageErrors).toEqual([])
   })
+
+  // The other two ways out of a failed send (#393/R009). Resend was covered above; these are the
+  // ones that decide whether a person can clear the red ●! without reloading — and "Resend N",
+  // which only exists once more than one send has failed and is therefore the branch most likely
+  // to rot unnoticed.
+  test("the fail menu deletes a failed node, and offers Resend N once a second one fails", async ({
+    alice,
+    seed,
+  }, testInfo) => {
+    await alice.goto(`/app/c/${seed.dm_id}`)
+    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await alice.waitForFunction(() => !!window.__edSendQueue)
+
+    const fail = (id, body) =>
+      alice.evaluate(([i, b]) => window.__edSendQueue.markFailed(i, b), [id, body])
+
+    // Slugged: the id goes into a `[data-client-id="…"]` selector, and a project name carrying a
+    // quote would break the selector rather than the product (#581 review).
+    const tag = testInfo.project.name.replace(/\W/g, "")
+    const first = `r009-del-${tag}-${Date.now()}`
+    await fail(first, `${first} body`)
+    const firstNode = alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${first}"]`)
+    await expect(firstNode).toBeVisible()
+
+    // One failed send: the batch item has nothing to batch, so it must not be offered. Addressed
+    // by its own attribute — its label carries both a count and a translation, so matching on
+    // text or position was a test of the wording rather than the behaviour (#581 review).
+    await firstNode.locator(".ed-msg-failed__bang").click()
+    const menu = alice.locator(".ed-fail-menu")
+    await expect(menu).toBeVisible()
+    await expect(menu.locator("[data-resend-all]")).toHaveCount(0)
+    await alice.keyboard.press("Escape")
+    await expect(menu).toHaveCount(0)
+
+    // A second failure brings it out.
+    const second = `r009-del2-${tag}-${Date.now()}`
+    await fail(second, `${second} body`)
+    await expect(
+      alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${second}"]`),
+    ).toBeVisible()
+
+    await firstNode.locator(".ed-msg-failed__bang").click()
+    await expect(menu).toBeVisible()
+
+    await expect(
+      menu.locator("[data-resend-all]"),
+      "the batch resend never appeared with two failed sends",
+    ).toHaveCount(1)
+
+    // Delete removes THIS node and leaves the other one alone — the failed pile is per message,
+    // not one lump. Addressed by its danger class rather than by position: the batch item appears
+    // and disappears above it, and a test that counts from the end would fire a resend the day the
+    // order changes (#581 review).
+    await menu.locator(".ed-menu__item--danger").click()
+    await expect(firstNode).toHaveCount(0)
+    await expect(
+      alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${second}"]`),
+      "deleting one failed message took the other with it",
+    ).toBeVisible()
+
+    // Nothing was sent by any of this: Delete is a discard, not a send.
+    await expect(alice.locator("#messages").getByText(`${first} body`)).toHaveCount(0)
+    expect(alice.__diag.pageErrors).toEqual([])
+  })
 })
