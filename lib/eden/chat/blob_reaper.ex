@@ -89,6 +89,12 @@ defmodule Eden.Chat.BlobReaper do
 
     orphans = Enum.sort(orphans)
 
+    # Re-read from the database in ONE pass over the candidates rather than two queries per orphan
+    # per source: the freshness this buys is the same (it happens after the snapshot, immediately
+    # before the deletes), and a first run on a neglected box can have thousands of candidates —
+    # per-orphan round trips would turn a nightly job into an hour of chatter (#584 review).
+    orphans = orphans -- still_referenced(orphans)
+
     # Counted by what the store actually did, not by what was asked of it. A delete that failed
     # (a lock, a permission, a vanished mount) leaves the blob exactly where it was, and a log
     # line claiming otherwise is worse than no log at all: the leak stays, and the one place that
@@ -107,7 +113,11 @@ defmodule Eden.Chat.BlobReaper do
         # written, not when a row started pointing at them (#584 review). Orphans are rare, so this
         # is a handful of indexed lookups, and it is the difference between "probably unreferenced"
         # and "unreferenced now".
-        reap(key, {ok, bad})
+        # ...and once more for THIS key, immediately before deleting it. The batch above is the
+        # cheap bulk pass; this is the one that has to be fresh, because between the two a row can
+        # start pointing at the blob and the delete is irreversible. One query per source, not two:
+        # exact name and rendition-source in a single condition (#584 review).
+        if still_orphan?(key), do: tally(Storage.delete(key), {ok, bad}), else: {ok, bad}
       end)
 
     Logger.info(
@@ -159,39 +169,69 @@ defmodule Eden.Chat.BlobReaper do
     end)
   end
 
-  defp reap(key, {ok, bad}) do
-    if still_orphan?(key), do: tally(Storage.delete(key), {ok, bad}), else: {ok, bad}
-  end
-
   defp tally(:ok, {ok, bad}), do: {ok + 1, bad}
   defp tally({:error, _reason}, {ok, bad}), do: {ok, bad + 1}
 
-  # Is this key still unreferenced RIGHT NOW?
+  # Which of these candidates the database points at RIGHT NOW.
   #
-  # Its own name first, then — for a rendition — its source. A stored blob can be referenced under
-  # a name that merely looks like a variant, and asking only about the source would delete it; a
-  # variant is referenced by nothing directly, and asking only about its own name would delete
-  # every rendered size (#584 review). Mirrors `kept?/2`, which the snapshot pass uses.
-  defp still_orphan?(key) do
-    referenced =
-      referenced_exactly?(key) or
-        case Regex.named_captures(@variant, key) do
-          %{"stem" => stem} -> referenced_like?(stem <> ".%")
-          nil -> false
-        end
+  # Asked by exact name and — for a rendition — by its source's stem, mirroring `kept?/2`: a stored
+  # blob can be referenced under a name that merely looks like a variant, and a variant is
+  # referenced by nothing directly (#584 review).
+  defp still_referenced([]), do: []
 
-    not referenced
+  defp still_referenced(keys) do
+    stems =
+      for key <- keys, captures = Regex.named_captures(@variant, key), into: %{} do
+        {captures["stem"], key}
+      end
+
+    exact = Enum.filter(keys, &referenced_exactly?(&1, keys))
+
+    from_stems =
+      for {stem, key} <- stems, referenced_like?(escape_like(stem) <> ".%"), do: key
+
+    Enum.uniq(exact ++ from_stems)
   end
 
-  defp referenced_exactly?(key) do
-    Enum.any?(sources(), fn {schema, field} ->
-      Repo.exists?(from(s in schema, where: field(s, ^field) == ^key))
+  defp still_orphan?(key) do
+    pattern =
+      case Regex.named_captures(@variant, key) do
+        %{"stem" => stem} -> escape_like(stem) <> ".%"
+        # A name that cannot be a rendition still needs a pattern for the one query; its own
+        # escaped name matches only itself.
+        nil -> escape_like(key)
+      end
+
+    not Enum.any?(sources(), fn {schema, field} ->
+      Repo.exists?(
+        from(s in schema,
+          where:
+            field(s, ^field) == ^key or
+              fragment("? LIKE ? ESCAPE ?", field(s, ^field), ^pattern, "\\")
+        )
+      )
     end)
   end
 
+  defp referenced_exactly?(key, all) do
+    key in Enum.flat_map(sources(), fn {schema, field} ->
+      Repo.all(from(s in schema, where: field(s, ^field) in ^all, select: field(s, ^field)))
+    end)
+  end
+
+  # `_` is a LIKE wildcard and `Storage.build_key/2` mints keys from base64url, which uses it — an
+  # unescaped stem therefore matches keys it has nothing to do with. That direction is fail-SAFE
+  # (garbage is kept, never data deleted), but it means a leak that no run would ever reclaim
+  # (#584 review). Escaped the same way `Eden.Chat` escapes search terms.
+  defp escape_like(term), do: String.replace(term, ~r/[\\%_]/, fn ch -> "\\" <> ch end)
+
   defp referenced_like?(pattern) do
     Enum.any?(sources(), fn {schema, field} ->
-      Repo.exists?(from(s in schema, where: like(field(s, ^field), ^pattern)))
+      Repo.exists?(
+        from(s in schema,
+          where: fragment("? LIKE ? ESCAPE ?", field(s, ^field), ^pattern, "\\")
+        )
+      )
     end)
   end
 

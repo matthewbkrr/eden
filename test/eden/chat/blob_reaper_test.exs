@@ -240,6 +240,24 @@ defmodule Eden.Chat.BlobReaperTest do
     assert Storage.exists?(group_avatar), "a group's avatar was reaped"
   end
 
+  test "an underscore in a key is a literal, not a LIKE wildcard" do
+    user = user_fixture()
+
+    # `Storage.build_key/2` mints names from base64url, which uses `_` — and `_` matches any single
+    # character in LIKE. An unescaped pattern would let this referenced avatar keep an unrelated
+    # orphan alive forever (#584 review).
+    referenced = store("avatars/aXb.jpg", 30 * @day)
+    orphan = store("avatars/a_b@192.webp", 30 * @day)
+    Repo.update!(Ecto.Changeset.change(user, avatar_key: referenced))
+
+    run()
+
+    assert Storage.exists?(referenced), "the referenced avatar was deleted"
+
+    refute Storage.exists?(orphan),
+           "an orphan survived because its stem was read as a LIKE pattern — `a_b` matched `aXb`"
+  end
+
   test "an adapter that cannot enumerate sweeps nothing" do
     key = store("attachments/unknowable.jpg", 2 * @day)
 
