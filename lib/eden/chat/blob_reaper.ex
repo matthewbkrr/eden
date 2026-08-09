@@ -101,22 +101,11 @@ defmodule Eden.Chat.BlobReaper do
     # would have shown it says everything is fine (#584 review).
     {removed, failed} =
       Enum.reduce(orphans, {0, 0}, fn key, {ok, bad} ->
-        # Re-checked against the database immediately before the delete.
-        #
-        # The window is not zero and cannot be: storage is not the database, so no lock spans both.
-        # What it is, is microseconds instead of the minutes a snapshot-only sweep leaves open —
-        # and reaching it takes a row starting to point at a blob that was already 24 hours old,
-        # i.e. re-using an existing key rather than writing a new one, which is not something any
-        # path in this app does today (#584 review). The inventory and the
-        # reference set are a snapshot, and a blob can become referenced after it was taken — the
-        # write-time grace says nothing about that window, because it is about when the BYTES were
-        # written, not when a row started pointing at them (#584 review). Orphans are rare, so this
-        # is a handful of indexed lookups, and it is the difference between "probably unreferenced"
-        # and "unreferenced now".
-        # ...and once more for THIS key, immediately before deleting it. The batch above is the
-        # cheap bulk pass; this is the one that has to be fresh, because between the two a row can
-        # start pointing at the blob and the delete is irreversible. One query per source, not two:
-        # exact name and rendition-source in a single condition (#584 review).
+        # Asked once more for THIS key, immediately before deleting it. The batch above is the
+        # cheap bulk pass; this is the one that has to be FRESH, because a row can start pointing
+        # at the blob in between and the delete is irreversible. The window cannot be closed
+        # entirely — storage is not the database, so no lock spans both — but it can be
+        # microseconds instead of the minutes a snapshot-only sweep leaves open.
         if still_orphan?(key), do: tally(Storage.delete(key), {ok, bad}), else: {ok, bad}
       end)
 
@@ -185,8 +174,21 @@ defmodule Eden.Chat.BlobReaper do
         {captures["stem"], key}
       end
 
-    exact = Enum.filter(keys, &referenced_exactly?(&1, keys))
+    # Asked ONCE for the whole candidate list, then filtered in memory. Written as a filter over a
+    # function that queried, this ran the full set of per-source queries for every candidate — the
+    # batch pass doing N times the work of the per-key pass it was introduced to replace (#584
+    # review).
+    referenced_now =
+      sources()
+      |> Enum.flat_map(fn {schema, field} ->
+        Repo.all(from(s in schema, where: field(s, ^field) in ^keys, select: field(s, ^field)))
+      end)
+      |> MapSet.new()
 
+    exact = Enum.filter(keys, &MapSet.member?(referenced_now, &1))
+
+    # Stems still need one query each: a rendition's source is not in the candidate list, so no
+    # single `in` covers them. There are only as many as there are variant-shaped candidates.
     from_stems =
       for {stem, key} <- stems, referenced_like?(escape_like(stem) <> ".%"), do: key
 
@@ -210,12 +212,6 @@ defmodule Eden.Chat.BlobReaper do
               fragment("? LIKE ? ESCAPE ?", field(s, ^field), ^pattern, "\\")
         )
       )
-    end)
-  end
-
-  defp referenced_exactly?(key, all) do
-    key in Enum.flat_map(sources(), fn {schema, field} ->
-      Repo.all(from(s in schema, where: field(s, ^field) in ^all, select: field(s, ^field)))
     end)
   end
 
