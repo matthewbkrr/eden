@@ -74,6 +74,28 @@ defmodule Eden.Storage.Local do
   @impl true
   def exists?(key), do: File.exists?(path(key))
 
+  @impl true
+  # sobelow_skip ["Traversal.FileModule"]
+  def list_keys do
+    root = Application.fetch_env!(:eden, __MODULE__)[:root]
+
+    keys =
+      root
+      |> Path.join("**/*")
+      |> Path.wildcard()
+      # A temp file is a write in progress, not a blob: it has no key, and the rename that gives
+      # it one may still be coming (see atomic_write/2).
+      |> Enum.reject(&(File.dir?(&1) or String.contains?(Path.basename(&1), ".tmp-")))
+      |> Enum.flat_map(fn file ->
+        case File.stat(file, time: :posix) do
+          {:ok, %{mtime: mtime}} -> [{Path.relative_to(file, root), mtime}]
+          _ -> []
+        end
+      end)
+
+    {:ok, keys}
+  end
+
   # Resolve a key under the root, refusing to escape it (defense in depth — keys
   # are app-generated, never user-supplied).
   defp path(key) do

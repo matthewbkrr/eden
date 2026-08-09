@@ -27,7 +27,17 @@ defmodule Eden.Storage do
   """
   @callback read_range(key, {first :: non_neg_integer, last :: non_neg_integer}) ::
               {:ok, binary} | {:error, term}
-  @optional_callbacks local_path: 1, read_range: 2
+  @doc """
+  Every key the store holds, with the unix timestamp it was last written.
+
+  Optional: only an adapter that can enumerate its own contents implements it, and only the blob
+  reconciler (#385/R128) asks. The facade answers `:error` where it is missing, and the reaper
+  treats that as "this store cannot be swept" rather than "the store is empty" — deleting nothing
+  is the only safe reading of an unknown inventory.
+  """
+  @callback list_keys() :: {:ok, [{key, written_at :: integer}]} | :error
+
+  @optional_callbacks local_path: 1, read_range: 2, list_keys: 0
 
   @doc "Store the file at `source_path` under `key`."
   def put(key, source_path), do: adapter().put(key, source_path)
@@ -88,6 +98,15 @@ defmodule Eden.Storage do
   def build_key(prefix, ext) do
     random = 16 |> :crypto.strong_rand_bytes() |> Base.url_encode64(padding: false)
     "#{prefix}/#{random}.#{ext}"
+  end
+
+  @doc """
+  Every key in the store with its write time, or `:error` when the adapter cannot enumerate.
+  """
+  def list_keys do
+    mod = adapter()
+
+    if function_exported?(mod, :list_keys, 0), do: mod.list_keys(), else: :error
   end
 
   defp adapter, do: Application.fetch_env!(:eden, __MODULE__)[:adapter]

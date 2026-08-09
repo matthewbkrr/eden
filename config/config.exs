@@ -21,7 +21,14 @@ config :eden, Oban,
   plugins: [
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     # Reclaim expired auth tokens once a day (#238) — off-peak, no urgency.
-    {Oban.Plugins.Cron, crontab: [{"23 3 * * *", Eden.Accounts.TokenPruner}]}
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"23 3 * * *", Eden.Accounts.TokenPruner},
+       # Blobs nothing references (#385/R128) — a crash between storing bytes and committing the
+       # row leaves them behind, and every other cleanup path is tied to a delete that never
+       # happened.
+       {"47 4 * * *", Eden.Chat.BlobReaper}
+     ]}
   ]
 
 # Blob storage. Local disk on dev; swap the adapter (S3-compatible) in prod via
