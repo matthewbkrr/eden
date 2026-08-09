@@ -89,12 +89,6 @@ defmodule Eden.Chat.BlobReaper do
 
     orphans = Enum.sort(orphans)
 
-    # A cheap bulk pass first: one chunked `in` per source drops the candidates the database still
-    # names, so the per-key pass below only walks what is left. On a neglected box the candidate
-    # list is thousands long, and this is what keeps a nightly job from becoming an hour of round
-    # trips (#584 review).
-    orphans = orphans -- still_referenced(orphans)
-
     # Counted by what the store actually did, not by what was asked of it. A delete that failed
     # (a lock, a permission, a vanished mount) leaves the blob exactly where it was, and a log
     # line claiming otherwise is worse than no log at all: the leak stays, and the one place that
@@ -135,60 +129,22 @@ defmodule Eden.Chat.BlobReaper do
       end
   end
 
-  # Streamed, not loaded. Attachments are the table that grows without bound here, and a nightly
-  # job has no reason to hold every key of it in memory at once (#584 review); the fold goes
-  # straight into the set the sweep needs.
+  # Loaded plainly. A stream and a chunked bulk pass lived here for a while, built for a table of
+  # millions; this app has a few thousand attachments, so both were machinery for a size that does
+  # not exist — and the bulk pass only existed to make the per-key check below cheaper, a layer
+  # serving a layer. Deleted on purpose: when the numbers change, the measurement comes first.
   defp referenced_keys do
     empty = %{keys: MapSet.new(), stems: MapSet.new()}
 
     Enum.reduce(sources(), empty, fn {schema, field}, acc ->
-      {:ok, collected} =
-        Repo.transaction(
-          fn ->
-            from(s in schema, where: not is_nil(field(s, ^field)), select: field(s, ^field))
-            |> Repo.stream(max_rows: 500)
-            |> Enum.reduce(acc, &remember/2)
-          end,
-          # A stream holds its transaction open for as long as the walk takes, and the default 15s
-          # pool timeout is a limit on the DATABASE being slow, not on this job being long.
-          timeout: :infinity
-        )
-
-      collected
+      from(s in schema, where: not is_nil(field(s, ^field)), select: field(s, ^field))
+      |> Repo.all()
+      |> Enum.reduce(acc, &remember/2)
     end)
   end
 
   defp tally(:ok, {ok, bad}), do: {ok + 1, bad}
   defp tally({:error, _reason}, {ok, bad}), do: {ok, bad + 1}
-
-  # Which of these candidates the database names by their EXACT key, right now.
-  #
-  # Only the exact check, deliberately: a rendition is matched by a LIKE on its source's stem,
-  # which is the same query the per-key pass runs immediately afterwards, so doing it here too
-  # bought a second round trip and nothing else (#584 review).
-  defp still_referenced([]), do: []
-
-  defp still_referenced(keys) do
-    # Asked ONCE for the whole candidate list, then filtered in memory. Written as a filter over a
-    # function that queried, this ran the full set of per-source queries for every candidate — the
-    # batch pass doing N times the work of the per-key pass it was introduced to replace (#584
-    # review).
-    # Chunked: every key in an `in` is a bound parameter, and PostgreSQL takes 65535 of them. The
-    # run where that matters is the FIRST one on a box that has been leaking for months — the exact
-    # run this module exists for, which would otherwise crash instead of reclaiming anything
-    # (#584 review).
-    referenced_now =
-      keys
-      |> Enum.chunk_every(1_000)
-      |> Enum.flat_map(fn chunk ->
-        Enum.flat_map(sources(), fn {schema, field} ->
-          Repo.all(from(s in schema, where: field(s, ^field) in ^chunk, select: field(s, ^field)))
-        end)
-      end)
-      |> MapSet.new()
-
-    Enum.filter(keys, &MapSet.member?(referenced_now, &1))
-  end
 
   defp still_orphan?(key) do
     pattern =
