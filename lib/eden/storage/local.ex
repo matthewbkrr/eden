@@ -87,10 +87,12 @@ defmodule Eden.Storage.Local do
       # it one may still be coming (see atomic_write/2). Matched as the SUFFIX atomic_write appends
       # rather than anywhere in the name, so a legitimate key that merely contains those characters
       # is not skipped and then reaped as unknown (#584 review).
-      |> Enum.reject(&(File.dir?(&1) or Regex.match?(~r/\.tmp-[\w-]+$/, &1)))
+      |> Enum.reject(&Regex.match?(~r/\.tmp-[\w-]+$/, &1))
+      # One stat per entry, which also answers "is it a directory" — asking File.dir?/1 first and
+      # File.stat/2 after walked the filesystem twice for every blob (#584 review).
       |> Enum.flat_map(fn file ->
         case File.stat(file, time: :posix) do
-          {:ok, %{mtime: mtime}} -> [{Path.relative_to(file, root), mtime}]
+          {:ok, %{type: :regular, mtime: mtime}} -> [{Path.relative_to(file, root), mtime}]
           _ -> []
         end
       end)

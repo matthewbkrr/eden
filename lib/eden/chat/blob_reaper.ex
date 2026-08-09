@@ -104,18 +104,28 @@ defmodule Eden.Chat.BlobReaper do
       end
   end
 
+  # Streamed, not loaded. Attachments are the table that grows without bound here, and a nightly
+  # job has no reason to hold every key of it in memory at once (#584 review); the accumulator it
+  # folds into is the set the sweep actually needs. Both columns come from the same row, so one
+  # pass covers them.
   defp referenced_keys do
-    # One pass over attachments for both columns: they live in the same row, and the table is the
-    # big one here (#584 review).
-    attachment_keys =
-      from(a in Attachment, select: {a.storage_key, a.thumbnail_key})
-      |> Repo.all()
-      |> Enum.flat_map(fn {storage, thumb} -> Enum.reject([storage, thumb], &is_nil/1) end)
+    empty = %{keys: MapSet.new(), stems: MapSet.new()}
 
-    avatar_keys = Repo.all(from u in User, where: not is_nil(u.avatar_key), select: u.avatar_key)
+    {:ok, from_attachments} =
+      Repo.transaction(fn ->
+        from(a in Attachment, select: {a.storage_key, a.thumbnail_key})
+        |> Repo.stream(max_rows: 500)
+        |> Enum.reduce(empty, fn {storage, thumb}, acc ->
+          [storage, thumb] |> Enum.reject(&is_nil/1) |> Enum.reduce(acc, &remember/2)
+        end)
+      end)
 
-    keys = attachment_keys ++ avatar_keys
+    from(u in User, where: not is_nil(u.avatar_key), select: u.avatar_key)
+    |> Repo.all()
+    |> Enum.reduce(from_attachments, &remember/2)
+  end
 
-    %{keys: MapSet.new(keys), stems: MapSet.new(keys, &Path.rootname/1)}
+  defp remember(key, %{keys: keys, stems: stems}) do
+    %{keys: MapSet.put(keys, key), stems: MapSet.put(stems, Path.rootname(key))}
   end
 end

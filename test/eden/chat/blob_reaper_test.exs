@@ -4,7 +4,8 @@ defmodule Eden.Chat.BlobReaperTest do
 
   A sweeper that deletes by absence is only as safe as the things that stop it, so those are what
   this file is about: the grace period that protects an upload in flight, the rule that keeps a
-  derived variant alive with its source, and the refusal to sweep a store it cannot enumerate.
+  derived variant alive with its source, the refusal to sweep a store it cannot enumerate, and the
+  honesty of its own report.
   """
   use Eden.DataCase, async: false
 
@@ -36,14 +37,24 @@ defmodule Eden.Chat.BlobReaperTest do
 
     if age_seconds > 0 do
       {:ok, path} = Storage.local_path(key)
-      old = System.system_time(:second) - age_seconds
-      File.touch!(path, old)
+      File.touch!(path, System.system_time(:second) - age_seconds)
     end
 
     key
   end
 
   defp run, do: :ok = BlobReaper.perform(%Oban.Job{})
+
+  defp with_adapter(module, fun) do
+    previous = Application.get_env(:eden, Eden.Storage)
+    Application.put_env(:eden, Eden.Storage, adapter: module)
+
+    try do
+      fun.()
+    after
+      Application.put_env(:eden, Eden.Storage, previous)
+    end
+  end
 
   test "an old blob nothing references is reclaimed" do
     key = store("attachments/orphan.jpg", 2 * @day)
@@ -90,19 +101,45 @@ defmodule Eden.Chat.BlobReaperTest do
     refute Storage.exists?(gone_variant), "a rendition of a blob nobody references survived"
   end
 
-  test "an adapter that cannot enumerate sweeps nothing" do
-    key = store("attachments/unknowable.jpg", 2 * @day)
-    previous = Application.get_env(:eden, Eden.Storage)
-    Application.put_env(:eden, Eden.Storage, adapter: __MODULE__.BlindAdapter)
-    on_exit(fn -> Application.put_env(:eden, Eden.Storage, previous) end)
+  test "a stored blob whose own name looks like a variant is protected by its own reference" do
+    user = user_fixture()
+    # Not a rendition of anything: this IS the referenced key, and it merely happens to be shaped
+    # like one. Reading it only as a variant would delete a blob the database points at.
+    key = store("avatars/looks-like@192.webp", 30 * @day)
+    Repo.update!(Ecto.Changeset.change(user, avatar_key: key))
 
     run()
 
-    Application.put_env(:eden, Eden.Storage, previous)
+    assert Storage.exists?(key),
+           "a referenced key was reaped because its name resembled a variant"
+  end
+
+  test "an adapter that cannot enumerate sweeps nothing" do
+    key = store("attachments/unknowable.jpg", 2 * @day)
+
+    with_adapter(__MODULE__.BlindAdapter, &run/0)
 
     assert Storage.exists?(key),
            "the sweep ran against a store it cannot list — an unknown inventory must mean " <>
              "delete nothing, not delete everything the database does not name"
+  end
+
+  test "a delete the store refuses is not counted as reclaimed" do
+    key = store("attachments/undeletable.jpg", 2 * @day)
+
+    # A stub adapter, not a chmod: permission bits do not stop root, and CI runs in a container
+    # where root is the default — the test would then delete the blob and fail on its own setup
+    # rather than on the behaviour (#584 review).
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        with_adapter(__MODULE__.RefusingAdapter, &run/0)
+      end)
+
+    assert Storage.exists?(key),
+           "the blob is gone — this test no longer exercises a failed delete"
+
+    assert log =~ "could not be deleted", "a refused delete was reported as a reclaimed orphan"
+    refute log =~ "1 orphan(s) of", "the count claimed a removal that never happened"
   end
 
   defmodule BlindAdapter do
@@ -121,37 +158,22 @@ defmodule Eden.Chat.BlobReaperTest do
     def exists?(_key), do: false
   end
 
-  test "a stored blob whose own name looks like a variant is still protected by its reference" do
-    user = user_fixture()
-    # Not a rendition of anything: this IS the referenced key, and it merely happens to be shaped
-    # like one. Reading it only as a variant would delete a blob the database points at.
-    key = store("avatars/looks-like@192.webp", 30 * @day)
-    Repo.update!(Ecto.Changeset.change(user, avatar_key: key))
+  defmodule RefusingAdapter do
+    @moduledoc "Lists like Local, refuses every delete — a locked file, a read-only mount."
+    @behaviour Eden.Storage
 
-    run()
+    @impl true
+    defdelegate put(key, path), to: Eden.Storage.Local
+    @impl true
+    defdelegate put_binary(key, binary), to: Eden.Storage.Local
+    @impl true
+    defdelegate read(key), to: Eden.Storage.Local
+    @impl true
+    defdelegate exists?(key), to: Eden.Storage.Local
+    @impl true
+    defdelegate list_keys(), to: Eden.Storage.Local
 
-    assert Storage.exists?(key),
-           "a referenced key was reaped because its name resembled a variant"
-  end
-
-  test "a delete the store refuses is not counted as reclaimed" do
-    key = store("attachments/undeletable.jpg", 2 * @day)
-    {:ok, path} = Storage.local_path(key)
-
-    # Read-only directory: the file cannot be unlinked, so the sweep must report the failure rather
-    # than claim the orphan is gone.
-    dir = Path.dirname(path)
-    File.chmod!(dir, 0o500)
-    on_exit(fn -> File.chmod(dir, 0o700) end)
-
-    log = ExUnit.CaptureLog.capture_log(fn -> run() end)
-
-    File.chmod!(dir, 0o700)
-
-    assert Storage.exists?(key),
-           "the blob is gone — this test no longer exercises a failed delete"
-
-    assert log =~ "could not be deleted", "a refused delete was reported as a reclaimed orphan"
-    refute log =~ "1 orphan(s) of", "the count claimed a removal that never happened"
+    @impl true
+    def delete(_key), do: {:error, :eacces}
   end
 end
