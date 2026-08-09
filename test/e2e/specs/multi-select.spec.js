@@ -416,8 +416,13 @@ test("a reaction from the other side re-streams a selected row without deselecti
   const row = alice.locator(".ed-msg", { hasText: mine }).first()
   await expect(row).toHaveClass(/ed-msg--selected/)
 
-  // Bob reacts, which broadcasts {:reaction_changed} and re-streams the row for alice.
-  const theirMenu = await openMenu(bob, bob.locator(".ed-bubble", { hasText: mine }).first())
+  // Bob reacts, which broadcasts {:reaction_changed} and re-streams the row for alice. Waited for
+  // on his side first: the locator would auto-wait anyway, but on the default timeout rather than
+  // one chosen for replication, and a menu opened on a row that has not arrived is a timeout with
+  // a misleading name (#580 review).
+  const theirRow = bob.locator(".ed-bubble", { hasText: mine }).first()
+  await expect(theirRow, "the message never reached bob").toBeVisible({ timeout: 8000 })
+  const theirMenu = await openMenu(bob, theirRow)
   await theirMenu.locator(".ed-menu__reacts [data-emoji]").first().click()
 
   await expect(row.locator(".ed-react"), "the reaction never reached alice's row").toHaveCount(1, {
