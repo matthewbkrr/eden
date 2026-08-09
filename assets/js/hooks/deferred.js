@@ -118,9 +118,10 @@ function placeholder(name) {
     // `liveSocket.hooks` should still carry this.
     __lazyPlaceholder: name,
     mounted() {
-      // A Set, not a list. What matters is WHICH callbacks were missed, not how many times: a
-      // page patched a thousand times while the bundle is in flight would otherwise collect a
-      // thousand copies of the word "updated" (#578 review). Four names, insertion-ordered.
+      // A Set, not a list, and only for the two callbacks that are NOTIFICATIONS: a page patched a
+      // thousand times while the bundle is in flight would otherwise collect a thousand copies of
+      // the word "updated", and knowing it was patched twice is worth nothing over knowing it was
+      // patched (#578 review).
       this.__queued = new Set()
       this.__gone = false
 
@@ -148,6 +149,13 @@ function placeholder(name) {
         Object.assign(this, real)
         start?.call(this)
 
+        // Connection is a STATE, not a log. Queuing `disconnected`/`reconnected` and replaying them
+        // was wrong in both directions: as a list it replayed ancient history, and as a Set it
+        // collapsed drop→recover→drop into drop→recover, handing over to a hook that believes it is
+        // online while the socket is down (#578 review). The hook only ever needed to know where
+        // things stand NOW — which is one question, asked once.
+        if (this.liveSocket && !this.liveSocket.isConnected()) real.disconnected?.call(this)
+
         // Cleared BEFORE the replay, and iterated from a snapshot. A queued callback the real hook
         // does not define still resolves to the placeholder's own method, which puts the name back
         // — replaying from the live collection meant the loop picking up what it had just added,
@@ -159,25 +167,17 @@ function placeholder(name) {
 
       whenLoaded().then(attach)
     },
-    // Each of these survives the handover only when the real hook does NOT define it — then the
-    // queue is already null and the push is a no-op.
-    //
-    // The connection pair is queued and replayed on purpose. A socket that drops while the bundle
-    // is in flight would otherwise hand over to a hook that believes it is online — SendQueue would
-    // keep marking sends as live with nothing carrying them (#578 review). Replayed in the order
-    // they happened, so a drop-and-recover ends where reality is.
+    // Both survive the handover only when the real hook does NOT define them — then the queue is
+    // already null and the add is a no-op.
     beforeUpdate() {
       this.__queued?.add("beforeUpdate")
     },
     updated() {
       this.__queued?.add("updated")
     },
-    disconnected() {
-      this.__queued?.add("disconnected")
-    },
-    reconnected() {
-      this.__queued?.add("reconnected")
-    },
+    // Deliberately dropped rather than queued: the handover asks the socket directly, above.
+    disconnected() {},
+    reconnected() {},
     destroyed() {
       this.__gone = true
     },
