@@ -97,13 +97,19 @@ test("the video overlay is a modal dialog, and gives focus back when it closes",
   // ...and the clip stops. A closed overlay that keeps playing audio is the bug the close handler
   // exists for, and moving that handler onto the dialog's own `close` event is exactly the kind of
   // change that can silently drop it.
-  expect(
-    await alice.evaluate(() => {
-      const v = document.querySelector("#ed-video-modal .ed-video-modal__player")
-      return v.paused && !v.getAttribute("src")
-    }),
-    "the video kept its source after the overlay closed",
-  ).toBe(true)
+  // Polled: the dialog hides the moment `close()` runs, while the handler that stops the clip is
+  // an event listener on it — asserting immediately raced the product rather than testing it
+  // (#585 review).
+  await expect
+    .poll(
+      () =>
+        alice.evaluate(() => {
+          const v = document.querySelector("#ed-video-modal .ed-video-modal__player")
+          return v.paused && !v.getAttribute("src")
+        }),
+      { message: "the video kept playing after the overlay closed", timeout: 5000 },
+    )
+    .toBe(true)
 })
 
 function hasFfmpeg() {

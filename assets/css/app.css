@@ -951,9 +951,6 @@ html {
   .ed-video-modal[open] {
     display: grid;
   }
-  .ed-video-modal::backdrop {
-    background: oklch(0 0 0 / 0.9);
-  }
   .ed-video-modal__player {
     max-width: calc(100dvw - 3rem);
     max-height: calc(100dvh - 3rem);
