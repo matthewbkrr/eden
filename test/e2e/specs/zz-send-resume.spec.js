@@ -39,8 +39,7 @@ test("the store drops what is stale, hides what is sent, and keeps the order (#3
       await store.put({ ...base, id: "r-stale", order: 0, createdAt: now - DAY - 60_000 })
       await store.put({ ...base, id: "r-sent", order: 9, status: "sent", createdAt: now })
       const live = await store.listUnfinished(arg.user)
-      // Read a second time: the stale one must be GONE from the store, not merely filtered out of
-      // the answer, and the delivered one must still be there (it is another queue's business).
+      // Read a second time: the answer has to be stable, not a one-off of the first pass.
       const again = await store.listUnfinished(arg.user)
       return { first: live.map((r) => r.id), second: again.map((r) => r.id) }
     })()
@@ -51,15 +50,22 @@ test("the store drops what is stale, hides what is sent, and keeps the order (#3
   expect(rows.first, "the queue came back wrong").toEqual(["r-first", "r-second"])
   expect(rows.second, "a second read disagreed with the first").toEqual(["r-first", "r-second"])
 
+  // Read the row STRAIGHT out of IndexedDB. Asking `listUnfinished` again would only prove the
+  // record stays hidden from that one API — and hidden is not gone: a store that filters instead
+  // of deleting grows without bound (#580 review).
   const stale = await store(
     alice,
     `return (async () => {
-       const all = await store.listUnfinished(arg.user)
-       return all.some((r) => r.id === "r-stale")
+       const db = await store.db()
+       return await new Promise((resolve) => {
+         const req = db.transaction("items", "readonly").objectStore("items").get("r-stale")
+         req.onsuccess = () => resolve(!!req.result)
+         req.onerror = () => resolve(true)
+       })
      })()`,
-    { user },
+    {},
   )
-  expect(stale, "the stale record was filtered out but never deleted").toBe(false)
+  expect(stale, "the stale record was filtered out of the answer but never deleted").toBe(false)
 
   await store(
     alice,
@@ -83,6 +89,9 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
   const user = await alice.locator("#composer").getAttribute("data-sender-id")
   const conv = await alice.locator("#composer").getAttribute("data-conversation-id")
   const clientId = `resume-${Date.now()}`
+  // Unique per run: this conversation is seeded once and outlives the run, so a fixed name could
+  // be satisfied by a file an earlier run had already sent (#580 review).
+  const name = `resumed-${clientId}.txt`
 
   // What a send that was interrupted mid-upload leaves behind: the File itself, keyed to this
   // conversation and this person. Written directly rather than by killing a real upload, because
@@ -103,14 +112,14 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
        albumCid: null,
        clientId: arg.clientId,
        groupId: null,
-       name: "resumed.txt",
+       name: arg.name,
        sizeLabel: "12 B",
        type: "text/plain",
-       file: new File(["resumed-body"], "resumed.txt", { type: "text/plain" }),
+       file: new File(["resumed-body"], arg.name, { type: "text/plain" }),
        status: "queued",
        createdAt: Date.now(),
      })`,
-    { user, conv, clientId },
+    { user, conv, clientId, name },
   )
 
   await alice.reload()
@@ -121,7 +130,7 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
   // card is a race with the product rather than a test of it: what has to be true is that the
   // interrupted file ends up sent, and that its optimistic twin does not outlive it.
   await expect(
-    alice.locator("#messages").getByText("resumed.txt").first(),
+    alice.locator("#messages").getByText(name).first(),
     "the interrupted file was never resumed after the reload",
   ).toBeVisible({ timeout: 30_000 })
 
@@ -130,11 +139,17 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
   })
 
   // Nothing is left to resume a second time — a record that outlives its send is how one file
-  // becomes two.
-  const left = await store(
-    alice,
-    `return (async () => (await store.listUnfinished(arg.user)).filter((r) => r.queueId === arg.q).length)()`,
-    { user, q: clientId },
-  )
-  expect(left, "the delivered file is still queued for resume").toBe(0)
+  // becomes two. Polled, not read once: the record is dropped when the send SETTLES, a beat after
+  // the row appears, so a single read here was racing the product rather than testing it.
+  await expect
+    .poll(
+      () =>
+        store(
+          alice,
+          `return (async () => (await store.listUnfinished(arg.user)).filter((r) => r.queueId === arg.q).length)()`,
+          { user, q: clientId },
+        ),
+      { message: "the delivered file is still queued for resume", timeout: 10_000 },
+    )
+    .toBe(0)
 })

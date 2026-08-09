@@ -451,7 +451,6 @@ test("a selected message deleted by its author leaves the bar counting what is l
   // Bob deletes his own message for everyone — one of the two alice has selected.
   const bobMenu = await openMenu(bob, bob.locator(".ed-bubble", { hasText: theirs }).first())
   await bobMenu.locator(".ed-menu__item", { hasText: "Delete for everyone" }).click()
-  await alice.locator(".ed-ask [data-ok]").waitFor({ state: "detached" }).catch(() => {})
   await bob.locator(".ed-ask [data-ok]").click()
 
   // The body is gone for alice: whatever the bar now says, acting on it must not act on a message
