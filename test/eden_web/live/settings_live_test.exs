@@ -342,6 +342,47 @@ defmodule EdenWeb.SettingsLiveTest do
              "the move button did not reorder the folders"
     end
 
+    test "moving twice walks the same folder, not the row under the cursor (#366/R093)", %{
+      conn: conn
+    } do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      for name <- ["A", "B", "C"] do
+        view |> form("form[phx-submit=create_folder]", %{"name" => name}) |> render_submit()
+      end
+
+      [a, _b, _c] = Chat.list_folders(scope)
+
+      # The button keeps a stable id across the re-render, so the same control keeps meaning the
+      # same folder — which is what lets a keyboard user press it twice.
+      down = ~s|button#folder-move-down-#{a.id}|
+      view |> element(down) |> render_click()
+      view |> element(down) |> render_click()
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == ["B", "C", "A"],
+             "the second press moved something else — the control is not tied to its folder"
+    end
+
+    test "a direction that is neither up nor down does nothing (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Family"}) |> render_submit()
+      before = Chat.list_folders(scope) |> Enum.map(& &1.name)
+      [work, _] = Chat.list_folders(scope)
+
+      render_click(view, "move_folder", %{"id" => to_string(work.id), "dir" => "sideways"})
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == before,
+             "an unknown direction was treated as a move"
+    end
+
     test "a move for a folder that is not mine changes nothing (#366/R093)", %{conn: conn} do
       user = user_fixture()
       scope = Scope.for_user(user)

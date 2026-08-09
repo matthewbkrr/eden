@@ -1087,6 +1087,7 @@ defmodule EdenWeb.SettingsLive do
                   </p>
 
                   <ul id="folder-list" phx-hook="Sortable" class="space-y-1.5">
+                    <% total = length(@folder_rows) %>
                     <%= for {row, at} <- Enum.with_index(@folder_rows) do %>
                       <li
                         :if={row == :all}
@@ -1104,7 +1105,7 @@ defmodule EdenWeb.SettingsLive do
                           id="all"
                           label={gettext("All Chats")}
                           at={at}
-                          total={length(@folder_rows)}
+                          total={total}
                         />
                         <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
                           {gettext("All Chats")}
@@ -1129,7 +1130,7 @@ defmodule EdenWeb.SettingsLive do
                           id={to_string(row.id)}
                           label={row.name}
                           at={at}
-                          total={length(@folder_rows)}
+                          total={total}
                         />
                         <%!-- Renames save on Enter AND on blur (clicking away / leaving
                         the page), with a flash confirming the change. Focusing
@@ -1475,9 +1476,16 @@ defmodule EdenWeb.SettingsLive do
         {:noreply, socket}
 
       at ->
-        to = if dir == "up", do: at - 1, else: at + 1
+        # Named directions, not "up or whatever else": a forged or malformed event used to fall
+        # through to a move down (#586 review).
+        to =
+          case dir do
+            "up" -> at - 1
+            "down" -> at + 1
+            _ -> nil
+          end
 
-        if to in 0..(length(ids) - 1)//1 do
+        if to && to in 0..(length(ids) - 1)//1 do
           moved = ids |> List.delete_at(at) |> List.insert_at(to, id)
           Chat.reorder_folders(socket.assigns.current_scope, moved)
           {:noreply, reload_folders(socket)}
@@ -1594,6 +1602,11 @@ defmodule EdenWeb.SettingsLive do
   #
   # Disabled at the ends rather than hidden: a control that disappears at the edge of a list makes
   # the row jump under the finger that is using it.
+  #
+  # Each button carries a STABLE id built from the row it moves. The whole list re-renders after a
+  # move, and without an id morphdom patches by position — so the button under the keyboard would
+  # become a different row's button, and pressing "down" twice would walk two different folders
+  # (#586 review).
   defp folder_move(assigns) do
     # The caller already knows where the row sits; taking the position rather than searching for it
     # means the list is walked once to render, not once per row (#586 review).
@@ -1603,6 +1616,7 @@ defmodule EdenWeb.SettingsLive do
     <span class="ed-folder-row__move">
       <button
         type="button"
+        id={"folder-move-up-#{@id}"}
         class="ed-folder-row__move-btn"
         phx-click="move_folder"
         phx-value-id={@id}
@@ -1614,6 +1628,7 @@ defmodule EdenWeb.SettingsLive do
       </button>
       <button
         type="button"
+        id={"folder-move-down-#{@id}"}
         class="ed-folder-row__move-btn"
         phx-click="move_folder"
         phx-value-id={@id}
