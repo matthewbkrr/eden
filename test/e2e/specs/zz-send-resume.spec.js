@@ -25,55 +25,65 @@ test("the store drops what is stale, hides what is sent, and keeps the order (#3
   await alice.waitForFunction(() => !!window.__edenSendStore)
 
   const user = await alice.locator("#composer").getAttribute("data-sender-id")
+  // Unique per run and swept in a `finally`: these rows live in a real IndexedDB that outlives the
+  // test, so a failed assertion used to leave them behind for the next run to trip over (#580
+  // review).
+  const tag = `t${Date.now()}`
 
-  const rows = await store(
-    alice,
-    `
+  try {
+    const rows = await store(
+      alice,
+      `
     const now = Date.now()
     const DAY = 24 * 60 * 60 * 1000
-    const base = { userId: arg.user, convId: 1, queueId: "q", kind: "file", status: "queued" }
+    const t = arg.tag
+    const base = { userId: arg.user, convId: 1, queueId: t, kind: "file", status: "queued" }
     return (async () => {
       // Two live records queued out of order, one long dead, one already delivered.
-      await store.put({ ...base, id: "r-second", order: 1, createdAt: now - 1000 })
-      await store.put({ ...base, id: "r-first", order: 0, createdAt: now - 2000 })
-      await store.put({ ...base, id: "r-stale", order: 0, createdAt: now - DAY - 60_000 })
-      await store.put({ ...base, id: "r-sent", order: 9, status: "sent", createdAt: now })
+      await store.put({ ...base, id: t + "-second", order: 1, createdAt: now - 1000 })
+      await store.put({ ...base, id: t + "-first", order: 0, createdAt: now - 2000 })
+      await store.put({ ...base, id: t + "-stale", order: 0, createdAt: now - DAY - 60_000 })
+      await store.put({ ...base, id: t + "-sent", order: 9, status: "sent", createdAt: now })
       const live = await store.listUnfinished(arg.user)
       // Read a second time: the answer has to be stable, not a one-off of the first pass.
       const again = await store.listUnfinished(arg.user)
       return { first: live.map((r) => r.id), second: again.map((r) => r.id) }
     })()
   `,
-    { user },
-  )
+      { user, tag },
+    )
 
-  expect(rows.first, "the queue came back wrong").toEqual(["r-first", "r-second"])
-  expect(rows.second, "a second read disagreed with the first").toEqual(["r-first", "r-second"])
+    expect(rows.first, "the queue came back wrong").toEqual([`${tag}-first`, `${tag}-second`])
+    expect(rows.second, "a second read disagreed with the first").toEqual([
+      `${tag}-first`,
+      `${tag}-second`,
+    ])
 
-  // Read the row STRAIGHT out of IndexedDB. Asking `listUnfinished` again would only prove the
-  // record stays hidden from that one API — and hidden is not gone: a store that filters instead
-  // of deleting grows without bound (#580 review).
-  const stale = await store(
-    alice,
-    `return (async () => {
-       const db = await store.db()
-       return await new Promise((resolve) => {
-         const req = db.transaction("items", "readonly").objectStore("items").get("r-stale")
-         req.onsuccess = () => resolve(!!req.result)
-         req.onerror = () => resolve(true)
-       })
-     })()`,
-    {},
-  )
-  expect(stale, "the stale record was filtered out of the answer but never deleted").toBe(false)
-
-  await store(
-    alice,
-    `return (async () => {
-       for (const id of ["r-first", "r-second", "r-sent"]) await store.remove(id)
-     })()`,
-    {},
-  )
+    // Read the row STRAIGHT out of IndexedDB. Asking `listUnfinished` again would only prove the
+    // record stays hidden from that one API — and hidden is not gone: a store that filters instead
+    // of deleting grows without bound (#580 review).
+    const stale = await store(
+      alice,
+      `return (async () => {
+         const db = await store.db()
+         return await new Promise((resolve) => {
+           const req = db.transaction("items", "readonly").objectStore("items").get(arg.tag + "-stale")
+           req.onsuccess = () => resolve(!!req.result)
+           req.onerror = () => resolve(true)
+         })
+       })()`,
+      { tag },
+    )
+    expect(stale, "the stale record was filtered out of the answer but never deleted").toBe(false)
+  } finally {
+    await store(
+      alice,
+      `return (async () => {
+         for (const s of ["-first", "-second", "-stale", "-sent"]) await store.remove(arg.tag + s)
+       })()`,
+      { tag },
+    )
+  }
 })
 
 test("a file left in the store is picked back up after a reload (#361/R016)", async ({

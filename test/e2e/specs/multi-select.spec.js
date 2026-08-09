@@ -453,9 +453,16 @@ test("a selected message deleted by its author leaves the bar counting what is l
   await bobMenu.locator(".ed-menu__item", { hasText: "Delete for everyone" }).click()
   await bob.locator(".ed-ask [data-ok]").click()
 
-  // The body is gone for alice: whatever the bar now says, acting on it must not act on a message
-  // that no longer exists.
+  // The body is gone for alice...
   await expect(alice.locator("#messages").getByText(theirs)).toHaveCount(0, { timeout: 12_000 })
+
+  // ...and the bar stops counting it. The server prunes the vanished row out of the selection
+  // MapSet (`prune_removed_message`, #379/R056); without that assertion this test would pass on a
+  // bar still claiming two messages, which is the exact desync it is named after (#580 review).
+  await expect(
+    alice.locator(".ed-selbar__count"),
+    "the bar is still counting a message that is no longer in the stream",
+  ).toContainText("1", { timeout: 12_000 })
 
   // Deleting the remaining selection still works and still targets the right message — the failure
   // this guards is a delete that errors out (or takes the wrong row) because the set went stale.
