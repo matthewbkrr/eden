@@ -183,6 +183,63 @@ defmodule Eden.Chat.BlobReaperTest do
              "an inventory that can leave the root is a deleter that can leave the root"
   end
 
+  test "every schema field holding a storage key is declared as a reference source" do
+    # The one mistake that makes this module dangerous is forgetting a column: a key nobody declared
+    # is a key the sweep calls garbage, and the deletion is permanent. So the schemas are read and
+    # compared against what the reaper says it covers — this test found channel and group avatars
+    # missing on its first run, which the sweep would have deleted wholesale (#584 review).
+    declared =
+      MapSet.new(BlobReaper.sources(), fn {schema, field} ->
+        {schema.__schema__(:source), field}
+      end)
+
+    in_schemas =
+      "lib/eden/**/*.ex"
+      |> Path.wildcard()
+      |> Enum.flat_map(fn path ->
+        source = File.read!(path)
+
+        case Regex.run(~r/schema "(\w+)" do/, source) do
+          [_, table] ->
+            ~r/field :(\w+_key),/
+            |> Regex.scan(source)
+            |> Enum.map(fn [_, field] -> {table, String.to_atom(field)} end)
+
+          _ ->
+            []
+        end
+      end)
+      |> MapSet.new()
+
+    missing = MapSet.difference(in_schemas, declared)
+
+    assert Enum.empty?(missing),
+           "these columns hold storage keys and the reaper does not know about them, so it would " <>
+             "delete what they point at: #{inspect(Enum.to_list(missing))}"
+  end
+
+  test "avatars of channels and groups are references too" do
+    channel_avatar = store("avatars/channel.jpg", 30 * @day)
+    group_avatar = store("avatars/group.jpg", 30 * @day)
+
+    user = user_fixture()
+
+    {:ok, channel} =
+      Eden.Channels.create_channel(Eden.Accounts.Scope.for_user(user), %{"name" => "Reap"})
+
+    Repo.update!(Ecto.Changeset.change(channel, avatar_key: channel_avatar))
+
+    {:ok, group} =
+      Eden.Chat.create_conversation(Eden.Accounts.Scope.for_user(user), [user_fixture().id])
+
+    Repo.update!(Ecto.Changeset.change(group, avatar_key: group_avatar))
+
+    run()
+
+    assert Storage.exists?(channel_avatar), "a channel's avatar was reaped"
+    assert Storage.exists?(group_avatar), "a group's avatar was reaped"
+  end
+
   test "an adapter that cannot enumerate sweeps nothing" do
     key = store("attachments/unknowable.jpg", 2 * @day)
 
