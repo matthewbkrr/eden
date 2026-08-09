@@ -34,7 +34,7 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     {:ok, view, _html} =
       conn |> log_in_user(alice) |> live(~p"/channels/#{channel.id}/r/#{room.id}")
 
-    %{view: view, room: room, bob: bob}
+    %{view: view, room: room, alice: alice, bob: bob}
   end
 
   defp count_aggregate_queries(fun) do
@@ -89,13 +89,22 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
            "the badges were recomputed #{queries} times for ten messages — the burst is not being coalesced"
   end
 
-  test "the badge still updates after the window", %{view: view, room: room, bob: bob} do
-    {:ok, _} = Chat.create_message(Scope.for_user(bob), room.id, %{"body" => "one"})
-    render(view)
+  test "the badge itself catches up after the window", %{view: view, alice: alice, bob: bob} do
+    # A DM, NOT the open room: a message in the room the viewer is looking at is auto-read, so its
+    # badge would legitimately stay at zero and prove nothing. The messenger badge on the rail is
+    # an aggregate this session must recompute to learn about.
+    {:ok, dm} = Chat.create_conversation(Scope.for_user(bob), [alice.id])
+    refute render(view) =~ "ed-rail__badge"
+
+    {:ok, _} = Chat.create_message(Scope.for_user(bob), dm.id, %{"body" => "unread one"})
     Process.sleep(300)
 
-    # Coalescing may not swallow the recompute: the aggregates have to end up recomputed, or a
-    # badge would sit stale until the next unrelated event.
-    assert render(view) =~ "ed-rail"
+    # The VALUE, not the container. Asserting the rail markup exists proved nothing — it renders
+    # whether or not anything was recomputed, so the test passed with the recompute deleted, which
+    # is the one failure it was written to catch (#583 review, unanimous).
+    html = render(view)
+
+    assert html =~ ~r/ed-rail__badge[^>]*>\s*1\s*</,
+           "the rail badge does not read 1 after one unread DM — the aggregate was never recomputed"
   end
 end
