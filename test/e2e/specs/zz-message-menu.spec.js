@@ -200,3 +200,64 @@ test("swipe-to-reply still runs the same path as the menu item", async ({
   await expect(alice.locator(".ed-reply-bar").first()).toBeVisible({ timeout: 5000 });
   await expect(alice.locator("#composer-body")).toBeFocused();
 });
+
+// The other half of the gesture (#393/R062): what must NOT open a reply. A swipe recogniser that
+// only ever gets tested on the motion it is supposed to catch will happily catch everything —
+// and the cost lands on the two motions people make constantly over a message: selecting text,
+// and scrolling the feed.
+test("a vertical drag over a message selects text instead of opening a reply", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/mobile/.test(testInfo.project.name), "desktop drag path");
+  await ready(alice);
+  await openDm(alice, seed);
+
+  const mark = `swipe-neg-${Date.now()}`;
+  await send(alice, mark);
+  const bubble = alice.locator("#messages .ed-bubble", { hasText: mark }).last();
+  await expect(bubble).toBeVisible();
+
+  const box = await bubble.boundingBox();
+  const x = box.x + box.width - 12;
+
+  // Axis-dominant DOWN, past the same distance that would open a reply sideways.
+  await alice.mouse.move(x, box.y + 4);
+  await alice.mouse.down();
+  for (const dy of [20, 45, 75, 100]) await alice.mouse.move(x, box.y + 4 + dy);
+  await alice.mouse.up();
+
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "a vertical drag opened the reply bar — text selection and scrolling would both quote by accident",
+  ).toBeHidden();
+});
+
+test("a short sideways nudge does not reach the reply threshold", async ({
+  alice,
+  seed,
+}, testInfo) => {
+  test.skip(/mobile/.test(testInfo.project.name), "desktop drag path");
+  await ready(alice);
+  await openDm(alice, seed);
+
+  const mark = `swipe-short-${Date.now()}`;
+  await send(alice, mark);
+  const bubble = alice.locator("#messages .ed-bubble", { hasText: mark }).last();
+  await expect(bubble).toBeVisible();
+
+  const box = await bubble.boundingBox();
+  const y = box.y + box.height / 2;
+
+  // Half the 56px threshold: the gesture is deliberately hard to trigger by accident, and the
+  // number that makes it so is worth a test of its own.
+  await alice.mouse.move(box.x + box.width - 12, y);
+  await alice.mouse.down();
+  for (const dx of [10, 20, 28]) await alice.mouse.move(box.x + box.width - 12 - dx, y);
+  await alice.mouse.up();
+
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "half a swipe opened a reply — the threshold is not being applied",
+  ).toBeHidden();
+});
