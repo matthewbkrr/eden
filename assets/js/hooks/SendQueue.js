@@ -2163,11 +2163,14 @@ export default {
     const menu = document.createElement("div")
     menu.className = "ed-menu ed-fail-menu"
     menu.setAttribute("role", "menu")
-    const item = (label, onClick, danger) => {
+    const item = (label, onClick, danger, mark) => {
       const b = document.createElement("button")
       b.type = "button"
       b.className = "ed-menu__item" + (danger ? " ed-menu__item--danger" : "")
       b.setAttribute("role", "menuitem")
+      // A stable handle for the one action whose LABEL is a moving target — it carries a count and
+      // a translation, so a test can address it by neither (#581 review).
+      if (mark) b.dataset[mark] = ""
       b.textContent = label
       b.addEventListener("click", () => { this.closeFailMenu(); onClick() })
       menu.appendChild(b)
@@ -2177,7 +2180,7 @@ export default {
     if (failed.length > 1) {
       const label = (d.resendMany || "Resend {count} messages")
         .replace("{count}", failed.length)
-      item(label, () => { failed.forEach((n) => this.resendNode(n)); this.flush() })
+      item(label, () => { failed.forEach((n) => this.resendNode(n)); this.flush() }, false, "resendAll")
     }
     item(d.delete || "Delete", () => node.remove(), true)
     document.body.appendChild(menu)

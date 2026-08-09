@@ -168,6 +168,16 @@ test("Delete for everyone asks first, then tombstones the message", async ({ ali
   expect(asked, "no confirmation was asked before deleting for everyone").toBeGreaterThan(0);
 });
 
+// A full leftward swipe: past the 56px threshold, axis-dominant, from the trailing edge.
+async function swipeReply(page, bubble) {
+  const box = await bubble.boundingBox();
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width - 12, y);
+  await page.mouse.down();
+  for (const dx of [20, 45, 75, 100]) await page.mouse.move(box.x + box.width - 12 - dx, y);
+  await page.mouse.up();
+}
+
 test("swipe-to-reply still runs the same path as the menu item", async ({
   alice,
   seed,
@@ -236,6 +246,15 @@ test("a vertical drag over a message does not open a reply", async ({
     alice.locator(".ed-reply-bar").first(),
     "a vertical drag opened the reply bar — text selection and scrolling would both quote by accident",
   ).toBeHidden();
+
+  // `toBeHidden` is also satisfied by a gesture layer that is simply dead, which would make this
+  // whole test a green light over a broken feature (#581 review). So the same message is then
+  // swiped for real: if the recogniser answers that, the silence above was a decision.
+  await swipeReply(alice, bubble);
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "the recogniser did not answer a real swipe either — the negative above proved nothing",
+  ).toBeVisible({ timeout: 5000 });
 });
 
 test("a short sideways nudge does not reach the reply threshold", async ({
@@ -265,4 +284,11 @@ test("a short sideways nudge does not reach the reply threshold", async ({
     alice.locator(".ed-reply-bar").first(),
     "half a swipe opened a reply — the threshold is not being applied",
   ).toBeHidden();
+
+  // Same reason as above: a threshold that rejects everything is not a threshold. Cross it.
+  await swipeReply(alice, bubble);
+  await expect(
+    alice.locator(".ed-reply-bar").first(),
+    "a full swipe opened nothing either — the gesture path is dead, so the nudge proved nothing",
+  ).toBeVisible({ timeout: 5000 });
 });

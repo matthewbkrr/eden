@@ -122,11 +122,13 @@ test.describe("resilience", () => {
     const firstNode = alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${first}"]`)
     await expect(firstNode).toBeVisible()
 
-    // One failed send: the batch item has nothing to batch, so it must not be offered.
+    // One failed send: the batch item has nothing to batch, so it must not be offered. Addressed
+    // by its own attribute — its label carries both a count and a translation, so matching on
+    // text or position was a test of the wording rather than the behaviour (#581 review).
     await firstNode.locator(".ed-msg-failed__bang").click()
     const menu = alice.locator(".ed-fail-menu")
     await expect(menu).toBeVisible()
-    await expect(menu.locator(".ed-menu__item")).toHaveCount(2)
+    await expect(menu.locator("[data-resend-all]")).toHaveCount(0)
     await alice.keyboard.press("Escape")
     await expect(menu).toHaveCount(0)
 
@@ -140,11 +142,8 @@ test.describe("resilience", () => {
     await firstNode.locator(".ed-msg-failed__bang").click()
     await expect(menu).toBeVisible()
 
-    // By CONTENT, not by count: three items would also be satisfied by a duplicated Resend. The
-    // batch item is the only one carrying the number of failed sends, and the number is the same
-    // in every locale (#581 review).
     await expect(
-      menu.locator(".ed-menu__item", { hasText: "2" }),
+      menu.locator("[data-resend-all]"),
       "the batch resend never appeared with two failed sends",
     ).toHaveCount(1)
 
