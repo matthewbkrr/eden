@@ -102,11 +102,11 @@ defmodule Eden.Storage.Local do
         walk(path, root)
 
       {:ok, %{type: :regular, mtime: mtime}} ->
-        # A temp file is a write in progress, not a blob: it has no key yet, and the rename that
-        # gives it one may still be coming (see atomic_write/2).
-        if Regex.match?(~r/\.tmp-[\w-]+$/, path),
-          do: [],
-          else: [{Path.relative_to(path, root), mtime}]
+        # Temp files are reported like anything else. A write in flight is protected by the sweep's
+        # grace period, which is the mechanism for exactly that; hiding them instead meant a
+        # `.tmp-` file left behind by a crash before the rename was invisible to the only thing
+        # that would ever clean it up (#584 review).
+        [{Path.relative_to(path, root), mtime}]
 
       _ ->
         []

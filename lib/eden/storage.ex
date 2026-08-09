@@ -106,7 +106,12 @@ defmodule Eden.Storage do
   def list_keys do
     mod = adapter()
 
-    if function_exported?(mod, :list_keys, 0), do: mod.list_keys(), else: :error
+    # `Code.ensure_loaded?` first: `function_exported?/3` answers false for a module that simply
+    # has not been loaded yet, which would silently turn "this adapter can be swept" into "skip the
+    # sweep" (#584 review).
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :list_keys, 0),
+      do: mod.list_keys(),
+      else: :error
   end
 
   defp adapter, do: Application.fetch_env!(:eden, __MODULE__)[:adapter]

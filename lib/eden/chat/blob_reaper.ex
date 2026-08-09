@@ -142,16 +142,31 @@ defmodule Eden.Chat.BlobReaper do
     |> Enum.reduce(from_attachments, &remember/2)
   end
 
-  # Is this exact key still unreferenced RIGHT NOW?
+  # Is this key still unreferenced RIGHT NOW?
   #
-  # Exact lookups only, no stem arithmetic in SQL: a variant becomes newly referenced exactly when
-  # its SOURCE does, and a source that starts being referenced during this run is a blob written
-  # during this run — younger than the grace period, so it was never a candidate to begin with.
+  # A variant is asked about by its SOURCE, the way the sweep reads it: `avatars/ab@192.webp` must
+  # survive if anything now points at `avatars/ab.<anything>`. Resting on "a newly referenced source
+  # is always a newly written blob, so the grace covers it" would make this correct only as long as
+  # no code anywhere re-points a row at an old key — an invariant this module cannot enforce and
+  # should not depend on (#584 review).
   defp still_orphan?(key) do
-    not (Repo.exists?(
-           from(a in Attachment, where: a.storage_key == ^key or a.thumbnail_key == ^key)
-         ) or
-           Repo.exists?(from(u in User, where: u.avatar_key == ^key)))
+    case Regex.named_captures(@variant, key) do
+      %{"stem" => stem} -> not referenced_like?(stem <> ".%")
+      nil -> not referenced_exactly?(key)
+    end
+  end
+
+  defp referenced_exactly?(key) do
+    Repo.exists?(from(a in Attachment, where: a.storage_key == ^key or a.thumbnail_key == ^key)) or
+      Repo.exists?(from(u in User, where: u.avatar_key == ^key))
+  end
+
+  defp referenced_like?(pattern) do
+    Repo.exists?(
+      from(a in Attachment,
+        where: like(a.storage_key, ^pattern) or like(a.thumbnail_key, ^pattern)
+      )
+    ) or Repo.exists?(from(u in User, where: like(u.avatar_key, ^pattern)))
   end
 
   defp remember(key, %{keys: keys, stems: stems}) do

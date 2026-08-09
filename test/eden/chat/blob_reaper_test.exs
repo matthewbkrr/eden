@@ -132,6 +132,38 @@ defmodule Eden.Chat.BlobReaperTest do
     refute Storage.exists?(first), "nothing was deleted at all — this test proved nothing"
   end
 
+  test "a variant whose source becomes referenced mid-sweep is not deleted" do
+    user = user_fixture()
+    first = store("attachments/deleted-first.jpg", 2 * @day)
+    source = store("avatars/late-source.jpg", 2 * @day)
+    variant = store("avatars/late-source@192.webp", 2 * @day)
+
+    # Nothing points at the variant directly, ever — it survives only through its source. So the
+    # re-check has to ask about the SOURCE, not about the variant's own name (#584 review).
+    Process.put(:reference_on_delete, {user, source})
+
+    with_adapter(__MODULE__.ReferencingAdapter, &run/0)
+
+    assert Storage.exists?(variant),
+           "the rendition was deleted although its source became referenced during the sweep"
+
+    refute Storage.exists?(first), "nothing was deleted at all — this test proved nothing"
+  end
+
+  test "a temp file left by a crashed write is eventually reclaimed" do
+    # `atomic_write/2` writes here and renames into place; a crash in between leaves this behind
+    # with nothing to ever clean it up unless the sweep can see it (#584 review).
+    orphan_temp = store("attachments/crashed.jpg.tmp-abc123", 2 * @day)
+    fresh_temp = store("attachments/writing-now.jpg.tmp-def456")
+
+    run()
+
+    refute Storage.exists?(orphan_temp), "a temp file from a crashed write was never reclaimed"
+
+    assert Storage.exists?(fresh_temp),
+           "a write in flight was reaped — the grace period is what protects it, not invisibility"
+  end
+
   test "a symlinked directory does not let the sweep escape the storage root" do
     outside_dir = Path.join(System.tmp_dir!(), "outside-#{System.unique_integer([:positive])}")
     File.mkdir_p!(outside_dir)
