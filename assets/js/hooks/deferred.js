@@ -118,7 +118,10 @@ function placeholder(name) {
     // `liveSocket.hooks` should still carry this.
     __lazyPlaceholder: name,
     mounted() {
-      this.__queued = []
+      // A Set, not a list. What matters is WHICH callbacks were missed, not how many times: a
+      // page patched a thousand times while the bundle is in flight would otherwise collect a
+      // thousand copies of the word "updated" (#578 review). Four names, insertion-ordered.
+      this.__queued = new Set()
       this.__gone = false
 
       const attach = (registry) => {
@@ -129,12 +132,12 @@ function placeholder(name) {
         const real = registry && registry[name]
 
         if (!real) {
-          // Nothing to hand over to — the fetch failed, or this bundle does not carry the name.
-          // Either way the queue has to stop growing: left as an array it would collect a string
-          // on every patch for the life of the page (#578 review). A failed fetch can still be
-          // retried by a later gesture, so this instance goes back to waiting.
-          this.__queued = null
-          if (!registry) whenLoaded().then(attach)
+          // Nothing to hand over to. A failed fetch can still be retried by a later gesture, so
+          // this instance goes back to waiting AND keeps collecting: dropping the queue for the
+          // duration of the retry made every patch in between a no-op, and the hook would then
+          // take over knowing nothing of what it missed (#578 review). Bounded by the Set.
+          if (registry) this.__queued = null
+          else whenLoaded().then(attach)
           return
         }
 
@@ -146,9 +149,9 @@ function placeholder(name) {
         start?.call(this)
 
         // Cleared BEFORE the replay, and iterated from a snapshot. A queued callback the real hook
-        // does not define still resolves to the placeholder's own method, which pushes the name
-        // back onto the queue — replaying from the live array meant `for...of` picking up what it
-        // had just appended, forever, freezing the tab (#578 review, P0).
+        // does not define still resolves to the placeholder's own method, which puts the name back
+        // — replaying from the live collection meant the loop picking up what it had just added,
+        // forever, freezing the tab (#578 review, P0).
         const queued = this.__queued || []
         this.__queued = null
         for (const cb of queued) this[cb]?.()
@@ -164,16 +167,16 @@ function placeholder(name) {
     // keep marking sends as live with nothing carrying them (#578 review). Replayed in the order
     // they happened, so a drop-and-recover ends where reality is.
     beforeUpdate() {
-      this.__queued?.push("beforeUpdate")
+      this.__queued?.add("beforeUpdate")
     },
     updated() {
-      this.__queued?.push("updated")
+      this.__queued?.add("updated")
     },
     disconnected() {
-      this.__queued?.push("disconnected")
+      this.__queued?.add("disconnected")
     },
     reconnected() {
-      this.__queued?.push("reconnected")
+      this.__queued?.add("reconnected")
     },
     destroyed() {
       this.__gone = true
