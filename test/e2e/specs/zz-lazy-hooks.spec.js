@@ -105,3 +105,46 @@ test("an element mounted before the bundle landed still answers afterwards", asy
     "the context menu never opened — the placeholder never handed the element over",
   ).toBeVisible({ timeout: 5000 })
 })
+
+// The handover asks the socket for the connection state instead of replaying the transitions it
+// missed (#578 review). That reads `this.liveSocket` on the hook instance — a getter ViewHook
+// defines, not a property the hook object owns — so it is worth proving rather than asserting in a
+// comment: a hook that takes over during an outage must know it is offline.
+test("a hook that takes over during an outage knows the socket is down", async ({
+  alice,
+  seed,
+}) => {
+  test.setTimeout(120_000)
+
+  let refuse = true
+  await alice.route("**/assets/js/lazy.js*", (route) =>
+    refuse ? route.abort("failed") : route.continue(),
+  )
+
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await ready(alice)
+  expect(await alice.evaluate(() => !!window.__edenLazyHooks)).toBe(false)
+
+  // The link drops while the hooks are still placeholders.
+  await alice.evaluate(() => window.liveSocket.disconnect())
+  await alice.waitForFunction(() => !window.liveSocket.isConnected())
+
+  // The bundle arrives now: SendQueue mounts into a page whose socket is down.
+  refuse = false
+  await alice.mouse.click(4, 4)
+  await loaded(alice)
+  await alice.waitForFunction(() => !!window.__edSendQueue)
+
+  expect(
+    await alice.evaluate(() => window.__edSendQueue.connected),
+    "the hook took over believing it was online — sends would be marked live with nothing carrying them",
+  ).toBe(false)
+
+  // ...and it recovers on its own when the link comes back, so the handover has not left it stuck
+  // in the offline state either.
+  await alice.evaluate(() => window.liveSocket.connect())
+  await alice.waitForFunction(() => window.liveSocket.isConnected())
+  await expect
+    .poll(() => alice.evaluate(() => window.__edSendQueue.connected), { timeout: 10_000 })
+    .toBe(true)
+})
