@@ -319,6 +319,132 @@ defmodule EdenWeb.SettingsLiveTest do
       refute html =~ "No folders yet"
     end
 
+    test "folders reorder without a mouse (#366/R093, R094)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Family"}) |> render_submit()
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == ["Work", "Family"]
+
+      [work, _family] = Chat.list_folders(scope)
+
+      # The control a keyboard reaches by Tab and a finger reaches by tapping. Reordering used to
+      # be native HTML5 drag and nothing else, which is neither.
+      view
+      |> element(~s|button[phx-value-id="#{work.id}"][phx-value-dir="down"]|)
+      |> render_click()
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == ["Family", "Work"],
+             "the move button did not reorder the folders"
+    end
+
+    test "moving twice walks the same folder, not the row under the cursor (#366/R093)", %{
+      conn: conn
+    } do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      for name <- ["A", "B", "C"] do
+        view |> form("form[phx-submit=create_folder]", %{"name" => name}) |> render_submit()
+      end
+
+      [a, _b, _c] = Chat.list_folders(scope)
+
+      # The button keeps a stable id across the re-render, so the same control keeps meaning the
+      # same folder — which is what lets a keyboard user press it twice.
+      down = ~s|button#folder-move-down-#{a.id}|
+      view |> element(down) |> render_click()
+      view |> element(down) |> render_click()
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == ["B", "C", "A"],
+             "the second press moved something else — the control is not tied to its folder"
+    end
+
+    test "a direction that is neither up nor down does nothing (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Family"}) |> render_submit()
+      before = Chat.list_folders(scope) |> Enum.map(& &1.name)
+      [work, _] = Chat.list_folders(scope)
+
+      render_click(view, "move_folder", %{"id" => to_string(work.id), "dir" => "sideways"})
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == before,
+             "an unknown direction was treated as a move"
+    end
+
+    test "a move for a folder that is not mine changes nothing (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Family"}) |> render_submit()
+      before = Chat.list_folders(scope) |> Enum.map(& &1.name)
+
+      # The id rides in from the client, so a foreign or invented one is a case to answer, not an
+      # impossibility to assume away.
+      render_click(view, "move_folder", %{"id" => "999999", "dir" => "up"})
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == before,
+             "a move naming a folder outside this account reordered something"
+    end
+
+    test "the virtual All Chats row moves too (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      assert Chat.all_chats_position(scope) == 0
+
+      # "All Chats" is a movable row with no folder behind it — the reorder speaks about it through
+      # the "all" sentinel, and its place is remembered per user rather than as a row order.
+      view
+      |> element(~s|button[phx-value-id="all"][phx-value-dir="down"]|)
+      |> render_click()
+
+      assert Chat.all_chats_position(scope) == 1,
+             "moving All Chats did nothing — its position is stored separately and was not written"
+    end
+
+    test "the row at the end offers no move past it (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Only"}) |> render_submit()
+
+      last = List.last(Chat.list_folders(Scope.for_user(user)))
+
+      # Disabled, not absent: a control that vanishes at the edge of a list moves the row out from
+      # under the finger pressing it. "All Chats" sits above and keeps its own controls — it is a
+      # movable row too, just not a deletable one.
+      assert has_element?(
+               view,
+               ~s|button[phx-value-id="#{last.id}"][phx-value-dir="down"][disabled]|
+             ),
+             "the last row offers a move past the end of the list"
+
+      assert has_element?(
+               view,
+               ~s|button[phx-value-id="#{last.id}"][phx-value-dir="up"]:not([disabled])|
+             ),
+             "the last row cannot be moved up either — the controls are inert"
+    end
+
     test "create, rename, delete, and reorder", %{conn: conn} do
       user = user_fixture()
       scope = Scope.for_user(user)

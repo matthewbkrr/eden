@@ -4671,6 +4671,38 @@ html {
   .ed-folder-row__handle--grab {
     cursor: grab;
   }
+  /* The keyboard/touch reorder controls (#366). Sized to the 44px tap target the rest of the app
+     uses on coarse pointers; a disabled end-of-list button keeps its space so the row cannot jump
+     under the finger pressing it. */
+  .ed-folder-row__move {
+    flex: none;
+    display: inline-flex;
+    gap: 0.125rem;
+  }
+  .ed-folder-row__move-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: var(--ed-radius-sm);
+    color: var(--ed-muted);
+    cursor: pointer;
+  }
+  .ed-folder-row__move-btn:hover:not(:disabled) {
+    background: var(--ed-surface-2);
+    color: var(--ed-ink);
+  }
+  .ed-folder-row__move-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  @media (pointer: coarse) {
+    .ed-folder-row__move-btn {
+      width: 2.75rem;
+      height: 2.75rem;
+    }
+  }
   .ed-folder-row__name {
     width: 100%;
     background: transparent;
