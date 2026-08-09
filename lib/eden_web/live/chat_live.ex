@@ -7,6 +7,10 @@ defmodule EdenWeb.ChatLive do
   """
   use EdenWeb, :live_view
 
+  # Folder tabs and the channel rail are aggregates, not rows: they are recomputed once per
+  # burst of badge-changing events rather than once per event (#372/R059).
+  @badge_coalesce_ms 40
+
   require Logger
 
   on_mount EdenWeb.RailHook
@@ -270,7 +274,9 @@ defmodule EdenWeb.ChatLive do
         channel_results: nil,
         room_search_open: false,
         room_search: "",
-        room_results: nil
+        room_results: nil,
+        # Set while a coalesced badge recompute is already on its way to this process (#372/R059).
+        badges_pending: false
       )
       |> stream(:thread, [])
       |> refresh_folders()
@@ -2702,8 +2708,7 @@ defmodule EdenWeb.ChatLive do
         {:noreply,
          socket
          |> put_sidebar_conversation(conversation.id)
-         |> refresh_folders()
-         |> refresh_rail()}
+         |> stale_badges()}
     end
   end
 
@@ -2736,10 +2741,14 @@ defmodule EdenWeb.ChatLive do
     {:noreply,
      socket
      |> put_sidebar_conversation(conversation_id, at: 0)
-     |> refresh_folders()
-     # Room activity bumps the channel's rail badge; for DM activity this is a
-     # cheap no-op recompute (DMs never contribute to channel aggregates).
-     |> refresh_rail()}
+     # Room activity bumps the channel's rail badge; DM activity leaves the channel aggregates
+     # alone but still moves a folder badge. Both ride the coalesced recompute.
+     |> stale_badges()}
+  end
+
+  # The one recompute a burst of badge-changing events collapses into (#372/R059).
+  def handle_info(:recompute_badges, socket) do
+    {:noreply, socket |> assign(badges_pending: false) |> refresh_folders() |> refresh_rail()}
   end
 
   # Folder set / membership / order / mute changed in one of the user's
@@ -8562,6 +8571,31 @@ defmodule EdenWeb.ChatLive do
       channels: Channels.list_channels(scope),
       messenger_unread: Chat.messenger_unread_total(scope)
     )
+  end
+
+  # The badges, recomputed ONCE per burst (#372/R059).
+  #
+  # One incoming message reaches a viewer as several events — the conversation's own activity,
+  # the read that auto-marking it produces, the folder/rail signals behind them — and each of
+  # them used to recompute the folder tabs and the channel rail on the spot. Measured: three
+  # `list_folders` and three `list_channels` for a single message in an open room, per viewer.
+  #
+  # A short window rather than a single mailbox hop. A hop alone collapses the events that are
+  # ALREADY queued, which measured 3 → 2: the second recompute comes from this session's own
+  # auto-mark-read, whose broadcast cannot exist yet when the first one is handled. The window
+  # catches it — and, in a busy room, catches the next messages too, which is where the arithmetic
+  # stops being about one message: ten arriving inside the window cost one recompute instead of
+  # thirty.
+  #
+  # @badge_coalesce_ms is far below the threshold at which a badge reads as late, and the row
+  # itself never waits — its own handler updates it immediately. Only the two AGGREGATES do.
+  defp stale_badges(socket) do
+    if socket.assigns.badges_pending do
+      socket
+    else
+      Process.send_after(self(), :recompute_badges, @badge_coalesce_ms)
+      assign(socket, badges_pending: true)
+    end
   end
 
   # #216: total unread for the browser-tab badge — messenger (DMs/groups, already
