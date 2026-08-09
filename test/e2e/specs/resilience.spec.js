@@ -114,7 +114,10 @@ test.describe("resilience", () => {
     const fail = (id, body) =>
       alice.evaluate(([i, b]) => window.__edSendQueue.markFailed(i, b), [id, body])
 
-    const first = `r009-del-${testInfo.project.name}-${Date.now()}`
+    // Slugged: the id goes into a `[data-client-id="…"]` selector, and a project name carrying a
+    // quote would break the selector rather than the product (#581 review).
+    const tag = testInfo.project.name.replace(/\W/g, "")
+    const first = `r009-del-${tag}-${Date.now()}`
     await fail(first, `${first} body`)
     const firstNode = alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${first}"]`)
     await expect(firstNode).toBeVisible()
@@ -128,7 +131,7 @@ test.describe("resilience", () => {
     await expect(menu).toHaveCount(0)
 
     // A second failure brings it out.
-    const second = `r009-del2-${testInfo.project.name}-${Date.now()}`
+    const second = `r009-del2-${tag}-${Date.now()}`
     await fail(second, `${second} body`)
     await expect(
       alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${second}"]`),
@@ -136,14 +139,20 @@ test.describe("resilience", () => {
 
     await firstNode.locator(".ed-msg-failed__bang").click()
     await expect(menu).toBeVisible()
+
+    // By CONTENT, not by count: three items would also be satisfied by a duplicated Resend. The
+    // batch item is the only one carrying the number of failed sends, and the number is the same
+    // in every locale (#581 review).
     await expect(
-      menu.locator(".ed-menu__item"),
+      menu.locator(".ed-menu__item", { hasText: "2" }),
       "the batch resend never appeared with two failed sends",
-    ).toHaveCount(3)
+    ).toHaveCount(1)
 
     // Delete removes THIS node and leaves the other one alone — the failed pile is per message,
-    // not one lump.
-    await menu.locator(".ed-menu__item").last().click()
+    // not one lump. Addressed by its danger class rather than by position: the batch item appears
+    // and disappears above it, and a test that counts from the end would fire a resend the day the
+    // order changes (#581 review).
+    await menu.locator(".ed-menu__item--danger").click()
     await expect(firstNode).toHaveCount(0)
     await expect(
       alice.locator(`#pending-messages .ed-msg-failed[data-client-id="${second}"]`),

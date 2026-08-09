@@ -202,10 +202,15 @@ test("swipe-to-reply still runs the same path as the menu item", async ({
 });
 
 // The other half of the gesture (#393/R062): what must NOT open a reply. A swipe recogniser that
-// only ever gets tested on the motion it is supposed to catch will happily catch everything —
-// and the cost lands on the two motions people make constantly over a message: selecting text,
-// and scrolling the feed.
-test("a vertical drag over a message selects text instead of opening a reply", async ({
+// only ever gets tested on the motion it is supposed to catch will happily catch everything — and
+// the cost lands on the two motions people make constantly over a message: selecting text, and
+// scrolling the feed.
+//
+// Only the reply half is asserted. Whether the drag still SELECTS is not observable here: a
+// synthetic mouse drag does not drive native selection in this harness at all — probed with a
+// plain horizontal drag inside a bubble whose computed `user-select` is `auto`, which also came
+// back empty (#581 review). Claiming it in a title would have been a promise the test cannot keep.
+test("a vertical drag over a message does not open a reply", async ({
   alice,
   seed,
 }, testInfo) => {
