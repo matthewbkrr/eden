@@ -3853,6 +3853,7 @@ defmodule EdenWeb.ChatLive do
             data-lb-next={gettext("Next")}
             data-lb-of={gettext("of")}
             data-lb-viewer={gettext("Photo viewer")}
+            data-lb-video={gettext("Video player")}
             data-lb-menu={gettext("Photo actions")}
             data-lb-show={gettext("Show in chat")}
             data-lb-save={gettext("Save")}
@@ -6840,12 +6841,18 @@ defmodule EdenWeb.ChatLive do
       |> assign(:errs, compose_errors(assigns.upload))
 
     ~H"""
+    <%!-- The only server-rendered modal that carried role/aria-modal/Escape without the hook that
+          makes them mean anything (#365/R073): Tab walked straight out into the page behind it,
+          and closing left focus wherever it had wandered to. --%>
     <div
       class="ed-compose"
       data-upload-preview
+      id="dlg-attachment-preview"
       role="dialog"
       aria-modal="true"
       aria-label={gettext("Attachment preview")}
+      phx-hook="FocusTrap"
+      tabindex="-1"
       phx-window-keydown="cancel_all_uploads"
       phx-key="Escape"
     >

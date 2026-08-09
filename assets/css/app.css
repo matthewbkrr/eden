@@ -930,18 +930,29 @@ html {
     border-radius: var(--ed-radius);
   }
   /* Full-screen player opened from a poster (the shared #ed-video-modal overlay). */
+  /* A native <dialog> since #365/R068 — hence the UA resets (a dialog is a centred, bordered,
+     auto-width box by default) and `[open]` instead of an --open class. */
   .ed-video-modal {
     position: fixed;
     inset: 0;
     z-index: 50;
     display: none;
     place-items: center;
+    width: 100dvw;
+    height: 100dvh;
+    max-width: 100dvw;
+    max-height: 100dvh;
     padding: 1.5rem;
+    margin: 0;
+    border: none;
     background: oklch(0 0 0 / 0.9);
     cursor: zoom-out;
   }
-  .ed-video-modal--open {
+  .ed-video-modal[open] {
     display: grid;
+  }
+  .ed-video-modal::backdrop {
+    background: oklch(0 0 0 / 0.9);
   }
   .ed-video-modal__player {
     max-width: calc(100dvw - 3rem);

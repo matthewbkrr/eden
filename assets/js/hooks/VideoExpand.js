@@ -37,9 +37,7 @@ export default {
     if (type) source.type = type
     video.appendChild(source)
     video.load()
-    box.classList.add("ed-video-modal--open")
-    document.body.style.overflow = "hidden"
-    document.addEventListener("keydown", box.__onKey)
+    box.showModal()
     // The opening tap is a user gesture, so play-with-sound is permitted.
     video.play && video.play().catch(() => {})
   },
@@ -47,10 +45,16 @@ export default {
     let box = document.getElementById("ed-video-modal")
     if (box) return box
 
-    box = document.createElement("div")
+    // A native <dialog>, like the photo viewer (#365/R068). It was a plain <div>: no role, no
+    // modal semantics, and Tab walked straight out of it into the chat behind — a keyboard user
+    // could focus and activate things they could not see. `showModal()` brings the top layer, the
+    // focus trap, focus return and Escape from the platform instead of four hand-rolled listeners.
+    box = document.createElement("dialog")
     box.id = "ed-video-modal"
     box.className = "ed-video-modal"
     const lbl = document.getElementById("message-scroll")?.dataset || {}
+    box.setAttribute("aria-label", lbl.lbVideo || "Video player")
+    box.setAttribute("tabindex", "-1")
     const xmark =
       "M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z"
     box.innerHTML =
@@ -58,9 +62,13 @@ export default {
       '<video class="ed-video-modal__player" controls playsinline></video>'
 
     const close = () => {
-      box.classList.remove("ed-video-modal--open")
-      document.body.style.overflow = ""
-      document.removeEventListener("keydown", box.__onKey)
+      if (box.open) box.close()
+    }
+
+    // Everything that has to happen however the dialog closed — the button, the scrim, Escape
+    // handled by the platform, or a navigation guard calling close(). One place, so a new way to
+    // dismiss it cannot forget to stop the audio.
+    box.addEventListener("close", () => {
       const v = box.querySelector(".ed-video-modal__player")
       // Stop playback + release the source so the clip can't keep playing audio
       // behind the closed overlay.
@@ -68,12 +76,10 @@ export default {
       v.innerHTML = ""
       v.removeAttribute("src")
       v.load()
-    }
+    })
+
     // Expose close for the global nav guard (#380/R187), like the Lightbox overlay.
     box.__close = close
-    box.__onKey = (e) => {
-      if (e.key === "Escape") close()
-    }
     box.addEventListener("click", (e) => {
       if (e.target.closest(".ed-video-modal__close")) return close()
       // Click on the scrim (anything but the player) closes.

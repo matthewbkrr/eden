@@ -22,7 +22,7 @@ if (!window.__edOverlayNavGuard) {
     const lb = document.getElementById("ed-lightbox")
     if (lb && lb.open) lb.__close && lb.__close()
     const vm = document.getElementById("ed-video-modal")
-    if (vm && vm.classList.contains("ed-video-modal--open")) vm.__close && vm.__close()
+    if (vm && vm.open) vm.__close && vm.__close()
   })
 }
 export default {
