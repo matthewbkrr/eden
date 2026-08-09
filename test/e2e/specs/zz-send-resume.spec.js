@@ -117,8 +117,8 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
   // database that outlives the run — and the next run would resume it (#580 review).
   try {
     await store(
-    alice,
-    `return store.put({
+      alice,
+      `return store.put({
        id: arg.clientId + ":0",
        userId: arg.user,
        queueId: arg.clientId,
