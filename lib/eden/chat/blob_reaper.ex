@@ -89,10 +89,10 @@ defmodule Eden.Chat.BlobReaper do
 
     orphans = Enum.sort(orphans)
 
-    # Re-read from the database in ONE pass over the candidates rather than two queries per orphan
-    # per source: the freshness this buys is the same (it happens after the snapshot, immediately
-    # before the deletes), and a first run on a neglected box can have thousands of candidates —
-    # per-orphan round trips would turn a nightly job into an hour of chatter (#584 review).
+    # A cheap bulk pass first: one chunked `in` per source drops the candidates the database still
+    # names, so the per-key pass below only walks what is left. On a neglected box the candidate
+    # list is thousands long, and this is what keeps a nightly job from becoming an hour of round
+    # trips (#584 review).
     orphans = orphans -- still_referenced(orphans)
 
     # Counted by what the store actually did, not by what was asked of it. A delete that failed
@@ -161,28 +161,14 @@ defmodule Eden.Chat.BlobReaper do
   defp tally(:ok, {ok, bad}), do: {ok + 1, bad}
   defp tally({:error, _reason}, {ok, bad}), do: {ok, bad + 1}
 
-  # Which of these candidates the database points at RIGHT NOW.
+  # Which of these candidates the database names by their EXACT key, right now.
   #
-  # Asked by exact name and — for a rendition — by its source's stem, mirroring `kept?/2`: a stored
-  # blob can be referenced under a name that merely looks like a variant, and a variant is
-  # referenced by nothing directly (#584 review).
+  # Only the exact check, deliberately: a rendition is matched by a LIKE on its source's stem,
+  # which is the same query the per-key pass runs immediately afterwards, so doing it here too
+  # bought a second round trip and nothing else (#584 review).
   defp still_referenced([]), do: []
 
   defp still_referenced(keys) do
-    # Grouped, not mapped: two renditions of one source (`ab@64.webp` and `ab@192.webp`) share a
-    # stem, and keying by it kept only the last — the others fell out of the batch pass entirely
-    # (#584 review). They were still caught by the per-key check before deletion, so nothing was
-    # ever wrongly deleted; the pre-filter simply did less than it claimed.
-    stems =
-      keys
-      |> Enum.flat_map(fn key ->
-        case Regex.named_captures(@variant, key) do
-          %{"stem" => stem} -> [{stem, key}]
-          nil -> []
-        end
-      end)
-      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
-
     # Asked ONCE for the whole candidate list, then filtered in memory. Written as a filter over a
     # function that queried, this ran the full set of per-source queries for every candidate — the
     # batch pass doing N times the work of the per-key pass it was introduced to replace (#584
@@ -201,17 +187,7 @@ defmodule Eden.Chat.BlobReaper do
       end)
       |> MapSet.new()
 
-    exact = Enum.filter(keys, &MapSet.member?(referenced_now, &1))
-
-    # Stems still need one query each: a rendition's source is not in the candidate list, so no
-    # single `in` covers them. There are only as many as there are variant-shaped candidates.
-    from_stems =
-      for {stem, sharing} <- stems,
-          referenced_like?(escape_like(stem) <> ".%"),
-          key <- sharing,
-          do: key
-
-    Enum.uniq(exact ++ from_stems)
+    Enum.filter(keys, &MapSet.member?(referenced_now, &1))
   end
 
   defp still_orphan?(key) do
@@ -239,16 +215,6 @@ defmodule Eden.Chat.BlobReaper do
   # (garbage is kept, never data deleted), but it means a leak that no run would ever reclaim
   # (#584 review). Escaped the same way `Eden.Chat` escapes search terms.
   defp escape_like(term), do: String.replace(term, ~r/[\\%_]/, fn ch -> "\\" <> ch end)
-
-  defp referenced_like?(pattern) do
-    Enum.any?(sources(), fn {schema, field} ->
-      Repo.exists?(
-        from(s in schema,
-          where: fragment("? LIKE ? ESCAPE ?", field(s, ^field), ^pattern, "\\")
-        )
-      )
-    end)
-  end
 
   defp remember(key, %{keys: keys, stems: stems}) do
     %{keys: MapSet.put(keys, key), stems: MapSet.put(stems, Path.rootname(key))}

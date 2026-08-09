@@ -193,23 +193,31 @@ defmodule Eden.Chat.BlobReaperTest do
         {schema.__schema__(:source), field}
       end)
 
+    # Split per `schema "..." do` block rather than per file, and both `field :x_key` and
+    # `field(:x_key, …)` are recognised: a file with two schemas used to hand every key column to
+    # the first one, and paren-style declarations were invisible — either way the guard could miss
+    # exactly the column it exists to find (#584 review).
     in_schemas =
       "lib/eden/**/*.ex"
       |> Path.wildcard()
       |> Enum.flat_map(fn path ->
-        source = File.read!(path)
+        path
+        |> File.read!()
+        |> String.split(~r/schema "/)
+        |> Enum.drop(1)
+        |> Enum.flat_map(fn block ->
+          [table | _] = String.split(block, "\"", parts: 2)
 
-        case Regex.run(~r/schema "(\w+)" do/, source) do
-          [_, table] ->
-            ~r/field :(\w+_key),/
-            |> Regex.scan(source)
-            |> Enum.map(fn [_, field] -> {table, String.to_atom(field)} end)
-
-          _ ->
-            []
-        end
+          ~r/field[ (]:(\w+_key)[,)]/
+          |> Regex.scan(block)
+          |> Enum.map(fn [_, field] -> {table, String.to_atom(field)} end)
+        end)
       end)
       |> MapSet.new()
+
+    assert MapSet.size(in_schemas) >= 5,
+           "the scan found #{MapSet.size(in_schemas)} key columns — it has stopped reading the " <>
+             "schemas, so it would pass no matter what the reaper declares"
 
     missing = MapSet.difference(in_schemas, declared)
 
