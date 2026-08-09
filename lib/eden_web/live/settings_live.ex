@@ -1082,12 +1082,12 @@ defmodule EdenWeb.SettingsLive do
                   <h2 style="font-size:0.9375rem; font-weight:600;">{gettext("Chat folders")}</h2>
                   <p class="mt-0.5 mb-4" style="color: var(--ed-muted); font-size:0.8125rem;">
                     {gettext(
-                      "Group your chats. Drag to reorder — \"All Chats\" can be moved but not deleted."
+                      "Group your chats. Drag or use the arrows to reorder — \"All Chats\" can be moved but not deleted."
                     )}
                   </p>
 
                   <ul id="folder-list" phx-hook="Sortable" class="space-y-1.5">
-                    <%= for row <- @folder_rows do %>
+                    <%= for {row, at} <- Enum.with_index(@folder_rows) do %>
                       <li
                         :if={row == :all}
                         draggable="true"
@@ -1100,7 +1100,12 @@ defmodule EdenWeb.SettingsLive do
                         >
                           <.icon name="hero-bars-3-micro" class="size-4" />
                         </span>
-                        <.folder_move id="all" label={gettext("All Chats")} rows={@folder_rows} />
+                        <.folder_move
+                          id="all"
+                          label={gettext("All Chats")}
+                          at={at}
+                          total={length(@folder_rows)}
+                        />
                         <span class="flex-1" style="font-weight:550; font-size:0.875rem;">
                           {gettext("All Chats")}
                         </span>
@@ -1120,7 +1125,12 @@ defmodule EdenWeb.SettingsLive do
                         >
                           <.icon name="hero-bars-3-micro" class="size-4" />
                         </span>
-                        <.folder_move id={to_string(row.id)} label={row.name} rows={@folder_rows} />
+                        <.folder_move
+                          id={to_string(row.id)}
+                          label={row.name}
+                          at={at}
+                          total={length(@folder_rows)}
+                        />
                         <%!-- Renames save on Enter AND on blur (clicking away / leaving
                         the page), with a flash confirming the change. Focusing
                         selects the whole name so it's clearly being edited. --%>
@@ -1455,15 +1465,25 @@ defmodule EdenWeb.SettingsLive do
   # commits, so there is one ordering path rather than two that can disagree.
   def handle_event("move_folder", %{"id" => id, "dir" => dir}, socket) do
     ids = Enum.map(socket.assigns.folder_rows, &row_id/1)
-    at = Enum.find_index(ids, &(&1 == id))
-    to = if dir == "up", do: (at || 0) - 1, else: (at || 0) + 1
 
-    if (at && to >= 0) and to < length(ids) do
-      moved = ids |> List.delete_at(at) |> List.insert_at(to, id)
-      Chat.reorder_folders(socket.assigns.current_scope, moved)
-      {:noreply, reload_folders(socket)}
-    else
-      {:noreply, socket}
+    # The id comes from the client, so "not in my list" is a case to answer rather than an
+    # impossibility. It used to be guarded with `at && … and …`, which raises BadBooleanError on a
+    # nil `at` instead of doing nothing — `and` demands a boolean on its left, and `nil && _` is
+    # nil (#586 review, and the test written to disprove the finding proved it instead).
+    case Enum.find_index(ids, &(&1 == id)) do
+      nil ->
+        {:noreply, socket}
+
+      at ->
+        to = if dir == "up", do: at - 1, else: at + 1
+
+        if to in 0..(length(ids) - 1)//1 do
+          moved = ids |> List.delete_at(at) |> List.insert_at(to, id)
+          Chat.reorder_folders(socket.assigns.current_scope, moved)
+          {:noreply, reload_folders(socket)}
+        else
+          {:noreply, socket}
+        end
     end
   end
 
@@ -1564,7 +1584,8 @@ defmodule EdenWeb.SettingsLive do
     required: true,
     doc: "the folder's name, so each button says what it moves"
 
-  attr :rows, :list, required: true
+  attr :at, :integer, required: true, doc: "where this row sits, so the component need not look"
+  attr :total, :integer, required: true
 
   # The keyboard and touch path to reordering (#366/R093, R094). Buttons rather than a
   # pointer-events drag implementation: a drag needs a gesture recogniser, an autoscroll, a drop
@@ -1574,10 +1595,9 @@ defmodule EdenWeb.SettingsLive do
   # Disabled at the ends rather than hidden: a control that disappears at the edge of a list makes
   # the row jump under the finger that is using it.
   defp folder_move(assigns) do
-    ids = Enum.map(assigns.rows, &row_id/1)
-    at = Enum.find_index(ids, &(&1 == assigns.id))
-
-    assigns = assign(assigns, first?: at == 0, last?: at == length(ids) - 1)
+    # The caller already knows where the row sits; taking the position rather than searching for it
+    # means the list is walked once to render, not once per row (#586 review).
+    assigns = assign(assigns, first?: assigns.at == 0, last?: assigns.at == assigns.total - 1)
 
     ~H"""
     <span class="ed-folder-row__move">

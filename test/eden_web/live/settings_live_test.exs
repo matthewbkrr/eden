@@ -342,6 +342,24 @@ defmodule EdenWeb.SettingsLiveTest do
              "the move button did not reorder the folders"
     end
 
+    test "a move for a folder that is not mine changes nothing (#366/R093)", %{conn: conn} do
+      user = user_fixture()
+      scope = Scope.for_user(user)
+      conn = log_in_user(conn, user)
+      {:ok, view, _html} = live(conn, ~p"/settings/folders")
+
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Work"}) |> render_submit()
+      view |> form("form[phx-submit=create_folder]", %{"name" => "Family"}) |> render_submit()
+      before = Chat.list_folders(scope) |> Enum.map(& &1.name)
+
+      # The id rides in from the client, so a foreign or invented one is a case to answer, not an
+      # impossibility to assume away.
+      render_click(view, "move_folder", %{"id" => "999999", "dir" => "up"})
+
+      assert Chat.list_folders(scope) |> Enum.map(& &1.name) == before,
+             "a move naming a folder outside this account reordered something"
+    end
+
     test "the virtual All Chats row moves too (#366/R093)", %{conn: conn} do
       user = user_fixture()
       scope = Scope.for_user(user)
