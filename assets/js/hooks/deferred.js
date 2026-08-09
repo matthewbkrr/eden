@@ -118,10 +118,10 @@ function placeholder(name) {
     // `liveSocket.hooks` should still carry this.
     __lazyPlaceholder: name,
     mounted() {
-      // A Set, not a list, and only for the two callbacks that are NOTIFICATIONS: a page patched a
-      // thousand times while the bundle is in flight would otherwise collect a thousand copies of
-      // the word "updated", and knowing it was patched twice is worth nothing over knowing it was
-      // patched (#578 review).
+      // One callback is worth replaying, and it is `updated`: it means "the DOM under you changed",
+      // which a hook answers by reading the DOM it now has. A Set rather than a list because
+      // knowing the page was patched a thousand times is worth nothing over knowing it was patched
+      // (#578 review).
       this.__queued = new Set()
       this.__gone = false
 
@@ -167,15 +167,17 @@ function placeholder(name) {
 
       whenLoaded().then(attach)
     },
-    // Both survive the handover only when the real hook does NOT define them — then the queue is
-    // already null and the add is a no-op.
-    beforeUpdate() {
-      this.__queued?.add("beforeUpdate")
-    },
+    // Survives the handover only when the real hook does NOT define it — then the queue is already
+    // null and the add is a no-op.
     updated() {
       this.__queued?.add("updated")
     },
-    // Deliberately dropped rather than queued: the handover asks the socket directly, above.
+    // Dropped rather than queued, each for its own reason. `beforeUpdate` exists to look at the DOM
+    // BEFORE a patch and save something from it; calling it afterwards would hand the hook the
+    // already-updated DOM and call it "before" — worse than not calling it at all, since the hook
+    // would save the wrong snapshot (#578 review). The connection pair is a state, and the handover
+    // asks the socket for it directly, above.
+    beforeUpdate() {},
     disconnected() {},
     reconnected() {},
     destroyed() {
