@@ -60,11 +60,15 @@ defmodule Eden.Chat.BlobReaper do
     referenced = referenced_keys()
     cutoff = System.system_time(:second) - @grace_hours * 3600
 
+    # Sorted: the store hands its inventory back in whatever order it walks, and a nightly job that
+    # deletes in a stable order is one whose logs can be compared between runs.
     orphans =
       for {key, written_at} <- keys,
           written_at < cutoff,
           not kept?(key, referenced),
           do: key
+
+    orphans = Enum.sort(orphans)
 
     # Counted by what the store actually did, not by what was asked of it. A delete that failed
     # (a lock, a permission, a vanished mount) leaves the blob exactly where it was, and a log
@@ -72,7 +76,14 @@ defmodule Eden.Chat.BlobReaper do
     # would have shown it says everything is fine (#584 review).
     {removed, failed} =
       Enum.reduce(orphans, {0, 0}, fn key, {ok, bad} ->
-        case Storage.delete(key) do
+        # Re-checked against the database immediately before the delete. The inventory and the
+        # reference set are a snapshot, and a blob can become referenced after it was taken — the
+        # write-time grace says nothing about that window, because it is about when the BYTES were
+        # written, not when a row started pointing at them (#584 review). Orphans are rare, so this
+        # is a handful of indexed lookups, and it is the difference between "probably unreferenced"
+        # and "unreferenced now".
+        case still_orphan?(key) and Storage.delete(key) do
+          false -> {ok, bad}
           :ok -> {ok + 1, bad}
           {:error, _reason} -> {ok, bad + 1}
         end
@@ -112,17 +123,35 @@ defmodule Eden.Chat.BlobReaper do
     empty = %{keys: MapSet.new(), stems: MapSet.new()}
 
     {:ok, from_attachments} =
-      Repo.transaction(fn ->
-        from(a in Attachment, select: {a.storage_key, a.thumbnail_key})
-        |> Repo.stream(max_rows: 500)
-        |> Enum.reduce(empty, fn {storage, thumb}, acc ->
-          [storage, thumb] |> Enum.reject(&is_nil/1) |> Enum.reduce(acc, &remember/2)
-        end)
-      end)
+      Repo.transaction(
+        fn ->
+          from(a in Attachment, select: {a.storage_key, a.thumbnail_key})
+          |> Repo.stream(max_rows: 500)
+          |> Enum.reduce(empty, fn {storage, thumb}, acc ->
+            [storage, thumb] |> Enum.reject(&is_nil/1) |> Enum.reduce(acc, &remember/2)
+          end)
+        end,
+        # A stream has to hold its transaction open for as long as it takes to walk the table, and
+        # the default 15s pool timeout is a limit on the DATABASE being slow, not on this job being
+        # long (#584 review). A nightly reconciler is allowed to take its time.
+        timeout: :infinity
+      )
 
     from(u in User, where: not is_nil(u.avatar_key), select: u.avatar_key)
     |> Repo.all()
     |> Enum.reduce(from_attachments, &remember/2)
+  end
+
+  # Is this exact key still unreferenced RIGHT NOW?
+  #
+  # Exact lookups only, no stem arithmetic in SQL: a variant becomes newly referenced exactly when
+  # its SOURCE does, and a source that starts being referenced during this run is a blob written
+  # during this run — younger than the grace period, so it was never a candidate to begin with.
+  defp still_orphan?(key) do
+    not (Repo.exists?(
+           from(a in Attachment, where: a.storage_key == ^key or a.thumbnail_key == ^key)
+         ) or
+           Repo.exists?(from(u in User, where: u.avatar_key == ^key)))
   end
 
   defp remember(key, %{keys: keys, stems: stems}) do

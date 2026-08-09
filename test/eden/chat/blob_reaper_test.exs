@@ -114,6 +114,43 @@ defmodule Eden.Chat.BlobReaperTest do
            "a referenced key was reaped because its name resembled a variant"
   end
 
+  test "a blob referenced after the inventory was taken is not deleted" do
+    user = user_fixture()
+    first = store("attachments/deleted-first.jpg", 2 * @day)
+    late = store("avatars/referenced-mid-sweep.jpg", 2 * @day)
+
+    # The window the write-time grace says nothing about: both are orphans when the sweep takes its
+    # snapshot, and a row starts pointing at the second one WHILE the sweep is deleting the first.
+    # Only a re-check immediately before each delete can catch that (#584 review).
+    Process.put(:reference_on_delete, {user, late})
+
+    with_adapter(__MODULE__.ReferencingAdapter, &run/0)
+
+    assert Storage.exists?(late),
+           "a blob that became referenced during the sweep was deleted anyway"
+
+    refute Storage.exists?(first), "nothing was deleted at all — this test proved nothing"
+  end
+
+  test "a symlinked directory does not let the sweep escape the storage root" do
+    outside_dir = Path.join(System.tmp_dir!(), "outside-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(outside_dir)
+    outsider = Path.join(outside_dir, "not-ours.jpg")
+    File.write!(outsider, "not ours")
+    File.touch!(outsider, System.system_time(:second) - 2 * @day)
+    on_exit(fn -> File.rm_rf(outside_dir) end)
+
+    root = Application.fetch_env!(:eden, Eden.Storage.Local)[:root]
+    File.mkdir_p!(Path.join(root, "attachments"))
+    :ok = File.ln_s(outside_dir, Path.join([root, "attachments", "escape"]))
+
+    run()
+
+    assert File.exists?(outsider),
+           "the sweep walked through a symlinked directory and deleted a file outside the root — " <>
+             "an inventory that can leave the root is a deleter that can leave the root"
+  end
+
   test "an adapter that cannot enumerate sweeps nothing" do
     key = store("attachments/unknowable.jpg", 2 * @day)
 
@@ -140,6 +177,39 @@ defmodule Eden.Chat.BlobReaperTest do
 
     assert log =~ "could not be deleted", "a refused delete was reported as a reclaimed orphan"
     refute log =~ "1 orphan(s) of", "the count claimed a removal that never happened"
+  end
+
+  defmodule ReferencingAdapter do
+    @moduledoc """
+    Local in every way except that the first delete also makes ANOTHER blob referenced — the race
+    the pre-delete re-check exists for.
+    """
+    @behaviour Eden.Storage
+
+    @impl true
+    defdelegate put(key, path), to: Eden.Storage.Local
+    @impl true
+    defdelegate put_binary(key, binary), to: Eden.Storage.Local
+    @impl true
+    defdelegate read(key), to: Eden.Storage.Local
+    @impl true
+    defdelegate exists?(key), to: Eden.Storage.Local
+    @impl true
+    defdelegate list_keys(), to: Eden.Storage.Local
+
+    @impl true
+    def delete(key) do
+      case Process.get(:reference_on_delete) do
+        {user, late_key} when key != late_key ->
+          Process.delete(:reference_on_delete)
+          Eden.Repo.update!(Ecto.Changeset.change(user, avatar_key: late_key))
+
+        _ ->
+          :noop
+      end
+
+      Eden.Storage.Local.delete(key)
+    end
   end
 
   defmodule BlindAdapter do

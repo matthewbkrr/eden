@@ -78,26 +78,39 @@ defmodule Eden.Storage.Local do
   # sobelow_skip ["Traversal.FileModule"]
   def list_keys do
     root = Application.fetch_env!(:eden, __MODULE__)[:root]
+    {:ok, walk(root, root)}
+  end
 
-    keys =
-      root
-      |> Path.join("**/*")
-      |> Path.wildcard()
-      # A temp file is a write in progress, not a blob: it has no key, and the rename that gives
-      # it one may still be coming (see atomic_write/2). Matched as the SUFFIX atomic_write appends
-      # rather than anywhere in the name, so a legitimate key that merely contains those characters
-      # is not skipped and then reaped as unknown (#584 review).
-      |> Enum.reject(&Regex.match?(~r/\.tmp-[\w-]+$/, &1))
-      # One stat per entry, which also answers "is it a directory" — asking File.dir?/1 first and
-      # File.stat/2 after walked the filesystem twice for every blob (#584 review).
-      |> Enum.flat_map(fn file ->
-        case File.stat(file, time: :posix) do
-          {:ok, %{type: :regular, mtime: mtime}} -> [{Path.relative_to(file, root), mtime}]
-          _ -> []
-        end
-      end)
+  # Walked by hand rather than with `Path.wildcard/2`, and every entry is `lstat`-ed.
+  #
+  # A wildcard follows symlinks, so one symlinked directory under the uploads root would make this
+  # function enumerate files anywhere on the machine — and its only caller is a reaper that DELETES
+  # what it is told is unreferenced (#584 review). `lstat` reports a symlink as `:symlink`, so
+  # neither a linked file nor a linked directory is ever followed or returned.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp walk(dir, root) do
+    case File.ls(dir) do
+      {:ok, entries} -> Enum.flat_map(entries, &classify(Path.join(dir, &1), root))
+      {:error, _} -> []
+    end
+  end
 
-    {:ok, keys}
+  # sobelow_skip ["Traversal.FileModule"]
+  defp classify(path, root) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %{type: :directory}} ->
+        walk(path, root)
+
+      {:ok, %{type: :regular, mtime: mtime}} ->
+        # A temp file is a write in progress, not a blob: it has no key yet, and the rename that
+        # gives it one may still be coming (see atomic_write/2).
+        if Regex.match?(~r/\.tmp-[\w-]+$/, path),
+          do: [],
+          else: [{Path.relative_to(path, root), mtime}]
+
+      _ ->
+        []
+    end
   end
 
   # Resolve a key under the root, refusing to escape it (defense in depth — keys
