@@ -61,8 +61,11 @@ test("the video overlay is a modal dialog, and gives focus back when it closes",
 
   const state = await alice.evaluate(() => {
     const box = document.getElementById("ed-video-modal")
+    const r = box.getBoundingClientRect()
 
     return {
+      fits: r.width <= window.innerWidth + 1 && r.height <= window.innerHeight + 1,
+      boxSizing: getComputedStyle(box).boxSizing,
       tag: box.tagName,
       open: box.open === true,
       label: box.getAttribute("aria-label"),
@@ -76,6 +79,13 @@ test("the video overlay is a modal dialog, and gives focus back when it closes",
   expect(state.open, "the dialog was not opened modally — no top layer, no focus trap").toBe(true)
   expect(state.label, "the dialog has no accessible name").toBeTruthy()
   expect(state.focusInside, "focus stayed outside the open dialog").toBe(true)
+
+  // A full-viewport dialog WITH padding overflows unless it measures border-box. Asserted as the
+  // property that matters — does it fit — rather than as the rule that happens to provide it
+  // (#585 review).
+  expect(state.fits, `the overlay does not fit the viewport (box-sizing: ${state.boxSizing})`).toBe(
+    true,
+  )
 
   // Escape is the platform's now, not a document-level keydown listener of ours.
   await alice.keyboard.press("Escape")
@@ -105,7 +115,10 @@ test("the video overlay is a modal dialog, and gives focus back when it closes",
       () =>
         alice.evaluate(() => {
           const v = document.querySelector("#ed-video-modal .ed-video-modal__player")
-          return v.paused && !v.getAttribute("src")
+          // The clip hangs off a <source> child, so the element never has a `src` attribute and
+          // asserting its absence proved nothing (#585 review). What the close handler actually
+          // does is drop the children.
+          return v.paused && v.querySelector("source") === null
         }),
       { message: "the video kept playing after the overlay closed", timeout: 5000 },
     )

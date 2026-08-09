@@ -41,7 +41,11 @@ export default {
     // NOT stop it scrolling underneath (#585 review, caught after showModal() replaced the
     // hand-rolled listeners and took this line with them). The photo viewer locks it the same way.
     document.body.style.overflow = "hidden"
-    box.showModal()
+    // `showModal()` throws if the dialog is already open, and this one is shared and cached: a
+    // second clip opened without closing the first would raise instead of swapping (#585 review).
+    // The source has already been replaced above, so an open dialog simply keeps playing the new
+    // one.
+    if (!box.open) box.showModal()
     // The opening tap is a user gesture, so play-with-sound is permitted.
     video.play && video.play().catch(() => {})
   },
