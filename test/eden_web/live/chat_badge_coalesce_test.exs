@@ -104,7 +104,7 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     end
   end
 
-  test "a burst of messages recomputes the badges once, not once per message", %{
+  test "a burst costs a constant number of recomputes, not one per message", %{
     view: view,
     room: room,
     bob: bob
@@ -130,6 +130,11 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     # this test fail the day either grows a query — while saying nothing about coalescing (#583
     # review). So the same workload is measured for ONE message, and ten are required to cost no
     # more than two of those passes.
+    #
+    # Two, not one, because the mechanism is a leading edge plus a settling pass: the first event
+    # answers immediately and the rest of the burst collapses into one more. The name of this test
+    # says "a constant" for that reason — one-per-message is what it forbids, and ten messages
+    # costing two passes is the mechanism working (#583 review).
     unit =
       count_aggregate_queries(fn ->
         {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "unit"})
