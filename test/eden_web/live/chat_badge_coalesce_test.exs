@@ -44,31 +44,43 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
   # A named capture, not an inline closure: :telemetry warns about local anonymous handlers because
   # it cannot optimize them, and a warning printed by every run of this file is noise that teaches
   # people to ignore warnings (#583 review).
-  def handle_query(_event, _measure, meta, test_pid) do
-    if meta[:source] in @aggregates, do: send(test_pid, {:aggregate_query, meta[:source]})
+  #
+  # Counted only when the query comes from the LiveView itself. The handler is global, and the test
+  # process does its own share of work against these tables (creating messages, the fixtures) —
+  # counting that too would measure the test rather than the mechanism (#583 review).
+  def handle_query(_event, _measure, meta, {test_pid, view_pid}) do
+    if self() == view_pid and meta[:source] in @aggregates do
+      send(test_pid, {:aggregate_query, meta[:source]})
+    end
   end
 
-  defp count_aggregate_queries(fun) do
+  defp count_aggregate_queries(view, fun) do
     handler = {__MODULE__, System.unique_integer()}
 
-    :telemetry.attach(handler, [:eden, :repo, :query], &__MODULE__.handle_query/4, self())
+    :telemetry.attach(
+      handler,
+      [:eden, :repo, :query],
+      &__MODULE__.handle_query/4,
+      {self(), view.pid}
+    )
 
-    # `after`, not a plain call: a raising body would otherwise leave the handler attached for the
-    # rest of the suite, counting queries in tests that never asked (#583 review).
+    # Drained INSIDE the try, and to silence rather than to a deadline: a settle pass scheduled by
+    # a late event lands a whole window after the last query, and detaching before it would report
+    # a smaller number than actually happened — the one direction a measurement must never be
+    # wrong in (#583 review). Waiting for quiet cannot undercount; a fixed sleep could.
     try do
       fun.()
+      drain_until_quiet(0)
     after
       :telemetry.detach(handler)
     end
-
-    drain(0)
   end
 
-  defp drain(n) do
+  defp drain_until_quiet(n) do
     receive do
-      {:aggregate_query, _} -> drain(n + 1)
+      {:aggregate_query, _} -> drain_until_quiet(n + 1)
     after
-      0 -> n
+      @window_ms + 100 -> n
     end
   end
 
@@ -87,23 +99,6 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
 
   defp await_badge(view, _timeout), do: render(view)
 
-  # Waits for the first recompute instead of sleeping through the window, then settles for LONGER
-  # than a whole window.
-  #
-  # The settle is not padding: a late event schedules its own window, and detaching the handler
-  # before that window elapses would leave those queries uncounted — the test would report a
-  # smaller number than actually happened, which is the one direction a measurement must never be
-  # wrong in (#583 review).
-  defp await_recompute(timeout) do
-    receive do
-      {:aggregate_query, source} ->
-        send(self(), {:aggregate_query, source})
-        Process.sleep(@window_ms + 100)
-    after
-      timeout -> :timeout
-    end
-  end
-
   test "a burst costs a constant number of recomputes, not one per message", %{
     view: view,
     room: room,
@@ -112,16 +107,11 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     scope = Scope.for_user(bob)
 
     queries =
-      count_aggregate_queries(fn ->
+      count_aggregate_queries(view, fn ->
         for i <- 1..10 do
           {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "burst #{i}"})
         end
 
-        render(view)
-
-        # The window is widened in config/test.exs so the burst lands in ONE of them; this returns
-        # the moment that recompute has run, instead of sleeping through a fixed second.
-        await_recompute(2_000)
         render(view)
       end)
 
@@ -142,10 +132,8 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     # which is the machine being slow rather than the coalescer being broken — the exact trade
     # this file already got wrong once, in the other direction.
     unit =
-      count_aggregate_queries(fn ->
+      count_aggregate_queries(view, fn ->
         {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "unit"})
-        render(view)
-        await_recompute(2_000)
         render(view)
       end)
 
