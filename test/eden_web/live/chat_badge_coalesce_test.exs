@@ -83,6 +83,7 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
         end
 
         render(view)
+
         # Past the coalescing window (widened in config/test.exs so the burst lands in ONE of them).
         Process.sleep(600)
         render(view)
