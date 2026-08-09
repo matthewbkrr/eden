@@ -74,6 +74,45 @@ defmodule Eden.Storage.Local do
   @impl true
   def exists?(key), do: File.exists?(path(key))
 
+  @impl true
+  # sobelow_skip ["Traversal.FileModule"]
+  def list_keys do
+    root = Application.fetch_env!(:eden, __MODULE__)[:root]
+    {:ok, walk(root, root)}
+  end
+
+  # Walked by hand rather than with `Path.wildcard/2`, and every entry is `lstat`-ed.
+  #
+  # A wildcard follows symlinks, so one symlinked directory under the uploads root would make this
+  # function enumerate files anywhere on the machine — and its only caller is a reaper that DELETES
+  # what it is told is unreferenced (#584 review). `lstat` reports a symlink as `:symlink`, so
+  # neither a linked file nor a linked directory is ever followed or returned.
+  # sobelow_skip ["Traversal.FileModule"]
+  defp walk(dir, root) do
+    case File.ls(dir) do
+      {:ok, entries} -> Enum.flat_map(entries, &classify(Path.join(dir, &1), root))
+      {:error, _} -> []
+    end
+  end
+
+  # sobelow_skip ["Traversal.FileModule"]
+  defp classify(path, root) do
+    case File.lstat(path, time: :posix) do
+      {:ok, %{type: :directory}} ->
+        walk(path, root)
+
+      {:ok, %{type: :regular, mtime: mtime}} ->
+        # Temp files are reported like anything else. A write in flight is protected by the sweep's
+        # grace period, which is the mechanism for exactly that; hiding them instead meant a
+        # `.tmp-` file left behind by a crash before the rename was invisible to the only thing
+        # that would ever clean it up (#584 review).
+        [{Path.relative_to(path, root), mtime}]
+
+      _ ->
+        []
+    end
+  end
+
   # Resolve a key under the root, refusing to escape it (defense in depth — keys
   # are app-generated, never user-supplied).
   defp path(key) do

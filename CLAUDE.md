@@ -511,8 +511,13 @@ maps the task to the right one:
 `.claude/skills/ATTRIBUTION.md`. Note **Oban IS a dependency**: it runs in the
 supervision tree (`lib/eden/application.ex`) with a `:media` queue
 (`Eden.Chat.ThumbnailWorker`), a `:default` queue (`Eden.DeletedUserScrubWorker`,
-the #303 right-to-erasure scrub enqueued transactionally, #357) and a daily
-`Oban.Plugins.Cron` job (`Eden.Accounts.TokenPruner`, #238). Prefer an Oban worker +
+the #303 right-to-erasure scrub enqueued transactionally, #357) and two daily
+`Oban.Plugins.Cron` jobs (`Eden.Accounts.TokenPruner`, #238, and `Eden.Chat.BlobReaper`,
+#385/R128 — the only reconciler for blobs nothing references: every other cleanup path hangs off
+a delete that happened, so a crash between storing bytes and committing the row leaks forever. A
+24h grace protects uploads in flight, derived variants (#516) live and die with their source, and
+an adapter that cannot enumerate — S3 today — sweeps nothing rather than everything). Prefer an
+Oban worker +
 Cron for periodic / background work over a hand-rolled GenServer sweep.)
 
 ### UI / frontend work — use the design skills
