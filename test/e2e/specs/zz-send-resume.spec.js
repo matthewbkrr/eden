@@ -44,10 +44,14 @@ test("the store drops what is stale, hides what is sent, and keeps the order (#3
       await store.put({ ...base, id: t + "-first", order: 0, createdAt: now - 2000 })
       await store.put({ ...base, id: t + "-stale", order: 0, createdAt: now - DAY - 60_000 })
       await store.put({ ...base, id: t + "-sent", order: 9, status: "sent", createdAt: now })
+      // Only OUR rows: listUnfinished answers for the whole user, and this database outlives both
+      // the test and the run, so another test's in-flight send — or one stranded by an earlier
+      // failure — would otherwise be read as this test's business (#580 review).
+      const ours = (rows) => rows.filter((r) => r.id.startsWith(t)).map((r) => r.id)
       const live = await store.listUnfinished(arg.user)
       // Read a second time: the answer has to be stable, not a one-off of the first pass.
       const again = await store.listUnfinished(arg.user)
-      return { first: live.map((r) => r.id), second: again.map((r) => r.id) }
+      return { first: ours(live), second: ours(again) }
     })()
   `,
       { user, tag },
@@ -107,7 +111,12 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
   // conversation and this person. Written directly rather than by killing a real upload, because
   // the point under test is the RESUME, and a race for when to pull the plug would only make the
   // test flaky about something else.
-  await store(
+  //
+  // Swept in a `finally` like the first test's rows: on the happy path the product deletes this
+  // record itself, but a failed reload or a failed assertion would otherwise leave a File in a
+  // database that outlives the run — and the next run would resume it (#580 review).
+  try {
+    await store(
     alice,
     `return store.put({
        id: arg.clientId + ":0",
@@ -128,38 +137,41 @@ test("a file left in the store is picked back up after a reload (#361/R016)", as
        file: new File(["resumed-body"], arg.name, { type: "text/plain" }),
        status: "queued",
        createdAt: Date.now(),
-     })`,
-    { user, conv, clientId, name },
-  )
-
-  await alice.reload()
-  await ready(alice)
-
-  // The outcome, not the moment. The optimistic card the resume draws is real, but a twelve-byte
-  // file finishes uploading faster than a poll interval on a local server, so asserting on the
-  // card is a race with the product rather than a test of it: what has to be true is that the
-  // interrupted file ends up sent, and that its optimistic twin does not outlive it.
-  await expect(
-    alice.locator("#messages").getByText(name).first(),
-    "the interrupted file was never resumed after the reload",
-  ).toBeVisible({ timeout: 30_000 })
-
-  await expect(alice.locator(`#pending-messages [data-client-id="${clientId}"]`)).toHaveCount(0, {
-    timeout: 15_000,
-  })
-
-  // Nothing is left to resume a second time — a record that outlives its send is how one file
-  // becomes two. Polled, not read once: the record is dropped when the send SETTLES, a beat after
-  // the row appears, so a single read here was racing the product rather than testing it.
-  await expect
-    .poll(
-      () =>
-        store(
-          alice,
-          `return (async () => (await store.listUnfinished(arg.user)).filter((r) => r.queueId === arg.q).length)()`,
-          { user, q: clientId },
-        ),
-      { message: "the delivered file is still queued for resume", timeout: 10_000 },
+       })`,
+      { user, conv, clientId, name },
     )
-    .toBe(0)
+
+    await alice.reload()
+    await ready(alice)
+
+    // The outcome, not the moment. The optimistic card the resume draws is real, but a twelve-byte
+    // file finishes uploading faster than a poll interval on a local server, so asserting on the
+    // card is a race with the product rather than a test of it: what has to be true is that the
+    // interrupted file ends up sent, and that its optimistic twin does not outlive it.
+    await expect(
+      alice.locator("#messages").getByText(name).first(),
+      "the interrupted file was never resumed after the reload",
+    ).toBeVisible({ timeout: 30_000 })
+
+    await expect(alice.locator(`#pending-messages [data-client-id="${clientId}"]`)).toHaveCount(0, {
+      timeout: 15_000,
+    })
+
+    // Nothing is left to resume a second time — a record that outlives its send is how one file
+    // becomes two. Polled, not read once: the record is dropped when the send SETTLES, a beat after
+    // the row appears, so a single read here was racing the product rather than testing it.
+    await expect
+      .poll(
+        () =>
+          store(
+            alice,
+            `return (async () => (await store.listUnfinished(arg.user)).filter((r) => r.queueId === arg.q).length)()`,
+            { user, q: clientId },
+          ),
+        { message: "the delivered file is still queued for resume", timeout: 10_000 },
+      )
+      .toBe(0)
+  } finally {
+    await store(alice, `return store.remove(arg.clientId + ":0")`, { clientId })
+  }
 })
