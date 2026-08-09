@@ -131,10 +131,16 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
     # review). So the same workload is measured for ONE message, and ten are required to cost no
     # more than two of those passes.
     #
-    # Two, not one, because the mechanism is a leading edge plus a settling pass: the first event
-    # answers immediately and the rest of the burst collapses into one more. The name of this test
-    # says "a constant" for that reason — one-per-message is what it forbids, and ten messages
-    # costing two passes is the mechanism working (#583 review).
+    # Why 2× and not tighter, in numbers rather than by feel (#583 review, third pass at this one):
+    #
+    #   ideal      ten messages inside one window = leading + settle = 2 passes = 1× unit
+    #   allowed    a burst spilling into a second window = 4 passes = 2× unit
+    #   forbidden  one recompute per message = ~10 passes = 5× unit
+    #
+    # The bound sits above what a slow machine can legitimately produce and far below the failure
+    # this test exists for. Tightening it to 1× would make the suite fail on window spillover,
+    # which is the machine being slow rather than the coalescer being broken — the exact trade
+    # this file already got wrong once, in the other direction.
     unit =
       count_aggregate_queries(fn ->
         {:ok, _} = Chat.create_message(scope, room.id, %{"body" => "unit"})
