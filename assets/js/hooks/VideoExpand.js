@@ -37,6 +37,10 @@ export default {
     if (type) source.type = type
     video.appendChild(source)
     video.load()
+    // The scroll lock is ours, not the platform's: a top-layer <dialog> covers the page but does
+    // NOT stop it scrolling underneath (#585 review, caught after showModal() replaced the
+    // hand-rolled listeners and took this line with them). The photo viewer locks it the same way.
+    document.body.style.overflow = "hidden"
     box.showModal()
     // The opening tap is a user gesture, so play-with-sound is permitted.
     video.play && video.play().catch(() => {})
@@ -69,6 +73,7 @@ export default {
     // handled by the platform, or a navigation guard calling close(). One place, so a new way to
     // dismiss it cannot forget to stop the audio.
     box.addEventListener("close", () => {
+      document.body.style.overflow = ""
       const v = box.querySelector(".ed-video-modal__player")
       // Stop playback + release the source so the clip can't keep playing audio
       // behind the closed overlay.

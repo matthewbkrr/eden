@@ -51,6 +51,14 @@ test("the video overlay is a modal dialog, and gives focus back when it closes",
   const overlay = alice.locator("#ed-video-modal")
   await expect(overlay).toBeVisible()
 
+  // The page behind must not scroll. A top-layer dialog covers it but does not lock it, and the
+  // lock lives in our code — exactly the line that vanished when hand-rolled listeners gave way to
+  // showModal() (#585 review).
+  expect(
+    await alice.evaluate(() => document.body.style.overflow),
+    "the chat behind the overlay can still be scrolled",
+  ).toBe("hidden")
+
   const state = await alice.evaluate(() => {
     const box = document.getElementById("ed-video-modal")
 
@@ -73,10 +81,18 @@ test("the video overlay is a modal dialog, and gives focus back when it closes",
   await alice.keyboard.press("Escape")
   await expect(overlay).toBeHidden()
 
+  // Back on the thing that opened it, not merely "somewhere outside": focus landing on <body> is
+  // exactly the lost-context this change exists to prevent, and it would satisfy a weaker
+  // assertion (#585 review).
   expect(
-    await alice.evaluate(() => document.getElementById("ed-video-modal").contains(document.activeElement)),
-    "focus was left inside a closed dialog",
-  ).toBe(false)
+    await alice.evaluate(() => document.activeElement?.closest?.(".ed-video-box") !== null),
+    "focus did not return to the video that opened the overlay",
+  ).toBe(true)
+
+  expect(
+    await alice.evaluate(() => document.body.style.overflow),
+    "the scroll lock outlived the overlay — the page behind stays frozen",
+  ).toBe("")
 
   // ...and the clip stops. A closed overlay that keeps playing audio is the bug the close handler
   // exists for, and moving that handler onto the dialog's own `close` event is exactly the kind of
