@@ -384,3 +384,86 @@ test("a message full of $-patterns still gets a readable select label (#multisel
   expect(label).toContain(body.slice(0, 30))
   expect(label, "the placeholder survived into the label").not.toContain("{}")
 })
+
+// Selection is server-owned (a MapSet) and reflected onto `phx-update="stream"` rows by SelectSync,
+// so anything that RE-STREAMS a row while the mode is open can take the highlight off it — and
+// nothing was watching that seam (#361/R102). The two events that re-stream a row from elsewhere
+// are a reaction and an edit; a delete removes it outright, which is the other half of the risk:
+// the bar's count and the set the Delete button acts on must not keep counting a message that is
+// no longer there.
+test("a reaction from the other side re-streams a selected row without deselecting it (#multiselect)", async ({
+  alice,
+  bob,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await bob.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await bob.waitForFunction(() => window.liveSocket?.isConnected())
+
+  const mine = `restream-mine ${Date.now()}`
+  await send(alice, mine)
+
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: mine }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+
+  const row = alice.locator(".ed-msg", { hasText: mine }).first()
+  await expect(row).toHaveClass(/ed-msg--selected/)
+
+  // Bob reacts, which broadcasts {:reaction_changed} and re-streams the row for alice.
+  const theirMenu = await openMenu(bob, bob.locator(".ed-bubble", { hasText: mine }).first())
+  await theirMenu.locator(".ed-menu__reacts [data-emoji]").first().click()
+
+  await expect(row.locator(".ed-react"), "the reaction never reached alice's row").toHaveCount(1, {
+    timeout: 8000,
+  })
+
+  // The row came back through the stream; the selection has to have come back with it.
+  await expect(row, "the re-streamed row lost its selection").toHaveClass(/ed-msg--selected/)
+  await expect(row.locator(".ed-select-hit")).toHaveAttribute("aria-pressed", "true")
+  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+})
+
+test("a selected message deleted by its author leaves the bar counting what is left (#multiselect)", async ({
+  alice,
+  bob,
+  seed,
+}) => {
+  await alice.goto(`/app/c/${seed.dm_id}`)
+  await bob.goto(`/app/c/${seed.dm_id}`)
+  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await bob.waitForFunction(() => window.liveSocket?.isConnected())
+
+  const mine = `gone-mine ${Date.now()}`
+  const theirs = `gone-theirs ${Date.now()}`
+  await send(alice, mine)
+  await send(bob, theirs)
+
+  const theirRow = alice.locator(".ed-msg", { hasText: theirs }).first()
+  await expect(theirRow).toBeVisible({ timeout: 8000 })
+
+  const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: mine }).first())
+  await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
+  await theirRow.locator(".ed-select-hit").click()
+  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+
+  // Bob deletes his own message for everyone — one of the two alice has selected.
+  const bobMenu = await openMenu(bob, bob.locator(".ed-bubble", { hasText: theirs }).first())
+  await bobMenu.locator(".ed-menu__item", { hasText: "Delete for everyone" }).click()
+  await alice.locator(".ed-ask [data-ok]").waitFor({ state: "detached" }).catch(() => {})
+  await bob.locator(".ed-ask [data-ok]").click()
+
+  // The body is gone for alice: whatever the bar now says, acting on it must not act on a message
+  // that no longer exists.
+  await expect(alice.locator("#messages").getByText(theirs)).toHaveCount(0, { timeout: 12_000 })
+
+  // Deleting the remaining selection still works and still targets the right message — the failure
+  // this guards is a delete that errors out (or takes the wrong row) because the set went stale.
+  await alice.locator(".ed-selbar button", { hasText: "Delete" }).click()
+  await alice.locator("#dlg-delete button", { hasText: "Delete for everyone" }).click()
+
+  await expect(alice.locator("#messages").getByText(mine)).toHaveCount(0, { timeout: 12_000 })
+  await expect(alice.locator(".ed-selbar")).toBeHidden({ timeout: 8000 })
+  expect(alice.__diag.pageErrors).toEqual([])
+})
