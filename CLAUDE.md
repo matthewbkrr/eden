@@ -15,10 +15,24 @@ must also be followed.
 - **Req** for HTTP (never httpoison/tesla/httpc). **No mailer / no email** —
   auth is invite-link based by design (delivery from an overseas VPS to RU
   inboxes is unreliable); never add Swoosh or any email dependency.
-- **Tailwind v4** + **esbuild** for assets. **Two JS bundles** (#511): `app.js` is the full
+- **Tailwind v4** + **esbuild** for assets. **Three JS bundles** (#511): `app.js` is the boot
   client; `auth.js` is what a SIGNED-OUT page loads (login, the 2FA challenge, invite
   acceptance) — the LiveView runtime plus the only two hooks such a page uses, 44.5 KB gzip
-  against 80.1. The split works because those two hooks (`FlashAutoHide`, `PasswordReveal`)
+  against 80.1; `lazy.js` carries the 30 hooks that only answer an INTERACTION (the lightbox,
+  the context menu, the send queue, the pickers, the sortables), fetched right after the first
+  frame rather than before the socket connects — boot went 87.9 → 60.2 KB gzip, 52.9 with brotli.
+  LiveView demands a hook at the instant its element mounts, so every deferred name is registered
+  as a placeholder (`assets/js/hooks/deferred.js`) that hands its ViewHook instance to the real
+  hook when the bundle lands; anything that paints, measures or positions at MOUNT stays eager
+  (`assets/js/hooks/index.js`) — deferring those would trade boot time for a visible flicker, and
+  `FocusTrap` is eager for the mirror reason: an `aria-modal` guarantee must not depend on a
+  fetch.
+  `hook_registry_test.exs` asserts every `phx-hook` in the templates names something a registry
+  provides: an unregistered name does not fail to compile or render, it just makes the element
+  inert (three sites shipped that way after #510's rename). Prod also ships **brotli**: the
+  Docker build writes a `.br` beside every digested asset and `Plug.Static` serves it (−12% on
+  top of gzip); a dev tree has no `.br` and falls back to gzip. The split works because those
+  two signed-out hooks (`FlashAutoHide`, `PasswordReveal`)
   are plain modules in `assets/js/shared_hooks.js` rather than colocated: the generated
   `phoenix-colocated/eden` index statically imports all 42 hooks and exports them as one
   object, so importing two from there bundles all of them. The router marks those pages with

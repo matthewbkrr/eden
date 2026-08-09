@@ -5,89 +5,38 @@
 // linter or unit test could see any of it. Moved verbatim; the only change at each site is
 // `phx-hook=".X"` becoming `phx-hook="X"`, since the name is now global rather than
 // module-scoped.
+//
+// Only the hooks below are in the boot bundle (#511). They earn the place by doing their work at
+// mount: painting a timestamp, placing an indicator, positioning the feed, taking over a tap
+// before the first one can land. Everything else answers an interaction and arrives in the second
+// bundle — see `deferred.js`.
 
-import ContextMenu from "./ContextMenu"
-import CopySelection from "./CopySelection"
-import CopyUrl from "./CopyUrl"
-import DateRail from "./DateRail"
-import DropZone from "./DropZone"
-import EmojiPicker from "./EmojiPicker"
+import { armDeferredHooks, deferredHooks } from "./deferred"
 import FocusTrap from "./FocusTrap"
 import FolderTabs from "./FolderTabs"
 import ForwardCarry from "./ForwardCarry"
-import GalleryMonths from "./GalleryMonths"
-import GalleryTabs from "./GalleryTabs"
-import IdleTracker from "./IdleTracker"
-import ImgPreview from "./ImgPreview"
 import InstantNav from "./InstantNav"
 import LastSeen from "./LastSeen"
-import Lightbox from "./Lightbox"
 import LocalTime from "./LocalTime"
 import LocalTimes from "./LocalTimes"
-import Mentions from "./Mentions"
-import NewConvGate from "./NewConvGate"
-import NotifyPerm from "./NotifyPerm"
-import PasteUpload from "./PasteUpload"
-import Popover from "./Popover"
 import PresenceDots from "./PresenceDots"
-import ReactionGrid from "./ReactionGrid"
-import RoomSortable from "./RoomSortable"
 import ScrollBottom from "./ScrollBottom"
-import SearchBox from "./SearchBox"
-import SelectAllOnClick from "./SelectAllOnClick"
-import SelectOnFocus from "./SelectOnFocus"
-import SelectSync from "./SelectSync"
-import SendQueue from "./SendQueue"
-import SidebarReorder from "./SidebarReorder"
-import Sortable from "./Sortable"
-import SoundPreview from "./SoundPreview"
 import StreamVideo from "./StreamVideo"
 import TabBadge from "./TabBadge"
-import ThemeSegA11y from "./ThemeSegA11y"
-import ThreadSendQueue from "./ThreadSendQueue"
-import VideoExpand from "./VideoExpand"
-import VideoPreview from "./VideoPreview"
+
+export { armDeferredHooks }
 
 export const edenHooks = {
-  ContextMenu,
-  CopySelection,
-  CopyUrl,
-  DateRail,
-  DropZone,
-  EmojiPicker,
+  ...deferredHooks(),
   FocusTrap,
   FolderTabs,
   ForwardCarry,
-  GalleryMonths,
-  GalleryTabs,
-  IdleTracker,
-  ImgPreview,
   InstantNav,
   LastSeen,
-  Lightbox,
   LocalTime,
   LocalTimes,
-  Mentions,
-  NewConvGate,
-  NotifyPerm,
-  PasteUpload,
-  Popover,
   PresenceDots,
-  ReactionGrid,
-  RoomSortable,
   ScrollBottom,
-  SearchBox,
-  SelectAllOnClick,
-  SelectOnFocus,
-  SelectSync,
-  SendQueue,
-  SidebarReorder,
-  Sortable,
-  SoundPreview,
   StreamVideo,
   TabBadge,
-  ThemeSegA11y,
-  ThreadSendQueue,
-  VideoExpand,
-  VideoPreview,
 }
