@@ -2,6 +2,11 @@
 // the bottom bar shows the count, Copy assembles the text + exits, Escape exits.
 const { test, expect, send, openMenu } = require("../helpers/fixtures")
 
+// The bar reads "N selected", localized, so the count cannot be asserted by equality — and
+// `toContainText("1")` is a substring test that a stale bar reading "11" or "10" would satisfy just
+// as happily (#580 review). A digit boundary on both sides says exactly this number.
+const count = (n) => new RegExp(`(?:^|\\D)${n}(?:\\D|$)`)
+
 test("select mode: enter, toggle rows, copy exits (#multiselect)", async ({ alice, seed }) => {
   await alice.goto(`/app/c/${seed.dm_id}`)
   await alice.waitForFunction(() => window.liveSocket?.isConnected())
@@ -18,18 +23,18 @@ test("select mode: enter, toggle rows, copy exits (#multiselect)", async ({ alic
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
   await expect(alice.locator(".ed-selbar")).toBeVisible()
   await expect(rowA).toHaveClass(/ed-msg--selected/)
-  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(1))
 
   // Tap the other row (the click-catcher toggles it) → 2 selected.
   const rowB = alice.locator(".ed-msg", { hasText: b }).first()
   await rowB.locator(".ed-select-hit").click()
   await expect(rowB).toHaveClass(/ed-msg--selected/)
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
 
   // Tap rowB again → deselects → back to 1.
   await rowB.locator(".ed-select-hit").click()
   await expect(rowB).not.toHaveClass(/ed-msg--selected/)
-  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(1))
 
   // Copy → assembles client-side, pings server → exits select mode, composer returns.
   await alice.locator("#selbar-copy").click()
@@ -65,7 +70,7 @@ test("delete-for-everyone offered when all mine; tombstones them (#multiselect)"
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: a1 }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
   await alice.locator(".ed-msg", { hasText: a2 }).first().locator(".ed-select-hit").click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
 
   // Delete → confirm sheet offers "for everyone" (both are mine).
   await alice.locator(".ed-selbar button", { hasText: "Delete" }).click()
@@ -98,7 +103,7 @@ test("mixed selection offers only delete-for-me; removes them for me (#multisele
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: mine }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
   await alice.locator(".ed-msg", { hasText: theirs }).first().locator(".ed-select-hit").click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
 
   // Delete → only "for me" (a peer message is selected).
   await alice.locator(".ed-selbar button", { hasText: "Delete" }).click()
@@ -128,11 +133,11 @@ test("forward the selection: carry many from a DM, drop into a room (#multiselec
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: f1 }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
   await alice.locator(".ed-msg", { hasText: f2 }).first().locator(".ed-select-hit").click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
   await alice.locator(".ed-selbar button", { hasText: "Forward" }).click()
   await expect(alice.locator(".ed-selbar")).toHaveCount(0)
   await expect(alice.locator(".ed-reply-bar--forward")).toBeVisible()
-  await expect(alice.locator(".ed-reply-bar--forward")).toContainText("2")
+  await expect(alice.locator(".ed-reply-bar--forward")).toHaveText(count(2))
 
   // Cross to a room via the rail (remount) — the plaque survives (sessionStorage re-hydrate).
   await alice.locator(`.ed-rail a[href*="/channels/${seed.channel_id}"]`).first().click()
@@ -161,7 +166,7 @@ test("Escape in the delete dialog closes only the dialog, keeping the selection 
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: a }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
   await alice.locator(".ed-msg", { hasText: b }).first().locator(".ed-select-hit").click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
 
   // Open the confirm sheet, then Escape → only the dialog closes; the selection survives.
   await alice.locator(".ed-selbar button", { hasText: "Delete" }).click()
@@ -169,7 +174,7 @@ test("Escape in the delete dialog closes only the dialog, keeping the selection 
   await alice.keyboard.press("Escape")
   await expect(alice.locator("#dlg-delete")).toHaveCount(0)
   await expect(alice.locator(".ed-selbar")).toBeVisible()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
 })
 
 test("deselecting the last message exits select mode; aria-pressed reflects state (#multiselect)", async ({
@@ -203,7 +208,7 @@ test("shift-click selects the whole range (#multiselect)", async ({ alice, seed 
   // Enter select on the first, then shift-click the last → all four selected.
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: texts[0] }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(1))
 
   await alice
     .locator(".ed-msg", { hasText: texts[3] })
@@ -211,7 +216,7 @@ test("shift-click selects the whole range (#multiselect)", async ({ alice, seed 
     .locator(".ed-select-hit")
     .click({ modifiers: ["Shift"] })
 
-  await expect(alice.locator(".ed-selbar__count")).toContainText("4")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(4))
   for (const t of texts) {
     await expect(alice.locator(".ed-msg", { hasText: t }).first()).toHaveClass(/ed-msg--selected/)
   }
@@ -305,7 +310,7 @@ test("a row that lost its overlay still selects, and gets it back (#multiselect)
 
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: a }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(1))
 
   const rowB = alice.locator(".ed-msg", { hasText: b }).first()
   await expect(rowB.locator(".ed-select-hit")).toHaveCount(1)
@@ -317,7 +322,7 @@ test("a row that lost its overlay still selects, and gets it back (#multiselect)
     r.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }))
   })
 
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
   await expect(rowB).toHaveClass(/ed-msg--selected/)
   // ...and the row is whole again, with its state, not just clickable.
   await expect(rowB.locator(".ed-select-hit")).toHaveCount(1)
@@ -350,7 +355,7 @@ test("a message arriving during selection gets an overlay too (#multiselect)", a
   await expect(row.locator(".ed-select-hit")).toHaveCount(1, { timeout: 5000 })
 
   await row.locator(".ed-select-hit").click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
   await expect(row).toHaveClass(/ed-msg--selected/)
 })
 
@@ -406,7 +411,7 @@ test("a reaction from the other side re-streams a selected row without deselecti
 
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: mine }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(1))
 
   const row = alice.locator(".ed-msg", { hasText: mine }).first()
   await expect(row).toHaveClass(/ed-msg--selected/)
@@ -422,7 +427,7 @@ test("a reaction from the other side re-streams a selected row without deselecti
   // The row came back through the stream; the selection has to have come back with it.
   await expect(row, "the re-streamed row lost its selection").toHaveClass(/ed-msg--selected/)
   await expect(row.locator(".ed-select-hit")).toHaveAttribute("aria-pressed", "true")
-  await expect(alice.locator(".ed-selbar__count")).toContainText("1")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(1))
 })
 
 test("a selected message deleted by its author leaves the bar counting what is left (#multiselect)", async ({
@@ -446,7 +451,7 @@ test("a selected message deleted by its author leaves the bar counting what is l
   const menu = await openMenu(alice, alice.locator(".ed-bubble", { hasText: mine }).first())
   await menu.locator(".ed-menu__item", { hasText: "Select" }).click()
   await theirRow.locator(".ed-select-hit").click()
-  await expect(alice.locator(".ed-selbar__count")).toContainText("2")
+  await expect(alice.locator(".ed-selbar__count")).toHaveText(count(2))
 
   // Bob deletes his own message for everyone — one of the two alice has selected.
   const bobMenu = await openMenu(bob, bob.locator(".ed-bubble", { hasText: theirs }).first())
@@ -462,7 +467,7 @@ test("a selected message deleted by its author leaves the bar counting what is l
   await expect(
     alice.locator(".ed-selbar__count"),
     "the bar is still counting a message that is no longer in the stream",
-  ).toContainText("1", { timeout: 12_000 })
+  ).toHaveText(count(1), { timeout: 12_000 })
 
   // Deleting the remaining selection still works and still targets the right message — the failure
   // this guards is a delete that errors out (or takes the wrong row) because the set went stale.
