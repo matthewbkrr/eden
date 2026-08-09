@@ -138,7 +138,13 @@ defmodule EdenWeb.ChatBadgeCoalesceTest do
         render(view)
       end)
 
-    assert unit >= 1, "no aggregate query ran at all — the badges are not being refreshed"
+    # BOTH sides need a floor. Moving the lower bound onto `unit` last round left the burst itself
+    # with none: a burst that recomputed nothing at all would sail through `0 <= 2 * unit` — the
+    # same vacuous shape this file has now been caught in twice (#583 review).
+    assert queries >= 1,
+           "the burst recomputed nothing at all — the badges are not being refreshed"
+
+    assert unit >= 1, "a single message recomputed nothing — the measurement has no baseline"
 
     assert queries <= 2 * unit,
            "ten messages cost #{queries} aggregate queries against #{unit} for one — the burst is not being coalesced"
