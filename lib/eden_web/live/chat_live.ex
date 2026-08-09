@@ -7,9 +7,14 @@ defmodule EdenWeb.ChatLive do
   """
   use EdenWeb, :live_view
 
-  # Folder tabs and the channel rail are aggregates, not rows: they are recomputed once per
-  # burst of badge-changing events rather than once per event (#372/R059).
-  @badge_coalesce_ms 40
+  # Folder tabs and the channel rail are aggregates, not rows: they are recomputed once per burst
+  # of badge-changing events rather than once per event (#372/R059).
+  #
+  # Configurable so the test env can widen it. A test that asserts "the burst became one recompute"
+  # is otherwise a race with the machine it runs on — ten inserts and their broadcasts fit inside
+  # 40 ms locally and may not on a loaded CI box, and that is the machine being slow, not the
+  # coalescer being broken (#583 review).
+  @badge_coalesce_ms Application.compile_env(:eden, :badge_coalesce_ms, 40)
 
   require Logger
 
