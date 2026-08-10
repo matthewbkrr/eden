@@ -140,32 +140,34 @@ test("Reply from the menu moves focus into the composer", async ({ alice, seed }
 });
 
 test("Delete for everyone asks first, then tombstones the message", async ({ alice, seed }) => {
-  // `data-confirm` is a phx-click feature and these items push directly, so the hook asks with
-  // window.confirm and the text comes from the server. Assert the prompt actually happens — not
-  // just the outcome — or dropping it would go unnoticed (#528 review).
+  // `data-confirm` is a phx-click feature and these items push directly, so the hook asks itself,
+  // with the server-rendered text. Assert the prompt actually happens — not just the outcome — or
+  // dropping it would go unnoticed (#528 review).
   await ready(alice);
   await openDm(alice, seed);
   const mark = `delete-both-${Date.now()}`;
   await send(alice, mark);
   const row = alice.locator("#messages [data-message-id]", { hasText: mark }).last();
 
-  // Accept here rather than leaning on the fixture's global handler: the test should not depend
-  // on someone else's registration to get past its own confirmation (#528 review). The fixture
-  // also accepts, and the loser of that race just gets a rejected promise — hence the catch.
-  let asked = 0;
-  alice.on("dialog", (d) => {
-    asked++;
-    d.accept().catch(() => {});
-  });
-
   const menu = await openMenu(alice, row);
   const item = menu.locator('[data-act="delete_for_both"]');
   await expect(item).toBeVisible();
-  await expect(item).toHaveAttribute("data-confirm-text", /.+/);
+  const question = await item.getAttribute("data-confirm-text");
+  expect(question, "the item carries no confirmation text to ask with").toBeTruthy();
   await item.click();
 
+  // Since #518 the question is the app's own sheet, not `window.confirm`. Watching for a browser
+  // dialog therefore counted nothing, and — because nobody answered the sheet — the delete never
+  // fired either, so both halves of this test were asserting into the void (#579).
+  const ask = alice.locator(".ed-ask");
+  await expect(ask, "no confirmation was asked before deleting for everyone").toBeVisible();
+  await expect(ask).toContainText(question);
+
+  // The menu goes first: the question belongs over the chat, not over a menu on its way out.
+  await expect(menu).toBeHidden();
+
+  await ask.locator("[data-ok]").click();
   await expect(alice.locator("#messages", { hasText: mark })).toHaveCount(0, { timeout: 8000 });
-  expect(asked, "no confirmation was asked before deleting for everyone").toBeGreaterThan(0);
 });
 
 // A full leftward swipe: past the 56px threshold, axis-dominant, from the trailing edge.
@@ -291,4 +293,43 @@ test("a short sideways nudge does not reach the reply threshold", async ({
     alice.locator(".ed-reply-bar").first(),
     "a full swipe opened nothing either — the gesture path is dead, so the nudge proved nothing",
   ).toBeVisible({ timeout: 5000 });
+});
+
+test("an open menu survives a server patch of the pane", async ({ alice, bob, seed }) => {
+  // The menu is server markup (`hidden`, unpositioned) that the CLIENT takes over on open. Without
+  // `phx-update="ignore"` any patch of this LiveView put that markup back: the menu blinked out
+  // with `close()` never running, so `active` still pointed at the row, the document listeners
+  // stayed armed and focus never came home. Traffic in ANOTHER chat was enough — it only has to
+  // move an unread badge (#579).
+  await ready(alice);
+  await openDm(alice, seed);
+  const mark = `patch-${Date.now()}`;
+  await send(alice, mark);
+  const row = alice.locator("#messages [data-message-id]", { hasText: mark }).last();
+
+  const menu = await openMenu(alice, row);
+  const placed = await menu.evaluate((m) => m.style.top);
+  expect(placed, "the menu opened without being positioned").toBeTruthy();
+
+  // A message into the GROUP, which alice is not looking at: her sidebar badge moves and nothing
+  // else. Deliberately not a message into THIS chat — that scrolls the stream to the bottom, and a
+  // scroll closes the menu on purpose, which would hide the bug this test is for.
+  const badge = alice.locator(`#conversations a.ed-convo[href$="/app/c/${seed.group_id}"] .ed-badge`);
+  const before = (await badge.count()) ? await badge.first().innerText() : "";
+  await bob.goto(`/app/c/${seed.group_id}`);
+  await bob.waitForFunction(() => window.liveSocket?.isConnected());
+  await send(bob, `patch-from-bob-${Date.now()}`);
+  await expect(badge.first(), "the sidebar never patched — nothing was proven").not.toHaveText(
+    before,
+    { timeout: 12_000 },
+  );
+
+  await expect(menu, "a patch elsewhere in the page closed the menu").toBeVisible();
+  expect(await menu.evaluate((m) => m.style.top), "the patch wiped the menu's position").toBe(
+    placed,
+  );
+
+  // Still a working menu, not just a visible one.
+  await menu.locator('[data-act="enter_select"]').click();
+  await expect(alice.locator(".ed-selbar")).toBeVisible();
 });

@@ -1,7 +1,7 @@
 // Every surface draws an optimistic text node on send (#351): rooms (flat) + groups get a FADED
 // node with NO clock (the fade is the "sending" indicator), DMs keep the clock. All appear
 // instantly (ed-msg--sent, no rise-in) and swap to the real row.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 
 const room = (seed) => `/channels/${seed.channel_id}/r/${seed.general_room_id}`
 
@@ -45,7 +45,12 @@ const read = (alice) => alice.evaluate(() => window.__opt)
 
 async function sendText(alice, url, bodySel = "#composer-body", formSel = "#composer") {
   await alice.goto(url)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  // Watching cannot start at `isConnected()`. The DOM is still the dead render then, and the
+  // connected render REPLACES `#pending-messages` — so the observer was left holding a detached
+  // node and never saw a thing. Every send in this file has been unobserved since (#579).
+  await ready(alice)
+
   await watch(alice)
   await alice.locator(bodySel).fill(`opt-probe ${Date.now()}`)
   await alice.locator(formSel).evaluate((f) => f.requestSubmit())
