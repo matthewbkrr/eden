@@ -23,7 +23,10 @@ test("navigating with the lightbox open unlocks body scroll (#380/R187)", async 
   // Deep-link to the seeded photo instead of opening the DM and hoping it is still on screen:
   // every other spec sends into this same DM, and the photo had long since been pushed off the
   // loaded page, so this waited twelve seconds for a tile that was never going to be there (#579).
-  test.skip(!seed.portrait_msg_id, "no seeded photo on this stand")
+  // Asserted, not `test.skip`-ed: seed.exs creates this message unconditionally, so a missing key
+  // means the seed contract changed — and a skip would swallow that into a test that quietly
+  // stops running (#579 review).
+  expect(seed.portrait_msg_id, "the seed no longer carries portrait_msg_id").toBeTruthy()
   await alice.goto(`/app/c/${seed.dm_id}/m/${seed.portrait_msg_id}`)
   // Lightbox is a deferred hook: a tap before its bundle lands opens nothing at all (#579).
   await ready(alice)

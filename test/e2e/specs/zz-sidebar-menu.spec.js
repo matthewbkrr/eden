@@ -8,7 +8,7 @@
 // One shared menu per kind now, configured on open from the row's data-*. That trade is only safe
 // if the configuring actually happens, which is what this file is about: not "a menu exists" but
 // "the right menu, pointed at the right row, and its items reach the server".
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready: sharedReady } = require("../helpers/fixtures")
 
 // Wait for the menu to be OPEN, not for a fixed slice of time: these menus are opened by a hook
 // on a real gesture, and a stand under load can take longer than any number picked in advance
@@ -24,7 +24,10 @@ const openMenu = async (page, selector, menuId) => {
 // "hooks are up" signal — dropping it in favour of "the row is in the DOM" made the second test
 // time out here, which is the shape of every fixed-delay bug, just without the delay.
 const ready = async (page, rowSelector) => {
-  await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  // The shared helper, not a local copy of half of it: .ContextMenu is a DEFERRED hook, and
+  // openMenu() above right-clicks exactly once with no retry, so a gesture that lands before the
+  // second bundle opens nothing and the wait below times out on a menu no one armed (#579).
+  await sharedReady(page)
   await page.locator(rowSelector).first().waitFor()
 }
 
@@ -176,38 +179,73 @@ test("a room menu carries that room's link and hides delete for general", async 
   expect(await visibleItems(alice, "room-menu")).toContain("Delete room")
 })
 
-test("an open room menu survives a patch, and its admin items still follow one", async ({
+test("an open room menu survives a patch: still placed, still armed, still works", async ({
   alice,
   bob,
   seed,
 }) => {
-  // #room-menu is the one shared menu that stays patchable: its admin block is behind a server
-  // gate on the channel role. So it gets the protection the other way round — `.MenuKeepOpen`
-  // re-asserts the open state a patch wipes. Both halves are asserted here, because fixing either
-  // one alone is what this review round caught (#579).
+  // #room-menu is the one shared menu that stays patchable: its admin items are behind a server
+  // gate on the channel role, so `phx-update="ignore"` would freeze them (a channel owner who
+  // arrives from /app would lose room administration for the session). It defends itself with
+  // .MenuKeepOpen instead.
+  //
+  // Asserting that the menu is still VISIBLE is not enough, and that weaker test is what shipped
+  // first: a patch also wipes everything fillSidebar() wrote — every `phx-value-id`, the
+  // `data-needs` visibility, the copy link — so the first version of the hook brought the menu
+  // back disarmed, every id reading `null`, which is worse than the vanish it replaced (#579
+  // review). Assert the wiring, and then use it.
   await alice.goto(`/channels/${seed.channel_id}`)
   await ready(alice, ".ed-room-wrap")
 
+  const row = () => alice.locator(`.ed-room-wrap[data-id="${seed.general_room_id}"]`).first()
   await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`, "room-menu")
   const menu = alice.locator("#room-menu")
-  const placed = await menu.evaluate((m) => m.style.top)
-  expect(placed, "the menu opened without being positioned").toBeTruthy()
 
-  // Alice created this channel in the seed, so she administers it. If a patch could freeze the
-  // subtree, these are what a channel owner would lose.
-  const admin = await visibleItems(alice, "room-menu")
-  expect(admin, "the owner is not being offered room administration at all").toContain("Add members")
+  const wiring = () =>
+    alice.evaluate(() => {
+      const m = document.getElementById("room-menu")
+      return {
+        top: m.style.top,
+        ids: [...m.querySelectorAll("[phx-click]")].map((b) => b.getAttribute("phx-value-id")),
+        link: m.querySelector("[data-copy-link]")?.dataset.link || "",
+      }
+    })
 
-  // An ordinary patch of the page: bob writes into the DM, which moves alice's sidebar.
+  const before = await wiring()
+  expect(before.top, "the menu opened without being positioned").toBeTruthy()
+  expect(before.ids.length, "no items to point at a row").toBeGreaterThan(0)
+  expect(before.ids.every((id) => id === String(seed.general_room_id))).toBe(true)
+  expect(before.link, "the copy item has no room link").toContain(String(seed.general_room_id))
+
+  // Alice created this channel in the seed, so she administers it. These are the items a frozen
+  // subtree would have cost her.
+  expect(
+    await visibleItems(alice, "room-menu"),
+    "the owner is not being offered room administration at all",
+  ).toContain("Add members")
+
+  // An ordinary patch of alice's page: bob writes into the DM, which moves her sidebar. Measured
+  // to reach this view — it is what wiped the ids before the fix.
   await bob.goto(`/app/c/${seed.dm_id}`)
   await bob.waitForFunction(() => window.liveSocket?.isConnected())
   await bob.locator("#composer-body").fill(`room-menu-patch ${Date.now()}`)
   await bob.locator("#composer").evaluate((f) => f.requestSubmit())
 
   await expect(menu, "a patch closed the open room menu").toBeVisible({ timeout: 12_000 })
-  expect(await menu.evaluate((m) => m.style.top), "the patch wiped the menu's position").toBe(placed)
+  await expect
+    .poll(wiring, { message: "the patch left the menu on screen but disarmed", timeout: 12_000 })
+    .toEqual(before)
   expect(
     await visibleItems(alice, "room-menu"),
     "the patch dropped the owner's admin items",
   ).toContain("Add members")
+
+  // And it still reaches the server for the RIGHT room — the point of carrying phx-value-id.
+  const muted = (await row().getAttribute("data-muted")) === "1"
+  await alice.locator('#room-menu button[phx-click="toggle_mute"]').click()
+  if (muted) {
+    await expect(row()).not.toHaveAttribute("data-muted", "1")
+  } else {
+    await expect(row()).toHaveAttribute("data-muted", "1")
+  }
 })

@@ -8,7 +8,7 @@
 // pointing at whichever row wired it first, every action silently targets the wrong message —
 // and nothing on screen would look wrong. So the tests below check WHICH message an action
 // reaches, not merely that the menu appears.
-const { test, expect, send, openMenu } = require("../helpers/fixtures");
+const { test, expect, send, ready: sharedReady, openMenu } = require("../helpers/fixtures");
 
 // Serial: every test here sends into the SAME dm and one of them deletes a message, so running
 // them in parallel had them fighting over the same conversation (the pane simply never opened).
@@ -16,6 +16,9 @@ test.describe.configure({ mode: "serial" });
 
 async function ready(page) {
   await page.goto("/app");
+  // .ContextMenu is deferred (#511): gate on the shared helper first, then on this file's own
+  // stronger condition below.
+  await sharedReady(page);
   // Wait for the app's OWN readiness signal, not just the socket: until the instant-nav hook is
   // armed a click on a sidebar row can be swallowed, and the pane never opens.
   await page.waitForFunction(

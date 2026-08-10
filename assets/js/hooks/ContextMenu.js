@@ -241,6 +241,27 @@ if (!window.__edReactChipGuard) {
 // labels in an ignored menu are FROZEN — anything server-computed has to go the
 // #room-menu way, not into #convo-menu.
 let active = null
+
+// Re-point the open shared menu at its row after a server patch reset it (#579 review).
+//
+// A shared sidebar menu is server markup, so a patch restores exactly what fillSidebar() wrote:
+// `phx-value-id` on every item, the `data-needs` visibility, the copy link. Measured on #room-menu:
+// after one patch every id read `null` and the link was empty — the menu was back on screen and
+// disarmed, which is worse than the vanish it replaced. .MenuKeepOpen calls this instead of
+// restoring those by hand, so the wiring keeps ONE owner.
+//
+// Returns false when the menu has no live owner: its row went away with the same patch, and
+// re-showing a menu pointed at nothing is the ghost of #478/#479/#493.
+window.__edMenuRearm = (menu) => {
+  if (!active || active.menu !== menu) return false
+  if (!active.el.isConnected) {
+    active.close()
+    return false
+  }
+  active.fillSidebar()
+  return true
+}
+
 export default {
   mounted() {
     this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }

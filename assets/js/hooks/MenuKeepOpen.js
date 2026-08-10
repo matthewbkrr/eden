@@ -19,6 +19,11 @@ export default {
   },
   updated() {
     if (!this.wasOpen) return
+    // The patch also wiped what fillSidebar() wrote — every `phx-value-id`, the `data-needs`
+    // visibility, the copy link. Re-arm through .ContextMenu rather than restoring those here:
+    // that hook owns the row->menu wiring, and a second copy of it would drift. A false answer
+    // means the menu has no live owner any more, so it stays down.
+    if (!window.__edMenuRearm?.(this.el)) return
     this.el.hidden = false
     // The whole attribute, not left/top one at a time: position() is the only writer of this
     // element's inline style, so restoring what it wrote keeps the two in step.
