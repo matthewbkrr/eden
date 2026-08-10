@@ -175,3 +175,39 @@ test("a room menu carries that room's link and hides delete for general", async 
   await openMenu(alice, `.ed-room-wrap[data-id="${other}"]`, "room-menu")
   expect(await visibleItems(alice, "room-menu")).toContain("Delete room")
 })
+
+test("an open room menu survives a patch, and its admin items still follow one", async ({
+  alice,
+  bob,
+  seed,
+}) => {
+  // #room-menu is the one shared menu that stays patchable: its admin block is behind a server
+  // gate on the channel role. So it gets the protection the other way round — `.MenuKeepOpen`
+  // re-asserts the open state a patch wipes. Both halves are asserted here, because fixing either
+  // one alone is what this review round caught (#579).
+  await alice.goto(`/channels/${seed.channel_id}`)
+  await ready(alice, ".ed-room-wrap")
+
+  await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`, "room-menu")
+  const menu = alice.locator("#room-menu")
+  const placed = await menu.evaluate((m) => m.style.top)
+  expect(placed, "the menu opened without being positioned").toBeTruthy()
+
+  // Alice created this channel in the seed, so she administers it. If a patch could freeze the
+  // subtree, these are what a channel owner would lose.
+  const admin = await visibleItems(alice, "room-menu")
+  expect(admin, "the owner is not being offered room administration at all").toContain("Add members")
+
+  // An ordinary patch of the page: bob writes into the DM, which moves alice's sidebar.
+  await bob.goto(`/app/c/${seed.dm_id}`)
+  await bob.waitForFunction(() => window.liveSocket?.isConnected())
+  await bob.locator("#composer-body").fill(`room-menu-patch ${Date.now()}`)
+  await bob.locator("#composer").evaluate((f) => f.requestSubmit())
+
+  await expect(menu, "a patch closed the open room menu").toBeVisible({ timeout: 12_000 })
+  expect(await menu.evaluate((m) => m.style.top), "the patch wiped the menu's position").toBe(placed)
+  expect(
+    await visibleItems(alice, "room-menu"),
+    "the patch dropped the owner's admin items",
+  ).toContain("Add members")
+})

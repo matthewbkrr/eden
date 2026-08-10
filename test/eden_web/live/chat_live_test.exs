@@ -3990,6 +3990,31 @@ defmodule EdenWeb.ChatLiveTest do
       assert length(Regex.scan(~r/id="room-menu"/, html)) == 1
     end
 
+    test "the room menu's admin items follow a patch into a channel (#579)", ctx do
+      scope = Scope.for_user(ctx.alice)
+      {:ok, channel} = Eden.Channels.create_channel(scope, %{"name" => "Patch579"})
+
+      conn = log_in_user(ctx.conn, ctx.alice)
+
+      # Sign-in lands on /app, where there is no channel and the admin block renders empty. The
+      # rail then switches with a PATCH, not a navigate, so the view is never remounted — the
+      # server conditional on @channel.role has to travel in that diff.
+      {:ok, view, _html} = live(conn, ~p"/app")
+
+      refute render(element(view, "#room-menu")) =~ "Delete room",
+             "no channel is open yet — nothing to administer"
+
+      render_patch(view, ~p"/channels/#{channel.id}/enter")
+      menu = render(element(view, "#room-menu"))
+
+      # Alice created the channel, so she owns it. These three have no other entry point in the
+      # UI; frozen markup here costs the owner room administration for the whole session.
+      for item <- ["Add members", "Rename room", "Delete room"] do
+        assert menu =~ item,
+               "the owner's #{inspect(item)} never arrived after a patch into her own channel"
+      end
+    end
+
     test "mute toggles from the chat menu and de-emphasizes the badge", ctx do
       scope = Scope.for_user(ctx.alice)
 

@@ -3084,9 +3084,13 @@ defmodule EdenWeb.ChatLive do
         arriving message, a typing indicator, a badge) walks this node and puts that markup
         back, so the menu vanished mid-gesture with `close()` never running: `active` kept
         pointing at the row, the document listeners stayed armed, and focus never returned to
-        the opener (#579). Nothing inside is dynamic — every per-row difference is applied by
-        the hook from the row's data-*. The other three shared menus carry it for this same
-        reason. --%>
+        the opener (#579).
+
+        Safe here because nothing inside is server-computed: this menu takes no assigns at all,
+        #reaction-grid renders a constant set, and #message-menu renders `@my_quick`, which is
+        assigned once at mount. That is a CONDITION, not a property of menus — an ignored subtree
+        is frozen, so making any of them dynamic (a live `@my_quick`, say) means dropping the
+        ignore, not adding an assign. #room-menu already has to: see it below. --%>
       <div
         id="convo-menu"
         phx-update="ignore"
@@ -3143,10 +3147,15 @@ defmodule EdenWeb.ChatLive do
         </button>
       </div>
 
-      <%!-- `phx-update="ignore"` — client-owned while open, like #convo-menu above (#579). --%>
+      <%!-- The one shared menu that must stay PATCHABLE: its admin block below is behind a server
+            gate on `@channel.role`, and the rail switches channels with `patch=`, so that block
+            has to be able to arrive in a diff. `phx-update="ignore"` would freeze whichever
+            variant rendered first — an owner who reaches her channel from /app would lose room
+            administration for the whole session (#579 review). `.MenuKeepOpen` gives it the same
+            protection the other way round: it re-asserts the open state the patch just wiped. --%>
       <div
         id="room-menu"
-        phx-update="ignore"
+        phx-hook="MenuKeepOpen"
         class="ed-menu"
         data-menu
         role="menu"

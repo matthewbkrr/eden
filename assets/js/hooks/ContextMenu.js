@@ -230,9 +230,16 @@ if (!window.__edReactChipGuard) {
 // closes it through close() so its document listeners are torn down — never
 // by mutating `.hidden` directly (that would orphan the listeners). The host
 // (this.el) and the menu node both carry stable ids, so their listeners
-// survive a stream re-render; menu visibility/position is re-applied in
-// updated(), which is why the markup needs no phx-update="ignore" and item
-// labels stay free to change (e.g. a future Mute/Unmute toggle).
+// survive a stream re-render.
+//
+// updated() re-applies visibility, but only for THIS hook's element — the row.
+// It never runs for the menu node, which has no hook of its own, so a patch
+// there silently restored the server's `hidden` and wiped the position with no
+// close() to match (#579). The menus therefore carry `phx-update="ignore"`,
+// except #room-menu, whose admin items are behind a server gate on the channel
+// role: that one stays patchable and defends itself with .MenuKeepOpen. Item
+// labels in an ignored menu are FROZEN — anything server-computed has to go the
+// #room-menu way, not into #convo-menu.
 let active = null
 export default {
   mounted() {

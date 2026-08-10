@@ -46,9 +46,12 @@ const read = (alice) => alice.evaluate(() => window.__opt)
 async function sendText(alice, url, bodySel = "#composer-body", formSel = "#composer") {
   await alice.goto(url)
 
-  // Watching cannot start at `isConnected()`. The DOM is still the dead render then, and the
-  // connected render REPLACES `#pending-messages` — so the observer was left holding a detached
-  // node and never saw a thing. Every send in this file has been unobserved since (#579).
+  // Watching cannot start at `isConnected()`: every send in this file was unobserved, because
+  // the optimistic node the observer waits for is drawn by .SendQueue, and .SendQueue is one of
+  // the deferred hooks (#511) — submit before it mounts and the send takes the plain server path,
+  // drawing nothing. `ready()` waits for that bundle. (Measured, not assumed: `#pending-messages`
+  // itself is `phx-update="ignore"`, so it is NOT swapped out and the observer never went stale
+  // — #579 review corrected an earlier reading of this.)
   await ready(alice)
 
   await watch(alice)
