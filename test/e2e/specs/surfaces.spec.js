@@ -52,7 +52,9 @@ test.describe("surface tour", () => {
     await alice.goto(`/settings/profile`)
     await expect(alice.locator("#profile-form")).toBeVisible()
     await alice.goto(`/settings/reactions`)
-    await expect(alice.locator(".ed-qr-grid")).toBeVisible()
+    // Scoped by role: since the double-click-reaction picker landed there are TWO .ed-qr-grid
+    // groups on this page, and a bare class locator is a strict-mode violation (#588).
+    await expect(alice.getByRole("group", { name: "Quick reactions" })).toBeVisible()
     await shot(alice, testInfo, "settings")
     expect(alice.__diag.pageErrors, "settings uncaught errors").toEqual([])
   })

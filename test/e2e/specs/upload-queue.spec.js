@@ -3,7 +3,7 @@
 // overlay and sends normally; the engine queues it behind the in-flight one, so both land as
 // their OWN ordered messages. (This replaces the old #119 `.ed-queued` / `mediaInFlight`
 // assertions, whose UI was removed with the concurrent engine.)
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 const path = require("path")
 const fix = (n) => path.join(__dirname, "..", "fixtures", n)
 
@@ -14,11 +14,14 @@ test("two batches picked back-to-back arrive as separate ordered messages (#361/
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const before = await alice.locator("#messages a.ed-file").count()
 
   // Send batch A.
-  await alice.locator('#composer input[type="file"]').setInputFiles(fix("qa.txt"))
+  // By NAME: the composer carries three file inputs — the ordinary one, the sequential
+  // uploader (#323) and the retry channel (#310) — so `input[type="file"]` is a strict-mode
+  // violation, not a locator (#588). Every healthy spec here names it.
+  await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("qa.txt"))
   await expect(alice.locator("[data-upload-preview]")).toBeVisible()
   await alice.locator('[data-upload-preview] button[type="submit"]').click()
   // The overlay closing means the send started (A is uploading on :attachment_seq).
@@ -26,7 +29,7 @@ test("two batches picked back-to-back arrive as separate ordered messages (#361/
 
   // Pick batch B right away — no "in queue" gating: the overlay just re-opens as a normal new
   // send (there is no `.ed-queued` element in the sequential engine).
-  await alice.locator('#composer input[type="file"]').setInputFiles(fix("qb.txt"))
+  await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("qb.txt"))
   await expect(alice.locator("[data-upload-preview]")).toBeVisible()
   await expect(alice.locator(".ed-queued")).toHaveCount(0)
   await alice.locator('[data-upload-preview] button[type="submit"]').click()

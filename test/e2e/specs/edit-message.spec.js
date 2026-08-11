@@ -1,4 +1,4 @@
-const { test, expect, send, openMenu } = require("../helpers/fixtures")
+const { test, expect, send, openMenu, ready } = require("../helpers/fixtures")
 const path = require("path")
 const fix = (n) => path.join(__dirname, "..", "fixtures", n)
 
@@ -14,7 +14,7 @@ test("an author edits their message; it shows 'edited' and reaches the peer live
   const fixed = `after ${stamp}`
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await send(alice, original)
 
   // Bob is viewing the same DM (so the edit must reach him live).
@@ -60,7 +60,7 @@ test("an author edits a photo message via the media modal: adds a photo + captio
   const caption = `cap ${Date.now()}`
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   // Send a single photo.
   await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("sample1.png"))
@@ -112,7 +112,7 @@ test("edit-media modal: removing a tile keeps the typed caption (#164)", async (
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   // A 2-photo album, so removing one leaves one (Save stays enabled).
   await alice
@@ -142,7 +142,7 @@ test("Escape cancels the text-edit banner and clears the composer (#164)", async
   seed,
 }) => {
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await send(alice, `escape me ${Date.now()}`)
   const bubble = alice.locator(".ed-bubble").last()
   const menu = await openMenu(alice, bubble)
@@ -164,7 +164,7 @@ test("editing a text message + attaching media converts it to a media message (#
   const text = `text2pic ${Date.now()}`
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await send(alice, text)
   const bubble = alice.locator(".ed-bubble", { hasText: text }).first()
   await expect(bubble).toBeVisible()
