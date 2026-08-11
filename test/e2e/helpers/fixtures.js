@@ -96,17 +96,22 @@ async function openMenu(page, messageLocator) {
 // gap, and it fails without a single error in the console. `send()` below happens to gate on a
 // deferred hook already, which is the only reason most of the harness never noticed (#579).
 async function ready(page) {
-  await page.waitForFunction(
-    () =>
-      !!(
-        window.liveSocket &&
-        window.liveSocket.isConnected() &&
-        window.__edInstantNavReady &&
-        window.__edenLazyHooks
-      ),
-    null,
-    { timeout: 15_000 },
-  )
+  // `__edInstantNavReady` only ever appears on a ChatLive page — `phx-hook="InstantNav"` is
+  // rendered in chat_live.ex and nowhere else — so requiring it hung for the full timeout on
+  // /settings, /admin and every other authed page. Measured on notify-sound, which visits
+  // /settings/notifications: 15 s, then a bare timeout naming none of its conditions (#588; this
+  // was raised in the #587 review and I wrongly let it be waved off as speculative).
+  //
+  // So: wait for the socket and the deferred bundle everywhere, and for instant-nav only where it
+  // exists. Each condition gets its own wait, so a failure names the one that did not happen
+  // instead of collapsing four into one nameless timeout.
+  await page.waitForFunction(() => !!(window.liveSocket && window.liveSocket.isConnected()), null, {
+    timeout: 15_000,
+  })
+  await page.waitForFunction(() => !!window.__edenLazyHooks, null, { timeout: 15_000 })
+  if (await page.locator("#instant-nav").count()) {
+    await page.waitForFunction(() => !!window.__edInstantNavReady, null, { timeout: 15_000 })
+  }
 }
 
 // Fill the composer and submit it. Uses requestSubmit on the form so it fires phx-submit

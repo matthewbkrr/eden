@@ -2,7 +2,7 @@
 // Telegram-style panel (peer/group card + a per-dialog media gallery with Photo/Video/
 // Files/Audio tabs). A photo opens the shared lightbox; Esc closes ONLY the lightbox.
 // Groups also show their member list inline; tapping a member opens their popover.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 
 test("the DM header opens the profile panel with a media gallery (#136)", async ({
   alice,
@@ -10,7 +10,7 @@ test("the DM header opens the profile panel with a media gallery (#136)", async 
 }) => {
   // The seed plants one photo in the DM, so the gallery is deterministic on every engine.
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   // Open the expanded profile from the chat header.
   await alice.locator("[data-profile-trigger]").first().click()
@@ -57,7 +57,7 @@ test("the group header opens the panel with a member list + gallery (#136)", asy
   seed,
 }) => {
   await alice.goto(`/app/c/${seed.group_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   await alice.locator("[data-profile-trigger]").first().click()
   const panel = alice.locator(".ed-profile")

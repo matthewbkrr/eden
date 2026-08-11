@@ -1,4 +1,4 @@
-const { test, expect, send } = require("../helpers/fixtures")
+const { test, expect, send, ready } = require("../helpers/fixtures")
 
 // #215: when a gated notification (#213) lands and sound is on and the chat isn't focused,
 // the .Notifier hook plays a chime. Real audio can't be asserted, so Web Audio is stubbed to
@@ -34,14 +34,14 @@ test("a notification chimes when sound is on and the chat isn't focused (#215)",
 
   // Notification prefs are shared dev state — make sure alice's sound is ON first.
   await alice.goto("/settings/notifications")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const toggle = alice.locator('button[phx-click="set_notify_sound"]')
   if ((await toggle.getAttribute("aria-checked")) === "false") await toggle.click()
   await expect(toggle).toHaveAttribute("aria-checked", "true")
 
   // Alice is on the chat list, NOT viewing the alice–bob DM (so it isn't focused).
   await alice.goto("/app")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await alice.waitForSelector("#notifier", { state: "attached" })
   await expect(alice.locator("#notifier")).toHaveAttribute("data-sound", "true")
   // The hook unlocks the audio context on the first interaction.
@@ -91,15 +91,20 @@ test("a suspended audio context is resumed so a backgrounded notification still 
 
   // Sound on (independent of the first test).
   await alice.goto("/settings/notifications")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const toggle = alice.locator('button[phx-click="set_notify_sound"]')
   if ((await toggle.getAttribute("aria-checked")) === "false") await toggle.click()
   await expect(toggle).toHaveAttribute("aria-checked", "true")
 
   await alice.goto("/app")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await alice.waitForSelector("#notifier", { state: "attached" })
   await alice.evaluate(() => window.dispatchEvent(new Event("pointerdown"))) // unlock → running
+  // The context is created by the Notifier hook's own pointerdown listener, so it exists only once
+  // that hook has MOUNTED. `#notifier` attached is the dead render — measured: after the old wait
+  // `window.__edAudio` was undefined on every run, and the line below died with "Cannot set
+  // properties of undefined" (#588).
+  await alice.waitForFunction(() => !!window.__edAudio)
   // The browser auto-suspended the context while we were backgrounded.
   await alice.evaluate(() => (window.__edAudio.state = "suspended"))
 

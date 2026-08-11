@@ -42,19 +42,38 @@ test("a signed-out page loads the small bundle, the app loads the full one", asy
   // An unregistered hook is a console error, not a crash — the page would look fine.
   expect(login.errors, `console errors on /login: ${JSON.stringify(login.errors)}`).toEqual([])
 
-  const sizes = await anon.evaluate(async () => {
+  // What the split means, asserted directly: the login bundle carries none of the chat client.
+  //
+  // This used to be a size ratio (`auth < app * 0.75`) and it went red for the WRONG reason —
+  // measured: #511 moved thirty hooks out of app.js into lazy.js (213 KB), so app.js SHRANK, and
+  // the ratio rose 0.51 -> 0.75. Both bundles are dominated by the shared LiveView runtime
+  // (auth.js is 345 KB of which the chat hooks are 0), so the ratio tends to 1 the better the
+  // split gets: the guard punished the improvement it exists to protect. Its comment claimed the
+  // hooks were 46% of the bundle; they are 24.7% (#588).
+  const bundles = await anon.evaluate(async () => {
     const get = async (p) => (await (await fetch(p)).text()).length
-    return { auth: await get("/assets/js/auth.js"), app: await get("/assets/js/app.js") }
+    const auth = await (await fetch("/assets/js/auth.js")).text()
+    return {
+      auth: auth.length,
+      app: await get("/assets/js/app.js"),
+      // Named hooks, not a byte count: this is what "the chat client is not here" means, and it
+      // cannot drift with the size of the runtime both bundles share.
+      leaked: ["ContextMenu", "SendQueue", "Lightbox", "InstantNav", "ReactionGrid"].filter((h) =>
+        auth.includes(h),
+      ),
+    }
   })
-  const line = `auth.js ${sizes.auth} B vs app.js ${sizes.app} B (unminified)`
+  const line = `auth.js ${bundles.auth} B vs app.js ${bundles.app} B (unminified)`
   console.log(line)
   testInfo.annotations.push({ type: "measurement", description: line })
 
-  // A threshold that separates "the chat client is out" from "a few modules moved": the hooks are
-  // 46% of the bundle, so anything close to parity means the split did not take.
-  expect(sizes.auth, `${line} — the auth bundle is not materially smaller`).toBeLessThan(
-    sizes.app * 0.75,
-  )
+  expect(
+    bundles.leaked,
+    `the login bundle carries chat hooks: ${bundles.leaked.join(", ")}`,
+  ).toEqual([])
+  // And it is still the smaller of the two — a floor that survives further splitting, unlike a
+  // ratio close to the runtime's own share.
+  expect(bundles.auth, `${line} — the auth bundle is not smaller at all`).toBeLessThan(bundles.app)
   await anon.close()
 
   const app = await scriptsFor(alice, "/app")
