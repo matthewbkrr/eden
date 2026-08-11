@@ -247,20 +247,27 @@ let active = null
 // A shared sidebar menu is server markup, so a patch restores exactly what fillSidebar() wrote:
 // `phx-value-id` on every item, the `data-needs` visibility, the copy link. Measured on #room-menu:
 // after one patch every id read `null` and the link was empty — the menu was back on screen and
-// disarmed, which is worse than the vanish it replaced. .MenuKeepOpen calls this instead of
+// disarmed, which is worse than the vanish it replaced. .MenuKeepOpen asks for this instead of
 // restoring those by hand, so the wiring keeps ONE owner.
 //
-// Returns false when the menu has no live owner: its row went away with the same patch, and
-// re-showing a menu pointed at nothing is the ghost of #478/#479/#493.
-window.__edMenuRearm = (menu) => {
-  if (!active || active.menu !== menu) return false
-  if (!active.el.isConnected) {
-    active.close()
-    return false
-  }
+// Over an `ed:` event rather than an import or a window global: .MenuKeepOpen is in the BOOT
+// bundle and this hook is in the deferred one (#511), so importing it there would drag the whole
+// of ContextMenu back into boot and undo that split. One document-level listener, registered when
+// the deferred bundle loads — the same shape as the `ed:nav` this file already listens to.
+//
+// The listener sets `detail.armed` so the caller can tell "re-pointed" from "no live owner": the
+// row went away with the same patch, and re-showing a menu pointed at nothing is the ghost of
+// #478/#479/#493. That branch is a BELT and is deliberately not covered by a test — the row's own
+// destroyed() -> close() normally gets there first, and hook order is what makes "normally" worth
+// a guard. Verified by mutation that the rest is covered: forcing `armed = true` here leaves every
+// menu test green, so nothing pins this line (#579 review).
+document.addEventListener("ed:menu-rearm", (e) => {
+  const menu = e.detail && e.detail.menu
+  if (!active || active.menu !== menu) return
+  if (!active.el.isConnected) return active.close()
   active.fillSidebar()
-  return true
-}
+  e.detail.armed = true
+})
 
 export default {
   mounted() {

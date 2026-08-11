@@ -20,10 +20,15 @@ export default {
   updated() {
     if (!this.wasOpen) return
     // The patch also wiped what fillSidebar() wrote — every `phx-value-id`, the `data-needs`
-    // visibility, the copy link. Re-arm through .ContextMenu rather than restoring those here:
-    // that hook owns the row->menu wiring, and a second copy of it would drift. A false answer
-    // means the menu has no live owner any more, so it stays down.
-    if (!window.__edMenuRearm?.(this.el)) return
+    // visibility, the copy link. Ask .ContextMenu to re-point the menu rather than restoring
+    // those here: that hook owns the row->menu wiring, and a second copy of it would drift.
+    // Unanswered (no listener yet, or no live owner) means the menu stays down.
+    const ask = new CustomEvent("ed:menu-rearm", {
+      bubbles: true,
+      detail: { menu: this.el, armed: false },
+    })
+    this.el.dispatchEvent(ask)
+    if (!ask.detail.armed) return
     this.el.hidden = false
     // The whole attribute, not left/top one at a time: position() is the only writer of this
     // element's inline style, so restoring what it wrote keeps the two in step.
