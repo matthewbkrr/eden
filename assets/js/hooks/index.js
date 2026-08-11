@@ -37,7 +37,8 @@ export const edenHooks = {
   LocalTime,
   LocalTimes,
   // Eager on purpose: it defends state a DEFERRED hook (.ContextMenu) sets, and a patch can
-  // land in the same frame the menu opens. 12 lines.
+  // land in the same frame the menu opens. Two callbacks, no imports — the boot cost is noise
+  // next to the split it protects.
   MenuKeepOpen,
   PresenceDots,
   ScrollBottom,

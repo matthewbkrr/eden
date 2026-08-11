@@ -49,9 +49,12 @@ and runs a chosen spec on Chromium (default `smoke.spec.js`) — trigger it from
 
 ## Conventions that keep specs robust
 
-- **Wait for connect before acting**: `await page.waitForFunction(() => window.liveSocket?.isConnected())`.
-  A LiveView form/composer can be visible before the socket connects; a pre-connect submit is a
-  no-op. `send()` already does this.
+- **Wait with `ready(page)` before acting**, not on `isConnected()` alone. A connected socket is
+  not a page that can answer a gesture: the composer may still be the dead render, and thirty
+  hooks (menus, lightbox, `SendQueue`, …) arrive in a second bundle a frame after paint (#511),
+  so a click landing before it opens nothing and fails with no error in the console. `ready()`
+  waits for socket + instant-nav + that bundle; `send()` gates on the composer's own hook. Four
+  specs were silently broken on the `isConnected()`-only form this line used to recommend (#579).
 - **Submit via `requestSubmit`** on `#composer` (fires `phx-submit` regardless of Enter quirks
   that differ between the bubble and flat composers).
 - **Open a message menu** with `openMenu(page, msgLocator)` — dispatches `contextmenu` (works on
