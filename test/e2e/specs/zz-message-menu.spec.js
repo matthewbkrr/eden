@@ -16,16 +16,10 @@ test.describe.configure({ mode: "serial" });
 
 async function ready(page) {
   await page.goto("/app");
-  // .ContextMenu is deferred (#511): gate on the shared helper first, then on this file's own
-  // stronger condition below.
+  // The shared helper covers every condition this file used to wait for on its own — socket,
+  // instant-nav, and the deferred bundle .ContextMenu arrives in (#511) — so the local copy that
+  // stood here was a strict subset of it and could never block (#579 review).
   await sharedReady(page);
-  // Wait for the app's OWN readiness signal, not just the socket: until the instant-nav hook is
-  // armed a click on a sidebar row can be swallowed, and the pane never opens.
-  await page.waitForFunction(
-    () => window.liveSocket && window.liveSocket.isConnected() && window.__edInstantNavReady,
-    null,
-    { timeout: 15_000 },
-  );
 }
 
 async function openDm(page, seed) {
