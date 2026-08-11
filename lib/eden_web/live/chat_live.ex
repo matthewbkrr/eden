@@ -3078,8 +3078,22 @@ defmodule EdenWeb.ChatLive do
             every item's `phx-value-id` and flips `data-needs` visibility on open, so the actions
             stay plain `phx-click` markup — which is what keeps `data-confirm` working. The
             predicates themselves stay in Elixir: the server puts them on the row as data-*. --%>
+      <%!-- `phx-update="ignore"`, for the same reason #mention-pop carries it: opening a menu
+        is a CLIENT act — the hook clears `hidden` and writes an inline position — while the
+        server's markup says hidden and unpositioned. Any patch of the surrounding pane (an
+        arriving message, a typing indicator, a badge) walks this node and puts that markup
+        back, so the menu vanished mid-gesture with `close()` never running: `active` kept
+        pointing at the row, the document listeners stayed armed, and focus never returned to
+        the opener (#579).
+
+        Safe here because nothing inside is server-computed: this menu takes no assigns at all,
+        #reaction-grid renders a constant set, and #message-menu renders `@my_quick`, which is
+        assigned once at mount. That is a CONDITION, not a property of menus — an ignored subtree
+        is frozen, so making any of them dynamic (a live `@my_quick`, say) means dropping the
+        ignore, not adding an assign. #room-menu already has to: see it below. --%>
       <div
         id="convo-menu"
+        phx-update="ignore"
         class="ed-menu"
         data-menu
         role="menu"
@@ -3133,8 +3147,15 @@ defmodule EdenWeb.ChatLive do
         </button>
       </div>
 
+      <%!-- The one shared menu that must stay PATCHABLE: its admin block below is behind a server
+            gate on `@channel.role`, and the rail switches channels with `patch=`, so that block
+            has to be able to arrive in a diff. `phx-update="ignore"` would freeze whichever
+            variant rendered first — an owner who reaches her channel from /app would lose room
+            administration for the whole session (#579 review). `.MenuKeepOpen` gives it the same
+            protection the other way round: it re-asserts the open state the patch just wiped. --%>
       <div
         id="room-menu"
+        phx-hook="MenuKeepOpen"
         class="ed-menu"
         data-menu
         role="menu"
@@ -3962,8 +3983,10 @@ defmodule EdenWeb.ChatLive do
             hidden
           >
           </div>
+          <%!-- `phx-update="ignore"` — client-owned while open, like #convo-menu above (#579). --%>
           <div
             id="reaction-grid"
+            phx-update="ignore"
             class="ed-react-grid"
             phx-hook="ReactionGrid"
             role="menu"
@@ -3994,8 +4017,10 @@ defmodule EdenWeb.ChatLive do
                 with the row's id — the same reason #reaction-grid needs none. `data-needs`
                 marks an item whose visibility depends on the message; the server computes those
                 predicates onto the row (data-can-*), so the rules stay in Elixir. --%>
+          <%!-- `phx-update="ignore"` — client-owned while open, like #convo-menu above (#579). --%>
           <div
             id="message-menu"
+            phx-update="ignore"
             class="ed-menu"
             data-menu
             role="menu"

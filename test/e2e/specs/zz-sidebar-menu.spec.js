@@ -8,7 +8,7 @@
 // One shared menu per kind now, configured on open from the row's data-*. That trade is only safe
 // if the configuring actually happens, which is what this file is about: not "a menu exists" but
 // "the right menu, pointed at the right row, and its items reach the server".
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, send, ready: sharedReady } = require("../helpers/fixtures")
 
 // Wait for the menu to be OPEN, not for a fixed slice of time: these menus are opened by a hook
 // on a real gesture, and a stand under load can take longer than any number picked in advance
@@ -24,7 +24,10 @@ const openMenu = async (page, selector, menuId) => {
 // "hooks are up" signal — dropping it in favour of "the row is in the DOM" made the second test
 // time out here, which is the shape of every fixed-delay bug, just without the delay.
 const ready = async (page, rowSelector) => {
-  await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
+  // The shared helper, not a local copy of half of it: .ContextMenu is a DEFERRED hook, and
+  // openMenu() above right-clicks exactly once with no retry, so a gesture that lands before the
+  // second bundle opens nothing and the wait below times out on a menu no one armed (#579).
+  await sharedReady(page)
   await page.locator(rowSelector).first().waitFor()
 }
 
@@ -174,4 +177,100 @@ test("a room menu carries that room's link and hides delete for general", async 
   await alice.keyboard.press("Escape")
   await openMenu(alice, `.ed-room-wrap[data-id="${other}"]`, "room-menu")
   expect(await visibleItems(alice, "room-menu")).toContain("Delete room")
+})
+
+test("an open room menu survives a patch: still placed, still armed, still works", async ({
+  alice,
+  bob,
+  seed,
+}) => {
+  // #room-menu is the one shared menu that stays patchable: its admin items are behind a server
+  // gate on the channel role, so `phx-update="ignore"` would freeze them (a channel owner who
+  // arrives from /app would lose room administration for the session). It defends itself with
+  // .MenuKeepOpen instead.
+  //
+  // Asserting that the menu is still VISIBLE is not enough, and that weaker test is what shipped
+  // first: a patch also wipes everything fillSidebar() wrote — every `phx-value-id`, the
+  // `data-needs` visibility, the copy link — so the first version of the hook brought the menu
+  // back disarmed, every id reading `null`, which is worse than the vanish it replaced (#579
+  // review). Assert the wiring, and then use it.
+  await alice.goto(`/channels/${seed.channel_id}`)
+  await ready(alice, ".ed-room-wrap")
+
+  const row = () => alice.locator(`.ed-room-wrap[data-id="${seed.general_room_id}"]`).first()
+  await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`, "room-menu")
+  const menu = alice.locator("#room-menu")
+
+  const wiring = () =>
+    alice.evaluate(() => {
+      const m = document.getElementById("room-menu")
+      return {
+        top: m.style.top,
+        ids: [...m.querySelectorAll("[phx-click]")].map((b) => b.getAttribute("phx-value-id")),
+        link: m.querySelector("[data-copy-link]")?.dataset.link || "",
+      }
+    })
+
+  const before = await wiring()
+  expect(before.top, "the menu opened without being positioned").toBeTruthy()
+  expect(before.ids.length, "no items to point at a row").toBeGreaterThan(0)
+  expect(before.ids.every((id) => id === String(seed.general_room_id))).toBe(true)
+  expect(before.link, "the copy item has no room link").toContain(String(seed.general_room_id))
+
+  // Alice created this channel in the seed, so she administers it. These are the items a frozen
+  // subtree would have cost her.
+  expect(
+    await visibleItems(alice, "room-menu"),
+    "the owner is not being offered room administration at all",
+  ).toContain("Add members")
+
+  // An ordinary patch of alice's page: bob writes into the DM, which moves the rail's messenger
+  // badge. Through `send()`, not a raw requestSubmit — the helper waits for .SendQueue to have
+  // mounted, and its own comment records that submitting at `isConnected()` is how nine specs here
+  // were silently failing.
+  const badge = alice.locator(".ed-rail__badge").first()
+  const unread = (await badge.count()) ? await badge.innerText() : ""
+  await bob.goto(`/app/c/${seed.dm_id}`)
+  await send(bob, `room-menu-patch ${Date.now()}`)
+
+  // WAIT for the patch to land before asserting anything about the menu. Without this the first
+  // sample of the poll below can read the untouched DOM, which equals `before` by construction —
+  // a green tautology that exercises none of MenuKeepOpen. The badge is server-coalesced
+  // (@badge_coalesce_ms), so "the send returned" is not the same moment as "alice re-rendered"
+  // (#579 review).
+  await expect(badge, "the patch never reached alice — nothing below is proven").not.toHaveText(
+    unread,
+    { timeout: 12_000 },
+  )
+
+  await expect(menu, "a patch closed the open room menu").toBeVisible()
+  await expect
+    .poll(wiring, { message: "the patch left the menu on screen but disarmed", timeout: 12_000 })
+    .toEqual(before)
+  expect(
+    await visibleItems(alice, "room-menu"),
+    "the patch dropped the owner's admin items",
+  ).toContain("Add members")
+
+  // And it still reaches the server for the RIGHT room — the point of carrying phx-value-id.
+  const muted = (await row().getAttribute("data-muted")) === "1"
+  await alice.locator('#room-menu button[phx-click="toggle_mute"]').click()
+  if (muted) {
+    await expect(row()).not.toHaveAttribute("data-muted", "1")
+  } else {
+    await expect(row()).toHaveAttribute("data-muted", "1")
+  }
+
+  // Put it back: this room is the shared seed's general room, and a spec that leaves state behind
+  // is how the accumulation this issue is about starts. (It also hid this test's own bug: the row
+  // renders `data-muted={@room.muted && "1"}`, so unmuted means the attribute is ABSENT — there is
+  // no "0" — and asserting one passed only because a previous run had left the room muted. The
+  // rest of this file already uses the absent form; #579 review caught the one place that did not.)
+  await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`, "room-menu")
+  await alice.locator('#room-menu button[phx-click="toggle_mute"]').click()
+  if (muted) {
+    await expect(row()).toHaveAttribute("data-muted", "1")
+  } else {
+    await expect(row()).not.toHaveAttribute("data-muted", "1")
+  }
 })

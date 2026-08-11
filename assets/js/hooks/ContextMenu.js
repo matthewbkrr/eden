@@ -230,10 +230,45 @@ if (!window.__edReactChipGuard) {
 // closes it through close() so its document listeners are torn down — never
 // by mutating `.hidden` directly (that would orphan the listeners). The host
 // (this.el) and the menu node both carry stable ids, so their listeners
-// survive a stream re-render; menu visibility/position is re-applied in
-// updated(), which is why the markup needs no phx-update="ignore" and item
-// labels stay free to change (e.g. a future Mute/Unmute toggle).
+// survive a stream re-render.
+//
+// updated() re-applies visibility, but only for THIS hook's element — the row.
+// It never runs for the menu node, which has no hook of its own, so a patch
+// there silently restored the server's `hidden` and wiped the position with no
+// close() to match (#579). The menus therefore carry `phx-update="ignore"`,
+// except #room-menu, whose admin items are behind a server gate on the channel
+// role: that one stays patchable and defends itself with .MenuKeepOpen. Item
+// labels in an ignored menu are FROZEN — anything server-computed has to go the
+// #room-menu way, not into #convo-menu.
 let active = null
+
+// Re-point the open shared menu at its row after a server patch reset it (#579 review).
+//
+// A shared sidebar menu is server markup, so a patch restores exactly what fillSidebar() wrote:
+// `phx-value-id` on every item, the `data-needs` visibility, the copy link. Measured on #room-menu:
+// after one patch every id read `null` and the link was empty — the menu was back on screen and
+// disarmed, which is worse than the vanish it replaced. .MenuKeepOpen asks for this instead of
+// restoring those by hand, so the wiring keeps ONE owner.
+//
+// Over an `ed:` event rather than an import or a window global: .MenuKeepOpen is in the BOOT
+// bundle and this hook is in the deferred one (#511), so importing it there would drag the whole
+// of ContextMenu back into boot and undo that split. One document-level listener, registered when
+// the deferred bundle loads — the same shape as the `ed:nav` this file already listens to.
+//
+// The listener sets `detail.armed` so the caller can tell "re-pointed" from "no live owner": the
+// row went away with the same patch, and re-showing a menu pointed at nothing is the ghost of
+// #478/#479/#493. That branch is a BELT and is deliberately not covered by a test — the row's own
+// destroyed() -> close() normally gets there first, and hook order is what makes "normally" worth
+// a guard. Verified by mutation that the rest is covered: forcing `armed = true` here leaves every
+// menu test green, so nothing pins this line (#579 review).
+document.addEventListener("ed:menu-rearm", (e) => {
+  const menu = e.detail && e.detail.menu
+  if (!active || active.menu !== menu) return
+  if (!active.el.isConnected) return active.close()
+  active.fillSidebar()
+  e.detail.armed = true
+})
+
 export default {
   mounted() {
     this.onDoc = (e) => { if (!this.menu.contains(e.target)) this.close() }

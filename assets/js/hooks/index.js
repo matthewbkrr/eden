@@ -19,6 +19,7 @@ import InstantNav from "./InstantNav"
 import LastSeen from "./LastSeen"
 import LocalTime from "./LocalTime"
 import LocalTimes from "./LocalTimes"
+import MenuKeepOpen from "./MenuKeepOpen"
 import PresenceDots from "./PresenceDots"
 import ScrollBottom from "./ScrollBottom"
 import StreamVideo from "./StreamVideo"
@@ -35,6 +36,10 @@ export const edenHooks = {
   LastSeen,
   LocalTime,
   LocalTimes,
+  // Eager on purpose: it defends state a DEFERRED hook (.ContextMenu) sets, and a patch can
+  // land in the same frame the menu opens. Two callbacks, no imports — the boot cost is noise
+  // next to the split it protects.
+  MenuKeepOpen,
   PresenceDots,
   ScrollBottom,
   StreamVideo,

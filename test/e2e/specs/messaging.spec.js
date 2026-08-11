@@ -3,14 +3,15 @@
 // OTHER user sees the result live. The .ContextMenu hook listens to the `contextmenu`
 // event, so dispatchEvent("contextmenu") opens a message's menu on any project.
 const path = require("path")
-const { test, expect, shot, send, openMenu } = require("../helpers/fixtures")
+const { test, expect, shot, send, ready, openMenu } = require("../helpers/fixtures")
 
 const sampleTxt = path.join(__dirname, "..", "fixtures", "sample.txt")
 
 test.describe("messaging", () => {
   test("emoji picker inserts into the composer", async ({ alice, seed }, testInfo) => {
     await alice.goto(`/app/c/${seed.dm_id}`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    // The picker is a deferred hook and this is the first gesture of the test — see `ready` (#579).
+    await ready(alice)
     await alice.locator("#emoji-picker [data-emoji-toggle]").click()
     const pop = alice.locator("[data-emoji-pop]")
     await expect(pop).toBeVisible()
@@ -74,6 +75,13 @@ test.describe("messaging", () => {
 
     const menu = await openMenu(alice, bubble)
     await menu.locator(".ed-menu__item", { hasText: "Delete for everyone" }).click()
+
+    // Confirm in the app's OWN dialog. Since #518 this no longer goes through `window.confirm`,
+    // so the fixture's blanket "accept every dialog" (fixtures.js:39) — which is what used to
+    // carry this test — never fires: no browser dialog is raised, nobody answers the sheet, the
+    // delete never happens, and the assertions below were checking a message that was still
+    // there (#579).
+    await alice.locator(".ed-ask [data-ok]").click()
 
     // The body is gone; a "Message deleted" tombstone replaces it for both users.
     await expect(alice.locator("#messages").getByText(msg)).toHaveCount(0, { timeout: 12_000 })

@@ -2,7 +2,7 @@
 // root, and lock body scroll (overflow:hidden) while open. A server-driven navigation tears down
 // the owning hook WITHOUT firing its Esc/backdrop close(), which would leave the overlay visible and
 // the page scroll-locked. A global phx:page-loading-start guard closes any open overlay on nav.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 
 // Trigger a live navigation while the overlay is open. The open lightbox covers the sidebar, so a
 // normal (visibility-enforced) click can't reach the link — dispatch the click programmatically on
@@ -20,11 +20,18 @@ async function navToWhileOverlayOpen(page, convId) {
 }
 
 test("navigating with the lightbox open unlocks body scroll (#380/R187)", async ({ alice, seed }) => {
-  // The seed DM carries a photo, so a lightbox is one click away.
-  await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  // Deep-link to the seeded photo instead of opening the DM and hoping it is still on screen:
+  // every other spec sends into this same DM, and the photo had long since been pushed off the
+  // loaded page, so this waited twelve seconds for a tile that was never going to be there (#579).
+  // Asserted, not `test.skip`-ed: seed.exs creates this message unconditionally, so a missing key
+  // means the seed contract changed — and a skip would swallow that into a test that quietly
+  // stops running (#579 review).
+  expect(seed.portrait_msg_id, "the seed no longer carries portrait_msg_id").toBeTruthy()
+  await alice.goto(`/app/c/${seed.dm_id}/m/${seed.portrait_msg_id}`)
+  // Lightbox is a deferred hook: a tap before its bundle lands opens nothing at all (#579).
+  await ready(alice)
 
-  const photo = alice.locator("#messages .ed-photo").last()
+  const photo = alice.locator(`#messages-${seed.portrait_msg_id} .ed-photo`).first()
   await expect(photo).toBeVisible({ timeout: 12_000 })
   await photo.scrollIntoViewIfNeeded()
   // The in-message Lightbox defers its open ~250ms (double-click-to-react disambiguation).

@@ -87,6 +87,28 @@ async function openMenu(page, messageLocator) {
   return menu
 }
 
+// Wait until the page can actually answer a gesture.
+//
+// `isConnected()` is not that moment. Thirty hooks live in a second bundle fetched a frame after
+// paint (#511), and until it lands each name is a placeholder that drops what it is given — by
+// design, gestures in that window are not replayed. A spec that clicks an emoji picker, opens a
+// lightbox or long-presses a row the instant the socket connects is therefore clicking into the
+// gap, and it fails without a single error in the console. `send()` below happens to gate on a
+// deferred hook already, which is the only reason most of the harness never noticed (#579).
+async function ready(page) {
+  await page.waitForFunction(
+    () =>
+      !!(
+        window.liveSocket &&
+        window.liveSocket.isConnected() &&
+        window.__edInstantNavReady &&
+        window.__edenLazyHooks
+      ),
+    null,
+    { timeout: 15_000 },
+  )
+}
+
 // Fill the composer and submit it. Uses requestSubmit on the form so it fires phx-submit
 // (and the SendQueue hook's submit handler) deterministically — independent of Enter-key
 // focus/timing quirks that differ between the bubble and flat composers.
@@ -134,4 +156,14 @@ function allDiagnostics(...pages) {
   )
 }
 
-module.exports = { test, expect: base.expect, seed, shot, send, openMenu, allDiagnostics, artifactsRoot }
+module.exports = {
+  test,
+  expect: base.expect,
+  seed,
+  shot,
+  send,
+  ready,
+  openMenu,
+  allDiagnostics,
+  artifactsRoot,
+}

@@ -1,7 +1,7 @@
 // Every surface draws an optimistic text node on send (#351): rooms (flat) + groups get a FADED
 // node with NO clock (the fade is the "sending" indicator), DMs keep the clock. All appear
 // instantly (ed-msg--sent, no rise-in) and swap to the real row.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 
 const room = (seed) => `/channels/${seed.channel_id}/r/${seed.general_room_id}`
 
@@ -45,7 +45,15 @@ const read = (alice) => alice.evaluate(() => window.__opt)
 
 async function sendText(alice, url, bodySel = "#composer-body", formSel = "#composer") {
   await alice.goto(url)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+
+  // Watching cannot start at `isConnected()`: every send in this file was unobserved, because
+  // the optimistic node the observer waits for is drawn by .SendQueue, and .SendQueue is one of
+  // the deferred hooks (#511) — submit before it mounts and the send takes the plain server path,
+  // drawing nothing. `ready()` waits for that bundle. (Measured, not assumed: `#pending-messages`
+  // itself is `phx-update="ignore"`, so it is NOT swapped out and the observer never went stale
+  // — #579 review corrected an earlier reading of this.)
+  await ready(alice)
+
   await watch(alice)
   await alice.locator(bodySel).fill(`opt-probe ${Date.now()}`)
   await alice.locator(formSel).evaluate((f) => f.requestSubmit())
