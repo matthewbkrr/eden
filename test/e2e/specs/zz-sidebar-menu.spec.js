@@ -262,8 +262,15 @@ test("an open room menu survives a patch: still placed, still armed, still works
   }
 
   // Put it back: this room is the shared seed's general room, and a spec that leaves state behind
-  // is how the accumulation this issue is about starts.
+  // is how the accumulation this issue is about starts. (It also hid this test's own bug: the row
+  // renders `data-muted={@room.muted && "1"}`, so unmuted means the attribute is ABSENT — there is
+  // no "0" — and asserting one passed only because a previous run had left the room muted. The
+  // rest of this file already uses the absent form; #579 review caught the one place that did not.)
   await openMenu(alice, `.ed-room-wrap[data-id="${seed.general_room_id}"]`, "room-menu")
   await alice.locator('#room-menu button[phx-click="toggle_mute"]').click()
-  await expect(row()).toHaveAttribute("data-muted", muted ? "1" : "0")
+  if (muted) {
+    await expect(row()).toHaveAttribute("data-muted", "1")
+  } else {
+    await expect(row()).not.toHaveAttribute("data-muted", "1")
+  }
 })
