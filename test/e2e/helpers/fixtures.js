@@ -105,9 +105,17 @@ async function ready(page) {
   // So: wait for the socket and the deferred bundle everywhere, and for instant-nav only where it
   // exists. Each condition gets its own wait, so a failure names the one that did not happen
   // instead of collapsing four into one nameless timeout.
-  await page.waitForFunction(() => !!(window.liveSocket && window.liveSocket.isConnected()), null, {
-    timeout: 15_000,
-  })
+  // `liveSocket.isConnected()` is the SOCKET. The view on screen is still the dead render for a
+  // moment after it — measured: `liveSocket.main.isConnected()` reads false at that instant and
+  // true once the view has joined. Acting in that window is silent loss, not an error: a `fill()`
+  // lands on the dead form, its change event reaches no channel, and the page then keeps the typed
+  // text while the server never heard about it (messaging-ext's folder form sat there with a name
+  // in the box and a disabled Add button, #588).
+  await page.waitForFunction(
+    () => !!(window.liveSocket && window.liveSocket.isConnected() && window.liveSocket.main?.isConnected()),
+    null,
+    { timeout: 15_000 },
+  )
   await page.waitForFunction(() => !!window.__edenLazyHooks, null, { timeout: 15_000 })
   if (await page.locator("#instant-nav").count()) {
     await page.waitForFunction(() => !!window.__edInstantNavReady, null, { timeout: 15_000 })

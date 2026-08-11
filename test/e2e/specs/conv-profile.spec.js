@@ -1,6 +1,9 @@
 // #136 — the conversation profile panel: tapping a 1:1 or group chat header opens a
-// Telegram-style panel (peer/group card + a per-dialog media gallery with Photo/Video/
-// Files/Audio tabs). A photo opens the shared lightbox; Esc closes ONLY the lightbox.
+// Telegram-style panel (peer/group card + a per-dialog media gallery with Photo/Video/Files
+// tabs). A photo opens the shared lightbox; Esc closes ONLY the lightbox.
+//
+// There was a fourth tab, Audio. It went away with the audio kind in #373/#402 — `gallery_tabs/0`
+// returns three — and this file kept asserting four ever since (#588).
 // Groups also show their member list inline; tapping a member opens their popover.
 const { test, expect, ready } = require("../helpers/fixtures")
 
@@ -16,7 +19,7 @@ test("the DM header opens the profile panel with a media gallery (#136)", async 
   await alice.locator("[data-profile-trigger]").first().click()
   const panel = alice.locator(".ed-profile")
   await expect(panel).toBeVisible()
-  await expect(panel.locator(".ed-gallery-tab")).toHaveCount(4)
+  await expect(panel.locator(".ed-gallery-tab")).toHaveCount(3)
   // Photo is the default tab and its grid shows the photo we seeded.
   await expect(panel.locator(".ed-gallery-tab--on")).toHaveText("Photo")
   await expect(panel.locator(".ed-gallery-grid .ed-gallery-tile").first()).toBeVisible()
@@ -65,7 +68,7 @@ test("the group header opens the panel with a member list + gallery (#136)", asy
   // Group card + member rows (3 seed members, "(you)" on alice) + the gallery tabs.
   await expect(panel.locator(".ed-member-row")).toHaveCount(3)
   await expect(panel.locator(".ed-member-row__name").first()).toContainText("(you)")
-  await expect(panel.locator(".ed-gallery-tab")).toHaveCount(4)
+  await expect(panel.locator(".ed-gallery-tab")).toHaveCount(3)
 
   // Tapping a member opens their profile popover over the panel.
   await panel.locator(".ed-member-row").nth(1).click()
