@@ -427,14 +427,16 @@ test("a reel reply that arrives after a reopen cannot repaint the viewer", async
 // Paging used to rebuild the filmstrip on every step: ~49 <img> nodes replaced while the slide
 // animation was running, and the 44 thumbnail requests that came with it queued ahead of the
 // preview for the photo being paged TO. That claim no longer holds — see the note below.
-// KNOWN FAILURE, tracked as #591 — marked here rather than left to look like a fresh regression.
+// EXPECTED TO FAIL, tracked as #591. `test.fail`, not `test.fixme`: fixme skips, so a still-broken
+// test and a silently-fixed one are indistinguishable. This keeps running and goes red the day the
+// rebuild count reaches zero, which is the moment to delete this note (#590 review).
 // Measured: with the strip built before the observer is installed the count drops 3 -> 2 (one of
 // the three was the strip's own construction), but two remain. The window is idx±STRIP_SPAN(24)
 // and re-windows within STRIP_EDGE(8) of an edge, so six steps from a mid-list photo should not
 // reach one — meaning either the observer's `addedNodes.length > 1` catches something besides a
 // re-window (thumbnails filling in?), or the window anchors somewhere unexpected. That is a look
 // at Lightbox.js, not a louder assertion here.
-test.fixme("paging inside the strip's window does not rebuild it", async ({ alice, seed }, testInfo) => {
+test.fail("paging inside the strip's window does not rebuild it", async ({ alice, seed }, testInfo) => {
   await alice.setViewportSize({ width: 1280, height: 880 })
   await visit(alice, seed)
   const tile = alice.locator(`#messages-${seed.portrait_msg_id} .ed-photo`).first()

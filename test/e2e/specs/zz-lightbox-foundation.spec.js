@@ -23,7 +23,7 @@ async function openAlbum(page, seed) {
   // event it was named for — so every measurement below was still taken pre-hydration (#588
   // review). `__loading` is set true at open and false the moment the reply is handled, which is
   // the event itself rather than a proxy for it.
-  await page.waitForFunction(() => document.getElementById("ed-lightbox").__loading === false, null, {
+  await page.waitForFunction(() => document.getElementById("ed-lightbox")?.__loading === false, null, {
     timeout: 8000,
   })
 
@@ -235,7 +235,12 @@ test("Show in chat closes the viewer and highlights the message", async ({
   await expect(row).toHaveClass(/ed-msg--focus/, { timeout: 3000 })
 })
 
-// FAILING, and left failing on purpose (#588). Measured on this stand: opening the seeded album
+// EXPECTED TO FAIL (#589), via `test.fail` rather than `test.fixme`: fixme SKIPS, so a test that
+// is still broken and a test that someone quietly fixed look identical for as long as nobody
+// re-runs it by hand. `fail` keeps running it and turns the suite red the day it starts passing,
+// which is when this note needs deleting (#590 review).
+//
+// Measured on this stand: opening the seeded album
 // shows "1 of 3", then the reel hydrates to the conversation-wide gallery ("1778 of 1780") within
 // ~300 ms; ArrowRight after that does move the index (1778 -> 1779) but fires no `transitionstart`
 // on the track at all, so the frame swaps dead — which is the exact complaint #465 set out to fix.
@@ -243,7 +248,7 @@ test("Show in chat closes the viewer and highlights the message", async ({
 // large reel genuinely lost its animation, or the animation is conditional in a way nothing states.
 // Answering that is a product question, not a locator fix, so it gets its own issue rather than a
 // green-looking edit here. Tracked as #589.
-test.fixme("paging animates the frame instead of swapping it dead", async ({
+test.fail("paging animates the frame instead of swapping it dead", async ({
   alice,
   seed,
 }, testInfo) => {

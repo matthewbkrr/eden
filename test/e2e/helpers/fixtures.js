@@ -111,14 +111,20 @@ async function ready(page) {
   // lands on the dead form, its change event reaches no channel, and the page then keeps the typed
   // text while the server never heard about it (messaging-ext's folder form sat there with a name
   // in the box and a disabled Add button, #588).
+  // ONE budget for the whole helper, not 15 s per step: three sequential waits could otherwise
+  // outlast the 40 s test timeout between them and report as a test timeout rather than as the
+  // condition that did not happen (#590 review).
+  const deadline = Date.now() + 15_000
+  const left = () => Math.max(1, deadline - Date.now())
+
   await page.waitForFunction(
     () => !!(window.liveSocket && window.liveSocket.isConnected() && window.liveSocket.main?.isConnected()),
     null,
-    { timeout: 15_000 },
+    { timeout: left() },
   )
-  await page.waitForFunction(() => !!window.__edenLazyHooks, null, { timeout: 15_000 })
+  await page.waitForFunction(() => !!window.__edenLazyHooks, null, { timeout: left() })
   if (await page.locator("#instant-nav").count()) {
-    await page.waitForFunction(() => !!window.__edInstantNavReady, null, { timeout: 15_000 })
+    await page.waitForFunction(() => !!window.__edInstantNavReady, null, { timeout: left() })
   }
 }
 
