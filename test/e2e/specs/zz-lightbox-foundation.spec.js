@@ -15,6 +15,23 @@ async function openAlbum(page, seed) {
   await expect(tile).toBeVisible({ timeout: 12_000 })
   await tile.click()
   await page.waitForSelector("dialog#ed-lightbox[open]", { timeout: 5000 })
+
+  // Let the reel settle before anything is measured. The viewer opens on the album ("1 of 3") and
+  // then hydrates to the conversation-wide gallery ("1778 of 1780") within ~300 ms — measured. Any
+  // assertion taken in that window is a race with hydration, which is how these tests passed when
+  // the file ran alone and failed in the suite (#588).
+  await expect
+    .poll(
+      async () => {
+        const a = await page.locator(".ed-lightbox__count").textContent()
+        await page.waitForTimeout(150)
+        const b = await page.locator(".ed-lightbox__count").textContent()
+        return a === b ? a : null
+      },
+      { message: "the album counter never settled", timeout: 8000 },
+    )
+    .not.toBeNull()
+
   return tile
 }
 
@@ -62,13 +79,14 @@ test("album counter shows and tracks paging", async ({ alice, seed }, testInfo) 
   await openAlbum(page, seed)
   const count = page.locator(".ed-lightbox__count")
   await expect(count).toBeVisible()
-  // openAlbum clicks the album's LAST tile, so entry lands on 3-of-3 — assert the
-  // format, then that paging moves the number (wraps to 1).
+  // "N of M", whatever M is: the viewer opens album-scoped and then hydrates to the whole
+  // conversation's gallery, so pinning M to the album's 3 is pinning a state that lives ~300 ms
+  // (#588). What the counter must do is EXIST and TRACK paging.
   const first = (await count.textContent()).trim()
-  expect(first).toMatch(/^\d \S+ 3$/)
+  expect(first).toMatch(/^\d+ \S+ \d+$/)
   await page.keyboard.press("ArrowRight")
   await expect(count).not.toHaveText(first, { timeout: 3000 })
-  await expect(count).toHaveText(/^\d \S+ 3$/)
+  await expect(count).toHaveText(/^\d+ \S+ \d+$/)
 })
 
 test("zoom: dblclick toggles scale, paging resets it", async ({ alice, seed }, testInfo) => {

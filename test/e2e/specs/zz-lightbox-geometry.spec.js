@@ -197,6 +197,13 @@ test("a tap beside a portrait photo closes, a tap on it does not", async ({ alic
 
   await alice.mouse.click(...points.beside)
   await alice.waitForTimeout(400)
+
+  // STILL RED after this, and deliberately not forced green: with the strip built first the count
+  // drops 3 -> 2, so one of those was the construction itself, but two remain. The window is
+  // idx±STRIP_SPAN(24) and re-windows within STRIP_EDGE(8) of an edge, so six steps from a
+  // mid-list photo should not reach one — meaning either the observer's `addedNodes.length > 1`
+  // catches something besides a re-window, or the window anchors somewhere unexpected. That needs
+  // its own look at Lightbox.js rather than a louder assertion here (#588).
   expect(
     await alice.evaluate(() => document.getElementById("ed-lightbox").open),
     "tapping the backdrop beside the photo did not close the viewer",
@@ -433,7 +440,18 @@ test("paging inside the strip's window does not rebuild it", async ({ alice, see
   await tile.scrollIntoViewIfNeeded()
   await tile.click()
   await alice.waitForFunction(() => document.getElementById("ed-lightbox")?.open)
-  await alice.waitForTimeout(1600)
+  // Get the strip BUILT before watching it for rebuilds. Measured: 1600 ms after the viewer opened
+  // it still held zero buttons — it populates when the reel hydrates, which a step provokes and
+  // waiting does not. So the observer used to count the strip's own construction as a rebuild and
+  // reported three before a single step of its own (#588).
+  await alice.evaluate(() => document.getElementById("ed-lightbox").__step(1))
+  await expect
+    .poll(() => alice.locator(".ed-lightbox__strip button").count(), {
+      message: "the strip never populated",
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(0)
+  await alice.waitForTimeout(400)
 
   const files = []
   alice.on("request", (r) => r.url().includes("/files/") && files.push(r.url().split("/files/")[1]))
