@@ -1,10 +1,10 @@
 // Wave 6 — corporate extended: room creation, channel members, invite link + redemption.
-const { test, expect, shot } = require("../helpers/fixtures")
+const { test, expect, shot, ready } = require("../helpers/fixtures")
 
 test.describe("corporate-ext", () => {
   test("an admin creates a new room", async ({ alice, seed }, testInfo) => {
     await alice.goto(`/channels/${seed.channel_id}`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     await alice.locator(".ed-room--new").click()
     const modal = alice.locator("#room-modal")
     await expect(modal).toBeVisible()
@@ -19,7 +19,7 @@ test.describe("corporate-ext", () => {
 
   test("the channel members list opens", async ({ alice, seed }, testInfo) => {
     await alice.goto(`/channels/${seed.channel_id}`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     await alice.locator('button[aria-label="Channel menu"]').click()
     await alice.getByRole("menuitem", { name: "Members", exact: true }).click()
     await expect(alice.locator('[role="dialog"]', { hasText: "Members" })).toBeVisible()
@@ -29,7 +29,7 @@ test.describe("corporate-ext", () => {
 
   test("an admin generates an invite link and another user redeems it", async ({ alice, carol, seed }, testInfo) => {
     await alice.goto(`/channels/${seed.channel_id}`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     await alice.locator('button[aria-label="Channel menu"]').click()
     await alice.getByRole("menuitem", { name: "Invite link" }).click()
 

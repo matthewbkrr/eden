@@ -6,7 +6,7 @@
 // The optimistic node is short-lived on localhost (the upload finishes fast), so we record
 // #thread-pending additions with a MutationObserver installed BEFORE Send rather than racing
 // to assert a live-in-DOM node.
-const { test, expect, openMenu } = require("../helpers/fixtures")
+const { test, expect, ready, openMenu } = require("../helpers/fixtures")
 const path = require("path")
 const fix = (n) => path.join(__dirname, "..", "fixtures", n)
 
@@ -14,7 +14,7 @@ const room = (seed) => `/channels/${seed.channel_id}/r/${seed.general_room_id}`
 
 async function openThread(alice, seed, label) {
   await alice.goto(room(seed))
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const rootText = `optim-root ${label} ${Date.now()}`
   await alice.locator("#composer-body").fill(rootText)
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
@@ -126,7 +126,7 @@ test("switching threads hides an in-flight node instead of wiping it (#380/R066)
   seed,
 }) => {
   await alice.goto(room(seed))
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   const stamp = Date.now()
   const rootAText = `r066-A ${stamp}`

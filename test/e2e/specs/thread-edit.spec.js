@@ -1,6 +1,6 @@
 // #164 F3: editing a THREAD reply must use the thread composer (banner + pre-fill in
 // #reply-composer), never the main composer — and show "edited" after save.
-const { test, expect, openMenu } = require("../helpers/fixtures")
+const { test, expect, openMenu, ready } = require("../helpers/fixtures")
 const path = require("path")
 const fix = (n) => path.join(__dirname, "..", "fixtures", n)
 
@@ -11,7 +11,7 @@ test("editing a thread reply uses the thread composer, not the main one (#164)",
   seed,
 }, testInfo) => {
   await alice.goto(room(seed))
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   // A root message, then open its thread and post a reply.
   const rootText = `root ${testInfo.project.name} ${Date.now()}`
@@ -57,7 +57,7 @@ test("editing a text thread reply + attaching media converts it to media (#164)"
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
 
   await alice.goto(room(seed))
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   await alice.locator("#composer-body").fill(`root ${Date.now()}`)
   await alice.locator("#composer").evaluate((f) => f.requestSubmit())
