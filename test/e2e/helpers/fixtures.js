@@ -96,17 +96,36 @@ async function openMenu(page, messageLocator) {
 // gap, and it fails without a single error in the console. `send()` below happens to gate on a
 // deferred hook already, which is the only reason most of the harness never noticed (#579).
 async function ready(page) {
+  // `__edInstantNavReady` only ever appears on a ChatLive page — `phx-hook="InstantNav"` is
+  // rendered in chat_live.ex and nowhere else — so requiring it hung for the full timeout on
+  // /settings, /admin and every other authed page. Measured on notify-sound, which visits
+  // /settings/notifications: 15 s, then a bare timeout naming none of its conditions (#588; this
+  // was raised in the #587 review and I wrongly let it be waved off as speculative).
+  //
+  // So: wait for the socket and the deferred bundle everywhere, and for instant-nav only where it
+  // exists. Each condition gets its own wait, so a failure names the one that did not happen
+  // instead of collapsing four into one nameless timeout.
+  // `liveSocket.isConnected()` is the SOCKET. The view on screen is still the dead render for a
+  // moment after it — measured: `liveSocket.main.isConnected()` reads false at that instant and
+  // true once the view has joined. Acting in that window is silent loss, not an error: a `fill()`
+  // lands on the dead form, its change event reaches no channel, and the page then keeps the typed
+  // text while the server never heard about it (messaging-ext's folder form sat there with a name
+  // in the box and a disabled Add button, #588).
+  // ONE budget for the whole helper, not 15 s per step: three sequential waits could otherwise
+  // outlast the 40 s test timeout between them and report as a test timeout rather than as the
+  // condition that did not happen (#590 review).
+  const deadline = Date.now() + 15_000
+  const left = () => Math.max(1, deadline - Date.now())
+
   await page.waitForFunction(
-    () =>
-      !!(
-        window.liveSocket &&
-        window.liveSocket.isConnected() &&
-        window.__edInstantNavReady &&
-        window.__edenLazyHooks
-      ),
+    () => !!(window.liveSocket && window.liveSocket.isConnected() && window.liveSocket.main?.isConnected()),
     null,
-    { timeout: 15_000 },
+    { timeout: left() },
   )
+  await page.waitForFunction(() => !!window.__edenLazyHooks, null, { timeout: left() })
+  if (await page.locator("#instant-nav").count()) {
+    await page.waitForFunction(() => !!window.__edInstantNavReady, null, { timeout: left() })
+  }
 }
 
 // Fill the composer and submit it. Uses requestSubmit on the form so it fires phx-submit

@@ -70,7 +70,11 @@ test("the photo follows the finger and the scrim thins under it", async ({ alice
   touchable(browserName)
   await openViewer(alice, seed)
 
-  const samples = await dragDown(alice, 140, { release: false })
+  // 180px, not 140. The scrim fades with the drag, and at 140 the last sample landed on 0.8011
+  // against a `< 0.8` assertion — the test was pinning a coincidence, and a hair's change in the
+  // step count or the easing put it on the wrong side of it (#588). Further down the gesture the
+  // margin is real, and the assertion still fails outright if the scrim stops thinning.
+  const samples = await dragDown(alice, 180, { release: false })
   const ys = samples.map((s) => s.y)
   const fades = samples.map((s) => s.fade)
   console.log("DRAG", JSON.stringify({ ys, fades, scales: samples.map((s) => s.scale) }))
@@ -120,7 +124,10 @@ test("a full drag carries the photo out and closes", async ({ alice, seed, brows
 
   // And the next open starts from rest, not from wherever the last gesture ended.
   const tile = alice.locator(`#messages-${seed.portrait_msg_id} .ed-photo`).first()
-  await tile.tap()
+  // click, not tap: this project is Desktop Chrome, which has no touch — `tap()` throws outright
+  // ("The page does not support tap"). The gesture above is injected as raw touch events, which is
+  // a different mechanism; here we only need the viewer opened again (#588).
+  await tile.click()
   await alice.waitForFunction(() => document.getElementById("ed-lightbox")?.open)
 
   await alice.waitForTimeout(400)

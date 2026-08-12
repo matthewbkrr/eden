@@ -102,6 +102,34 @@ end
 portrait_msg_id = photo_msg.("e2e-portrait", 1200, 1600, [200, 80, 60])
 landscape_msg_id = photo_msg.("e2e-landscape", 2400, 1200, [60, 140, 90])
 
+# A THREE-photo album, for the specs about paging and the album counter. Same reason the two
+# above exist: those specs used to click the last `.ed-photo` in the dialog and hope it was an
+# album, and in a stand this harness has been writing to all day it usually is not (#588).
+album_msg_id =
+  case Repo.one(
+         from(m in Eden.Chat.Message,
+           where: m.conversation_id == ^dm.id and m.body == "e2e-album",
+           limit: 1
+         )
+       ) do
+    nil ->
+      files =
+        for {colour, n} <- Enum.with_index([[190, 70, 90], [70, 130, 190], [120, 170, 80]], 1) do
+          {:ok, img} = Image.new(900, 1200, color: colour)
+          {:ok, bytes} = Image.write(img, :memory, suffix: ".png")
+          file = Path.join(System.tmp_dir!(), "e2e-album-#{n}.png")
+          File.write!(file, bytes)
+          %{path: file, filename: "e2e-album-#{n}.png"}
+        end
+
+      {:ok, m} = Chat.create_album_message(as, dm.id, files, %{body: "e2e-album"})
+      Enum.each(files, &File.rm(&1.path))
+      m.id
+
+    m ->
+      m.id
+  end
+
 # Group (alice + bob + carol) — match by title before creating so re-runs don't pile up.
 group =
   case Repo.one(from(c in Conversation, where: c.is_group and c.title == "E2E Group", limit: 1)) do
@@ -209,6 +237,7 @@ out = %{
   dm_id: dm.id,
   portrait_msg_id: portrait_msg_id,
   landscape_msg_id: landscape_msg_id,
+  album_msg_id: album_msg_id,
   group_id: group.id,
   channel_id: channel_id,
   room_id: room_id,

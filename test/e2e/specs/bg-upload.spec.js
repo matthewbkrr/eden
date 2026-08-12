@@ -3,7 +3,7 @@
 // return, instead of being wiped. Conversation switches are push_patch (the LiveView stays
 // alive → SendQueue.updated() fires); a full goto would remount and clear #pending anyway,
 // so we switch via the sidebar patch-links.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 const path = require("path")
 const sampleTxt = path.join(__dirname, "..", "fixtures", "sample.txt")
 
@@ -22,7 +22,7 @@ test("a real optimistic file node is tagged with its conversation (#144)", async
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const convA = Number(await alice.locator("#composer").getAttribute("data-conversation-id"))
 
   await alice.locator('#composer input[name="attachment"]').setInputFiles(sampleTxt)
@@ -43,7 +43,7 @@ test("an optimistic media node survives a conversation switch + dedups on return
   seed,
 }) => {
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const convA = Number(await alice.locator("#composer").getAttribute("data-conversation-id"))
   expect(convA).toBe(seed.dm_id)
 

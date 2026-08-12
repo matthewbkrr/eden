@@ -104,6 +104,16 @@ async function makeSource(page, surface, format) {
       : format === "file"
         ? [fix("sample.txt")]
         : [fix("sample1.png")]
+  // Which rows exist BEFORE this send. The wait below has to be for a NEW row: this conversation
+  // already ends in a media row nine times out of ten (every earlier cell drops a copy here), so
+  // "the last row has an img" was satisfied the instant it was asked — `make` returned before its
+  // own message existed, and `forward` then opened the menu on the PREVIOUS row. Measured: source
+  // row 19298 (the file), carried id 19297 (#588).
+  const idsBefore = new Set(
+    await page.locator(`${stream} [data-message-id]`).evaluateAll((els) =>
+      els.map((e) => e.dataset.messageId),
+    ),
+  )
   await page.locator(c.file).setInputFiles(files)
   const cap = format === "caption" ? `cap ${t}` : null
   // Both surfaces now open the SAME compose lightbox (#348): only one overlay is open at a time
@@ -115,11 +125,31 @@ async function makeSource(page, surface, format) {
     await page.locator(surface === "thread" ? "#thread-compose-caption" : "#compose-caption").fill(cap)
   }
   await submit.click()
-  await expect(page.locator(`${stream} ${row}`).last().locator("img, a[download]").first()).toBeVisible({ timeout: 15000 })
-  return { needle: cap, media: format }
+
+  // A REAL row (the optimistic twin lives outside #messages and carries no data-message-id), new
+  // since the snapshot above, and carrying the media. Its id identifies this message from here on:
+  // media has no text to match, and position is exactly what went wrong.
+  const newMediaId = () =>
+    page.locator(`${stream} [data-message-id]`).evaluateAll(
+      (els, before) =>
+        els
+          .filter((e) => !before.includes(e.dataset.messageId) && e.querySelector("img, a[download]"))
+          .map((e) => e.dataset.messageId)
+          .pop() || null,
+      [...idsBefore],
+    )
+
+  await expect
+    .poll(newMediaId, { message: "the media message never arrived as a real row", timeout: 15000 })
+    .not.toBeNull()
+
+  return { needle: cap, media: format, id: await newMediaId() }
 }
 
 const sourceRow = (page, surface, made) => {
+  // By id when `make` captured one — media has no text to find it by, and `.last()` is whatever
+  // the busiest conversation in the harness happens to end with (#588).
+  if (made.id) return page.locator(`${streamSel(surface)} [data-message-id="${made.id}"]`)
   const q = `${streamSel(surface)} ${rowSel(surface)}`
   return made.needle ? page.locator(q, { hasText: made.needle }).first() : page.locator(q).last()
 }
@@ -288,22 +318,27 @@ test("re-forward keeps original attribution (#fwdmatrix)", async ({ alice, seed 
 })
 
 // NEGATIVE: a tombstone (deleted-for-both) offers no Forward.
-test("a deleted (tombstone) message has no Forward (#fwdmatrix)", async ({ alice, seed }) => {
+test("a message deleted for everyone leaves nothing to forward (#fwdmatrix)", async ({ alice, seed }) => {
+  // This used to look for a "Message deleted" tombstone row and check its menu had no Forward.
+  // There is no such row: delete-for-both REMOVES it from the stream — `restream_message_in_place`
+  // says so outright ("{:message_deleted} already removed the row"), and measured, nothing matching
+  // /deleted/i is left behind. "Message deleted" is the text a REPLY QUOTE shows for a vanished
+  // target, not a row of its own. The test was written around a UI that does not exist, and every
+  // step of it was wrapped in `if (await x.count())` so it passed regardless (#588).
   await openSurface(alice, seed, "room")
   const made = await makeSource(alice, "room", "text")
   const row = sourceRow(alice, "room", made)
-  let menu = await openMenu(alice, row)
-  await menu.locator(".ed-menu__item", { hasText: "Delete" }).click()
-  // confirm sheet or direct — click "Delete for everyone" if present
-  const both = alice.locator('#dlg-delete button, [phx-value-scope="both"], .ed-menu__item', {
-    hasText: "everyone",
+
+  const menu = await openMenu(alice, row)
+  // By act: "Delete" matches both "Delete for me" and "Delete for everyone".
+  await menu.locator('[data-act="delete_for_both"]').click()
+  await alice.locator(".ed-ask [data-ok]").click()
+
+  await expect(alice.locator("#messages .ed-flat", { hasText: made.needle })).toHaveCount(0, {
+    timeout: 8000,
   })
-  if (await both.count()) await both.first().click()
-  await expect(alice.locator("#messages .ed-flat", { hasText: made.needle })).toHaveCount(0, { timeout: 8000 })
-  // The tombstone row (now "Message deleted") — its menu (if any) must not offer Forward.
-  const tomb = alice.locator("#messages .ed-flat").filter({ hasText: /deleted/i }).last()
-  if (await tomb.count()) {
-    menu = await openMenu(alice, tomb).catch(() => null)
-    if (menu) await expect(menu.locator(".ed-menu__item", { hasText: "Forward" })).toHaveCount(0)
-  }
+  await expect(
+    alice.locator("#messages .ed-flat").filter({ hasText: /deleted/i }),
+    "a tombstone row appeared — the stream contract changed, and the menu on it needs its own test",
+  ).toHaveCount(0)
 })

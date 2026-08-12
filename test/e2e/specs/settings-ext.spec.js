@@ -5,7 +5,9 @@ test.describe("settings-ext", () => {
   test("toggling a quick-react updates the set", async ({ alice }, testInfo) => {
     await alice.goto("/settings/reactions")
     await alice.waitForFunction(() => window.liveSocket?.isConnected())
-    const grid = alice.locator(".ed-qr-grid")
+    // Scoped by role: since the double-click-reaction picker landed there are TWO .ed-qr-grid
+    // groups on this page, and a bare class locator is a strict-mode violation (#588).
+    const grid = alice.getByRole("group", { name: "Quick reactions" })
     await expect(grid).toBeVisible()
 
     // Pick an emoji currently OFF; target it by its emoji value so the locator stays stable
