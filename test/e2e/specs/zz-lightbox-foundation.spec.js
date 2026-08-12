@@ -16,24 +16,16 @@ async function openAlbum(page, seed) {
   await tile.click()
   await page.waitForSelector("dialog#ed-lightbox[open]", { timeout: 5000 })
 
-  // Let the reel settle before anything is measured. The viewer opens on the album ("1 of 3") and
-  // then hydrates to the conversation-wide gallery ("1778 of 1780") within ~300 ms — measured. Any
-  // assertion taken in that window is a race with hydration, which is how these tests passed when
-  // the file ran alone and failed in the suite (#588).
-  await expect
-    .poll(
-      async () => {
-        const a = await page.locator(".ed-lightbox__count").textContent()
-        await page.waitForTimeout(150)
-        const b = await page.locator(".ed-lightbox__count").textContent()
-        // Non-empty AND unchanged. The first draft returned `a` whenever the two samples matched,
-        // which made an EMPTY counter — the very state before hydration — satisfy `.not.toBeNull()`
-        // on its first pair: "" is not null (#588 review, and it was right).
-        return a && a.trim() && a === b ? a : null
-      },
-      { message: "the album counter never settled", timeout: 8000 },
-    )
-    .not.toBeNull()
+  // Wait for the reel reply to LAND, not for two counter samples to agree. The viewer opens
+  // album-scoped ("1 of 3") and re-anchors to the conversation-wide gallery when the
+  // `lightbox_media` reply arrives ~300 ms later, which rewrites the counter. The first version
+  // of this settle sampled 150 ms apart and returned on its first pair — i.e. before the very
+  // event it was named for — so every measurement below was still taken pre-hydration (#588
+  // review). `__loading` is set true at open and false the moment the reply is handled, which is
+  // the event itself rather than a proxy for it.
+  await page.waitForFunction(() => document.getElementById("ed-lightbox").__loading === false, null, {
+    timeout: 8000,
+  })
 
   return tile
 }
@@ -87,8 +79,16 @@ test("album counter shows and tracks paging", async ({ alice, seed }, testInfo) 
   // (#588). What the counter must do is EXIST and TRACK paging.
   const first = (await count.textContent()).trim()
   expect(first).toMatch(/^\d+ \S+ \d+$/)
+
+  // The index, not just "the text changed". Hydration rewrites this counter all by itself, so a
+  // `not.toHaveText(first)` assertion was satisfied by the reel arriving and stayed green with
+  // arrow paging deleted from the product — verified by mutation (#588 review). Asking the viewer
+  // where it is, and requiring exactly one step, is something hydration cannot forge.
+  const at = () => page.evaluate(() => document.getElementById("ed-lightbox").__index())
+  const before = await at()
   await page.keyboard.press("ArrowRight")
-  await expect(count).not.toHaveText(first, { timeout: 3000 })
+  await expect.poll(at, { message: "ArrowRight did not move the viewer", timeout: 3000 }).toBe(before + 1)
+  await expect(count).not.toHaveText(first)
   await expect(count).toHaveText(/^\d+ \S+ \d+$/)
 })
 
@@ -218,10 +218,21 @@ test("Show in chat closes the viewer and highlights the message", async ({
   const page = alice
   await openAlbum(page, seed)
   const msgId = await page.evaluate(() => document.getElementById("ed-lightbox").__meta.msg)
+  const row = page.locator(`#messages-${msgId}`)
+
+  // Clear the deck first. openAlbum arrives by PERMALINK, and that route highlights its target
+  // row for --ed-hold-focus (2.2 s) all on its own — the same row and the same class this test
+  // asserts, because every photo of the album belongs to one message. Measured by mutation:
+  // with "Show in chat" reduced to just closing the viewer, the test still passed on the
+  // leftover highlight (#588 review). Waiting it out is what makes the assertion below evidence.
+  await expect(row, "the permalink highlight never expired").not.toHaveClass(/ed-msg--focus/, {
+    timeout: 6000,
+  })
+
   await page.locator(".ed-lightbox__more").click()
-  await page.locator('[data-act="show"]').click()
+  await page.locator('#ed-lightbox [data-act="show"]').click()
   await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(0, { timeout: 3000 })
-  await expect(page.locator(`#messages-${msgId}`)).toHaveClass(/ed-msg--focus/, { timeout: 3000 })
+  await expect(row).toHaveClass(/ed-msg--focus/, { timeout: 3000 })
 })
 
 // FAILING, and left failing on purpose (#588). Measured on this stand: opening the seeded album
