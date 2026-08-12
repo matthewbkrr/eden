@@ -26,7 +26,10 @@ async function openAlbum(page, seed) {
         const a = await page.locator(".ed-lightbox__count").textContent()
         await page.waitForTimeout(150)
         const b = await page.locator(".ed-lightbox__count").textContent()
-        return a === b ? a : null
+        // Non-empty AND unchanged. The first draft returned `a` whenever the two samples matched,
+        // which made an EMPTY counter — the very state before hydration — satisfy `.not.toBeNull()`
+        // on its first pair: "" is not null (#588 review, and it was right).
+        return a && a.trim() && a === b ? a : null
       },
       { message: "the album counter never settled", timeout: 8000 },
     )
@@ -245,9 +248,9 @@ test.fixme("paging animates the frame instead of swapping it dead", async ({
       .querySelector(".ed-lightbox__track")
       .addEventListener("transitionstart", (e) => window.__moved.push(e.propertyName))
   })
-  // Forward: the viewer opens on the album's FIRST photo, so there is nothing to the left and
-  // ArrowLeft is a no-op that animates nothing (#588 — this test used to click whatever tile
-  // happened to be last in the dialog, so its starting index was luck).
+  // Direction is arbitrary here — the reel hydrates to a mid-list index, so either arrow moves.
+  // (An earlier draft of this comment claimed ArrowLeft had nowhere to go, which was wrong: that
+  // is only true for the album-scoped moment before hydration. #588 review caught it.)
   await page.keyboard.press("ArrowRight")
   await page.waitForFunction(() => window.__moved?.includes("transform"), null, { timeout: 2000 })
   await page.waitForTimeout(420)
