@@ -11,7 +11,7 @@
 // store holding the SAME number of records. Under the bug the fat store is several times slower;
 // once fixed there is no difference. Absolute milliseconds would depend on the machine and on
 // throttling — a ratio does not.
-const { test, expect } = require("@playwright/test");
+const { test, expect } = require("../helpers/fixtures");
 
 const IDB_MAX = 25; // mirrors the constant in msg_cache.js
 const FAT_BYTES = 300 * 1024; // a real thread runs ~0.5 MB (see the module); per-record cap is 1 MB
@@ -106,15 +106,17 @@ async function storedIds(page) {
 }
 
 test.describe("message cache: GC on write", () => {
-  test.beforeEach(async ({ page }) => {
-    // The login page carries the same bundle and sets window.__edMsgCache, so this measurement
-    // needs no auth, no seeded data and no throttling runner — which keeps the harness
-    // deterministic.
-    await page.goto("/login");
-    await page.waitForFunction(() => !!window.__edMsgCache);
+  // Measured on the APP, not /login. This used to load the login page on the stated grounds that
+  // it "carries the same bundle" — true until #511 split the bundles: /login gets `auth.js`, and
+  // `window.__edMsgCache` is set in `app.js`. Every test in this file then waited out its timeout
+  // on a global that page will never have (#588). The measurement itself is unchanged: it drives
+  // the cache directly and needs nothing from the page but the module.
+  test.beforeEach(async ({ alice }) => {
+    await alice.goto("/app");
+    await alice.waitForFunction(() => !!window.__edMsgCache);
   });
 
-  test("write cost is independent of how much the store holds", async ({ page }, testInfo) => {
+  test("write cost is independent of how much the store holds", async ({ alice: page }, testInfo) => {
     const thin = await perPutMs(page, { fillerBytes: 512 });
     const fat = await perPutMs(page, { fillerBytes: FAT_BYTES });
     const ratio = fat / thin;
@@ -128,7 +130,7 @@ test.describe("message cache: GC on write", () => {
     expect(ratio, `GC deserializes records: ${line}`).toBeLessThan(2);
   });
 
-  test("the walk, when it does run, does not read record values", async ({ page }, testInfo) => {
+  test("the walk, when it does run, does not read record values", async ({ alice: page }, testInfo) => {
     // The gate makes the walk rare, which stopped the cursor type from being observable on the hot
     // path: reverting to `openCursor` broke no test. Here the walk is forced (every write takes a
     // new key, so the count goes past the cap) and reading values becomes visible again. This
@@ -157,7 +159,7 @@ test.describe("message cache: GC on write", () => {
     expect(ratio, `the walk deserializes records: ${line}`).toBeLessThan(2);
   });
 
-  test("records past TTL are evicted by the one-off pass on a fresh handle", async ({ page }) => {
+  test("records past TTL are evicted by the one-off pass on a fresh handle", async ({ alice: page }) => {
     // The TTL pass no longer runs on every write (#509): an expired snapshot is never handed out
     // anyway — TTL is checked on read — so the walk only exists to reclaim disk, and it runs once
     // per DB handle. A fresh handle means a new app launch; here `clearAll` plays that role, after
@@ -195,9 +197,7 @@ test.describe("message cache: GC on write", () => {
     expect(ids, "the expired snapshot survived in the store").toEqual(["7:1"]);
   });
 
-  test("an ordinary write does NOT run the walk — otherwise it is back on the hot path", async ({
-    page,
-  }) => {
+  test("an ordinary write does NOT run the walk — otherwise it is back on the hot path", async ({ alice: page }) => {
     // The ratio above catches a walk-per-write regression only on WebKit: on Chromium a key cursor
     // is cheap and the test would pass. So the gate is checked functionally too — deterministically
     // and on every engine.
@@ -239,7 +239,7 @@ test.describe("message cache: GC on write", () => {
     ]);
   });
 
-  test("on overflow the freshest survive, not an arbitrary set", async ({ page }) => {
+  test("on overflow the freshest survive, not an arbitrary set", async ({ alice: page }) => {
     const over = IDB_MAX + 5;
     await page.evaluate(
       async ({ over }) => {

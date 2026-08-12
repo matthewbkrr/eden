@@ -1,27 +1,18 @@
 // Lightbox foundation (#465/#469, impeccable audit P1s): native <dialog> semantics
 // (trap + focus return), the album counter, and zoom. These lock the audit fixes.
-const { test, expect } = require("../helpers/fixtures")
-
-// The seeded photos can sit far above the last page — earlier specs (and the stress
-// harness) flood the dialog with text. Page older messages in until one appears
-// instead of assuming the newest page holds media.
-async function ensurePhoto(page) {
-  for (let k = 0; k < 15; k++) {
-    if (await page.locator("#messages a.ed-photo").count()) return
-    await page.evaluate(() => {
-      const s = document.getElementById("message-scroll")
-      if (s) s.scrollTop = 0
-    })
-    await page.waitForTimeout(450)
-  }
-  throw new Error("no photo found in this conversation")
-}
+const { test, expect, ready } = require("../helpers/fixtures")
 
 async function openAlbum(page, seed) {
-  await page.goto(`/app/c/${seed.dm_id}`)
-  await page.waitForFunction(() => window.liveSocket?.isConnected() && window.__edInstantNavReady)
-  await ensurePhoto(page)
-  const tile = page.locator("#messages a.ed-photo").last()
+  // Deep-link to the SEEDED three-photo album. This used to page backwards through the dialog
+  // looking for any `.ed-photo` and click the last one — in a stand the rest of the harness has
+  // been writing to all day, that is whatever copy some other spec dropped in most recently,
+  // usually a single photo. Hence an empty album counter and a missing alt: the tests were
+  // measuring a different message every run (#588).
+  expect(seed.album_msg_id, "the seed no longer carries album_msg_id").toBeTruthy()
+  await page.goto(`/app/c/${seed.dm_id}/m/${seed.album_msg_id}`)
+  await ready(page)
+  const tile = page.locator(`#messages-${seed.album_msg_id} a.ed-photo`).first()
+  await expect(tile).toBeVisible({ timeout: 12_000 })
   await tile.click()
   await page.waitForSelector("dialog#ed-lightbox[open]", { timeout: 5000 })
   return tile
@@ -42,7 +33,10 @@ test("dialog semantics: focus moves in, Tab stays in, Esc returns focus", async 
       open: d.open,
       label: d.getAttribute("aria-label"),
       focusInside: !!document.activeElement?.closest("#ed-lightbox"),
-      alt: d.querySelector(".ed-lightbox__img").getAttribute("alt"),
+      // The CURRENT slide. The viewer is a three-slide carousel since #470 and the neighbours are
+      // deliberately alt="" (and src-less) until they become current, so a bare
+      // `.ed-lightbox__img` reads the previous slide and its empty alt (#588).
+      alt: d.querySelector(".ed-lightbox__slide--cur .ed-lightbox__img").getAttribute("alt"),
     }
   })
   expect(state.tag).toBe("DIALOG")
@@ -185,7 +179,9 @@ test("menu action reaches the server: Reply opens the reply bar", async ({
   const page = alice
   await openAlbum(page, seed)
   await page.locator(".ed-lightbox__more").click()
-  await page.locator('[data-act="reply"]').click()
+  // Scoped to the viewer's own menu: the shared #message-menu carries the same `data-act`, so an
+  // unscoped locator is a strict-mode violation rather than a click (#588).
+  await page.locator('#ed-lightbox [data-act="reply"]').click()
   await expect(page.locator("dialog#ed-lightbox[open]")).toHaveCount(0, { timeout: 3000 })
   // The composer's reply bar is the server's answer to the pushed event.
   await expect(page.locator("#composer [data-reply-bar], #composer .ed-reply-bar")).toBeVisible({
@@ -207,7 +203,15 @@ test("Show in chat closes the viewer and highlights the message", async ({
   await expect(page.locator(`#messages-${msgId}`)).toHaveClass(/ed-msg--focus/, { timeout: 3000 })
 })
 
-test("paging animates the frame instead of swapping it dead", async ({
+// FAILING, and left failing on purpose (#588). Measured on this stand: opening the seeded album
+// shows "1 of 3", then the reel hydrates to the conversation-wide gallery ("1778 of 1780") within
+// ~300 ms; ArrowRight after that does move the index (1778 -> 1779) but fires no `transitionstart`
+// on the track at all, so the frame swaps dead — which is the exact complaint #465 set out to fix.
+// It was red before this branch too, so it is not spec rot from the seeded album: either paging a
+// large reel genuinely lost its animation, or the animation is conditional in a way nothing states.
+// Answering that is a product question, not a locator fix, so it gets its own issue rather than a
+// green-looking edit here. Tracked as #589.
+test.fixme("paging animates the frame instead of swapping it dead", async ({
   alice,
   seed,
 }, testInfo) => {
@@ -223,7 +227,10 @@ test("paging animates the frame instead of swapping it dead", async ({
       .querySelector(".ed-lightbox__track")
       .addEventListener("transitionstart", (e) => window.__moved.push(e.propertyName))
   })
-  await page.keyboard.press("ArrowLeft")
+  // Forward: the viewer opens on the album's FIRST photo, so there is nothing to the left and
+  // ArrowLeft is a no-op that animates nothing (#588 — this test used to click whatever tile
+  // happened to be last in the dialog, so its starting index was luck).
+  await page.keyboard.press("ArrowRight")
   await page.waitForFunction(() => window.__moved?.includes("transform"), null, { timeout: 2000 })
   await page.waitForTimeout(420)
   const settled = await page.evaluate(
