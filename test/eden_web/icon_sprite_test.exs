@@ -38,7 +38,14 @@ defmodule EdenWeb.IconSpriteTest do
         File.read!(file)
         |> String.split("\n")
         |> Enum.with_index(1)
-        |> Enum.filter(fn {line, _} -> Regex.match?(~r/"hero-[^"]*(\#\{|" *\+)/, line) end)
+        # Every quote style, in both languages. The Elixir form is `"hero-\#{kind}"`; JS also has
+        # `'hero-' + kind` and template literals `` `hero-${kind}` `` — and a name assembled any of
+        # those ways is exactly as invisible to the sprite scan as the one this test was written
+        # for. The old pattern knew only double quotes (#594 review).
+        |> Enum.filter(fn {line, _} ->
+          Regex.match?(~r/(["'`])hero-[^"'`]*(\#\{|\$\{)/, line) or
+            Regex.match?(~r/(["'`])hero-[^"'`]*\1\s*\+/, line)
+        end)
         |> Enum.map(fn {_, i} -> "#{file}:#{i}" end)
       end)
 

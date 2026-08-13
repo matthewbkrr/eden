@@ -59,13 +59,36 @@ defmodule Mix.Tasks.Eden.Icons do
       # The QUOTES are load-bearing. A bare `hero-[a-z0-9-]+` also matches prose: this very file
       # mentions `hero-arrow-up-mini` in a comment below, and it was being shipped as a symbol
       # nobody references (#539 review). Worse, a comment naming an icon that does not exist would
-      # fail the build from a line that renders nothing. Every real reference is a string literal —
-      # in a template attribute or returned from a helper — so requiring the closing quote keeps
-      # all of them and drops the prose. It also rules out a trailing hyphen.
-      Regex.scan(~r/"(hero-[a-z0-9-]*[a-z0-9])"/, File.read!(file)) |> Enum.map(&List.last/1)
+      # fail the build from a line that renders nothing. Every real reference is a string literal,
+      # so requiring the closing quote keeps all of them and drops the prose.
+      #
+      # Which quotes count depends on the language, and that distinction is not cosmetic (#594
+      # review). Elixir writes `"` for strings and BACKTICKS for code in prose — accepting
+      # backticks there immediately shipped `hero-arrow-up-mini` again, straight out of the
+      # comment above. JS writes `'` and backticks as real string delimiters, so a name in either
+      # would otherwise be missed and render as nothing. Comments are stripped from the JS first,
+      # for the same reason backticks are refused in Elixir: prose must not name icons into the
+      # sprite.
+      names(file)
     end)
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  # Elixir: double quotes only. JS: single, double and backticks, with comments stripped first.
+  defp names(file) do
+    body = File.read!(file)
+
+    {body, quotes} =
+      if String.ends_with?(file, ".js") do
+        {body |> String.replace(~r|/\*.*?\*/|s, "") |> String.replace(~r|//[^\n]*|, ""),
+         ~s(["'`])}
+      else
+        {body, ~s(["])}
+      end
+
+    Regex.scan(~r/(#{quotes})(hero-[a-z0-9-]*[a-z0-9])\1/, body)
+    |> Enum.map(fn [_, _q, name] -> name end)
   end
 
   defp symbol(name) do
