@@ -47,9 +47,14 @@ defmodule Mix.Tasks.Eden.Icons do
     )
   end
 
-  @doc "Every `hero-*` name referenced in lib/, sorted. Public so the test can compare."
+  @doc "Every `hero-*` name referenced in lib/ or assets/js/, sorted. Public so the test can compare."
   def used_icon_names do
-    Path.wildcard("lib/**/*.{ex,heex}")
+    # assets/js too, not just lib/: several hooks build their own markup and ask for an icon
+    # through `window.edIcon("hero-…")` — the failed-send bang among them. Those names appear in
+    # no template, so the sprite shipped without them and `<use>` resolved to nothing: the icon
+    # rendered as empty space wherever a send failed (#588). `zz-icons` catches it by painting the
+    # hook-injected ones; it was red for exactly this.
+    (Path.wildcard("lib/**/*.{ex,heex}") ++ Path.wildcard("assets/js/**/*.js"))
     |> Enum.flat_map(fn file ->
       # The QUOTES are load-bearing. A bare `hero-[a-z0-9-]+` also matches prose: this very file
       # mentions `hero-arrow-up-mini` in a comment below, and it was being shipped as a symbol

@@ -29,13 +29,16 @@ defmodule EdenWeb.IconSpriteTest do
     # render as nothing at all. Today every name is a literal — including the ones returned from
     # helper functions, which the scan still sees. This keeps it that way instead of leaving the
     # guarantee resting on nobody having tried yet (#539 review).
+    # assets/js too: hooks ask for icons through `window.edIcon("hero-…")`, and the scan behind the
+    # sprite reads those files now (#588). A name pieced together there would be exactly as
+    # invisible as one pieced together in a template.
     offenders =
-      Path.wildcard("lib/**/*.{ex,heex}")
+      (Path.wildcard("lib/**/*.{ex,heex}") ++ Path.wildcard("assets/js/**/*.js"))
       |> Enum.flat_map(fn file ->
         File.read!(file)
         |> String.split("\n")
         |> Enum.with_index(1)
-        |> Enum.filter(fn {line, _} -> Regex.match?(~r/"hero-[^"]*\#\{/, line) end)
+        |> Enum.filter(fn {line, _} -> Regex.match?(~r/"hero-[^"]*(\#\{|" *\+)/, line) end)
         |> Enum.map(fn {_, i} -> "#{file}:#{i}" end)
       end)
 
