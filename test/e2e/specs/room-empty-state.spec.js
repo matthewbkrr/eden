@@ -18,17 +18,14 @@ test("an empty room shows an empty-state that clears on the first message (#154)
   await modal.locator('input[name="room[name]"]').fill(name)
   await modal.locator('button[type="submit"]').click()
 
-  // Land in the new room. Wait for the modal to go first and click the ROOM ROW, not "the first
-  // element containing this text" — the modal carries the name in its own input, so a bare
-  // getByText could pick that and never navigate (#588).
-  await expect(modal).toBeHidden()
-  // The LINK inside the row, not the row: `.ed-room-wrap` is a wrapper div that carries the
-  // context-menu hook, and clicking it navigates nowhere. `getByText(name).first()` was worse
-  // still — the modal holds the same text in its own input (#588).
-  await alice.locator(".ed-room-wrap", { hasText: name }).first().locator("a.ed-room").click()
+  // Land in the new room.
+  await alice.getByText(name).first().click()
   // ATTACHED, not visible: an empty room's `#messages` holds nothing and therefore has no box, so
-  // waiting for it to be *visible* waits forever in exactly the state this test is about (#588).
-  // The empty-state below is the thing that must actually be on screen.
+  // waiting for it to be *visible* waits forever in exactly the state this test is about — this
+  // one line is the whole failure (#588). An earlier attempt also rewrote the click above, on the
+  // theory that `getByText` could match the modal's own input; that was wrong (Playwright matches
+  // input values only for button/submit types) and it has been backed out — the click was never
+  // the problem (#594 review).
   await alice.waitForSelector("#messages", { state: "attached", timeout: 12000 })
 
   // The empty-state is visible and the medallion/title render.

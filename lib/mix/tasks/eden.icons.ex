@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Eden.Icons do
 
   @moduledoc """
   Writes `priv/static/images/icons.svg` — one `<symbol>` per heroicon referenced anywhere in
-  `lib/`.
+  `lib/` or `assets/js/`.
 
   Why a sprite at all (#511): the stock Tailwind plugin inlines every used icon as a percent-
   encoded data-URI inside a `mask-image` rule, and that lands in the **render-blocking**
@@ -125,7 +125,8 @@ defmodule Mix.Tasks.Eden.Icons do
       Mix.raise("""
       no heroicon named hero-#{rest} (looked for #{path}).
 
-      Icon names are read from string literals in lib/. Check the spelling, or the variant suffix:
+      Icon names are read from string literals in lib/ and assets/js/. Check the spelling, or
+      the variant suffix:
       no suffix = 24/outline, -solid = 24/solid, -mini = 20/solid, -micro = 16/solid.
       """)
     end
