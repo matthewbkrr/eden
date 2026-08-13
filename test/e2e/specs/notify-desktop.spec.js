@@ -17,6 +17,14 @@ function stubs() {
   }
   StubNotification.permission = "granted"
   StubNotification.requestPermission = () => Promise.resolve("granted")
+  // Declare renotify support, because this stub stands in for the browser these tests run on.
+  // The product suppresses the chime only where the OS banner re-alerts per message — it probes
+  // `"renotify" in Notification.prototype` and deliberately KEEPS the chime on Firefox/Safari,
+  // which ignore it (#363/R166). A bare stub has no such property, so it read as a
+  // non-renotify browser and the chime played exactly as designed, while the test asserted
+  // Chrome's behaviour. It only ever "passed" because the page was not ready in time for
+  // anything at all to happen (#588).
+  StubNotification.prototype.renotify = true
   window.Notification = StubNotification
   class StubCtx {
     constructor() {

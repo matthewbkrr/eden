@@ -44,9 +44,16 @@ test("a folder tab answers the tap before the server does", async ({ alice, seed
     window.liveSocket.socket.conn.send = window.__edOrigSend
     window.liveSocket.socket.conn.close()
   })
-  await page.waitForFunction(() => window.liveSocket && window.liveSocket.isConnected(), null, {
-    timeout: 15_000,
-  })
+  // The VIEW, not just the socket: after the forced close the socket reconnects first and the
+  // view re-joins a beat later, and a click in that window is pushed into a channel that has not
+  // re-joined — measured, it sat in `phx-click-loading` forever and the list never filtered
+  // (#588). This is the same distinction the shared `ready()` helper exists for.
+  await page.waitForFunction(
+    () =>
+      window.liveSocket && window.liveSocket.isConnected() && window.liveSocket.main?.isConnected(),
+    null,
+    { timeout: 15_000 },
+  )
   await expect(all).toHaveClass(/ed-folder-tab--active/, { timeout: 10_000 })
 
   // And a LIVE click applies for real: same instant flip, then the ack keeps it and
