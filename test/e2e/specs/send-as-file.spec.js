@@ -1,7 +1,7 @@
 // #122 — "Send as file": a staged photo can be sent as an uncompressed downloadable
 // document instead of a compressed inline image. The message renders as a file card whose
 // leading glyph is a mini photo preview (the thumbnail), never an inline album tile.
-const { test, expect } = require("../helpers/fixtures")
+const { test, expect, ready } = require("../helpers/fixtures")
 const path = require("path")
 const fix = (n) => path.join(__dirname, "..", "fixtures", n)
 
@@ -12,7 +12,7 @@ test("a staged photo sends as a document card with a thumbnail, not an inline im
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
 
   // Stage a photo → the overlay opens and offers the "Send as file" button (images only).
   await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("big-photo.png"))
@@ -41,7 +41,7 @@ test("Enter in the caption does a normal send, never as-file (#122)", async ({
   test.skip(/webkit|safari/i.test(testInfo.project.name), "WebKit transfers no upload bytes")
 
   await alice.goto(`/app/c/${seed.dm_id}`)
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const docBefore = await alice.locator("#messages .ed-file--photo").count()
 
   await alice.locator('#composer input[name="attachment"]').setInputFiles(fix("big-photo.png"))

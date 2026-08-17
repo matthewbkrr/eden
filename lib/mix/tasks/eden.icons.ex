@@ -3,7 +3,7 @@ defmodule Mix.Tasks.Eden.Icons do
 
   @moduledoc """
   Writes `priv/static/images/icons.svg` — one `<symbol>` per heroicon referenced anywhere in
-  `lib/`.
+  `lib/` or `assets/js/`.
 
   Why a sprite at all (#511): the stock Tailwind plugin inlines every used icon as a percent-
   encoded data-URI inside a `mask-image` rule, and that lands in the **render-blocking**
@@ -47,20 +47,48 @@ defmodule Mix.Tasks.Eden.Icons do
     )
   end
 
-  @doc "Every `hero-*` name referenced in lib/, sorted. Public so the test can compare."
+  @doc "Every `hero-*` name referenced in lib/ or assets/js/, sorted. Public so the test can compare."
   def used_icon_names do
-    Path.wildcard("lib/**/*.{ex,heex}")
+    # assets/js too, not just lib/: several hooks build their own markup and ask for an icon
+    # through `window.edIcon("hero-…")` — the failed-send bang among them. Those names appear in
+    # no template, so the sprite shipped without them and `<use>` resolved to nothing: the icon
+    # rendered as empty space wherever a send failed (#588). `zz-icons` catches it by painting the
+    # hook-injected ones; it was red for exactly this.
+    (Path.wildcard("lib/**/*.{ex,heex}") ++ Path.wildcard("assets/js/**/*.js"))
     |> Enum.flat_map(fn file ->
       # The QUOTES are load-bearing. A bare `hero-[a-z0-9-]+` also matches prose: this very file
       # mentions `hero-arrow-up-mini` in a comment below, and it was being shipped as a symbol
       # nobody references (#539 review). Worse, a comment naming an icon that does not exist would
-      # fail the build from a line that renders nothing. Every real reference is a string literal —
-      # in a template attribute or returned from a helper — so requiring the closing quote keeps
-      # all of them and drops the prose. It also rules out a trailing hyphen.
-      Regex.scan(~r/"(hero-[a-z0-9-]*[a-z0-9])"/, File.read!(file)) |> Enum.map(&List.last/1)
+      # fail the build from a line that renders nothing. Every real reference is a string literal,
+      # so requiring the closing quote keeps all of them and drops the prose.
+      #
+      # Which quotes count depends on the language, and that distinction is not cosmetic (#594
+      # review). Elixir writes `"` for strings and BACKTICKS for code in prose — accepting
+      # backticks there immediately shipped `hero-arrow-up-mini` again, straight out of the
+      # comment above. JS writes `'` and backticks as real string delimiters, so a name in either
+      # would otherwise be missed and render as nothing. Comments are stripped from the JS first,
+      # for the same reason backticks are refused in Elixir: prose must not name icons into the
+      # sprite.
+      names(file)
     end)
     |> Enum.uniq()
     |> Enum.sort()
+  end
+
+  # Elixir: double quotes only. JS: single, double and backticks, with comments stripped first.
+  defp names(file) do
+    body = File.read!(file)
+
+    {body, quotes} =
+      if String.ends_with?(file, ".js") do
+        {body |> String.replace(~r|/\*.*?\*/|s, "") |> String.replace(~r|//[^\n]*|, ""),
+         ~s(["'`])}
+      else
+        {body, ~s(["])}
+      end
+
+    Regex.scan(~r/(#{quotes})(hero-[a-z0-9-]*[a-z0-9])\1/, body)
+    |> Enum.map(fn [_, _q, name] -> name end)
   end
 
   defp symbol(name) do
@@ -97,7 +125,8 @@ defmodule Mix.Tasks.Eden.Icons do
       Mix.raise("""
       no heroicon named hero-#{rest} (looked for #{path}).
 
-      Icon names are read from string literals in lib/. Check the spelling, or the variant suffix:
+      Icon names are read from string literals in lib/ and assets/js/. Check the spelling, or
+      the variant suffix:
       no suffix = 24/outline, -solid = 24/solid, -mini = 20/solid, -micro = 16/solid.
       """)
     end

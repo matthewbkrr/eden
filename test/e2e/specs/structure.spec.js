@@ -1,11 +1,11 @@
 // Wave 2 — structure: folders, groups, presence propagation, profiles. Multi-user where
 // the point is realtime. Folder create/delete cleans up after itself.
-const { test, expect, shot, send } = require("../helpers/fixtures")
+const { test, expect, shot, send, ready } = require("../helpers/fixtures")
 
 test.describe("structure", () => {
   test("create a folder, see it as a sidebar tab, then delete it", async ({ alice }, testInfo) => {
     await alice.goto(`/settings/folders`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     const name = `Audit ${Date.now()}`
     const form = alice.locator('form[phx-submit="create_folder"]')
     await form.locator('input[name="name"]').fill(name)
@@ -21,16 +21,19 @@ test.describe("structure", () => {
 
     // And as a tab back in the sidebar (tabs render the name as text).
     await alice.goto(`/app`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     await expect(alice.locator("#folder-tabs", { hasText: name })).toBeVisible({ timeout: 12_000 })
     await shot(alice, testInfo, "folder-tab")
 
-    // Clean up — delete it (data-confirm; the fixture auto-accepts).
+    // Clean up — delete it. The confirm is the app's OWN sheet since #518, so the fixture's
+    // blanket dialog-accept never fires: no browser dialog is raised, nobody answers, and the
+    // folder simply stayed (#588).
     await alice.goto(`/settings/folders`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     const row2 = alice.locator("#folder-list li").filter({ has: alice.locator(`input[value="${name}"]`) })
     await expect(row2).toBeVisible({ timeout: 12_000 })
     await row2.getByLabel("Delete folder").click()
+    await alice.locator(".ed-ask [data-ok]").click()
     await expect(row2).toHaveCount(0, { timeout: 12_000 })
     expect(alice.__diag.pageErrors).toEqual([])
   })
@@ -51,7 +54,7 @@ test.describe("structure", () => {
     // alice must be connected to an app page to register presence (her fixture page starts
     // blank); put her in the same DM so bob sees her online to start.
     await alice.goto(`/app/c/${seed.dm_id}`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     await bob.goto(`/app/c/${seed.dm_id}`)
     const peerHeader = bob.locator("[data-profile-trigger]")
     // alice is connected → bob sees her online.
@@ -71,7 +74,7 @@ test.describe("structure", () => {
 
   test("peer profile opens from the DM header", async ({ alice, seed }, testInfo) => {
     await alice.goto(`/app/c/${seed.dm_id}`)
-    await alice.waitForFunction(() => window.liveSocket?.isConnected())
+    await ready(alice)
     await alice.locator("[data-profile-trigger]").click()
     await alice.waitForTimeout(600)
     await shot(alice, testInfo, "profile")

@@ -1,4 +1,4 @@
-const { test, expect, send } = require("../helpers/fixtures")
+const { test, expect, send, ready } = require("../helpers/fixtures")
 
 // #217: the notification output splits by where your attention is.
 //   • AWAY (window not focused / tab hidden) → a desktop OS notification fires (it carries its
@@ -17,6 +17,14 @@ function stubs() {
   }
   StubNotification.permission = "granted"
   StubNotification.requestPermission = () => Promise.resolve("granted")
+  // Declare renotify support, because this stub stands in for the browser these tests run on.
+  // The product suppresses the chime only where the OS banner re-alerts per message — it probes
+  // `"renotify" in Notification.prototype` and deliberately KEEPS the chime on Firefox/Safari,
+  // which ignore it (#363/R166). A bare stub has no such property, so it read as a
+  // non-renotify browser and the chime played exactly as designed, while the test asserted
+  // Chrome's behaviour. It only ever "passed" because the page was not ready in time for
+  // anything at all to happen (#588).
+  StubNotification.prototype.renotify = true
   window.Notification = StubNotification
   class StubCtx {
     constructor() {
@@ -44,7 +52,7 @@ function stubs() {
 // server still pushes the notify). Shared dev prefs, so set them explicitly each run.
 async function enableBoth(alice) {
   await alice.goto("/settings/notifications")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   const sound = alice.locator('button[phx-click="set_notify_sound"]')
   if ((await sound.getAttribute("aria-checked")) === "false") await sound.click()
   const desktop = alice.locator("#notify-desktop-switch")
@@ -52,7 +60,7 @@ async function enableBoth(alice) {
   await expect(desktop).toHaveAttribute("aria-checked", "true")
 
   await alice.goto("/app")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await alice.waitForSelector("#notifier", { state: "attached" })
   await expect(alice.locator("#notifier")).toHaveAttribute("data-desktop", "true")
   await alice.evaluate(() => window.dispatchEvent(new Event("pointerdown"))) // unlock audio
@@ -69,7 +77,7 @@ test("AWAY: a desktop notification fires and the chime is suppressed (#217)", as
   await enableBoth(alice)
 
   await bob.goto(`/app/c/${seed.dm_id}`)
-  await bob.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(bob)
 
   const msg = `desktop ${Date.now()}`
   await send(bob, msg)
@@ -87,7 +95,7 @@ test("AWAY: a desktop notification fires and the chime is suppressed (#217)", as
 
   // Restore: turn desktop back off so other specs see the default.
   await alice.goto("/settings/notifications")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await alice.locator("#notify-desktop-switch").click()
 })
 
@@ -102,7 +110,7 @@ test("ON THE SITE: the chime plays and NO desktop banner is shown (#217)", async
   await enableBoth(alice)
 
   await bob.goto(`/app/c/${seed.dm_id}`)
-  await bob.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(bob)
 
   const before = await alice.evaluate(() => window.__osc)
   await send(bob, `onsite ${Date.now()}`)
@@ -116,6 +124,6 @@ test("ON THE SITE: the chime plays and NO desktop banner is shown (#217)", async
 
   // Restore: turn desktop back off so other specs see the default.
   await alice.goto("/settings/notifications")
-  await alice.waitForFunction(() => window.liveSocket?.isConnected())
+  await ready(alice)
   await alice.locator("#notify-desktop-switch").click()
 })
